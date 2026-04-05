@@ -304,10 +304,26 @@ def run_text_tool_loop(
                     continue
                 chunks.append(chunk)
                 token_count += 1
-                # Feed every chunk to indicator — shows peek text + counts tokens + $
+                # Count tokens for $ savings display
                 out.feed_thinking(chunk)
+
+                # Show meaningful status — not raw code
+                partial = "".join(chunks)
                 if token_count % 10 == 0:
-                    out.set_stage(f"generating ({token_count} tok)")
+                    if '"write_file"' in partial:
+                        # Extract filename being written
+                        import re as _re
+                        path_match = _re.search(r'"path"\s*:\s*"([^"]+)"', partial)
+                        fname = path_match.group(1) if path_match else "file"
+                        out.set_stage(f"writing {fname} ({token_count} tok)")
+                    elif '"edit_file"' in partial:
+                        path_match = _re.search(r'"path"\s*:\s*"([^"]+)"', partial)
+                        fname = path_match.group(1) if path_match else "file"
+                        out.set_stage(f"editing {fname} ({token_count} tok)")
+                    elif '"bash"' in partial:
+                        out.set_stage(f"running command ({token_count} tok)")
+                    else:
+                        out.set_stage(f"generating ({token_count} tok)")
 
                 # Check if we have a complete tool call — stop streaming early
                 partial = "".join(chunks)
