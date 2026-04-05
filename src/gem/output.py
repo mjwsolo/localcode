@@ -205,14 +205,16 @@ class OutputManager:
 
     @staticmethod
     def _flip_text(text: str, tick: int) -> str:
-        """Subtle flip — one letter at a time shows as │, sweeping left to right."""
+        """Brightness wave — one character pulses bright as it sweeps left to right."""
         pos = tick % (len(text) + 3)
         result = []
         for i, ch in enumerate(text):
-            if ch in (' ', '.') or i != pos:
+            if ch in (' ', '.'):
                 result.append(ch)
+            elif i == pos:
+                result.append(f"\033[1;32m{ch}\033[32m")
             else:
-                result.append('│')
+                result.append(ch)
         return "".join(result)
 
     def _run_indicator(self) -> None:
