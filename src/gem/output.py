@@ -203,22 +203,27 @@ class OutputManager:
         sys.stderr.write("\r\033[K")
         sys.stderr.flush()
 
-    _FLIP_CHARS = "abcdefghijklmnopqrstuvwxyz"
+    # Flip stages: full letter → shrinking → edge → expanding → full letter
+    _FLIP_STAGES = ['▌', '│', '▐']
 
     @staticmethod
     def _flip_text(text: str, tick: int) -> str:
-        """Split-flap animation — each letter flips to a random char then settles.
+        """Horizontal flip animation — each letter rotates on its axis, left to right.
 
-        A wave moves left-to-right. At the wave front, the letter is replaced
-        with a random character. After the wave passes, the real letter appears.
+        Wave sweeps across text. Each letter goes through:
+          full char → ▌ (half) → │ (edge) → ▐ (half) → full char
+        Looks like each letter is physically flipping horizontally.
         """
-        wave_pos = tick % (len(text) + 4)
+        wave_pos = tick % (len(text) + 6)
+        stages = OutputManager._FLIP_STAGES
         result = []
         for i, ch in enumerate(text):
             if ch == ' ' or ch == '.':
                 result.append(ch)
-            elif i == wave_pos:
-                result.append(OutputManager._FLIP_CHARS[(tick + i * 7) % 26])
+                continue
+            dist = wave_pos - i
+            if 0 <= dist < len(stages):
+                result.append(stages[dist])
             else:
                 result.append(ch)
         return "".join(result)
