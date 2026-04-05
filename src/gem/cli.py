@@ -624,10 +624,10 @@ def main(argv: list[str] | None = None) -> None:
         if count:
             console.print(f"  Installed {count} built-in skills (review, test, explain, refactor, debug)")
 
-    # Auto-select the best installed model if none specified
-    if not args.model and not config.runtime.model:
+    # Auto-select best model: always prefer 26B if installed, even if config says e4b
+    if not args.model:
         best = _auto_select_model(config)
-        if best:
+        if best and best != config.runtime.model:
             config.runtime.model = best
 
     app = GemApp(config=config, cwd=Path.cwd(), profile_name=args.profile, model_name=args.model)
