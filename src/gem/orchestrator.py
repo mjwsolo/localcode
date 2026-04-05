@@ -130,7 +130,7 @@ class Orchestrator:
     Falls back gracefully to single-agent loop on failure.
     """
 
-    REVIEW_THRESHOLD = 80  # minimum score to pass review
+    REVIEW_THRESHOLD = 50  # pass if code basically works — don't burn 5min replanning for polish
     MAX_REVIEW_LOOPS = 2   # max planner→worker→review cycles
 
     def __init__(self, app: "GemApp") -> None:
@@ -223,32 +223,25 @@ class Orchestrator:
 
     def _plan(self, task: str, global_ctx: GlobalContext) -> TaskPlan:
         """Use 26B to generate a task DAG."""
-        prompt = f"""Break this task into 3-5 concrete steps. Keep it simple.
+        prompt = f"""You decide how many steps this task needs. Simple = fewer steps. Complex = more.
 
 TASK: {task}
 
-EXISTING FILES IN REPO:
+EXISTING FILES:
 {global_ctx.file_tree[:1000]}
 
-Return a JSON array. Each step:
-- "id": integer
-- "description": what to do (specific: "Create X" or "Add Y to Z")
-- "file_targets": file paths to create or modify
-- "depends_on": step IDs that must finish first ([] if independent)
+Return a JSON array. Each step: "id", "description", "file_targets", "depends_on".
 
-IMPORTANT:
-- Keep it SIMPLE. 3-5 steps max. Don't over-engineer.
-- You CAN edit existing files if the task requires it (e.g. "refactor app.py")
-- Do NOT touch config files (.gitignore, pyproject.toml, CLAUDE.md, .env) unless explicitly asked
-- For new projects, prefer ONE main file over many small files
-- Steps modifying the same file MUST be sequential (add dependency)
-- Return ONLY valid JSON, no explanation.
+Rules:
+- A simple app/game/script = 1-2 steps (one file + requirements). Do NOT split into paddle/ball/scoring steps.
+- Editing existing code = 1 step per file being changed.
+- Multi-file refactor = one step per file, parallel where possible.
+- Do NOT touch config files (.gitignore, pyproject.toml, CLAUDE.md) unless asked.
+- ONLY return valid JSON.
 
-Example for "make a snake game":
-[
-  {{"id": 1, "description": "Create snake.py with complete snake game using pygame", "file_targets": ["snake.py"], "depends_on": []}},
-  {{"id": 2, "description": "Create requirements.txt with pygame dependency", "file_targets": ["requirements.txt"], "depends_on": []}}
-]"""
+Examples:
+"make a pong game" → [{{"id":1,"description":"Create pong.py with complete pong game using pygame (paddles, ball, scoring, game loop)","file_targets":["pong.py"],"depends_on":[]}}]
+"add auth to server.py and update tests" → [{{"id":1,"description":"Add JWT authentication to server.py","file_targets":["server.py"],"depends_on":[]}},{{"id":2,"description":"Update test_server.py with auth tests","file_targets":["test_server.py"],"depends_on":[1]}}]"""
 
         try:
             response = self._call_planner(prompt)
