@@ -638,10 +638,11 @@ def main(argv: list[str] | None = None) -> None:
 
 
 def _auto_select_model(config) -> str:
-    """Pick the best available model. No user input needed.
+    """Pick the best available model. 26B is the target — it's what we optimized for.
 
-    Priority: 26B (smart) > e4b (balanced) > e2b (fast)
-    Picks the most capable model that's already installed in Ollama.
+    The 26B is the only model that can reliably do tool calling via JSON,
+    handle multi-step tasks, and produce quality code. e4b/e2b are fallbacks
+    only if 26B isn't installed yet.
     """
     try:
         from .runtime import GemRuntimeGateway
@@ -650,19 +651,26 @@ def _auto_select_model(config) -> str:
     except Exception:
         return ""
 
-    # Best to worst
-    preferences = [
-        ("gemma26b-iq3", "gemma4-26b-moe"),
-        ("gemma4:e4b", "gemma4-e4b"),
-        ("gemma4:e2b", "gemma4-e2b"),
-    ]
+    # 26B is the primary model — everything was optimized for it
+    for m in installed:
+        if "26b" in m.lower() or "gemma26b" in m.lower():
+            config.runtime.profile = "gemma4-26b-moe"
+            return m
 
-    for model_name, profile_key in preferences:
+    # 26B not installed — warn and fall back
+    import sys
+    sys.stderr.write(
+        "\033[33m  ! 26B model not found. Install it for best results:\n"
+        "    ollama pull gemma4:26b\n"
+        "    Falling back to smaller model.\033[0m\n"
+    )
+
+    # Fallback order
+    for model_name, profile_key in [("gemma4:e4b", "gemma4-e4b"), ("gemma4:e2b", "gemma4-e2b")]:
         if any(model_name in m for m in installed):
             config.runtime.profile = profile_key
             return model_name
 
-    # Return first available gemma model
     for m in installed:
         if "gemma" in m.lower():
             return m

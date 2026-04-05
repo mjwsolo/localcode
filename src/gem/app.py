@@ -1061,10 +1061,10 @@ class GemApp:
         if stream:
             self.out.start_thinking()
 
-        # NOTE: Two-tier model routing disabled — model swaps take 2-3 minutes
-        # on 16GB and freeze the UI. Use one model per session instead.
-        # Users pick model at startup: `localcode --model gemma26b-iq3`
-        # self._maybe_switch_tier(user_text)
+        # Two-tier routing: 26B stays loaded always, e2b handles simple queries.
+        # With OLLAMA_MAX_LOADED_MODELS=2, both coexist — no swap penalty.
+        # Only DE-escalate (26B→e2b for speed), never escalate (avoids 3min swap).
+        self._maybe_use_fast_model(user_text)
 
         self._adapt_to_prompt(user_text)
         self._apply_cache_policy()
@@ -2203,6 +2203,40 @@ class GemApp:
         if len(text) > 60:
             return text[:40].rsplit(" ", 1)[0] + "..."
         return text[:40] if len(text) > 5 else ""
+
+    def _maybe_use_fast_model(self, user_text: str) -> None:
+        """Use e2b for trivial queries (time, hi, git status) — 3x faster.
+
+        26B stays loaded always. With OLLAMA_MAX_LOADED_MODELS=2, e2b loads
+        alongside it without evicting the 26B. After the simple query,
+        next complex query goes straight back to the already-loaded 26B.
+        """
+        if not self.config.runtime.escalation_enabled:
+            return
+
+        text = user_text.lower().strip()
+        # Only use fast model for truly trivial stuff
+        is_trivial = (
+            len(text) < 15
+            or text in ("hi", "hello", "hey", "thanks", "ok", "yes", "no")
+            or any(text.startswith(w) for w in ("what time", "what day", "what date"))
+        )
+
+        if is_trivial and "26b" in self.runtime_model.lower():
+            draft = self.config.runtime.draft_model
+            if draft:
+                self._saved_main_model = self.runtime_model
+                self.config.runtime.model = draft
+                from .runtime import GemRuntimeGateway as _GRG
+                self.engine = _GRG(self.config.runtime)
+                self.runtime_model = draft
+        elif not is_trivial and hasattr(self, '_saved_main_model'):
+            # Switch back to 26B (already loaded, instant)
+            self.config.runtime.model = self._saved_main_model
+            from .runtime import GemRuntimeGateway as _GRG
+            self.engine = _GRG(self.config.runtime)
+            self.runtime_model = self._saved_main_model
+            del self._saved_main_model
 
     def _maybe_switch_tier(self, user_text: str) -> None:
         """Two-tier model routing: fast model for simple tasks, smart for complex.
