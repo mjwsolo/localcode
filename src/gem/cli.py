@@ -228,7 +228,8 @@ def main(argv: list[str] | None = None) -> None:
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
     # Ollama performance optimizations (from mmap article)
     os.environ.setdefault("OLLAMA_FLASH_ATTENTION", "1")
-    os.environ.setdefault("OLLAMA_MAX_LOADED_MODELS", "1")
+    # Allow 2 models simultaneously for orchestrator (26B planner + e2b workers)
+    os.environ.setdefault("OLLAMA_MAX_LOADED_MODELS", "2")
     warnings.filterwarnings("ignore", category=UserWarning)
     parser = build_parser()
     args = parser.parse_args(argv)
