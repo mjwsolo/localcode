@@ -1186,14 +1186,20 @@ class GemApp:
                 self.out.done()
                 # Build summary for conversation history
                 step_summary = "\n".join(
-                    f"  {'✓' if s.status == 'done' else '✗'} [{s.id}] {s.description}"
+                    f"  {'✓' if s.status == 'done' else '✗'} {s.description} → {s.result[:60]}"
                     for s in plan.steps
                 )
+                files_changed = set()
+                for s in plan.steps:
+                    if s.status == "done" and s.result.startswith("wrote "):
+                        files_changed.update(s.result.replace("wrote ", "").split(", "))
+                files_line = f"\n  Files: {', '.join(files_changed)}" if files_changed else ""
                 assistant_text = (
-                    f"Completed {plan.summary}\n"
-                    f"Review: {plan.review_notes}\n\n"
-                    f"Steps:\n{step_summary}"
+                    f"Done ({plan.review_score}/100)\n"
+                    f"{step_summary}{files_line}"
                 )
+                if plan.review_notes and plan.review_notes != "review failed":
+                    assistant_text += f"\n  Review: {plan.review_notes}"
                 if stream:
                     self.console.print(f"\n{assistant_text}\n")
                 self.session.messages.append({"role": "assistant", "content": assistant_text})

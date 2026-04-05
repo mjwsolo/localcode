@@ -140,22 +140,36 @@ class Orchestrator:
 
     def run(self, task: str) -> TaskPlan:
         """Execute the full pipeline: plan → workers → review → (loop if needed)."""
+        import sys
+
         # Phase 1: Build global context
         global_ctx = self._build_global_context()
 
         for attempt in range(self.MAX_REVIEW_LOOPS):
             # Phase 2: Plan (26B generates task DAG)
-            self.out.print_info(f"planning (attempt {attempt + 1})...")
+            self.out.set_stage("planning")
             plan = self._plan(task, global_ctx)
 
             if not plan.steps:
-                self.out.print_info("planner returned no steps, falling back to direct execution")
+                self.out.print_info("no steps generated, falling back to direct execution")
                 return plan
 
-            # Phase 3: Execute waves (e2b workers in parallel)
+            # Show the plan to the user
+            sys.stdout.write(f"\n\033[1m  Plan ({len(plan.steps)} steps):\033[0m\n")
             waves = plan.get_waves()
             for wave_num, wave in enumerate(waves, 1):
-                self.out.print_info(f"wave {wave_num}/{len(waves)}: {len(wave)} workers")
+                parallel_tag = f" \033[2m(parallel)\033[0m" if len(wave) > 1 else ""
+                sys.stdout.write(f"  \033[2mwave {wave_num}:{parallel_tag}\033[0m\n")
+                for step in wave:
+                    deps = f" \033[2m← after {step.depends_on}\033[0m" if step.depends_on else ""
+                    sys.stdout.write(f"    [{step.id}] {step.description[:70]}{deps}\n")
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+
+            # Phase 3: Execute waves (workers in parallel)
+            for wave_num, wave in enumerate(waves, 1):
+                self.out.set_stage(f"wave {wave_num}/{len(waves)}")
+                self.out.print_info(f"wave {wave_num}/{len(waves)}: {len(wave)} worker{'s' if len(wave) > 1 else ''}")
                 self._execute_wave(wave, global_ctx)
                 # Merge: update global context with results
                 for step in wave:
@@ -163,7 +177,7 @@ class Orchestrator:
                         global_ctx.completed_steps.append(
                             f"[{step.id}] {step.description}: {step.result[:100]}"
                         )
-                        # Re-read modified files
+                        # Re-read modified files into global context
                         for fpath in step.file_targets:
                             full = global_ctx.repo_root / fpath
                             if full.is_file():
@@ -173,18 +187,16 @@ class Orchestrator:
                                     pass
 
             # Phase 4: Review (26B checks quality)
-            self.out.print_info("reviewing...")
+            self.out.set_stage("reviewing")
             plan = self._review(task, plan, global_ctx)
 
             if plan.review_score >= self.REVIEW_THRESHOLD:
-                self.out.print_info(f"review passed: {plan.review_score}/100")
+                self.out.print_info(f"review passed ({plan.review_score}/100)")
                 break
             else:
                 self.out.print_info(
-                    f"review score {plan.review_score}/100 < {self.REVIEW_THRESHOLD}, "
-                    f"replanning with feedback..."
+                    f"review {plan.review_score}/100 — replanning..."
                 )
-                # Feed review notes back into the next planning cycle
                 task = f"{task}\n\nPrevious attempt feedback:\n{plan.review_notes}"
 
         return plan
@@ -272,50 +284,86 @@ Example:
                     step.error = str(exc)
 
     def _execute_step(self, step: TaskStep, global_ctx: GlobalContext) -> None:
-        """Execute a single step using an e2b worker."""
+        """Execute a single step — Aider Architect pattern.
+
+        Instead of relying on the worker to call tools (unreliable on small models),
+        we ask the worker to GENERATE CODE, then WE write the files.
+        """
+        import re as _re
         step.status = "running"
-        self.out.log_tool("worker", f"[{step.id}] {step.description[:50]}")
+        self.out.log_tool("worker", f"[{step.id}] {step.description[:60]}")
 
         # Build local context — only files this step needs
-        local_ctx = LocalContext(
-            step=step,
-            global_snapshot=global_ctx.snapshot(),
-        )
+        file_section = ""
         for fpath in step.file_targets:
             full = global_ctx.repo_root / fpath
             if full.is_file():
                 try:
-                    local_ctx.file_contents[fpath] = full.read_text(errors="replace")
+                    content = full.read_text(errors="replace")
+                    file_section += f"\n--- {fpath} ---\n{content[:4000]}\n"
                 except Exception:
                     pass
             elif fpath in global_ctx.existing_files:
-                local_ctx.file_contents[fpath] = global_ctx.existing_files[fpath]
+                file_section += f"\n--- {fpath} ---\n{global_ctx.existing_files[fpath][:4000]}\n"
 
-        # Build worker prompt
-        file_section = ""
-        for path, content in local_ctx.file_contents.items():
-            file_section += f"\n--- {path} ---\n{content[:4000]}\n"
-
-        prompt = f"""You are a code worker. Execute this ONE task precisely.
-
-TASK: {step.description}
-
-{f"EXISTING FILES:{file_section}" if file_section else "No existing files — create from scratch."}
-
-CONTEXT: {local_ctx.global_snapshot[:1000]}
-
-Instructions:
-- Use write_file to create new files
-- Use edit_file with old_string/new_string for changes to existing files
-- Use bash to run commands if needed
-- Do ONLY what the task says, nothing more
-- When done, say "DONE" with a one-line summary"""
+        # Worker prompt: generate code, don't call tools
+        if file_section:
+            prompt = (
+                f"TASK: {step.description}\n\n"
+                f"EXISTING FILES:{file_section}\n\n"
+                f"Return the COMPLETE updated file content for each file you modify.\n"
+                f"Format each file as:\n"
+                f"FILE: <path>\n```\n<complete file content>\n```\n\n"
+                f"Only include files that need changes. No explanation, just code."
+            )
+        else:
+            prompt = (
+                f"TASK: {step.description}\n\n"
+                f"Generate the complete file content.\n"
+                f"Format as:\n"
+                f"FILE: <path>\n```\n<complete file content>\n```\n\n"
+                f"No explanation, just code."
+            )
 
         try:
-            result = self._call_worker(prompt, step)
-            step.result = result
-            step.status = "done"
-            self.out.tool_result(f"[{step.id}] done: {result[:80]}")
+            response = self._call_worker(prompt, step)
+
+            # Parse FILE: blocks and write them
+            files_written = []
+            # Match FILE: path followed by code block
+            pattern = r'FILE:\s*(\S+)\s*\n```\w*\n(.*?)```'
+            matches = _re.findall(pattern, response, _re.DOTALL)
+
+            if not matches:
+                # Fallback: try to extract any code block and write to first target
+                code_match = _re.search(r'```\w*\n(.*?)```', response, _re.DOTALL)
+                if code_match and step.file_targets:
+                    matches = [(step.file_targets[0], code_match.group(1))]
+
+            for fpath, content in matches:
+                fpath = fpath.strip()
+                content = content.strip()
+                if not content:
+                    continue
+                full_path = global_ctx.repo_root / fpath
+                full_path.parent.mkdir(parents=True, exist_ok=True)
+                # Snapshot for undo
+                self.app.toolkit.changes.snapshot_before(fpath, f"orch_step_{step.id}")
+                full_path.write_text(content + "\n")
+                files_written.append(fpath)
+                # Update global context
+                global_ctx.existing_files[fpath] = content
+
+            if files_written:
+                step.result = f"wrote {', '.join(files_written)}"
+                step.status = "done"
+                self.out.tool_result(f"[{step.id}] {step.result}")
+            else:
+                # Worker returned text but no parseable code — still mark done
+                step.result = response[:100]
+                step.status = "done"
+                self.out.tool_result(f"[{step.id}] completed (no files)")
+
         except Exception as exc:
             step.status = "error"
             step.error = str(exc)
@@ -397,50 +445,26 @@ Return ONLY the JSON."""
         return response.get("message", {}).get("content", "").strip()
 
     def _call_worker(self, prompt: str, step: TaskStep) -> str:
-        """Call an e2b worker model with tool access."""
-        from .config import RuntimeConfig
-        from .runtime import GemRuntimeGateway
+        """Call a worker model to generate code (no tool calling — Aider pattern).
+
+        Workers just generate code text. The orchestrator writes files.
+        This is reliable even with small models that can't call tools.
+        """
         from dataclasses import replace
+        from .runtime import GemRuntimeGateway
 
-        # Try to use draft model (e2b) for workers — faster
-        draft_model = self.app.config.runtime.draft_model
-        if draft_model and draft_model != self.app.runtime_model:
-            try:
-                worker_config = replace(
-                    self.app.config.runtime,
-                    model=draft_model,
-                    max_context_chars=8000,
-                )
-                worker_engine = GemRuntimeGateway(worker_config)
-                step.worker_model = draft_model
-            except Exception:
-                worker_engine = self.app.engine
-                step.worker_model = self.app.runtime_model
-        else:
-            worker_engine = self.app.engine
-            step.worker_model = self.app.runtime_model
+        # Use the current model (26B) for workers too — avoids 7s model swap penalty.
+        # e2b is only worth swapping to if there are many parallel workers.
+        # For most tasks, keeping 26B loaded is faster overall.
+        worker_engine = self.app.engine
+        step.worker_model = self.app.runtime_model
 
-        # Give worker access to file tools only
-        worker_tools = [
-            t for t in self.app.toolkit.schemas(minimal=True)
-            if t["function"]["name"] in ("read_file", "write_file", "edit_file", "bash", "grep", "glob")
-        ]
-
+        # No tools — worker generates code, orchestrator writes files
         response = worker_engine.chat_once(
             [{"role": "user", "content": prompt}],
-            tools=worker_tools,
             think=False,
         )
-        msg = response.get("message", {})
-        content = msg.get("content", "").strip()
-
-        # Execute tool calls if any
-        tool_calls = msg.get("tool_calls", [])
-        if tool_calls:
-            tool_results = self.app.toolkit.execute_tool_calls(tool_calls)
-            content += "\n" + "\n".join(r.get("content", "") for r in tool_results)
-
-        return content
+        return response.get("message", {}).get("content", "").strip()
 
     # ── Helpers ──────────────────────────────────────────────────────
 
