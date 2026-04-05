@@ -92,10 +92,17 @@ class GemRuntimeGateway:
         if self.config.kv_cache_type and self.config.kv_cache_type != "f16":
             cmd.extend(["--cache-type-k", self.config.kv_cache_type,
                         "--cache-type-v", self.config.kv_cache_type])
-        # Speculative decoding (mutual exclusion: draft model > ngram)
+        # Speculative decoding (mutual exclusion: draft model > lookup > ngram)
         if self.config.llama_cpp_draft_model:
-            cmd.extend(["--model-draft", self.config.llama_cpp_draft_model,
+            draft_path = self.config.llama_cpp_draft_model
+            # Support Ollama blob paths (sha256-...)
+            if not draft_path.startswith("/") and "sha256" not in draft_path:
+                draft_path = self._find_ollama_blob(draft_path)
+            cmd.extend(["--model-draft", draft_path,
                         "--draft-max", str(self.config.llama_cpp_draft_max)])
+        elif self.config.llama_cpp_lookup_cache:
+            # Prompt lookup decoding: matches n-grams from input in output (2-4x on edits)
+            cmd.extend(["--lookup-cache-dynamic", "/tmp/localcode-lookup.bin"])
         elif self.config.llama_cpp_spec_type:
             cmd.extend(["--spec-type", self.config.llama_cpp_spec_type,
                         "--draft-max", str(self.config.llama_cpp_draft_max)])
@@ -103,6 +110,22 @@ class GemRuntimeGateway:
         cmd.extend(["-b", str(self.config.llama_cpp_batch_size),
                     "-ub", str(min(512, self.config.llama_cpp_batch_size))])
         return cmd
+
+    @staticmethod
+    def _find_ollama_blob(model_name: str) -> str:
+        """Find the GGUF blob path for an Ollama model."""
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["ollama", "show", model_name, "--modelfile"],
+                capture_output=True, text=True, check=False,
+            )
+            for line in result.stdout.splitlines():
+                if line.startswith("FROM ") and ".ollama" in line:
+                    return line.split("FROM ", 1)[1].strip()
+        except Exception:
+            pass
+        return model_name  # fallback: return as-is
 
     def healthcheck(self) -> tuple[bool, str]:
         if self.config.provider == "mlx-local":

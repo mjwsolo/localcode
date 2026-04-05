@@ -43,6 +43,7 @@ class PerformancePreset:
     llama_cpp_draft_max: int = 64
     llama_cpp_expert_offload: bool = False
     llama_cpp_draft_model: str = ""
+    llama_cpp_lookup_cache: bool = False
     kv_cache_type: str = "q8_0"
     notes: list[str] = None  # type: ignore[assignment]
 
@@ -168,19 +169,29 @@ def recommend_preset(machine: MachineProfile, requested_mode: str | None = None)
     draft_max = 64
     expert_offload = False
     llama_cpp_draft_model_path = ""
+    lookup_cache = False
     kv_cache_type = "q8_0"
 
     # Small tier (≤16GB): aggressive memory savings
     if machine.tier == "small":
-        kv_cache_type = "q4_0"  # aggressive KV compression to free memory
-        expert_offload = True   # MoE experts to CPU, attention stays on GPU
-        notes.append("KV cache q4_0 + expert offload for 16GB memory constraint.")
+        kv_cache_type = "q4_0"  # aggressive KV compression (8x less cache memory)
+        # Note: expert_offload with -ngl 999 causes OOM on 16GB.
+        # Use -ngl 0 (pure CPU + mmap) which is stable and fast enough.
+        expert_offload = False
+        llama_cpp_gpu_layers = 0  # CPU mmap is more stable on 16GB
+        notes.append("KV cache q4_0 + CPU mmap for 16GB memory constraint.")
 
-    # When using llama.cpp: enable n-gram speculation
+    # Apple Silicon + MoE model: prefer MLX (3x faster than llama.cpp for MoE)
+    if machine.system == "darwin" and machine.has_gpu and profile in ("gemma4-26b-moe",):
+        runtime_provider = "ollama"  # Ollama now uses MLX backend on Apple Silicon
+        notes.append("Ollama MLX backend preferred for MoE models on Apple Silicon (3x faster).")
+
+    # When using llama.cpp: enable n-gram speculation + prompt lookup
     if runtime_provider == "llama_cpp":
         spec_type = "ngram-mod"
         draft_max = 64
-        notes.append("N-gram speculative decoding enabled (1.5-2x speedup).")
+        lookup_cache = True  # prompt lookup decoding (2-4x on code edits)
+        notes.append("N-gram speculative decoding + prompt lookup enabled.")
 
     return PerformancePreset(
         mode=mode,
@@ -201,6 +212,7 @@ def recommend_preset(machine: MachineProfile, requested_mode: str | None = None)
         llama_cpp_draft_max=draft_max,
         llama_cpp_expert_offload=expert_offload,
         llama_cpp_draft_model=llama_cpp_draft_model_path,
+        llama_cpp_lookup_cache=lookup_cache,
         kv_cache_type=kv_cache_type,
         notes=notes,
     )
@@ -227,6 +239,7 @@ def apply_preset(config: AppConfig, preset: PerformancePreset, model: str | None
     config.runtime.llama_cpp_draft_max = preset.llama_cpp_draft_max
     config.runtime.llama_cpp_expert_offload = preset.llama_cpp_expert_offload
     config.runtime.llama_cpp_draft_model = preset.llama_cpp_draft_model
+    config.runtime.llama_cpp_lookup_cache = preset.llama_cpp_lookup_cache
     config.runtime.kv_cache_type = preset.kv_cache_type
     save_config(config)
     return config
