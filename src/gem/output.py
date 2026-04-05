@@ -85,15 +85,19 @@ class OutputManager:
 
     # ── Phase transitions ────────────────────────────────────────────
 
-    def start_thinking(self) -> None:
+    def start_thinking(self, reset: bool = True) -> None:
         """Begin thinking phase — shows pulsating indicator."""
         with self._lock:
             self.state.phase = Phase.THINKING
-            self.state.start_time = time.time()
-            self.state.tokens = 0
-            self.state.thinking_peek = ""
-            self.state.tool_actions.clear()
-            self.state.content_chunks.clear()
+            if reset:
+                self.state.start_time = time.time()
+                self.state.tokens = 0
+                self.state.thinking_peek = ""
+                self.state.tool_actions.clear()
+                self.state.content_chunks.clear()
+            else:
+                # Keep accumulated state (tokens, peek) between tool rounds
+                self.state.thinking_peek = ""
         self._start_indicator()
 
     def start_streaming(self) -> None:
