@@ -1179,16 +1179,13 @@ class GemApp:
         out = self.out
 
         try:
-            tool_enabled = self.profile.tool_strategy == "native"
-            if tool_enabled:
-                # Use text-based tool loop (model outputs JSON, we parse & execute)
-                # This works reliably with quantized models that can't do native tool calling
-                from .text_tool_loop import run_text_tool_loop
-                assistant_text = run_text_tool_loop(
-                    self, user_text, composed_messages, self.out,
-                )
-            else:
-                assistant_text = self._run_stream_simple(composed_messages, stream)
+            # Text-based tool loop: model outputs JSON tool calls, we execute.
+            # Works with ALL models (quantized or not). No special tokens needed.
+            # This is the Codex approach — one loop, model drives tools until done.
+            from .text_tool_loop import run_text_tool_loop
+            assistant_text = run_text_tool_loop(
+                self, user_text, composed_messages, self.out,
+            )
         except RuntimeErrorWithContext as exc:
             self.out.set_error(f"Connection issue: {exc}")
             self.log.exception("Runtime error")
