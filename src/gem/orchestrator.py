@@ -238,8 +238,9 @@ Return a JSON array. Each step:
 
 IMPORTANT:
 - Keep it SIMPLE. 3-5 steps max. Don't over-engineer.
-- Do NOT modify existing project files (README.md, pyproject.toml, etc.)
-- Create NEW files only. If making an app, put everything in ONE file.
+- You CAN edit existing files if the task requires it (e.g. "refactor app.py")
+- Do NOT touch config files (.gitignore, pyproject.toml, CLAUDE.md, .env) unless explicitly asked
+- For new projects, prefer ONE main file over many small files
 - Steps modifying the same file MUST be sequential (add dependency)
 - Return ONLY valid JSON, no explanation.
 
