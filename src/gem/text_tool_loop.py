@@ -329,21 +329,26 @@ def run_text_tool_loop(
                         out.set_stage(f"generating ({token_count} tok)")
 
                 # Check if we have a complete tool call — stop streaming early
-                partial = "".join(chunks)
                 if '{"tool"' in partial:
-                    # For write_file with code block: wait for closing ```
-                    if "write_file" in partial and "```" in partial:
-                        # Count code fences — need an even number (open + close)
+                    # For hybrid format: JSON line + code block
+                    if "```" in partial:
                         fences = partial.count("```")
                         if fences >= 2:
                             got_tool_call = True
                             break
-                    # For other tools: just need closing }
-                    elif partial.rstrip().endswith("}"):
+                    # For full JSON: try to parse every few tokens
+                    elif token_count % 5 == 0:
                         tc = parse_tool_call(partial)
-                        if tc:
+                        if tc and tc.get("args", {}).get("content", ""):
                             got_tool_call = True
                             break
+                        # Also stop if we see the JSON closing pattern "}}\n or "}} at end
+                        stripped = partial.rstrip()
+                        if stripped.endswith("}}") or stripped.endswith('"}'):
+                            tc = parse_tool_call(partial)
+                            if tc:
+                                got_tool_call = True
+                                break
 
         content = "".join(chunks).strip()
 
