@@ -199,9 +199,15 @@ class OutputManager:
             return
         self._indicator_running = False
         if self._indicator_thread:
-            self._indicator_thread.join(timeout=2)
-        sys.stderr.write("\r\033[K")
-        sys.stderr.flush()
+            try:
+                self._indicator_thread.join(timeout=1)
+            except (KeyboardInterrupt, RuntimeError):
+                pass
+        try:
+            sys.stderr.write("\r\033[K")
+            sys.stderr.flush()
+        except (BrokenPipeError, OSError):
+            pass
 
     @staticmethod
     def _flip_text(text: str, tick: int) -> str:
