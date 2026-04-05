@@ -234,23 +234,18 @@ class OutputManager:
                 peek = self.state.thinking_peek
                 custom = getattr(self, '_custom_stage', '')
 
-            label = custom or LABELS[int(elapsed) // 6 % len(LABELS)]
-
-            # Cost savings: what this would cost on cloud APIs
-            cost = tokens * 0.000015  # ~$15/1M tokens (Claude/GPT-4 average)
+            # Line 1: gem label (always rotating) + timer + savings
+            gem_label = LABELS[int(elapsed) // 6 % len(LABELS)]
+            cost = tokens * 0.000015
             savings = f" · ${cost:.3f} saved" if tokens > 10 else ""
 
-            flip_label = self._flip_text(f"{label}...", tick)
-            line1 = f"\033[32m {icon} {flip_label} ({timer}{savings})\033[0m"
+            line1 = f"\033[32m {icon} {gem_label}... ({timer}{savings})\033[0m"
 
-            raw_len = len(f" {icon} {label}... ({timer})")
-            if raw_len > cols - 2:
-                line1 = line1[:cols - 5] + "..."
-
-            # Line 2: thinking peek (what model is considering)
-            if peek:
-                peek_text = peek[:cols - 6]
-                sys.stderr.write(f"\r{line1}\033[K\n\033[2m    {peek_text}\033[0m\033[K\033[A")
+            # Line 2: what the model is actually doing (task context)
+            context_line = custom or ""
+            if context_line:
+                ctx_text = context_line[:cols - 6]
+                sys.stderr.write(f"\r{line1}\033[K\n\033[2m    {ctx_text}\033[0m\033[K\033[A")
             else:
                 sys.stderr.write(f"\r{line1}\033[K")
             sys.stderr.flush()
