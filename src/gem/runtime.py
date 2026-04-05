@@ -1,0 +1,581 @@
+from __future__ import annotations
+
+import json
+import re
+from typing import Any, Iterator
+
+import httpx
+
+from .config import RuntimeConfig
+from .tool_parsing import (
+    build_tool_result_message,
+    build_tool_response,
+    inject_tool_schemas_into_prompt,
+    parse_tool_calls,
+)
+
+
+class RuntimeErrorWithContext(RuntimeError):
+    pass
+
+
+class StreamEvent(dict):
+    pass
+
+
+class GemRuntimeGateway:
+    """Talks to Ollama, llama.cpp, MLX, or HuggingFace local backends."""
+
+    def __init__(self, config: RuntimeConfig) -> None:
+        self.config = config
+        self._hf_backend: Any | None = None
+        self._mlx_backend: Any | None = None
+        self._client: httpx.Client | None = None
+        self.last_response_meta: dict[str, Any] = {}  # for token tracking
+        self._last_thinking: str = ""  # thinking extracted from MLX output
+        base = self.config.base_url.rstrip("/")
+        if self.config.provider == "llama_cpp":
+            self.endpoint = f"{base}/v1/chat/completions"
+            self.tags_endpoint = f"{base}/v1/models"
+        elif self.config.provider in ("mlx-local", "huggingface-local"):
+            self.endpoint = ""
+            self.tags_endpoint = ""
+        else:
+            self.endpoint = f"{base}/api/chat"
+            self.tags_endpoint = f"{base}/api/tags"
+
+    @property
+    def client(self) -> httpx.Client:
+        """Persistent connection-pooled HTTP client for speed."""
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.Client(
+                timeout=httpx.Timeout(
+                    connect=10.0,
+                    read=float(self.config.request_timeout_seconds),
+                    write=30.0,
+                    pool=10.0,
+                ),
+                limits=httpx.Limits(
+                    max_connections=4,
+                    max_keepalive_connections=2,
+                    keepalive_expiry=300,
+                ),
+            )
+        return self._client
+
+    def close(self) -> None:
+        if self._client and not self._client.is_closed:
+            self._client.close()
+
+    def llama_server_command(self, model_path: str, port: int = 8081) -> list[str]:
+        """Build the optimal llama-server launch command with all speed flags.
+
+        Usage: subprocess.Popen(engine.llama_server_command("/path/to/model.gguf"))
+        """
+        cmd = [
+            "llama-server",
+            "--model", model_path,
+            "--port", str(port),
+            "--ctx-size", str(max(4096, self.config.max_context_chars // 4)),
+            "--threads", str(self.config.llama_cpp_threads),
+            "--flash-attn", "on",
+            "--mmap",
+        ]
+        # GPU layers
+        ngl = self.config.llama_cpp_gpu_layers
+        if ngl > 0:
+            cmd.extend(["-ngl", str(ngl)])
+        # Expert offloading (MoE models: keep attention on GPU, experts on CPU)
+        if self.config.llama_cpp_expert_offload:
+            cmd.extend(["-ngl", "999", "-ot", "exps=CPU"])
+        # KV cache compression
+        if self.config.kv_cache_type and self.config.kv_cache_type != "f16":
+            cmd.extend(["--cache-type-k", self.config.kv_cache_type,
+                        "--cache-type-v", self.config.kv_cache_type])
+        # Speculative decoding (mutual exclusion: draft model > ngram)
+        if self.config.llama_cpp_draft_model:
+            cmd.extend(["--model-draft", self.config.llama_cpp_draft_model,
+                        "--draft-max", str(self.config.llama_cpp_draft_max)])
+        elif self.config.llama_cpp_spec_type:
+            cmd.extend(["--spec-type", self.config.llama_cpp_spec_type,
+                        "--draft-max", str(self.config.llama_cpp_draft_max)])
+        # Batch sizes for MoE CPU inference
+        cmd.extend(["-b", str(self.config.llama_cpp_batch_size),
+                    "-ub", str(min(512, self.config.llama_cpp_batch_size))])
+        return cmd
+
+    def healthcheck(self) -> tuple[bool, str]:
+        if self.config.provider == "mlx-local":
+            try:
+                self._get_mlx_backend()
+                return True, self.config.mlx_model_id or self.config.model or "mlx local model"
+            except Exception as exc:
+                return False, str(exc)
+        if self.config.provider == "huggingface-local":
+            try:
+                self._get_hf_backend()
+                return True, self.config.huggingface_model_id or self.config.model or "local model"
+            except Exception as exc:
+                return False, str(exc)
+        try:
+            response = self.client.get(self.tags_endpoint)
+            response.raise_for_status()
+            return True, self.tags_endpoint
+        except Exception as exc:
+            return False, str(exc)
+
+    def list_models(self) -> list[str]:
+        if self.config.provider == "mlx-local":
+            model_id = self.config.mlx_model_id or self.config.model
+            return [model_id] if model_id else []
+        if self.config.provider == "huggingface-local":
+            model_id = self.config.huggingface_model_id or self.config.model
+            return [model_id] if model_id else []
+        response = self.client.get(self.tags_endpoint)
+        response.raise_for_status()
+        data = response.json()
+        if self.config.provider == "llama_cpp":
+            return [m.get("id", "") for m in data.get("data", []) if m.get("id")]
+        return [m["name"] for m in data.get("models", []) if "name" in m]
+
+    def _options(self, num_ctx_override: int | None = None) -> dict[str, Any]:
+        opts: dict[str, Any] = {
+            "temperature": self.config.temperature,
+            "num_ctx": num_ctx_override or max(16384, self.config.max_context_chars // 4),
+            "top_p": 0.95,
+            "top_k": 64,
+        }
+        if self.config.mode == "fast":
+            opts["temperature"] = min(opts["temperature"], 0.15)
+            opts["num_predict"] = 4096  # cap generation for speed
+        if self.config.quant_preset == "smallest":
+            opts["num_ctx"] = min(opts["num_ctx"], 2048)
+        elif self.config.quant_preset == "fastest":
+            opts["num_ctx"] = min(opts["num_ctx"], 3072)
+        return opts
+
+    def chat_once(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        think: bool = True,
+    ) -> dict[str, Any]:
+        if self.config.provider == "mlx-local":
+            # Inject tool schemas into system prompt for MLX
+            effective_messages = messages
+            if tools:
+                effective_messages = self._inject_tools_into_messages(messages, tools)
+            content = self._mlx_generate(effective_messages)
+            if tools:
+                parsed = parse_tool_calls(content)
+                if parsed.has_tools:
+                    return {"message": {"content": parsed.content, "tool_calls": parsed.to_ollama_format()}}
+            return {"message": {"content": content, "tool_calls": []}}
+        if self.config.provider == "huggingface-local":
+            effective_messages = messages
+            if tools:
+                effective_messages = self._inject_tools_into_messages(messages, tools)
+            content = self._hf_generate(effective_messages)
+            if tools:
+                parsed = parse_tool_calls(content)
+                if parsed.has_tools:
+                    return {"message": {"content": parsed.content, "tool_calls": parsed.to_ollama_format()}}
+            return {"message": {"content": content, "tool_calls": []}}
+
+        payload = self._payload(messages, stream=False, tools=tools, think=think)
+        last_error: Exception | None = None
+        for _ in range(max(1, self.config.max_retries + 1)):
+            try:
+                response = self.client.post(self.endpoint, json=payload)
+                response.raise_for_status()
+                data = response.json()
+                if "error" in data:
+                    raise RuntimeErrorWithContext(data["error"])
+                if self.config.provider == "llama_cpp":
+                    return {"message": self._extract_message(data)}
+                self.last_response_meta = {
+                    k: data.get(k, 0) for k in
+                    ("prompt_eval_count", "eval_count", "total_duration", "load_duration")
+                }
+                return data
+            except Exception as exc:
+                last_error = exc
+        raise RuntimeErrorWithContext(str(last_error) if last_error else "runtime request failed")
+
+    def stream_chat_events(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        think: bool = True,
+        num_ctx: int | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        if self.config.provider == "mlx-local":
+            effective_messages = messages
+            if tools:
+                effective_messages = self._inject_tools_into_messages(messages, tools)
+            # Stream with thinking/content separation
+            raw_parts: list[str] = []
+            buffer = ""
+            in_thinking = False
+            self._last_thinking = ""
+            for chunk in self._mlx_stream_generate(effective_messages):
+                buffer += chunk
+                # Buffer partial special tokens
+                if "<|" in buffer and "|>" not in buffer:
+                    continue
+                if "<tool_call" in buffer and "tool_call|>" not in buffer:
+                    continue
+                if "<|channel>" in buffer and "<channel|>" not in buffer:
+                    # Inside thinking block — accumulate but don't yield as content
+                    if "<|channel>thought" in buffer:
+                        in_thinking = True
+                    continue
+                raw_parts.append(buffer)
+                # Check if thinking block ended in this chunk
+                if in_thinking and "<channel|>" in buffer:
+                    # Extract thinking text
+                    parts = buffer.split("<channel|>", 1)
+                    thinking_part = parts[0].replace("<|channel>thought", "").strip()
+                    if thinking_part:
+                        yield {"type": "thinking", "content": thinking_part}
+                    content_after = parts[1] if len(parts) > 1 else ""
+                    content_after = self._clean_mlx_output(content_after)
+                    in_thinking = False
+                    buffer = ""
+                    if content_after.strip():
+                        yield {"type": "content", "content": content_after}
+                    continue
+                if not in_thinking:
+                    cleaned = self._clean_mlx_output(buffer)
+                    buffer = ""
+                    if cleaned.strip():
+                        yield {"type": "content", "content": cleaned}
+                else:
+                    buffer = ""
+            # Flush
+            if buffer:
+                raw_parts.append(buffer)
+                if in_thinking:
+                    yield {"type": "thinking", "content": buffer}
+                else:
+                    cleaned = self._clean_mlx_output(buffer)
+                    if cleaned.strip():
+                        yield {"type": "content", "content": cleaned}
+            # Parse tool calls from raw
+            raw_full = "".join(raw_parts)
+            if tools:
+                parsed = parse_tool_calls(raw_full)
+                if parsed.has_tools:
+                    yield {"type": "tool_calls", "tool_calls": parsed.to_ollama_format()}
+            return
+        if self.config.provider == "huggingface-local":
+            content = self._hf_generate(messages)
+            for chunk in self._chunk_text(content, 180):
+                if chunk:
+                    yield {"type": "content", "content": chunk}
+            return
+
+        payload = self._payload(messages, stream=True, tools=tools, think=think, num_ctx=num_ctx)
+        last_error: Exception | None = None
+        for attempt in range(max(1, self.config.max_retries + 1)):
+            try:
+                with self.client.stream("POST", self.endpoint, json=payload) as response:
+                    response.raise_for_status()
+                    for line in response.iter_lines():
+                        if not line:
+                            continue
+                        if self.config.provider == "llama_cpp" and line.startswith("data: "):
+                            line = line[6:]
+                            if line == "[DONE]":
+                                break
+                        data = json.loads(line)
+                        if "error" in data:
+                            raise RuntimeErrorWithContext(data["error"])
+                        message = self._extract_message(data)
+                        # Yield tool_calls from streaming if present
+                        tool_calls = message.get("tool_calls")
+                        if tool_calls:
+                            yield {"type": "tool_calls", "tool_calls": tool_calls}
+                        thinking = message.get("thinking")
+                        if thinking:
+                            yield {"type": "thinking", "content": thinking}
+                        content = message.get("content")
+                        if content:
+                            yield {"type": "content", "content": content}
+                        # Ollama signals done
+                        if data.get("done"):
+                            final_msg = data.get("message", {})
+                            final_tools = final_msg.get("tool_calls")
+                            if final_tools:
+                                yield {"type": "tool_calls", "tool_calls": final_tools}
+                return
+            except Exception as exc:
+                last_error = exc
+                if attempt >= self.config.max_retries:
+                    break
+        raise RuntimeErrorWithContext(str(last_error) if last_error else "runtime stream failed")
+
+    def stream_chat(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+    ) -> Iterator[str]:
+        for event in self.stream_chat_events(messages, tools):
+            if event["type"] == "content":
+                yield str(event["content"])
+
+    def _payload(
+        self,
+        messages: list[dict[str, Any]],
+        stream: bool,
+        tools: list[dict[str, Any]] | None = None,
+        think: bool = True,
+        num_ctx: int | None = None,
+    ) -> dict[str, Any]:
+        opts = self._options(num_ctx_override=num_ctx)
+        if self.config.provider == "llama_cpp":
+            extra: dict[str, Any] = {
+                "n_gpu_layers": self.config.llama_cpp_gpu_layers,
+                "n_threads": self.config.llama_cpp_threads,
+                "n_batch": self.config.llama_cpp_batch_size,
+            }
+            # Speed: expert offloading — keep attention on GPU, experts on CPU
+            if self.config.llama_cpp_expert_offload:
+                extra["ot"] = "exps=CPU"
+            # Speed: KV cache compression
+            if self.config.kv_cache_type and self.config.kv_cache_type != "f16":
+                extra["cache_type_k"] = self.config.kv_cache_type
+                extra["cache_type_v"] = self.config.kv_cache_type
+            payload: dict[str, Any] = {
+                "model": self.config.model,
+                "stream": stream,
+                "messages": messages,
+                "temperature": opts["temperature"],
+                "n_ctx": opts["num_ctx"],
+                "cache_prompt": True,
+                "extra_body": extra,
+            }
+            if tools:
+                payload["tools"] = tools
+            return payload
+
+        payload = {
+            "model": self.config.model,
+            "stream": stream,
+            "messages": messages,
+            "options": opts,
+            "keep_alive": "30m",
+        }
+        if not think:
+            payload["think"] = False
+        if tools:
+            payload["tools"] = tools
+        # Timeout: 120s for streaming, 300s for non-streaming
+        return payload
+
+    def _extract_message(self, data: dict[str, Any]) -> dict[str, Any]:
+        if self.config.provider == "llama_cpp":
+            choices = data.get("choices", [])
+            if not choices:
+                return {}
+            delta = choices[0].get("delta") or choices[0].get("message") or {}
+            return {
+                "content": delta.get("content", ""),
+                "tool_calls": delta.get("tool_calls") or [],
+            }
+        return data.get("message", {})
+
+    # ── Local backends ───────────────────────────────────────────────────
+
+    def _get_hf_backend(self) -> Any:
+        if self._hf_backend is not None:
+            return self._hf_backend
+        model_id = self.config.huggingface_model_id or self.config.model
+        if not model_id:
+            raise RuntimeErrorWithContext("No Hugging Face model configured.")
+        try:
+            import torch
+            from transformers import AutoModelForMultimodalLM, AutoProcessor
+        except ImportError:
+            try:
+                import torch
+                from transformers import AutoModelForCausalLM as AutoModelForMultimodalLM, AutoTokenizer as AutoProcessor
+            except Exception as exc:
+                raise RuntimeErrorWithContext("transformers + torch required for HF backend.") from exc
+        torch_dtype = None
+        if self.config.huggingface_dtype not in {"", "auto"}:
+            torch_dtype = getattr(torch, self.config.huggingface_dtype, None)
+        model_kwargs: dict[str, Any] = {}
+        if torch_dtype is not None:
+            model_kwargs["torch_dtype"] = torch_dtype
+        else:
+            model_kwargs["dtype"] = "auto"
+        device_map = self.config.huggingface_device if self.config.huggingface_device else "auto"
+        processor = AutoProcessor.from_pretrained(model_id)
+        model = AutoModelForMultimodalLM.from_pretrained(model_id, device_map=device_map, **model_kwargs)
+        self._hf_backend = (model, processor)
+        return self._hf_backend
+
+    def _get_mlx_backend(self) -> Any:
+        if self._mlx_backend is not None:
+            return self._mlx_backend
+        model_id = self.config.mlx_model_id or self.config.model
+        if not model_id:
+            raise RuntimeErrorWithContext("No MLX model configured.")
+        try:
+            from mlx_lm import load, generate
+        except Exception as exc:
+            raise RuntimeErrorWithContext("mlx-lm required for MLX backend.") from exc
+        model, tokenizer = load(model_id)
+        self._mlx_backend = (model, tokenizer, generate)
+        return self._mlx_backend
+
+    def _mlx_generate(self, messages: list[dict[str, Any]]) -> str:
+        model, tokenizer, generate = self._get_mlx_backend()
+        prompt = self._messages_to_prompt(messages)
+        try:
+            if getattr(tokenizer, "chat_template", None) is not None:
+                prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
+        except Exception:
+            pass
+        return str(generate(
+            model, tokenizer, prompt=prompt,
+            max_tokens=max(512, min(8192, self.config.max_context_chars // 4)),
+            # temperature handled by mlx defaults
+            verbose=False,
+        )).strip()
+
+    # Gemma 4 special tokens to strip from MLX output
+    _GEMMA4_TOKENS = re.compile(
+        r'<\|tool_call\>.*?<tool_call\|>'
+        r'|<\|"\|>'
+        r'|<\|[^>]*\|>'
+        r'|<turn\|>'
+        r'|<\|turn\>',
+        re.DOTALL
+    )
+
+    def _clean_mlx_output(self, text: str) -> str:
+        """Strip Gemma 4 special tokens, split thinking from content."""
+        # Split on thinking channel markers
+        if "<|channel>thought" in text:
+            # Everything before <|channel>thought = content prefix (usually empty)
+            # Everything between <|channel>thought and <channel|> = thinking
+            # Everything after <channel|> = actual content
+            parts = re.split(r'<\|channel\>thought', text, maxsplit=1)
+            before = parts[0]
+            if len(parts) > 1:
+                rest = parts[1]
+                channel_end = rest.find("<channel|>")
+                if channel_end >= 0:
+                    thinking = rest[:channel_end]
+                    content = rest[channel_end + len("<channel|>"):]
+                    # Store thinking for the indicator
+                    self._last_thinking = thinking
+                    text = before + content
+                else:
+                    # Haven't seen end of thinking yet — buffer it
+                    self._last_thinking = rest
+                    text = before
+        # Clean remaining tokens
+        text = self._GEMMA4_TOKENS.sub('', text)
+        # Also strip <channel|> and <|channel> fragments
+        text = text.replace("<channel|>", "").replace("<|channel>", "")
+        return text
+
+    def _mlx_stream_generate(self, messages: list[dict[str, Any]]) -> Iterator[str]:
+        """True streaming generation for MLX."""
+        model, tokenizer, _ = self._get_mlx_backend()
+        prompt = self._messages_to_prompt(messages)
+        try:
+            if getattr(tokenizer, "chat_template", None) is not None:
+                prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
+        except Exception:
+            pass
+        try:
+            from mlx_lm import stream_generate
+            for response in stream_generate(
+                model, tokenizer, prompt=prompt,
+                max_tokens=max(512, min(8192, self.config.max_context_chars // 4)),
+            ):
+                text = response.text if hasattr(response, 'text') else (response.get("text", "") if isinstance(response, dict) else str(response))
+                if text:
+                    cleaned = self._clean_mlx_output(text)
+                    if cleaned:
+                        yield cleaned
+        except (ImportError, AttributeError):
+            content = self._mlx_generate(messages)
+            cleaned = self._clean_mlx_output(content)
+            for chunk in self._chunk_text(cleaned, 80):
+                yield chunk
+
+    def _hf_generate(self, messages: list[dict[str, Any]]) -> str:
+        model, processor = self._get_hf_backend()
+        try:
+            # Use Gemma 4's apply_chat_template for proper formatting
+            inputs = processor.apply_chat_template(
+                messages,
+                tokenize=True,
+                return_dict=True,
+                return_tensors="pt",
+                add_generation_prompt=True,
+            )
+            if hasattr(model, "device"):
+                inputs = {k: v.to(model.device) if hasattr(v, "to") else v for k, v in inputs.items()}
+            input_len = inputs["input_ids"].shape[-1]
+            outputs = model.generate(
+                **inputs,
+                max_new_tokens=max(256, min(4096, self.config.max_context_chars // 4)),
+                # temperature handled by mlx defaults
+            )
+            generated = outputs[0][input_len:]
+            # Try parse_response for thinking mode support
+            raw = processor.decode(generated, skip_special_tokens=False)
+            if hasattr(processor, "parse_response"):
+                parsed = processor.parse_response(raw)
+                return str(parsed.get("content", parsed.get("text", raw))).strip()
+            return processor.decode(generated, skip_special_tokens=True).strip()
+        except Exception:
+            # Fallback to simple prompt-based generation
+            prompt = self._messages_to_prompt(messages)
+            inputs = processor(prompt, return_tensors="pt")
+            if hasattr(model, "device"):
+                inputs = {k: v.to(model.device) if hasattr(v, "to") else v for k, v in inputs.items()}
+            outputs = model.generate(**inputs, max_new_tokens=2048)
+            return processor.decode(outputs[0], skip_special_tokens=True).strip()
+
+    @staticmethod
+    def _inject_tools_into_messages(
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Inject tool schemas into the system/first message for non-native backends."""
+        result = list(messages)
+        for i, msg in enumerate(result):
+            if msg.get("role") == "system":
+                result[i] = {
+                    **msg,
+                    "content": inject_tool_schemas_into_prompt(msg["content"], tools),
+                }
+                return result
+        # No system message — prepend one
+        return [
+            {"role": "system", "content": inject_tool_schemas_into_prompt("", tools)},
+            *result,
+        ]
+
+    @staticmethod
+    def _messages_to_prompt(messages: list[dict[str, Any]]) -> str:
+        parts: list[str] = []
+        for msg in messages:
+            role = msg.get("role", "user").upper()
+            content = str(msg.get("content", ""))
+            if content:
+                parts.append(f"{role}:\n{content}")
+        parts.append("ASSISTANT:")
+        return "\n\n".join(parts)
+
+    @staticmethod
+    def _chunk_text(text: str, chunk_size: int) -> Iterator[str]:
+        for start in range(0, len(text), chunk_size):
+            yield text[start:start + chunk_size]

@@ -3,7 +3,7 @@ import requests
 from ddgs import DDGS
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
-MODEL = "gemma4:e4b"
+MODEL = "gemma4"
 
 TOOLS = [
     {
@@ -22,77 +22,77 @@ TOOLS = [
                 "required": ["query"]
             }
         }
-    }
-]
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "code_analyzer",
+            "description": "Parses, analyzes, and provides actionable feedback on a provided block of source code. Use this tool when the user needs to check for bugs, optimize performance, understand complexity, or refactor existing code.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code_snippet": {
+                        "description": "The complete source code provided by the user. This must be accurate and ready to run (or be the full file content).",
+                        "type": "STRING"
+                    },
+                    "language": {
+                        "description": "The programming language of the code (e.g., Python, JavaScript, Java, C++).",
+                        "type": "STRING"
+                    },
+                    "analysis_focus": {
+                        "description": "What specific aspect of the code needs attention. Choose one or more from: 'security vulnerability check', 'performance optimization', 'readability/style guide adherence', 'complexity assessment', or 'bug identification'.",
+                        "type": "ARRAY",
+                        "items": {
+                            "type": "string",
+                            "enum": [
+                                "security vulnerability check",
+                                "performance optimization",
+                                "readability assessment",
+                                "complexity assessment"
+                            ]
+                        }
+                    }
+                }
+            }
+        }
+    ]
 
+def run_chat_session():
+    """Runs the main interactive chat loop."""
+    print("--- Gemma Chat Session Initialized ---")
+    print("Type 'exit' or 'quit' to end the session.")
 
-def search(query, max_results=5):
-    results = []
-    with DDGS() as ddgs:
-        for r in ddgs.text(query, max_results=max_results):
-            results.append(f"**{r['title']}**\n{r['body']}\n{r['href']}\n")
-    return "\n".join(results) if results else "No results found."
+    while True:
+        user_input = input("\nYou: ")
+        if user_input.lower() in ['exit', 'quit']:
+            print("\n--- Session Ended ---")
+            break
+        
+        # In a real application, this is where the API call would happen.
+        # For this example, we simulate the response structure.
+        
+        # Simulate API call and response handling
+        try:
+            # Placeholder for actual API call logic
+            print("\n[Simulating API call to Gemma model...]")
+            
+            # Simple simulation of a response
+            if "hello" in user_input.lower():
+                response = "Hello! I am a large language model, ready to assist you today. How can I help?"
+            elif "weather" in user_input.lower():
+                response = "I cannot check the live weather, but I recommend checking a dedicated weather service!"
+            else:
+                response = f"I received your message: '{user_input}'. I am processing this request using my advanced language capabilities."
 
+            print(f"\nAI: {response}")
 
-def chat(messages):
-    resp = requests.post(OLLAMA_URL, json={
-        "model": MODEL,
-        "messages": messages,
-        "tools": TOOLS,
-        "stream": False
-    })
-    resp.raise_for_status()
-    return resp.json()["message"]
+        except Exception as e:
+            print(f"\nAI Error: An error occurred during processing: {e}")
 
 
 def main():
-    print(f"\n  Gemma 4 Chat (with web search)")
-    print(f"  Model: {MODEL}")
-    print(f"  Type 'quit' to exit\n")
-
-    messages = []
-
-    while True:
-        try:
-            user_input = input("\033[1m> \033[0m").strip()
-        except (KeyboardInterrupt, EOFError):
-            print("\nBye!")
-            break
-
-        if not user_input:
-            continue
-        if user_input.lower() in ("quit", "exit", "q"):
-            print("Bye!")
-            break
-
-        messages.append({"role": "user", "content": user_input})
-
-        response = chat(messages)
-        messages.append(response)
-
-        # Handle tool calls
-        while response.get("tool_calls"):
-            for tool_call in response["tool_calls"]:
-                name = tool_call["function"]["name"]
-                args = tool_call["function"]["arguments"]
-
-                if name == "web_search":
-                    print(f"\033[90m  Searching: {args['query']}\033[0m")
-                    result = search(args["query"])
-                else:
-                    result = f"Unknown tool: {name}"
-
-                messages.append({
-                    "role": "tool",
-                    "content": result
-                })
-
-            response = chat(messages)
-            messages.append(response)
-
-        if response.get("content"):
-            print(f"\n{response['content']}\n")
-
+    """Main entry point."""
+    run_chat_session()
 
 if __name__ == "__main__":
     main()

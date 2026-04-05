@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+.env
+.DS_Store
+*.gguf
+*.bin
+*.safetensors
+tests/test_results.json
+gem_traces_test.jsonl
