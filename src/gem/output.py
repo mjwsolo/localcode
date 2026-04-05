@@ -229,9 +229,12 @@ class OutputManager:
 
             label = custom or LABELS[int(elapsed) // 6 % len(LABELS)]
 
-            # Split-flap animation on the label text
+            # Cost savings: what this would cost on cloud APIs
+            cost = tokens * 0.000015  # ~$15/1M tokens (Claude/GPT-4 average)
+            savings = f" · saved ${cost:.2f}" if cost > 0.01 else ""
+
             flip_label = self._flip_text(f"{label}...", tick)
-            line1 = f"\033[32m {icon} {flip_label} ({timer})\033[0m"
+            line1 = f"\033[32m {icon} {flip_label} ({timer}{savings})\033[0m"
 
             raw_len = len(f" {icon} {label}... ({timer})")
             if raw_len > cols - 2:
