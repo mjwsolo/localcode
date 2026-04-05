@@ -104,46 +104,49 @@ def parse_tool_call(text: str) -> dict | None:
     if '{"tool"' not in text and '"tool"' not in text:
         return None
 
-    # Try hybrid format first: JSON line + code block
+    # Strategy 1: Look for a code block after a JSON tool call line
     # {"tool": "write_file", "args": {"path": "game.py"}}
-    # ```
+    # ```python
     # code here
     # ```
-    json_line_match = re.search(r'(\{[^{}]*"tool"\s*:\s*"(\w+)"[^{}]*\})', text)
-    if json_line_match:
+    code_block_match = re.search(r'```\w*\n(.*?)```', text, re.DOTALL)
+    # Match JSON with one level of nested braces: {"tool": "x", "args": {"key": "val"}}
+    simple_json = re.search(r'(\{"tool"\s*:\s*"(\w+)"\s*,\s*"args"\s*:\s*\{[^}]*\}\s*\})', text)
+    if simple_json and code_block_match:
         try:
-            tool_call = json.loads(json_line_match.group(1))
-            tool_name = tool_call.get("tool", "")
-            args = tool_call.get("args", {})
-
-            # If it's write_file and content is missing, look for a code block
-            if tool_name == "write_file" and "content" not in args:
-                code_match = re.search(r'```\w*\n(.*?)```', text, re.DOTALL)
-                if code_match:
-                    args["content"] = code_match.group(1).strip()
-                    tool_call["args"] = args
-
-            return tool_call
+            tool_call = json.loads(simple_json.group(1))
+            if tool_call.get("tool") == "write_file":
+                tool_call.setdefault("args", {})["content"] = code_block_match.group(1).strip()
+                return tool_call
         except json.JSONDecodeError:
             pass
 
-    # Full JSON format
-    try:
-        # Find the most complete JSON object
-        for m in re.finditer(r'\{[^{}]*"tool"[^{}]*\{.*?\}[^{}]*\}', text, re.DOTALL):
-            parsed = json.loads(m.group())
-            if isinstance(parsed, dict) and "tool" in parsed:
-                return parsed
-    except (json.JSONDecodeError, ValueError):
-        pass
-
-    # Last resort: try parsing the whole text
-    try:
-        parsed = json.loads(text)
-        if isinstance(parsed, dict) and "tool" in parsed:
-            return parsed
-    except json.JSONDecodeError:
-        pass
+    # Strategy 2: Full JSON with nested args (model put content in JSON)
+    # Find the largest valid JSON object containing "tool"
+    # Use a greedy approach since content may have special chars
+    start = text.find('{"tool"')
+    if start == -1:
+        start = text.find('"tool"')
+    if start >= 0:
+        # Try parsing from this point with increasing length
+        substr = text[start:]
+        # Try the whole thing first
+        for end_pos in range(len(substr), 10, -1):
+            candidate = substr[:end_pos]
+            if not candidate.rstrip().endswith("}"):
+                continue
+            try:
+                parsed = json.loads(candidate)
+                if isinstance(parsed, dict) and "tool" in parsed:
+                    # Unescape content if it has literal \n
+                    args = parsed.get("args", {})
+                    if "content" in args and isinstance(args["content"], str):
+                        if "\\n" in args["content"]:
+                            args["content"] = args["content"].replace("\\n", "\n").replace("\\t", "\t")
+                            parsed["args"] = args
+                    return parsed
+            except json.JSONDecodeError:
+                continue
 
     return None
 
