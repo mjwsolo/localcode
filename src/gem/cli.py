@@ -624,11 +624,50 @@ def main(argv: list[str] | None = None) -> None:
         if count:
             console.print(f"  Installed {count} built-in skills (review, test, explain, refactor, debug)")
 
+    # Auto-select the best installed model if none specified
+    if not args.model and not config.runtime.model:
+        best = _auto_select_model(config)
+        if best:
+            config.runtime.model = best
+
     app = GemApp(config=config, cwd=Path.cwd(), profile_name=args.profile, model_name=args.model)
     try:
         app.run()
     finally:
         app.close()
+
+
+def _auto_select_model(config) -> str:
+    """Pick the best available model. No user input needed.
+
+    Priority: 26B (smart) > e4b (balanced) > e2b (fast)
+    Picks the most capable model that's already installed in Ollama.
+    """
+    try:
+        from .runtime import GemRuntimeGateway
+        gw = GemRuntimeGateway(config.runtime)
+        installed = gw.list_models()
+    except Exception:
+        return ""
+
+    # Best to worst
+    preferences = [
+        ("gemma26b-iq3", "gemma4-26b-moe"),
+        ("gemma4:e4b", "gemma4-e4b"),
+        ("gemma4:e2b", "gemma4-e2b"),
+    ]
+
+    for model_name, profile_key in preferences:
+        if any(model_name in m for m in installed):
+            config.runtime.profile = profile_key
+            return model_name
+
+    # Return first available gemma model
+    for m in installed:
+        if "gemma" in m.lower():
+            return m
+
+    return ""
 
 
 if __name__ == "__main__":
