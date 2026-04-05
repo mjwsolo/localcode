@@ -203,25 +203,37 @@ class OutputManager:
         sys.stderr.write("\r\033[K")
         sys.stderr.flush()
 
-    @staticmethod
-    def _wave_text(text: str, tick: int) -> str:
-        """Create a wave animation by cycling character brightness left-to-right.
+    # Split-flap characters: each letter "flips" through these on its way to the target
+    _FLIP_CHARS = "▀▄█▌▐░▒▓"
 
-        Each character gets a brightness based on its position relative to
-        a moving wave front. Creates a shimmer/ripple effect.
+    @staticmethod
+    def _flip_text(text: str, tick: int) -> str:
+        """Split-flap display animation — letters flip left-to-right continuously.
+
+        A wave front moves across the text. Characters ahead of the front
+        show flip characters (like an airport departure board), characters
+        behind show the real letter. Creates a rolling reveal effect.
         """
-        # ANSI brightness levels: bold, normal, dim
-        levels = ["\033[1;32m", "\033[32m", "\033[2;32m", "\033[32m"]
-        wave_len = len(levels)
+        wave_pos = tick % (len(text) + 6)  # wave front position, wraps around
         result = []
         for i, ch in enumerate(text):
             if ch == ' ':
-                result.append(ch)
+                result.append(' ')
+                continue
+            dist = wave_pos - i
+            if dist < 0 or dist > 3:
+                # Normal: show real character
+                result.append(f"\033[32m{ch}")
+            elif dist == 0:
+                # Flipping NOW: show flip char
+                flip_ch = OutputManager._FLIP_CHARS[tick % len(OutputManager._FLIP_CHARS)]
+                result.append(f"\033[1;37m{flip_ch}")
+            elif dist == 1:
+                # Just flipped: bright white settling
+                result.append(f"\033[1;32m{ch}")
             else:
-                phase = (tick - i) % (wave_len * 2)
-                if phase >= wave_len:
-                    phase = wave_len * 2 - phase - 1
-                result.append(f"{levels[phase % wave_len]}{ch}")
+                # Recently flipped: normal green
+                result.append(f"\033[32m{ch}")
         return "".join(result) + "\033[0m"
 
     def _run_indicator(self) -> None:
@@ -244,9 +256,9 @@ class OutputManager:
 
             label = custom or LABELS[int(elapsed) // 6 % len(LABELS)]
 
-            # Wave animation on the label text
-            wave_label = self._wave_text(f"{label}...", tick)
-            line1 = f" {icon} {wave_label} \033[2m({timer})\033[0m"
+            # Split-flap animation on the label text
+            flip_label = self._flip_text(f"{label}...", tick)
+            line1 = f" \033[32m{icon}\033[0m {flip_label} \033[2m({timer})\033[0m"
 
             raw_len = len(f" {icon} {label}... ({timer})")
             if raw_len > cols - 2:
