@@ -145,47 +145,53 @@ class Orchestrator:
         global_ctx = self._build_global_context()
 
         for attempt in range(self.MAX_REVIEW_LOOPS):
-            # Phase 2: Plan (26B generates task DAG)
+            # Phase 2: Plan — let the model decide how many steps
             self.out.set_stage("planning")
             plan = self._plan(task, global_ctx)
 
             if not plan.steps:
-                self.out.print_info("no steps generated, falling back to direct execution")
+                self.out.print_info("no steps generated, falling back")
                 return plan
 
-            # Show the plan to the user
-            sys.stdout.write(f"\n\033[1m  Plan ({len(plan.steps)} steps):\033[0m\n")
-            waves = plan.get_waves()
-            for wave_num, wave in enumerate(waves, 1):
-                parallel_tag = f" \033[2m(parallel)\033[0m" if len(wave) > 1 else ""
-                sys.stdout.write(f"  \033[2mwave {wave_num}:{parallel_tag}\033[0m\n")
-                for step in wave:
-                    deps = f" \033[2m← after {step.depends_on}\033[0m" if step.depends_on else ""
-                    sys.stdout.write(f"    [{step.id}] {step.description[:70]}{deps}\n")
-            sys.stdout.write("\n")
-            sys.stdout.flush()
+            # ── Fast path: 1-2 steps → skip waves, just generate directly ──
+            if len(plan.steps) <= 2:
+                sys.stdout.write(f"\n\033[2m  {plan.steps[0].description[:70]}\033[0m\n\n")
+                sys.stdout.flush()
+                for step in plan.steps:
+                    self.out.set_stage(step.description[:30])
+                    self._execute_step(step, global_ctx)
+            else:
+                # Show the multi-step plan
+                sys.stdout.write(f"\n\033[1m  Plan ({len(plan.steps)} steps):\033[0m\n")
+                waves = plan.get_waves()
+                for wave_num, wave in enumerate(waves, 1):
+                    parallel_tag = " \033[2m(parallel)\033[0m" if len(wave) > 1 else ""
+                    sys.stdout.write(f"  \033[2mwave {wave_num}:{parallel_tag}\033[0m\n")
+                    for step in wave:
+                        deps = f" \033[2m← after {step.depends_on}\033[0m" if step.depends_on else ""
+                        sys.stdout.write(f"    [{step.id}] {step.description[:70]}{deps}\n")
+                sys.stdout.write("\n")
+                sys.stdout.flush()
 
-            # Phase 3: Execute waves (workers in parallel)
-            for wave_num, wave in enumerate(waves, 1):
-                self.out.set_stage(f"wave {wave_num}/{len(waves)}")
-                self.out.print_info(f"wave {wave_num}/{len(waves)}: {len(wave)} worker{'s' if len(wave) > 1 else ''}")
-                self._execute_wave(wave, global_ctx)
-                # Merge: update global context with results
-                for step in wave:
-                    if step.status == "done":
-                        global_ctx.completed_steps.append(
-                            f"[{step.id}] {step.description}: {step.result[:100]}"
-                        )
-                        # Re-read modified files into global context
-                        for fpath in step.file_targets:
-                            full = global_ctx.repo_root / fpath
-                            if full.is_file():
-                                try:
-                                    global_ctx.existing_files[fpath] = full.read_text(errors="replace")
-                                except Exception:
-                                    pass
+                # Execute waves
+                for wave_num, wave in enumerate(waves, 1):
+                    self.out.set_stage(f"wave {wave_num}/{len(waves)}")
+                    self.out.print_info(f"wave {wave_num}/{len(waves)}: {len(wave)} worker{'s' if len(wave) > 1 else ''}")
+                    self._execute_wave(wave, global_ctx)
+                    for step in wave:
+                        if step.status == "done":
+                            global_ctx.completed_steps.append(
+                                f"[{step.id}] {step.description}: {step.result[:100]}"
+                            )
+                            for fpath in step.file_targets:
+                                full = global_ctx.repo_root / fpath
+                                if full.is_file():
+                                    try:
+                                        global_ctx.existing_files[fpath] = full.read_text(errors="replace")
+                                    except Exception:
+                                        pass
 
-            # Phase 4: Review (26B checks quality)
+            # Phase 4: Review
             self.out.set_stage("reviewing")
             plan = self._review(task, plan, global_ctx)
 
@@ -193,9 +199,7 @@ class Orchestrator:
                 self.out.print_info(f"review passed ({plan.review_score}/100)")
                 break
             else:
-                self.out.print_info(
-                    f"review {plan.review_score}/100 — replanning..."
-                )
+                self.out.print_info(f"review {plan.review_score}/100 — replanning...")
                 task = f"{task}\n\nPrevious attempt feedback:\n{plan.review_notes}"
 
         return plan
