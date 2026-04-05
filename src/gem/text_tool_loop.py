@@ -286,9 +286,7 @@ def run_text_tool_loop(
         # Stream response — stop as soon as we see a complete tool call
         chunks: list[str] = []
         token_count = 0
-        if round_num == 0:
-            out.set_stage("thinking")
-        else:
+        if round_num > 0:
             out.set_stage(f"round {round_num + 1}")
 
         got_tool_call = False
