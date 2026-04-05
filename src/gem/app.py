@@ -1079,7 +1079,7 @@ class GemApp:
         self._apply_cache_policy()
         self.session.messages = compact_messages(self.session.messages, max_chars=max(8000, self._effective_context_chars() * 2))
 
-        # -- Parallel context gathering (biggest speed win) --
+        # -- Context gathering — skip heavy stuff for simple creation tasks --
         ctx_chars = self._effective_context_chars()
         context_result = ""
         retrieval_result = ""
@@ -1088,31 +1088,40 @@ class GemApp:
         plan_result = None
         draft_result = ""
 
+        # Simple creation tasks (make X, build Y) don't need repo context — just go
+        text_lower = user_text.lower()
+        is_creation = any(w in text_lower for w in ("make", "create", "build", "write")) and \
+                      not any(w in text_lower for w in ("edit", "fix", "change", "update", "refactor"))
+
         try:
-            with ThreadPoolExecutor(max_workers=5) as pool:
-                futures = {
-                    pool.submit(build_context_block, self.repo_root, self.session.pinned_files, ctx_chars): "context",
-                    pool.submit(self._retrieval_context, user_text): "retrieval",
-                    pool.submit(build_repo_cartridge, self.repo_root, user_text, self.profile.retrieval_budget): "cartridge",
-                    pool.submit(resolve_referenced_skills, self.repo_root, user_text): "skills",
-                    pool.submit(self.plan_for_task, user_text): "plan",
-                }
-                for future in as_completed(futures):
-                    key = futures[future]
-                    try:
-                        result = future.result()
-                        if key == "context":
-                            context_result = result
-                        elif key == "retrieval":
-                            retrieval_result = result
-                        elif key == "cartridge":
-                            cartridge_result = result
-                        elif key == "skills":
-                            skill_result = "\n\n".join(f"Skill {name}:\n{content}" for name, content in result)
-                        elif key == "plan":
-                            plan_result = result
-                    except Exception:
-                        pass
+            if is_creation:
+                # Skip heavy context — creation tasks don't need repo cartridge
+                context_result = build_context_block(self.repo_root, self.session.pinned_files, min(ctx_chars, 4000))
+            else:
+                with ThreadPoolExecutor(max_workers=5) as pool:
+                    futures = {
+                        pool.submit(build_context_block, self.repo_root, self.session.pinned_files, ctx_chars): "context",
+                        pool.submit(self._retrieval_context, user_text): "retrieval",
+                        pool.submit(build_repo_cartridge, self.repo_root, user_text, self.profile.retrieval_budget): "cartridge",
+                        pool.submit(resolve_referenced_skills, self.repo_root, user_text): "skills",
+                        pool.submit(self.plan_for_task, user_text): "plan",
+                    }
+                    for future in as_completed(futures):
+                        key = futures[future]
+                        try:
+                            result = future.result()
+                            if key == "context":
+                                context_result = result
+                            elif key == "retrieval":
+                                retrieval_result = result
+                            elif key == "cartridge":
+                                cartridge_result = result
+                            elif key == "skills":
+                                skill_result = "\n\n".join(f"Skill {name}:\n{content}" for name, content in result)
+                            elif key == "plan":
+                                plan_result = result
+                        except Exception:
+                            pass
         except KeyboardInterrupt:
             self.out.done()
             self.console.print("\n  [dim]interrupted[/]")
