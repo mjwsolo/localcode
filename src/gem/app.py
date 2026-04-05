@@ -952,6 +952,21 @@ class GemApp:
             self.console.print(f"  {self.stats.summary()}")
             self.console.print(f"  Cache entries: {self.tool_cache.size}")
             return True
+        if name == "/orch":
+            if not arg:
+                self.console.print("Usage: /orch <task>  — run multi-agent orchestrated execution")
+                return True
+            from .orchestrator import Orchestrator
+            self.out.start_thinking()
+            plan = Orchestrator(self).run(arg)
+            self.out.done()
+            self.console.print(f"\n  [bold]{plan.summary}[/bold]")
+            if plan.review_notes:
+                self.console.print(f"  [dim]{plan.review_notes}[/dim]")
+            for step in plan.steps:
+                icon = {"done": "✓", "error": "✗", "skipped": "○"}.get(step.status, "·")
+                self.console.print(f"    {icon} [{step.id}] {step.description[:70]}")
+            return True
         if name == "/plan":
             if not arg:
                 if self._active_plan:

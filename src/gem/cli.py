@@ -84,6 +84,8 @@ def build_parser() -> argparse.ArgumentParser:
     agent_bg.add_argument("prompt")
     hidden_agent = subparsers.add_parser("agent-runner", help=argparse.SUPPRESS)
     hidden_agent.add_argument("prompt")
+    orch_parser = subparsers.add_parser("orch", help="multi-agent orchestrated task (planner→workers→reviewer)")
+    orch_parser.add_argument("prompt")
 
     resume = subparsers.add_parser("resume", help="resume a saved session")
     resume.add_argument("session_id", nargs="?")
@@ -553,6 +555,20 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "agent-bg":
         job_id = launch_background_agent(args.prompt, Path.cwd(), args.profile, args.model)
         console.print(f"Started background agent job {job_id}")
+        return
+    if args.command == "orch":
+        from .orchestrator import Orchestrator
+        app = GemApp(config=config, cwd=Path.cwd(), profile_name=args.profile, model_name=args.model)
+        try:
+            plan = Orchestrator(app).run(args.prompt)
+            console.print(f"\n[bold]{plan.summary}[/bold]")
+            if plan.review_notes:
+                console.print(f"[dim]{plan.review_notes}[/dim]")
+            for step in plan.steps:
+                icon = {"done": "[green]✓[/]", "error": "[red]✗[/]", "skipped": "[dim]○[/]"}.get(step.status, "·")
+                console.print(f"  {icon} [{step.id}] {step.description[:70]}")
+        finally:
+            app.close()
         return
     if args.command in {"agent", "agent-runner"}:
         app = GemApp(config=config, cwd=Path.cwd(), profile_name=args.profile, model_name=args.model)
