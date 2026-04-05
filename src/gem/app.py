@@ -1095,8 +1095,9 @@ class GemApp:
 
         try:
             if is_creation:
-                # Skip heavy context — creation tasks don't need repo cartridge
+                # Light context — skip cartridge/skills/planner but keep retrieval
                 context_result = build_context_block(self.repo_root, self.session.pinned_files, min(ctx_chars, 4000))
+                retrieval_result = self._retrieval_context(user_text)
             else:
                 with ThreadPoolExecutor(max_workers=5) as pool:
                     futures = {
