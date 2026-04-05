@@ -359,8 +359,8 @@ def run_text_tool_loop(
                 f"or tests to run — do it now. Output another tool call. "
                 f"If everything is truly complete and working, say DONE."
             )})
-            # Restart indicator for next round
-            out.start_thinking()
+            # Restart indicator for next round — keep accumulated tokens/time
+            out.start_thinking(reset=False)
 
         else:
             # No tool call in response — model is giving a text answer
@@ -379,6 +379,6 @@ def run_text_tool_loop(
                 # Model is explaining instead of acting — push it to use tools
                 messages.append({"role": "assistant", "content": content})
                 messages.append({"role": "user", "content": "Don't explain — just do it. Use a tool call."})
-                out.start_thinking()
+                out.start_thinking(reset=False)
 
     return final_text
