@@ -347,7 +347,7 @@ def run_text_tool_loop(
 
             # Feed result back to model
             messages.append({"role": "assistant", "content": content})
-            messages.append({"role": "user", "content": f"Tool result:\n{result}\n\nContinue. Call another tool or give your final answer."})
+            messages.append({"role": "user", "content": f"Tool result:\n{result}\n\nGood. Now do the NEXT thing needed. Install dependencies, fix bugs, run tests. Don't ask — just do it. If everything is done, give a short final answer."})
             # Restart indicator for next round
             out.start_thinking()
 
