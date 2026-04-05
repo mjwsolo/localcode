@@ -362,12 +362,22 @@ def run_text_tool_loop(
             tool_name = tool_call["tool"]
             tool_args = tool_call.get("args", {})
 
+            # For write_file: ensure content exists and has real newlines
+            if tool_name == "write_file":
+                file_content = tool_args.get("content", "")
+                if not file_content:
+                    # Try extracting from code block in raw content
+                    code_match = re.search(r'```\w*\n(.*?)```', content, re.DOTALL)
+                    if code_match:
+                        tool_args["content"] = code_match.group(1).strip()
+                elif "\\n" in file_content:
+                    tool_args["content"] = file_content.replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"')
+
             # Show what's happening
             args_preview = str(tool_args.get("path", tool_args.get("command", tool_args.get("query", ""))))[:60]
             out.log_tool(tool_name, args_preview)
 
-            # Execute directly — no permission prompt (user consented by typing the task)
-            # Dangerous commands (rm -rf etc) are still blocked by execute_tool
+            # Execute directly
             result = execute_tool(app, tool_name, tool_args)
             is_err = result.startswith("Error")
             out.tool_result(result[:120], error=is_err)
@@ -387,8 +397,22 @@ def run_text_tool_loop(
             out.start_thinking(reset=False)
 
         else:
-            # No tool call in response — model is giving a text answer
-            # But check: is it ACTUALLY done, or just explaining what it'll do next?
+            # No JSON tool call found — but maybe there's a code block we should write
+            code_match = re.search(r'```\w*\n(.*?)```', content, re.DOTALL)
+            path_hint = re.search(r'`(\w+\.(?:py|js|ts|html|css|json|md|txt))`', content)
+
+            if code_match and path_hint:
+                # Model described what it did + included code — write it ourselves
+                fpath = path_hint.group(1)
+                code = code_match.group(1).strip()
+                out.log_tool("write_file", fpath)
+                result = execute_tool(app, "write_file", {"path": fpath, "content": code})
+                out.tool_result(result[:120])
+                final_text = content.split("```")[0].strip()  # text before code block
+                out.stream(final_text)
+                break
+
+            # Plain text response — check if model is done
             content_lower = content.lower()
             sounds_done = any(w in content_lower for w in (
                 "done", "complete", "finished", "created", "ready to run",
@@ -400,7 +424,6 @@ def run_text_tool_loop(
                 out.stream(content)
                 break
             else:
-                # Model is explaining instead of acting — push it to use tools
                 messages.append({"role": "assistant", "content": content})
                 messages.append({"role": "user", "content": "Don't explain — just do it. Use a tool call."})
                 out.start_thinking(reset=False)
