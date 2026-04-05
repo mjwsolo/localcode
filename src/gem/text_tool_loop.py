@@ -196,7 +196,7 @@ def execute_tool(app: "GemApp", tool_name: str, args: dict) -> str:
                 return "Error: bash needs command"
             result = subprocess.run(
                 cmd, shell=True, capture_output=True, text=True,
-                timeout=30, cwd=str(app.repo_root),
+                timeout=120, cwd=str(app.repo_root),
             )
             output = (result.stdout + result.stderr).strip()
             if len(output) > 4000:
