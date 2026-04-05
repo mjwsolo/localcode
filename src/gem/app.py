@@ -1061,9 +1061,10 @@ class GemApp:
         if stream:
             self.out.start_thinking()
 
-        # ── Two-tier model routing ──
-        # Use fast model (e4b) for simple tasks, smart model (26B) for complex
-        self._maybe_switch_tier(user_text)
+        # NOTE: Two-tier model routing disabled — model swaps take 2-3 minutes
+        # on 16GB and freeze the UI. Use one model per session instead.
+        # Users pick model at startup: `localcode --model gemma26b-iq3`
+        # self._maybe_switch_tier(user_text)
 
         self._adapt_to_prompt(user_text)
         self._apply_cache_policy()
