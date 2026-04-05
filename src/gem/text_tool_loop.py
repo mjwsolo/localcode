@@ -279,35 +279,49 @@ def run_text_tool_loop(
         # The model plans fine without explicit thinking mode.
         use_think = False
 
-        # Stream response — user sees tokens arriving in real time
+        # Stream response — stop as soon as we see a complete tool call
         chunks: list[str] = []
         token_count = 0
         if round_num == 0:
             out.set_stage("thinking")
         else:
             out.set_stage(f"round {round_num + 1}")
+
+        got_tool_call = False
         for event in app.engine.stream_chat_events(messages, think=use_think):
             if event["type"] == "thinking":
-                # Show thinking peek — user sees the model planning
                 chunk = str(event["content"])
                 peek = chunk.replace("\n", " ").strip()
                 if peek and len(peek) > 3:
                     out.feed_thinking(peek)
             elif event["type"] == "content":
                 chunk = str(event["content"])
-                # Filter special tokens
                 if "<|" in chunk or "|>" in chunk:
                     import re as _re
                     chunk = _re.sub(r'<\|[^>]*\|>', '', chunk)
+                if not chunk:
+                    continue
                 chunks.append(chunk)
                 token_count += 1
-                # Update indicator every few tokens so user sees activity
                 if token_count % 10 == 0:
                     out.set_stage(f"generating ({token_count} tok)")
-                # Also feed content to thinking peek for visibility
-                preview = chunk.replace("\n", " ").strip()
-                if preview and len(preview) > 3:
-                    out.feed_thinking(preview)
+
+                # Check if we have a complete tool call — stop streaming early
+                partial = "".join(chunks)
+                if '{"tool"' in partial:
+                    # For write_file with code block: wait for closing ```
+                    if "write_file" in partial and "```" in partial:
+                        # Count code fences — need an even number (open + close)
+                        fences = partial.count("```")
+                        if fences >= 2:
+                            got_tool_call = True
+                            break
+                    # For other tools: just need closing }
+                    elif partial.rstrip().endswith("}"):
+                        tc = parse_tool_call(partial)
+                        if tc:
+                            got_tool_call = True
+                            break
 
         content = "".join(chunks).strip()
 
@@ -325,15 +339,11 @@ def run_text_tool_loop(
             args_preview = str(tool_args.get("path", tool_args.get("command", tool_args.get("query", ""))))[:60]
             out.log_tool(tool_name, args_preview)
 
-            # Permission check
-            allowed, reason = app.perms.check(tool_name, tool_args)
-            if not allowed:
-                result = f"Denied: {reason}"
-                out.tool_result(result, error=True)
-            else:
-                result = execute_tool(app, tool_name, tool_args)
-                is_err = result.startswith("Error")
-                out.tool_result(result[:120], error=is_err)
+            # Execute directly — no permission prompt (user consented by typing the task)
+            # Dangerous commands (rm -rf etc) are still blocked by execute_tool
+            result = execute_tool(app, tool_name, tool_args)
+            is_err = result.startswith("Error")
+            out.tool_result(result[:120], error=is_err)
 
             # Feed result back to model
             messages.append({"role": "assistant", "content": content})
