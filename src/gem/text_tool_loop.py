@@ -84,6 +84,7 @@ def build_tool_system_prompt(tools: dict[str, dict] | None = None) -> str:
     lines.append("")
     lines.append("I will execute each tool and show you the result. Then continue.")
     lines.append("When done, respond with plain text (no JSON). One tool per response.")
+    lines.append("NEVER run GUI apps (pygame, tkinter) via bash — they block forever. Just tell the user how to run it.")
     return "\n".join(lines)
 
 
