@@ -203,29 +203,16 @@ class OutputManager:
         sys.stderr.write("\r\033[K")
         sys.stderr.flush()
 
-    # Flip stages: full letter → shrinking → edge → expanding → full letter
-    _FLIP_STAGES = ['▌', '│', '▐']
-
     @staticmethod
     def _flip_text(text: str, tick: int) -> str:
-        """Horizontal flip animation — each letter rotates on its axis, left to right.
-
-        Wave sweeps across text. Each letter goes through:
-          full char → ▌ (half) → │ (edge) → ▐ (half) → full char
-        Looks like each letter is physically flipping horizontally.
-        """
-        wave_pos = tick % (len(text) + 6)
-        stages = OutputManager._FLIP_STAGES
+        """Subtle flip — one letter at a time shows as │, sweeping left to right."""
+        pos = tick % (len(text) + 3)
         result = []
         for i, ch in enumerate(text):
-            if ch == ' ' or ch == '.':
+            if ch in (' ', '.') or i != pos:
                 result.append(ch)
-                continue
-            dist = wave_pos - i
-            if 0 <= dist < len(stages):
-                result.append(stages[dist])
             else:
-                result.append(ch)
+                result.append('│')
         return "".join(result)
 
     def _run_indicator(self) -> None:
