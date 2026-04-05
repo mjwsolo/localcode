@@ -1078,30 +1078,35 @@ class GemApp:
         plan_result = None
         draft_result = ""
 
-        with ThreadPoolExecutor(max_workers=5) as pool:
-            futures = {
-                pool.submit(build_context_block, self.repo_root, self.session.pinned_files, ctx_chars): "context",
-                pool.submit(self._retrieval_context, user_text): "retrieval",
-                pool.submit(build_repo_cartridge, self.repo_root, user_text, self.profile.retrieval_budget): "cartridge",
-                pool.submit(resolve_referenced_skills, self.repo_root, user_text): "skills",
-                pool.submit(self.plan_for_task, user_text): "plan",
-            }
-            for future in as_completed(futures):
-                key = futures[future]
-                try:
-                    result = future.result()
-                    if key == "context":
-                        context_result = result
-                    elif key == "retrieval":
-                        retrieval_result = result
-                    elif key == "cartridge":
-                        cartridge_result = result
-                    elif key == "skills":
-                        skill_result = "\n\n".join(f"Skill {name}:\n{content}" for name, content in result)
-                    elif key == "plan":
-                        plan_result = result
-                except Exception:
-                    pass
+        try:
+            with ThreadPoolExecutor(max_workers=5) as pool:
+                futures = {
+                    pool.submit(build_context_block, self.repo_root, self.session.pinned_files, ctx_chars): "context",
+                    pool.submit(self._retrieval_context, user_text): "retrieval",
+                    pool.submit(build_repo_cartridge, self.repo_root, user_text, self.profile.retrieval_budget): "cartridge",
+                    pool.submit(resolve_referenced_skills, self.repo_root, user_text): "skills",
+                    pool.submit(self.plan_for_task, user_text): "plan",
+                }
+                for future in as_completed(futures):
+                    key = futures[future]
+                    try:
+                        result = future.result()
+                        if key == "context":
+                            context_result = result
+                        elif key == "retrieval":
+                            retrieval_result = result
+                        elif key == "cartridge":
+                            cartridge_result = result
+                        elif key == "skills":
+                            skill_result = "\n\n".join(f"Skill {name}:\n{content}" for name, content in result)
+                        elif key == "plan":
+                            plan_result = result
+                    except Exception:
+                        pass
+        except KeyboardInterrupt:
+            self.out.done()
+            self.console.print("\n  [dim]interrupted[/]")
+            return ""
 
         context = context_result
         if retrieval_result:
@@ -1186,10 +1191,13 @@ class GemApp:
             assistant_text = run_text_tool_loop(
                 self, user_text, composed_messages, self.out,
             )
+        except KeyboardInterrupt:
+            self.out.done()
+            self.console.print("\n  [dim]interrupted[/]")
+            return ""
         except RuntimeErrorWithContext as exc:
             self.out.set_error(f"Connection issue: {exc}")
             self.log.exception("Runtime error")
-            # Retry once with simpler context
             try:
                 simple = [{"role": "user", "content": user_text}]
                 response = self.engine.chat_once(simple)
