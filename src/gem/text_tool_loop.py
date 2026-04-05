@@ -242,21 +242,32 @@ def run_text_tool_loop(
     final_text = ""
 
     for round_num in range(max_rounds):
-        # Think on first round (the model's "planning" phase — like Codex reasoning)
-        # Skip thinking on subsequent rounds for speed
+        # Think on first round (the model's "planning" phase)
         use_think = round_num == 0
 
-        response = app.engine.chat_once(messages, think=use_think)
-        msg = response.get("message", {})
-        content = msg.get("content", "").strip()
+        # Stream the response so user sees progress (not blank for 1min)
+        chunks: list[str] = []
+        token_count = 0
+        for event in app.engine.stream_chat_events(messages, think=use_think):
+            if event["type"] == "thinking":
+                # Show thinking peek — user sees the model planning
+                chunk = str(event["content"])
+                peek = chunk.replace("\n", " ").strip()
+                if peek and len(peek) > 3:
+                    out.feed_thinking(peek)
+            elif event["type"] == "content":
+                chunk = str(event["content"])
+                # Filter special tokens
+                if "<|" in chunk or "|>" in chunk:
+                    import re as _re
+                    chunk = _re.sub(r'<\|[^>]*\|>', '', chunk)
+                chunks.append(chunk)
+                token_count += 1
+                # Update indicator with token count so user sees progress
+                if token_count % 20 == 0:
+                    out.set_stage(f"generating ({token_count} tokens)")
 
-        # Show thinking to user (this is the "planning" they see)
-        thinking = msg.get("thinking", "")
-        if thinking and round_num == 0:
-            # Show a brief peek of what the model is planning
-            peek = thinking.strip().splitlines()[0][:80] if thinking.strip() else ""
-            if peek:
-                out.print_info(f"thinking: {peek}")
+        content = "".join(chunks).strip()
 
         if not content:
             break
@@ -285,9 +296,11 @@ def run_text_tool_loop(
             # Feed result back to model
             messages.append({"role": "assistant", "content": content})
             messages.append({"role": "user", "content": f"Tool result:\n{result}\n\nContinue. Call another tool or give your final answer."})
+            # Restart indicator for next round
+            out.start_thinking()
 
         else:
-            # Plain text response — model is done
+            # Plain text response — model is done, stream it to user
             final_text = content
             out.stream(content)
             break
