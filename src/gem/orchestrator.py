@@ -126,9 +126,8 @@ class LocalContext:
 class Orchestrator:
     """Multi-agent orchestrator with parallel execution and layered context.
 
-    Usage:
-        orch = Orchestrator(app)
-        outcome = orch.run("make a pong app")
+    Auto-triggered for complex tasks (multi-file creation, multi-step chains).
+    Falls back gracefully to single-agent loop on failure.
     """
 
     REVIEW_THRESHOLD = 80  # minimum score to pass review
@@ -224,33 +223,30 @@ class Orchestrator:
 
     def _plan(self, task: str, global_ctx: GlobalContext) -> TaskPlan:
         """Use 26B to generate a task DAG."""
-        prompt = f"""You are a senior software architect. Break this task into concrete steps.
+        prompt = f"""Break this task into 3-5 concrete steps. Keep it simple.
 
 TASK: {task}
 
-REPOSITORY:
-{global_ctx.file_tree[:2000]}
+EXISTING FILES IN REPO:
+{global_ctx.file_tree[:1000]}
 
-{global_ctx.snapshot()}
+Return a JSON array. Each step:
+- "id": integer
+- "description": what to do (specific: "Create X" or "Add Y to Z")
+- "file_targets": file paths to create or modify
+- "depends_on": step IDs that must finish first ([] if independent)
 
-Return a JSON array of steps. Each step has:
-- "id": integer (1, 2, 3...)
-- "description": what to do (be specific: "Create file X with Y" or "Add function Z to file W")
-- "file_targets": list of file paths this step reads or modifies
-- "depends_on": list of step IDs that must complete first (empty if independent)
+IMPORTANT:
+- Keep it SIMPLE. 3-5 steps max. Don't over-engineer.
+- Do NOT modify existing project files (README.md, pyproject.toml, etc.)
+- Create NEW files only. If making an app, put everything in ONE file.
+- Steps modifying the same file MUST be sequential (add dependency)
+- Return ONLY valid JSON, no explanation.
 
-Rules:
-- Steps that don't share files CAN run in parallel (empty depends_on)
-- Steps that modify the same file MUST be sequential (add dependency)
-- Each step should be small enough for a junior developer
-- Maximum 8 steps
-- Return ONLY valid JSON, no explanation
-
-Example:
+Example for "make a snake game":
 [
-  {{"id": 1, "description": "Create pong.py with pygame boilerplate", "file_targets": ["pong.py"], "depends_on": []}},
-  {{"id": 2, "description": "Add Paddle class to pong.py", "file_targets": ["pong.py"], "depends_on": [1]}},
-  {{"id": 3, "description": "Add Ball class to pong.py", "file_targets": ["pong.py"], "depends_on": [1]}}
+  {{"id": 1, "description": "Create snake.py with complete snake game using pygame", "file_targets": ["snake.py"], "depends_on": []}},
+  {{"id": 2, "description": "Create requirements.txt with pygame dependency", "file_targets": ["requirements.txt"], "depends_on": []}}
 ]"""
 
         try:
@@ -306,23 +302,22 @@ Example:
             elif fpath in global_ctx.existing_files:
                 file_section += f"\n--- {fpath} ---\n{global_ctx.existing_files[fpath][:4000]}\n"
 
-        # Worker prompt: generate code, don't call tools
+        # Worker prompt: generate COMPLETE code, no truncation
+        file_targets_str = ", ".join(step.file_targets) if step.file_targets else "the file"
         if file_section:
             prompt = (
                 f"TASK: {step.description}\n\n"
                 f"EXISTING FILES:{file_section}\n\n"
-                f"Return the COMPLETE updated file content for each file you modify.\n"
-                f"Format each file as:\n"
-                f"FILE: <path>\n```\n<complete file content>\n```\n\n"
-                f"Only include files that need changes. No explanation, just code."
+                f"Return the COMPLETE updated file. Do NOT truncate or abbreviate.\n"
+                f"Write the ENTIRE file from start to finish.\n\n"
+                f"FILE: {file_targets_str}\n```\n"
             )
         else:
             prompt = (
                 f"TASK: {step.description}\n\n"
-                f"Generate the complete file content.\n"
-                f"Format as:\n"
-                f"FILE: <path>\n```\n<complete file content>\n```\n\n"
-                f"No explanation, just code."
+                f"Write the COMPLETE file. Do NOT truncate or use '# ... rest of code'.\n"
+                f"Write EVERY line from start to finish.\n\n"
+                f"FILE: {file_targets_str}\n```\n"
             )
 
         try:
@@ -392,23 +387,22 @@ Example:
                     except Exception:
                         pass
 
-        prompt = f"""You are a code reviewer. Score the implementation quality.
+        prompt = f"""Score this implementation. Be practical, not perfectionist.
 
-ORIGINAL TASK: {task}
+TASK: {task}
 
-STEP RESULTS:
-{step_results}
-
-CURRENT FILES:
+FILES CREATED:
 {modified_files[:6000]}
 
-Score the implementation 0-100:
-- Does it fulfill the original task?
-- Is the code correct and complete?
-- Are there bugs or missing pieces?
+Score 0-100:
+- 80+: Code runs and does what was asked. Minor issues ok.
+- 50-79: Partially works but has real bugs (syntax errors, missing imports).
+- <50: Fundamentally broken or incomplete.
 
-Return JSON: {{"score": <0-100>, "notes": "<specific issues or 'looks good'>"}}
-Return ONLY the JSON."""
+If all files have valid syntax and the task is addressed, score 80+.
+
+Return JSON: {{"score": <0-100>, "notes": "<one line: what's wrong or 'looks good'>"}}
+ONLY the JSON."""
 
         try:
             response = self._call_planner(prompt)
@@ -433,11 +427,6 @@ Return ONLY the JSON."""
 
     def _call_planner(self, prompt: str) -> str:
         """Call the 26B planner model."""
-        from .config import RuntimeConfig
-        from .runtime import GemRuntimeGateway
-        from dataclasses import replace
-
-        # Use the main model (26B if available, otherwise current)
         response = self.app.engine.chat_once(
             [{"role": "user", "content": prompt}],
             think=False,
@@ -445,24 +434,23 @@ Return ONLY the JSON."""
         return response.get("message", {}).get("content", "").strip()
 
     def _call_worker(self, prompt: str, step: TaskStep) -> str:
-        """Call a worker model to generate code (no tool calling — Aider pattern).
+        """Call a worker model to generate code (Aider pattern — no tool calling).
 
-        Workers just generate code text. The orchestrator writes files.
-        This is reliable even with small models that can't call tools.
+        Workers generate code text. The orchestrator writes files.
+        Reliable even with small models that can't call tools.
         """
         from dataclasses import replace
         from .runtime import GemRuntimeGateway
 
         # Use draft model (e2b) for workers when available.
-        # With OLLAMA_MAX_LOADED_MODELS=2, both can stay loaded — no swap penalty.
-        # e2b generates code 3x faster than 26B (28 vs 8 tok/s).
+        # With OLLAMA_MAX_LOADED_MODELS=2, both stay loaded — no swap penalty.
         draft_model = self.app.config.runtime.draft_model
         if draft_model and draft_model != self.app.runtime_model:
             try:
                 worker_config = replace(
                     self.app.config.runtime,
                     model=draft_model,
-                    max_context_chars=8000,
+                    max_context_chars=16000,  # enough for complete files
                 )
                 worker_engine = GemRuntimeGateway(worker_config)
                 step.worker_model = draft_model
@@ -474,8 +462,12 @@ Return ONLY the JSON."""
             step.worker_model = self.app.runtime_model
 
         # No tools — worker generates code, orchestrator writes files
+        # Use higher num_predict so files don't get truncated
         response = worker_engine.chat_once(
-            [{"role": "user", "content": prompt}],
+            [
+                {"role": "system", "content": "You are a code generator. Output ONLY complete code. Never truncate. Never use comments like '# rest of code here'. Write every line."},
+                {"role": "user", "content": prompt},
+            ],
             think=False,
         )
         return response.get("message", {}).get("content", "").strip()
