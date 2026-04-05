@@ -68,48 +68,81 @@ def build_tool_system_prompt(tools: dict[str, dict] | None = None) -> str:
     for name, info in tools.items():
         lines.append(f"  {name}({info['args']}): {info['desc']}")
     lines.append("")
-    lines.append('To use a tool, output JSON: {"tool": "name", "args": {"key": "value"}}')
-    lines.append("I will execute it and show you the result. Then continue.")
-    lines.append("When the task is fully done, respond with plain text (no JSON).")
-    lines.append("You can call multiple tools — one at a time. I'll show each result.")
+    lines.append("To use a tool, output a JSON line: {\"tool\": \"name\", \"args\": {\"key\": \"value\"}}")
+    lines.append("")
+    lines.append("For write_file, put the code in a fenced block AFTER the JSON:")
+    lines.append('{\"tool\": \"write_file\", \"args\": {\"path\": \"game.py\"}}')
+    lines.append("```")
+    lines.append("code here")
+    lines.append("```")
+    lines.append("")
+    lines.append("IMPORTANT: Build code INCREMENTALLY. Don't write everything at once.")
+    lines.append("Step 1: write_file with a basic scaffold (imports, boilerplate, main)")
+    lines.append("Step 2: edit_file to add the next feature")
+    lines.append("Step 3: edit_file to add the next feature")
+    lines.append("This way each step is fast and the user sees progress.")
+    lines.append("")
+    lines.append("I will execute each tool and show you the result. Then continue.")
+    lines.append("When done, respond with plain text (no JSON). One tool per response.")
     return "\n".join(lines)
 
 
 def parse_tool_call(text: str) -> dict | None:
-    """Try to parse a JSON tool call from model output.
+    """Try to parse a tool call from model output.
+
+    Supports two formats:
+    1. Full JSON: {"tool": "write_file", "args": {"path": "x", "content": "..."}}
+    2. Hybrid: {"tool": "write_file", "args": {"path": "x"}} followed by ```code```
+       (faster — model doesn't need to JSON-escape the code)
 
     Returns {"tool": str, "args": dict} or None if it's plain text.
     """
     text = text.strip()
 
-    # Quick check: does it look like JSON?
-    if not (text.startswith("{") or '{"tool"' in text):
+    # Quick check: does it contain a tool call?
+    if '{"tool"' not in text and '"tool"' not in text:
         return None
 
-    # Try to extract JSON object
-    match = re.search(r'\{[^{}]*"tool"\s*:\s*"[^"]+"\s*,\s*"args"\s*:\s*\{.*?\}\s*\}', text, re.DOTALL)
-    if match:
+    # Try hybrid format first: JSON line + code block
+    # {"tool": "write_file", "args": {"path": "game.py"}}
+    # ```
+    # code here
+    # ```
+    json_line_match = re.search(r'(\{[^{}]*"tool"\s*:\s*"(\w+)"[^{}]*\})', text)
+    if json_line_match:
         try:
-            return json.loads(match.group())
+            tool_call = json.loads(json_line_match.group(1))
+            tool_name = tool_call.get("tool", "")
+            args = tool_call.get("args", {})
+
+            # If it's write_file and content is missing, look for a code block
+            if tool_name == "write_file" and "content" not in args:
+                code_match = re.search(r'```\w*\n(.*?)```', text, re.DOTALL)
+                if code_match:
+                    args["content"] = code_match.group(1).strip()
+                    tool_call["args"] = args
+
+            return tool_call
         except json.JSONDecodeError:
             pass
 
-    # Fallback: try parsing the whole text as JSON
+    # Full JSON format
+    try:
+        # Find the most complete JSON object
+        for m in re.finditer(r'\{[^{}]*"tool"[^{}]*\{.*?\}[^{}]*\}', text, re.DOTALL):
+            parsed = json.loads(m.group())
+            if isinstance(parsed, dict) and "tool" in parsed:
+                return parsed
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Last resort: try parsing the whole text
     try:
         parsed = json.loads(text)
         if isinstance(parsed, dict) and "tool" in parsed:
             return parsed
     except json.JSONDecodeError:
         pass
-
-    # Try to find JSON embedded in text (model might add explanation around it)
-    for m in re.finditer(r'\{.*?\}', text, re.DOTALL):
-        try:
-            parsed = json.loads(m.group())
-            if isinstance(parsed, dict) and "tool" in parsed:
-                return parsed
-        except json.JSONDecodeError:
-            continue
 
     return None
 
@@ -263,9 +296,13 @@ def run_text_tool_loop(
                     chunk = _re.sub(r'<\|[^>]*\|>', '', chunk)
                 chunks.append(chunk)
                 token_count += 1
-                # Update indicator with token count so user sees progress
-                if token_count % 20 == 0:
-                    out.set_stage(f"generating ({token_count} tokens)")
+                # Update indicator every few tokens so user sees activity
+                if token_count % 10 == 0:
+                    out.set_stage(f"generating ({token_count} tok)")
+                # Also feed content to thinking peek for visibility
+                preview = chunk.replace("\n", " ").strip()
+                if preview and len(preview) > 3:
+                    out.feed_thinking(preview)
 
         content = "".join(chunks).strip()
 
