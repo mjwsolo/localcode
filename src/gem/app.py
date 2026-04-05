@@ -276,6 +276,15 @@ class GemApp:
         anim = threading.Thread(target=_animate, daemon=True)
         anim.start()
         try:
+            # Unload any other model first so ours gets full GPU
+            import httpx as _httpx
+            try:
+                for _m in ["gemma4:e4b", "gemma4:e2b"]:
+                    if _m != self.runtime_model:
+                        _httpx.post(f"{self.config.runtime.base_url}/api/generate",
+                                    json={"model": _m, "keep_alive": 0}, timeout=5)
+            except Exception:
+                pass
             self.engine.chat_once([{"role": "user", "content": "hi"}])
             _loading = False
             anim.join(timeout=1)
