@@ -1178,6 +1178,31 @@ class GemApp:
         # Pass the ask-level indicator to model methods (ONE indicator for entire flow)
         out = self.out
 
+        # ── Auto-orchestration: complex tasks use planner→workers→reviewer ──
+        if self._should_orchestrate(user_text):
+            try:
+                from .orchestrator import Orchestrator
+                plan = Orchestrator(self).run(user_text)
+                self.out.done()
+                # Build summary for conversation history
+                step_summary = "\n".join(
+                    f"  {'✓' if s.status == 'done' else '✗'} [{s.id}] {s.description}"
+                    for s in plan.steps
+                )
+                assistant_text = (
+                    f"Completed {plan.summary}\n"
+                    f"Review: {plan.review_notes}\n\n"
+                    f"Steps:\n{step_summary}"
+                )
+                if stream:
+                    self.console.print(f"\n{assistant_text}\n")
+                self.session.messages.append({"role": "assistant", "content": assistant_text})
+                self.store.save(self.session)
+                return assistant_text
+            except Exception as exc:
+                self.log.warning(f"Orchestrator failed, falling back to single agent: {exc}")
+                # Fall through to normal tool loop
+
         try:
             tool_enabled = self.profile.tool_strategy == "native"
             if tool_enabled:
@@ -2126,6 +2151,41 @@ class GemApp:
         save_config(self.config)
         self.store.append_event(self.session, "model_escalation", f"{target.key} for {task[:80]}")
         self.render_agent_state("escalation", f"Switched to {target.display_name} for a broader task")
+
+    def _should_orchestrate(self, user_text: str) -> bool:
+        """Detect if a task is complex enough to need multi-agent orchestration.
+
+        Auto-triggers orchestrator for tasks that:
+        - Involve creating multi-file projects ("make an app", "build a game")
+        - Require multiple distinct steps ("set up X, then configure Y, then...")
+        - Are explicitly complex ("full", "complete", "entire", "from scratch")
+
+        Simple edits, questions, and single-file tasks stay in the normal loop.
+        """
+        text = user_text.lower().strip()
+
+        # Never orchestrate questions or short messages
+        if "?" in text or len(text) < 20:
+            return False
+
+        # Check for multi-step creation tasks
+        creation_words = ("make", "build", "create", "set up", "implement", "develop")
+        complex_targets = ("app", "game", "project", "website", "server", "api",
+                          "system", "framework", "tool", "cli", "dashboard")
+        has_creation = any(w in text for w in creation_words)
+        has_complex_target = any(w in text for w in complex_targets)
+
+        # Check for explicit complexity signals
+        complexity_signals = ("from scratch", "full", "complete", "entire",
+                            "multiple files", "multi-file", "step by step",
+                            "and then", "after that", "set up everything")
+        has_complexity = any(s in text for s in complexity_signals)
+
+        # Multi-step indicators (commas listing steps, "and" chaining)
+        import re
+        has_multiple_actions = len(re.findall(r'\b(?:and|then|also|plus)\b', text)) >= 2
+
+        return (has_creation and has_complex_target) or has_complexity or has_multiple_actions
 
     def _generate_task_name(self, user_text: str) -> str:
         """Generate a short dynamic task name from user input (like Codex)."""
