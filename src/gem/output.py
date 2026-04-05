@@ -125,8 +125,15 @@ class OutputManager:
         with self._lock:
             self.state.tokens += max(1, len(chunk) // 4)
             text = chunk.replace('\n', ' ').strip()
-            if text and len(text) > 3:
-                self.state.thinking_peek = text
+            if text:
+                # Accumulate short chunks into a readable peek
+                current = self.state.thinking_peek
+                if len(text) > 3:
+                    self.state.thinking_peek = text
+                elif current:
+                    # Append short chunk to existing peek
+                    updated = (current + text)[-80:]
+                    self.state.thinking_peek = updated
 
     def set_stage(self, stage: str) -> None:
         """Override the indicator label (e.g. 'editing hello.py')."""
