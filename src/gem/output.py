@@ -205,17 +205,9 @@ class OutputManager:
 
     @staticmethod
     def _flip_text(text: str, tick: int) -> str:
-        """Brightness wave — one character pulses bright as it sweeps left to right."""
-        pos = tick % (len(text) + 3)
-        result = []
-        for i, ch in enumerate(text):
-            if ch in (' ', '.'):
-                result.append(ch)
-            elif i == pos:
-                result.append(f"\033[1;32m{ch}\033[32m")
-            else:
-                result.append(ch)
-        return "".join(result)
+        """Subtle cursor — a dot moves after the text to show activity."""
+        # No per-character animation (causes flicker). Just rotate the icon.
+        return text
 
     def _run_indicator(self) -> None:
         tick = 0
