@@ -111,6 +111,15 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_add.add_argument("args", nargs="*")
     subparsers.add_parser("mcp-list", help="list configured MCP servers")
 
+    # -- Speed --
+    speed = subparsers.add_parser("speed", help="speed optimization tools")
+    speed_sub = speed.add_subparsers(dest="speed_command")
+    speed_sub.add_parser("status", help="show current speed optimizations")
+    speed_launch = speed_sub.add_parser("launch", help="print optimal llama-server launch command")
+    speed_launch.add_argument("model_path", help="path to GGUF model file")
+    speed_launch.add_argument("--draft", help="path to draft model GGUF for speculative decoding")
+    speed_sub.add_parser("benchmark", help="benchmark current model speed")
+
     # -- Daemon --
     daemon = subparsers.add_parser("daemon", help="manage the Gem background daemon")
     daemon_sub = daemon.add_subparsers(dest="daemon_command")
@@ -281,6 +290,50 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "voice-status":
         console.print(Panel("\n".join(voice_status(config)), title="Voice"))
+        return
+    if args.command == "speed":
+        from .runtime import GemRuntimeGateway
+        if args.speed_command == "launch":
+            gw = GemRuntimeGateway(config.runtime)
+            cmd = gw.llama_server_command(args.model_path)
+            if args.draft:
+                # Override draft model
+                config.runtime.llama_cpp_draft_model = args.draft
+                gw2 = GemRuntimeGateway(config.runtime)
+                cmd = gw2.llama_server_command(args.model_path)
+            console.print(" ".join(cmd))
+            return
+        if args.speed_command == "benchmark":
+            import subprocess, time
+            console.print("[bold]Speed Benchmark[/bold]\n")
+            # Test Ollama
+            try:
+                import httpx
+                start = time.time()
+                resp = httpx.post(
+                    f"{config.runtime.base_url}/api/generate",
+                    json={"model": config.runtime.model or "gemma4:e4b", "prompt": "Write fizzbuzz in Python", "stream": False, "think": False, "options": {"num_ctx": 4096}},
+                    timeout=120,
+                )
+                data = resp.json()
+                elapsed = data.get("eval_duration", 0) / 1e9
+                tokens = data.get("eval_count", 0)
+                speed = tokens / elapsed if elapsed > 0 else 0
+                console.print(f"  Ollama ({config.runtime.model or 'gemma4:e4b'}): {speed:.1f} tok/s ({tokens} tokens in {elapsed:.1f}s)")
+            except Exception as e:
+                console.print(f"  Ollama: not available ({e})")
+            return
+        # Default: show status
+        console.print("[bold]Speed Optimizations[/bold]\n")
+        table = Table("Setting", "Value", "Effect")
+        table.add_row("KV cache type", config.runtime.kv_cache_type, "q4_0 = 2x less cache memory")
+        table.add_row("Expert offload", str(config.runtime.llama_cpp_expert_offload), "MoE experts on CPU, attention on GPU")
+        table.add_row("Spec type", config.runtime.llama_cpp_spec_type or "(none)", "ngram-mod = 1.5-2x speedup")
+        table.add_row("Draft max", str(config.runtime.llama_cpp_draft_max), "Max speculative tokens")
+        table.add_row("Draft model", config.runtime.llama_cpp_draft_model or "(none)", "Small model for speculation")
+        table.add_row("Lookup cache", str(config.runtime.llama_cpp_lookup_cache), "Prompt lookup = 2-4x on edits")
+        table.add_row("Escalation", str(config.runtime.escalation_enabled), "Auto-switch fast↔smart model")
+        console.print(table)
         return
     if args.command == "runtime-cmd":
         command = runtime_command(config.runtime)

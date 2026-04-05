@@ -38,6 +38,7 @@ llama_cpp_spec_type = ""
 llama_cpp_draft_max = 64
 llama_cpp_expert_offload = false
 llama_cpp_draft_model = ""
+llama_cpp_lookup_cache = false
 kv_cache_type = "q8_0"
 temperature = 0.2
 max_context_chars = 40000
@@ -98,6 +99,7 @@ class RuntimeConfig:
     llama_cpp_draft_max: int = 64         # max draft tokens for speculation
     llama_cpp_expert_offload: bool = False # offload MoE experts to CPU (-ot exps=CPU)
     llama_cpp_draft_model: str = ""       # path to draft GGUF for speculative decoding
+    llama_cpp_lookup_cache: bool = False   # prompt lookup decoding (2-4x on code edits)
     kv_cache_type: str = "q8_0"           # KV cache quantization: q8_0, q4_0, f16
     temperature: float = 0.7  # Gemma 4 recommended (Unsloth: 1.0, we use 0.7 for coding focus)
     max_context_chars: int = 40000
@@ -202,6 +204,7 @@ def save_config(config: AppConfig) -> Path:
         f"llama_cpp_draft_max = {config.runtime.llama_cpp_draft_max}\n"
         f"llama_cpp_expert_offload = {'true' if config.runtime.llama_cpp_expert_offload else 'false'}\n"
         f'llama_cpp_draft_model = "{config.runtime.llama_cpp_draft_model}"\n'
+        f"llama_cpp_lookup_cache = {'true' if config.runtime.llama_cpp_lookup_cache else 'false'}\n"
         f'kv_cache_type = "{config.runtime.kv_cache_type}"\n'
         f"temperature = {config.runtime.temperature}\n"
         f"max_context_chars = {config.runtime.max_context_chars}\n"
@@ -269,6 +272,7 @@ def load_config() -> AppConfig:
         llama_cpp_draft_max=int(os.environ.get("GEM_LLAMA_CPP_DRAFT_MAX", runtime_data.get("llama_cpp_draft_max", 64))),
         llama_cpp_expert_offload=str(os.environ.get("GEM_LLAMA_CPP_EXPERT_OFFLOAD", runtime_data.get("llama_cpp_expert_offload", False))).lower() in {"1", "true", "yes", "on"},
         llama_cpp_draft_model=os.environ.get("GEM_LLAMA_CPP_DRAFT_MODEL", runtime_data.get("llama_cpp_draft_model", "")),
+        llama_cpp_lookup_cache=str(os.environ.get("GEM_LLAMA_CPP_LOOKUP_CACHE", runtime_data.get("llama_cpp_lookup_cache", False))).lower() in {"1", "true", "yes", "on"},
         kv_cache_type=os.environ.get("GEM_KV_CACHE_TYPE", runtime_data.get("kv_cache_type", "q8_0")),
         temperature=float(os.environ.get("GEM_TEMPERATURE", runtime_data.get("temperature", 0.2))),
         max_context_chars=int(os.environ.get("GEM_MAX_CONTEXT_CHARS", runtime_data.get("max_context_chars", 40000))),
