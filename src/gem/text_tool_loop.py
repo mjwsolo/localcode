@@ -275,12 +275,17 @@ def run_text_tool_loop(
     final_text = ""
 
     for round_num in range(max_rounds):
-        # Think on first round (the model's "planning" phase)
-        use_think = round_num == 0
+        # Skip thinking — it adds 1min+ delay on 26B with no benefit for tool calls.
+        # The model plans fine without explicit thinking mode.
+        use_think = False
 
-        # Stream the response so user sees progress (not blank for 1min)
+        # Stream response — user sees tokens arriving in real time
         chunks: list[str] = []
         token_count = 0
+        if round_num == 0:
+            out.set_stage("thinking")
+        else:
+            out.set_stage(f"round {round_num + 1}")
         for event in app.engine.stream_chat_events(messages, think=use_think):
             if event["type"] == "thinking":
                 # Show thinking peek — user sees the model planning
