@@ -1178,41 +1178,15 @@ class GemApp:
         # Pass the ask-level indicator to model methods (ONE indicator for entire flow)
         out = self.out
 
-        # ── Auto-orchestration: complex tasks use planner→workers→reviewer ──
-        if self._should_orchestrate(user_text):
-            try:
-                from .orchestrator import Orchestrator
-                plan = Orchestrator(self).run(user_text)
-                self.out.done()
-                # Build summary for conversation history
-                step_summary = "\n".join(
-                    f"  {'✓' if s.status == 'done' else '✗'} {s.description} → {s.result[:60]}"
-                    for s in plan.steps
-                )
-                files_changed = set()
-                for s in plan.steps:
-                    if s.status == "done" and s.result.startswith("wrote "):
-                        files_changed.update(s.result.replace("wrote ", "").split(", "))
-                files_line = f"\n  Files: {', '.join(files_changed)}" if files_changed else ""
-                assistant_text = (
-                    f"Done ({plan.review_score}/100)\n"
-                    f"{step_summary}{files_line}"
-                )
-                if plan.review_notes and plan.review_notes != "review failed":
-                    assistant_text += f"\n  Review: {plan.review_notes}"
-                if stream:
-                    self.console.print(f"\n{assistant_text}\n")
-                self.session.messages.append({"role": "assistant", "content": assistant_text})
-                self.store.save(self.session)
-                return assistant_text
-            except Exception as exc:
-                self.log.warning(f"Orchestrator failed, falling back to single agent: {exc}")
-                # Fall through to normal tool loop
-
         try:
             tool_enabled = self.profile.tool_strategy == "native"
             if tool_enabled:
-                assistant_text = self._run_tool_loop_streaming(composed_messages, stream, )
+                # Use text-based tool loop (model outputs JSON, we parse & execute)
+                # This works reliably with quantized models that can't do native tool calling
+                from .text_tool_loop import run_text_tool_loop
+                assistant_text = run_text_tool_loop(
+                    self, user_text, composed_messages, self.out,
+                )
             else:
                 assistant_text = self._run_stream_simple(composed_messages, stream)
         except RuntimeErrorWithContext as exc:
