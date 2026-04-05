@@ -242,10 +242,21 @@ def run_text_tool_loop(
     final_text = ""
 
     for round_num in range(max_rounds):
-        # Call the model (no native tools — just text)
-        use_think = round_num == 0 and len(user_text) > 30
+        # Think on first round (the model's "planning" phase — like Codex reasoning)
+        # Skip thinking on subsequent rounds for speed
+        use_think = round_num == 0
+
         response = app.engine.chat_once(messages, think=use_think)
-        content = response.get("message", {}).get("content", "").strip()
+        msg = response.get("message", {})
+        content = msg.get("content", "").strip()
+
+        # Show thinking to user (this is the "planning" they see)
+        thinking = msg.get("thinking", "")
+        if thinking and round_num == 0:
+            # Show a brief peek of what the model is planning
+            peek = thinking.strip().splitlines()[0][:80] if thinking.strip() else ""
+            if peek:
+                out.print_info(f"thinking: {peek}")
 
         if not content:
             break
@@ -258,7 +269,8 @@ def run_text_tool_loop(
             tool_args = tool_call.get("args", {})
 
             # Show what's happening
-            out.log_tool(tool_name, str(tool_args)[:60])
+            args_preview = str(tool_args.get("path", tool_args.get("command", tool_args.get("query", ""))))[:60]
+            out.log_tool(tool_name, args_preview)
 
             # Permission check
             allowed, reason = app.perms.check(tool_name, tool_args)
@@ -272,7 +284,7 @@ def run_text_tool_loop(
 
             # Feed result back to model
             messages.append({"role": "assistant", "content": content})
-            messages.append({"role": "user", "content": f"Tool result:\n{result}\n\nContinue with the task. Call another tool or respond with your final answer."})
+            messages.append({"role": "user", "content": f"Tool result:\n{result}\n\nContinue. Call another tool or give your final answer."})
 
         else:
             # Plain text response — model is done
