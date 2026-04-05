@@ -203,6 +203,27 @@ class OutputManager:
         sys.stderr.write("\r\033[K")
         sys.stderr.flush()
 
+    @staticmethod
+    def _wave_text(text: str, tick: int) -> str:
+        """Create a wave animation by cycling character brightness left-to-right.
+
+        Each character gets a brightness based on its position relative to
+        a moving wave front. Creates a shimmer/ripple effect.
+        """
+        # ANSI brightness levels: bold, normal, dim
+        levels = ["\033[1;32m", "\033[32m", "\033[2;32m", "\033[32m"]
+        wave_len = len(levels)
+        result = []
+        for i, ch in enumerate(text):
+            if ch == ' ':
+                result.append(ch)
+            else:
+                phase = (tick - i) % (wave_len * 2)
+                if phase >= wave_len:
+                    phase = wave_len * 2 - phase - 1
+                result.append(f"{levels[phase % wave_len]}{ch}")
+        return "".join(result) + "\033[0m"
+
     def _run_indicator(self) -> None:
         tick = 0
         cols = _cols()
@@ -221,20 +242,21 @@ class OutputManager:
                 peek = self.state.thinking_peek
                 custom = getattr(self, '_custom_stage', '')
 
-            cost = tokens * 0.000015
-            savings = f" · ${cost:.2f}" if cost > 0.001 else ""
             label = custom or LABELS[int(elapsed) // 6 % len(LABELS)]
 
-            # Line 1: indicator
-            line1 = f" {icon} {label}... ({timer}{savings})"
-            if len(line1) > cols - 2:
+            # Wave animation on the label text
+            wave_label = self._wave_text(f"{label}...", tick)
+            line1 = f" {icon} {wave_label} \033[2m({timer})\033[0m"
+
+            raw_len = len(f" {icon} {label}... ({timer})")
+            if raw_len > cols - 2:
                 line1 = line1[:cols - 5] + "..."
 
             # Line 2: thinking peek (what model is considering)
             if peek:
                 peek_text = peek[:cols - 6]
-                sys.stderr.write(f"\r\033[32m{line1}\033[0m\033[K\n\033[2m    {peek_text}\033[0m\033[K\033[A")
+                sys.stderr.write(f"\r{line1}\033[K\n\033[2m    {peek_text}\033[0m\033[K\033[A")
             else:
-                sys.stderr.write(f"\r\033[32m{line1}\033[0m\033[K")
+                sys.stderr.write(f"\r{line1}\033[K")
             sys.stderr.flush()
-            time.sleep(0.15)
+            time.sleep(0.12)

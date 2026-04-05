@@ -453,11 +453,25 @@ Return ONLY the JSON."""
         from dataclasses import replace
         from .runtime import GemRuntimeGateway
 
-        # Use the current model (26B) for workers too — avoids 7s model swap penalty.
-        # e2b is only worth swapping to if there are many parallel workers.
-        # For most tasks, keeping 26B loaded is faster overall.
-        worker_engine = self.app.engine
-        step.worker_model = self.app.runtime_model
+        # Use draft model (e2b) for workers when available.
+        # With OLLAMA_MAX_LOADED_MODELS=2, both can stay loaded — no swap penalty.
+        # e2b generates code 3x faster than 26B (28 vs 8 tok/s).
+        draft_model = self.app.config.runtime.draft_model
+        if draft_model and draft_model != self.app.runtime_model:
+            try:
+                worker_config = replace(
+                    self.app.config.runtime,
+                    model=draft_model,
+                    max_context_chars=8000,
+                )
+                worker_engine = GemRuntimeGateway(worker_config)
+                step.worker_model = draft_model
+            except Exception:
+                worker_engine = self.app.engine
+                step.worker_model = self.app.runtime_model
+        else:
+            worker_engine = self.app.engine
+            step.worker_model = self.app.runtime_model
 
         # No tools — worker generates code, orchestrator writes files
         response = worker_engine.chat_once(
