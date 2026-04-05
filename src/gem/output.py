@@ -244,7 +244,7 @@ class OutputManager:
 
             # Cost savings: what this would cost on cloud APIs
             cost = tokens * 0.000015  # ~$15/1M tokens (Claude/GPT-4 average)
-            savings = f" · saved ${cost:.2f}" if cost > 0.01 else ""
+            savings = f" · ${cost:.3f} saved" if tokens > 10 else ""
 
             flip_label = self._flip_text(f"{label}...", tick)
             line1 = f"\033[32m {icon} {flip_label} ({timer}{savings})\033[0m"

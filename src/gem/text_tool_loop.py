@@ -303,6 +303,8 @@ def run_text_tool_loop(
                     continue
                 chunks.append(chunk)
                 token_count += 1
+                # Feed every chunk to indicator — shows peek text + counts tokens + $
+                out.feed_thinking(chunk)
                 if token_count % 10 == 0:
                     out.set_stage(f"generating ({token_count} tok)")
 
