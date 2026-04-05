@@ -345,16 +345,37 @@ def run_text_tool_loop(
             is_err = result.startswith("Error")
             out.tool_result(result[:120], error=is_err)
 
-            # Feed result back to model
-            messages.append({"role": "assistant", "content": content})
-            messages.append({"role": "user", "content": f"Tool result:\n{result}\n\nGood. Now do the NEXT thing needed. Install dependencies, fix bugs, run tests. Don't ask — just do it. If everything is done, give a short final answer."})
+            # Feed ONLY the tool call back (strip any closing text the model added).
+            # If we include "I created pong.py, you can run it..." the model thinks
+            # the task is done and won't continue to fix bugs / install deps.
+            tool_call_json = json.dumps(tool_call)
+            messages.append({"role": "assistant", "content": tool_call_json})
+            messages.append({"role": "user", "content": (
+                f"Tool result: {result}\n\n"
+                f"What's the next step? If there are bugs to fix, dependencies to install, "
+                f"or tests to run — do it now. Output another tool call. "
+                f"If everything is truly complete and working, say DONE."
+            )})
             # Restart indicator for next round
             out.start_thinking()
 
         else:
-            # Plain text response — model is done, stream it to user
-            final_text = content
-            out.stream(content)
-            break
+            # No tool call in response — model is giving a text answer
+            # But check: is it ACTUALLY done, or just explaining what it'll do next?
+            content_lower = content.lower()
+            sounds_done = any(w in content_lower for w in (
+                "done", "complete", "finished", "created", "ready to run",
+                "you can run", "you can now", "all set",
+            ))
+
+            if sounds_done or round_num >= max_rounds - 1:
+                final_text = content
+                out.stream(content)
+                break
+            else:
+                # Model is explaining instead of acting — push it to use tools
+                messages.append({"role": "assistant", "content": content})
+                messages.append({"role": "user", "content": "Don't explain — just do it. Use a tool call."})
+                out.start_thinking()
 
     return final_text
