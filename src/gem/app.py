@@ -2114,11 +2114,10 @@ class GemApp:
 
     def _generate_task_name(self, user_text: str) -> str:
         """Generate a short dynamic task name from user input (like Codex)."""
+        import re
         text = user_text.strip().lower()
         # Quick keyword-based task naming — no LLM call needed
         if any(w in text for w in ("fix", "bug", "error", "broken")):
-            # Extract filename if present
-            import re
             f = re.search(r'(\w+\.\w{2,4})', text)
             return f"fixing {f.group(1)}" if f else "fixing bug"
         if any(w in text for w in ("make", "create", "build", "write", "generate")):
