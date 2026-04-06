@@ -1,14 +1,11 @@
-"""State machine agent loop — harness controls sequencing, model generates content.
+"""3-layer agent loop — harness controls sequencing, model generates content.
 
-Based on observing OpenAI Codex, Claude Code, and Claude Opus:
-- Model generates content (code, fixes, answers)
-- Harness handles sequencing, validation, and tool execution
-- Predictable state machine, not autonomous tool selection
+Layer 1: EXECUTORS — 13 deterministic state machines (this file)
+Layer 2: ORCHESTRATOR — walks multi-step plans
+Layer 3: PLANNER — decomposes complex tasks
 
-States: GATHER → WRITE → VERIFY → FIX → DONE
-
-This is more reliable with local quantized models than giving
-them full autonomy over tool ordering.
+Architecture based on observing OpenAI Codex, Claude Code, and Claude Opus.
+Model generates content. Harness handles sequencing, validation, retries.
 """
 from __future__ import annotations
 
@@ -22,6 +19,63 @@ if TYPE_CHECKING:
     from .app import GemApp
     from .output import OutputManager
 
+from .context_manager import (
+    ContextAssembler,
+    ConversationManager,
+    ProgressTracker,
+    RelevanceFinder,
+    SyntaxChecker,
+    UndoStack,
+    SYSTEM_PROMPTS,
+    _extract_keywords,
+    _list_dir,
+)
+
+
+# ── Intent Classifier (rule-based, LLM fallback) ───────────────────
+
+def classify_intent(text: str) -> str:
+    """Route user request to the right feature. Rule-based first, LLM fallback."""
+    t = text.lower()
+    if any(w in t for w in ("create", "make", "new file", "generate", "scaffold", "build")):
+        if any(w in t for w in ("test", "tests")):
+            return "TEST"
+        return "CREATE"
+    if any(w in t for w in ("edit", "change", "modify", "rename", "add to", "update", "refactor")):
+        return "EDIT"
+    if any(w in t for w in ("fix", "bug", "crash", "error", "broken", "doesn't work", "doesnt work")):
+        return "FIX"
+    if any(w in t for w in ("review", "check", "audit", "look at")):
+        return "REVIEW"
+    if any(w in t for w in ("explain", "what does", "how does", "why does", "what is")):
+        return "EXPLAIN"
+    if any(w in t for w in ("test", "run test", "pytest")):
+        return "TEST"
+    if any(w in t for w in ("commit", "push", "git ", "branch", "diff", "status")):
+        return "GIT"
+    if any(w in t for w in ("find", "search", "where", "grep", "locate")):
+        return "SEARCH"
+    if any(w in t for w in ("install", "add package", "dependency", "requirements")):
+        return "DEPS"
+    return "CHAT"
+
+
+def needs_planning(text: str) -> bool:
+    """Does this task need multi-step planning?"""
+    t = text.lower()
+    # Multiple action verbs
+    verbs = sum(1 for w in ("add", "create", "update", "fix", "write", "build", "set up", "implement")
+                if w in t)
+    if verbs >= 2:
+        return True
+    # Broad scope
+    if any(k in t for k in ("authentication", "database", "api", "refactor all",
+                            "migrate", "set up", "full")):
+        return True
+    return False
+
+
+# ── Main Entry Point ────────────────────────────────────────────────
 
 def run_agent_loop(
     app: "GemApp",
@@ -29,283 +83,445 @@ def run_agent_loop(
     composed_messages: list[dict],
     out: "OutputManager",
 ) -> str:
-    """State machine: GATHER → WRITE → VERIFY → FIX → DONE.
-
-    The harness controls the sequence. The model only generates content.
-    """
+    """Route to the right executor based on intent."""
     repo = app.repo_root
+    progress = ProgressTracker(out.print_info)
+    checker = SyntaxChecker()
+    context = ContextAssembler()
+    relevance = RelevanceFinder()
 
-    # ── GATHER: understand what exists ──
-    out.print_info("▶ gathering context")
-    existing_files = _list_files(repo)
-    relevant_content = _read_relevant_files(repo, user_text, existing_files)
+    intent = classify_intent(user_text)
 
-    # ── DECIDE: is this a new file or an edit? ──
-    target_file = _guess_target_file(user_text, existing_files)
-    is_edit = target_file and (repo / target_file).is_file()
+    # For complex tasks, use Layer 3 planner
+    if needs_planning(user_text) and intent in ("CREATE", "EDIT", "FIX"):
+        return _handle_planned(app, user_text, composed_messages, out, progress, checker, context, relevance)
 
-    if is_edit:
-        return _handle_edit(app, user_text, target_file, composed_messages, out)
+    # Simple tasks → direct to Layer 1 executor
+    if intent == "CREATE":
+        return _do_create(app, user_text, composed_messages, out, progress, checker, context, relevance)
+    elif intent in ("EDIT", "FIX"):
+        return _do_edit(app, user_text, composed_messages, out, progress, checker, context, relevance)
+    elif intent == "REVIEW":
+        return _do_review(app, user_text, composed_messages, out, context, relevance)
+    elif intent == "EXPLAIN":
+        return _do_explain(app, user_text, composed_messages, out, context, relevance)
+    elif intent == "TEST":
+        return _do_test(app, user_text, composed_messages, out, progress, checker)
+    elif intent == "GIT":
+        return _do_git(app, user_text, composed_messages, out)
+    elif intent == "SEARCH":
+        return _do_search(app, user_text, out)
     else:
-        return _handle_create(app, user_text, existing_files, relevant_content, composed_messages, out)
+        # CHAT — just answer
+        return _do_chat(app, user_text, composed_messages, out)
 
 
-def _handle_create(
-    app: "GemApp",
-    user_text: str,
-    existing_files: list[str],
-    relevant_content: str,
-    composed_messages: list[dict],
-    out: "OutputManager",
-) -> str:
-    """Create a new file: ask model for code → write → verify → fix if needed."""
+# ── Feature 1: FILE CREATION ───────────────────────────────────────
+
+def _do_create(app, user_text, messages, out, progress, checker, context, relevance):
     repo = app.repo_root
 
-    # ── WRITE: ask model to generate complete code ──
-    out.print_info("▶ generating code")
+    # GATHER
+    progress.start("gathering context")
+    related = relevance.find_related(user_text, repo, max_files=2)
+    ctx = context.build_for_create(user_text, repo, related)
+
+    # WRITE
+    progress.start("generating code")
     out.set_stage("generating code")
-
-    file_list = ", ".join(existing_files[:20]) if existing_files else "(empty directory)"
-    prompt = (
-        f"Existing files: {file_list}\n"
-        f"{relevant_content}\n\n"
-        f"Task: {user_text}\n\n"
-        f"Write the COMPLETE code. Output it in a code block:\n"
-        f"FILENAME: <the filename>\n"
-        f"```python\n"
-        f"complete code here\n"
-        f"```\n\n"
-        f"Write ALL the code needed — not a scaffold. One file, complete and working."
-    )
-
+    prompt = f"{ctx}\n\nWrite the COMPLETE code in a code block:\nFILENAME: <filename>\n```python\ncomplete code\n```"
     response = app.engine.generate_once([
-        *composed_messages,
+        {"role": "system", "content": SYSTEM_PROMPTS["create"]},
+        *messages[-4:],
         {"role": "user", "content": prompt},
     ])
 
-    # Parse filename and code from response
     filename, code = _parse_code_response(response, user_text)
     if not code:
         out.stream(response)
         return response
 
-    # Write the file
-    out.log_tool("write_file", filename)
-    full_path = repo / filename
-    full_path.parent.mkdir(parents=True, exist_ok=True)
+    # APPLY
+    full = repo / filename
+    full.parent.mkdir(parents=True, exist_ok=True)
     app.toolkit.changes.snapshot_before(filename, "agent")
-    full_path.write_text(code)
+    full.write_text(code)
     lines = len(code.splitlines())
+    out.log_tool("write_file", filename)
     out.tool_result(f"Written {filename} ({lines} lines)")
+    progress.done("write", f"{filename} ({lines} lines)")
 
-    # ── VERIFY: syntax check ──
-    out.print_info("▶ verifying")
-    out.set_stage("verifying")
-    error = _verify_python(repo, filename)
-
-    if error:
-        out.tool_result(f"⚠ {error}", error=True)
-        # ── FIX: ask model to fix the error (max 2 attempts) ──
-        for fix_attempt in range(2):
-            out.print_info(f"▶ fixing (attempt {fix_attempt + 1})")
-            out.set_stage("fixing")
-            current_code = full_path.read_text(errors="replace")
-            fix_prompt = (
-                f"This code has an error:\n"
-                f"```python\n{current_code}\n```\n\n"
-                f"Error: {error}\n\n"
-                f"Fix the error and return the COMPLETE corrected file in a code block:\n"
-                f"```python\nfixed code\n```"
-            )
+    # VERIFY
+    progress.start("verifying")
+    result = checker.check(filename, str(repo))
+    if not result["ok"]:
+        progress.fail("verify", result["error"][:80])
+        # FIX LOOP (max 2)
+        for attempt in range(2):
+            progress.start(f"fixing (attempt {attempt + 1})")
+            fix_ctx = context.build_for_fix(filename, result["error"], repo)
             fix_response = app.engine.generate_once([
-                {"role": "user", "content": fix_prompt},
+                {"role": "system", "content": SYSTEM_PROMPTS["fix"]},
+                {"role": "user", "content": fix_ctx},
             ])
-            _, fixed_code = _parse_code_response(fix_response, "")
-            if fixed_code:
-                app.toolkit.changes.snapshot_before(filename, "agent_fix")
-                full_path.write_text(fixed_code)
-                out.log_tool("write_file", f"{filename} (fixed)")
-                out.tool_result(f"Written {filename} ({len(fixed_code.splitlines())} lines)")
-
-                error = _verify_python(repo, filename)
-                if not error:
-                    out.print_info("▶ fix successful")
-                    break
-                out.tool_result(f"⚠ {error}", error=True)
-            else:
+            _, fixed = _parse_code_response(fix_response, "")
+            if not fixed:
+                # Try extracting search/replace blocks
+                fixed = _apply_search_replace(full, fix_response)
+                if fixed:
+                    result = checker.check(filename, str(repo))
+                    if result["ok"]:
+                        progress.done("fix", "verified OK")
+                        break
+                continue
+            app.toolkit.changes.snapshot_before(filename, "fix")
+            full.write_text(fixed)
+            out.log_tool("write_file", f"{filename} (fixed)")
+            result = checker.check(filename, str(repo))
+            if result["ok"]:
+                progress.done("fix", "verified OK")
                 break
+            progress.fail("fix", result["error"][:60])
+    else:
+        progress.done("verify", "syntax OK")
 
-    # ── CHECK DEPS: verify imports work ──
+    # CHECK DEPS
     if filename.endswith(".py"):
-        out.print_info("▶ checking dependencies")
-        out.set_stage("checking deps")
-        dep_error = _check_deps(repo, filename)
-        if dep_error:
-            out.tool_result(f"⚠ {dep_error}", error=True)
-            # Try to install the missing module
-            module = _extract_module_name(dep_error)
+        progress.start("checking dependencies")
+        dep_err = _check_deps(repo, filename)
+        if dep_err:
+            module = re.search(r"No module named '(\w+)'", dep_err)
             if module:
-                out.log_tool("bash", f"pip install {module}")
-                result = subprocess.run(
-                    f"pip install {module}", shell=True,
-                    capture_output=True, text=True, timeout=60,
-                    cwd=str(repo),
-                )
-                output = (result.stdout + result.stderr).strip()
-                out.tool_result(output[:120])
+                mod = module.group(1)
+                out.log_tool("bash", f"pip install {mod}")
+                r = subprocess.run(f"pip install {mod}", shell=True, capture_output=True, text=True,
+                                   timeout=60, cwd=str(repo))
+                out.tool_result(r.stdout.strip()[:80] or r.stderr.strip()[:80])
+            else:
+                progress.fail("deps", dep_err[:60])
+        else:
+            progress.done("deps", "all imports OK")
 
-    # ── DONE ──
-    out.print_info("▶ done")
     summary = f"Created {filename} ({lines} lines). Run: python {filename}"
     out.stream(summary)
     return summary
 
 
-def _handle_edit(
-    app: "GemApp",
-    user_text: str,
-    target_file: str,
-    composed_messages: list[dict],
-    out: "OutputManager",
-) -> str:
-    """Edit an existing file: read → ask model for changes → write → verify."""
+# ── Feature 2: FILE EDITING / BUG FIXING ───────────────────────────
+
+def _do_edit(app, user_text, messages, out, progress, checker, context, relevance):
     repo = app.repo_root
 
-    # ── READ: get current file contents ──
-    out.print_info("▶ reading file")
-    out.set_stage("reading")
-    full_path = repo / target_file
-    current_code = full_path.read_text(errors="replace")
-    out.log_tool("read_file", target_file)
-    out.tool_result(f"{target_file} ({len(current_code.splitlines())} lines)")
+    # Find target file
+    progress.start("finding file")
+    target = _guess_target_file(user_text, repo)
+    if not target:
+        related = relevance.find_related(user_text, repo, max_files=1)
+        target = related[0] if related else ""
+    if not target or not (repo / target).is_file():
+        out.stream(f"Couldn't find a file to edit. Please specify the filename.")
+        return ""
 
-    # ── EDIT: ask model for modified version ──
-    out.print_info("▶ generating changes")
+    # READ
+    progress.start(f"reading {target}")
+    full = repo / target
+    current = full.read_text(errors="replace")
+    out.log_tool("read_file", target)
+    out.tool_result(f"{target} ({len(current.splitlines())} lines)")
+
+    # EDIT
+    progress.start("generating changes")
     out.set_stage("editing")
-    prompt = (
-        f"Here is {target_file}:\n"
-        f"```python\n{current_code}\n```\n\n"
-        f"Task: {user_text}\n\n"
-        f"Return the COMPLETE modified file with your changes applied.\n"
-        f"```python\nmodified code\n```\n\n"
-        f"Make MINIMAL changes — only modify what's needed for the task."
-    )
-
+    related_imports = relevance.find_imports(str(full), repo)
+    ctx = context.build_for_edit(target, user_text, repo, related_imports)
     response = app.engine.generate_once([
-        *composed_messages,
-        {"role": "user", "content": prompt},
+        {"role": "system", "content": SYSTEM_PROMPTS["create"]},  # use create prompt — we want full file back
+        *messages[-4:],
+        {"role": "user", "content": f"{ctx}\n\nReturn the COMPLETE modified file:\n```python\nmodified code\n```\n\nMake MINIMAL changes."},
     ])
 
     _, new_code = _parse_code_response(response, "")
     if not new_code:
-        out.stream(response)
-        return response
-
-    # Write the modified file
-    app.toolkit.changes.snapshot_before(target_file, "agent_edit")
-    full_path.write_text(new_code)
-    out.log_tool("write_file", target_file)
-    out.tool_result(f"Updated {target_file} ({len(new_code.splitlines())} lines)")
-
-    # ── VERIFY ──
-    out.print_info("▶ verifying")
-    out.set_stage("verifying")
-    error = _verify_python(repo, target_file)
-    if error:
-        out.tool_result(f"⚠ {error}", error=True)
-        # One fix attempt
-        out.print_info("▶ fixing")
-        fix_prompt = (
-            f"This code has an error:\n```python\n{new_code}\n```\n\n"
-            f"Error: {error}\n\nReturn the COMPLETE fixed file:\n```python\nfixed\n```"
-        )
-        fix_response = app.engine.generate_once([{"role": "user", "content": fix_prompt}])
-        _, fixed = _parse_code_response(fix_response, "")
-        if fixed:
-            app.toolkit.changes.snapshot_before(target_file, "agent_fix")
-            full_path.write_text(fixed)
-            out.log_tool("write_file", f"{target_file} (fixed)")
-            out.tool_result(f"Updated {target_file} ({len(fixed.splitlines())} lines)")
+        # Try search/replace format
+        applied = _apply_search_replace(full, response)
+        if applied:
+            out.log_tool("edit_file", target)
+            out.tool_result(f"Edited {target}")
+        else:
+            out.stream(response)
+            return response
     else:
-        out.print_info("▶ verified OK")
+        app.toolkit.changes.snapshot_before(target, "edit")
+        full.write_text(new_code)
+        out.log_tool("write_file", target)
+        out.tool_result(f"Updated {target} ({len(new_code.splitlines())} lines)")
 
-    # ── DONE ──
-    summary = f"Updated {target_file}. Run: python {target_file}"
+    # VERIFY
+    progress.start("verifying")
+    result = checker.check(target, str(repo))
+    if not result["ok"]:
+        progress.fail("verify", result["error"][:80])
+        # One fix attempt
+        fix_ctx = context.build_for_fix(target, result["error"], repo)
+        fix_resp = app.engine.generate_once([
+            {"role": "system", "content": SYSTEM_PROMPTS["fix"]},
+            {"role": "user", "content": fix_ctx},
+        ])
+        _, fixed = _parse_code_response(fix_resp, "")
+        if fixed:
+            app.toolkit.changes.snapshot_before(target, "fix")
+            full.write_text(fixed)
+            r2 = checker.check(target, str(repo))
+            if r2["ok"]:
+                progress.done("fix", "verified OK")
+    else:
+        progress.done("verify", "syntax OK")
+
+    summary = f"Updated {target}"
     out.stream(summary)
     return summary
 
 
-# ── Helper functions ──────────────────────────────────────────────
+# ── Feature 3: CODE REVIEW ─────────────────────────────────────────
 
-def _list_files(repo: Path) -> list[str]:
-    """List files in repo (fast, no hidden/cache dirs)."""
-    files = []
-    for p in repo.rglob("*"):
-        if p.is_file() and ".git" not in p.parts and "__pycache__" not in p.parts:
-            try:
-                files.append(str(p.relative_to(repo)))
-            except ValueError:
-                pass
-    return sorted(files)[:50]
+def _do_review(app, user_text, messages, out, context, relevance):
+    repo = app.repo_root
+    target = _guess_target_file(user_text, repo)
+    if not target:
+        related = relevance.find_related(user_text, repo, max_files=1)
+        target = related[0] if related else ""
+    if not target or not (repo / target).is_file():
+        out.stream("Please specify a file to review.")
+        return ""
+
+    out.log_tool("read_file", target)
+    content = (repo / target).read_text(errors="replace")
+    out.tool_result(f"{target} ({len(content.splitlines())} lines)")
+
+    response = app.engine.generate_once([
+        {"role": "system", "content": SYSTEM_PROMPTS["review"]},
+        {"role": "user", "content": f"Review this code:\n```\n{content[:6000]}\n```"},
+    ])
+    out.stream(response)
+    return response
 
 
-def _read_relevant_files(repo: Path, user_text: str, files: list[str]) -> str:
-    """Read files that seem relevant to the task."""
-    text_lower = user_text.lower()
-    relevant = []
-    for f in files:
-        fname = f.lower()
-        # Check if any word from user text appears in filename
-        if any(w in fname for w in text_lower.split() if len(w) > 3):
-            try:
-                content = (repo / f).read_text(errors="replace")[:3000]
-                relevant.append(f"--- {f} ---\n{content}")
-            except Exception:
-                pass
-    if relevant:
-        return "Relevant existing files:\n" + "\n".join(relevant[:3])
+# ── Feature 4: EXPLANATION ─────────────────────────────────────────
+
+def _do_explain(app, user_text, messages, out, context, relevance):
+    repo = app.repo_root
+    target = _guess_target_file(user_text, repo)
+    if target and (repo / target).is_file():
+        out.log_tool("read_file", target)
+        content = (repo / target).read_text(errors="replace")
+        out.tool_result(f"{target} ({len(content.splitlines())} lines)")
+        prompt = f"Explain this code:\n```\n{content[:6000]}\n```\n\n{user_text}"
+    else:
+        prompt = user_text
+
+    response = app.engine.generate_once([
+        {"role": "system", "content": SYSTEM_PROMPTS["explain"]},
+        *messages[-4:],
+        {"role": "user", "content": prompt},
+    ])
+    out.stream(response)
+    return response
+
+
+# ── Feature 7+8: TESTS ─────────────────────────────────────────────
+
+def _do_test(app, user_text, messages, out, progress, checker):
+    repo = app.repo_root
+    t = user_text.lower()
+
+    if "run" in t or "pytest" in t:
+        # RUN tests
+        progress.start("running tests")
+        out.log_tool("bash", "python3 -m pytest -v --tb=short")
+        r = subprocess.run("python3 -m pytest -v --tb=short 2>&1 | tail -30",
+                           shell=True, capture_output=True, text=True, timeout=60, cwd=str(repo))
+        output = r.stdout.strip()
+        out.tool_result(output[:120])
+        out.stream(output)
+        return output
+    else:
+        # GENERATE tests
+        target = _guess_target_file(user_text, repo)
+        if not target:
+            out.stream("Please specify a file to write tests for.")
+            return ""
+        progress.start(f"reading {target}")
+        content = (repo / target).read_text(errors="replace")
+        progress.start("generating tests")
+        response = app.engine.generate_once([
+            {"role": "system", "content": SYSTEM_PROMPTS["create"]},
+            {"role": "user", "content": f"Write pytest tests for:\n```\n{content[:4000]}\n```\nOutput ONLY test code."},
+        ])
+        _, test_code = _parse_code_response(response, "")
+        if test_code:
+            test_file = f"test_{Path(target).name}"
+            (repo / test_file).write_text(test_code)
+            out.log_tool("write_file", test_file)
+            out.tool_result(f"Written {test_file} ({len(test_code.splitlines())} lines)")
+            # Run
+            progress.start("running tests")
+            r = subprocess.run(f"python3 -m pytest {test_file} -v --tb=short 2>&1 | tail -20",
+                               shell=True, capture_output=True, text=True, timeout=60, cwd=str(repo))
+            out.stream(r.stdout.strip())
+            return r.stdout.strip()
+        out.stream(response)
+        return response
+
+
+# ── Feature 10: GIT ────────────────────────────────────────────────
+
+def _do_git(app, user_text, messages, out):
+    repo = app.repo_root
+    t = user_text.lower()
+
+    if "status" in t or "diff" in t:
+        out.log_tool("bash", "git status && git diff --stat")
+        r = subprocess.run("git status --short && echo '---' && git diff --stat",
+                           shell=True, capture_output=True, text=True, cwd=str(repo))
+        out.stream(r.stdout.strip())
+        return r.stdout.strip()
+
+    if "commit" in t:
+        # Get diff
+        r = subprocess.run("git diff --staged", shell=True, capture_output=True, text=True, cwd=str(repo))
+        diff = r.stdout.strip()
+        if not diff:
+            r = subprocess.run("git diff", shell=True, capture_output=True, text=True, cwd=str(repo))
+            diff = r.stdout.strip()
+        if not diff:
+            out.stream("No changes to commit.")
+            return ""
+        # Generate message
+        response = app.engine.generate_once([
+            {"role": "user", "content": f"Write a concise commit message for:\n{diff[:3000]}\n\nOutput ONLY the message."},
+        ])
+        msg = response.strip().strip('"').strip("'")
+        out.log_tool("bash", f"git commit -m '{msg[:50]}...'")
+        subprocess.run("git add -A", shell=True, cwd=str(repo))
+        r = subprocess.run(f'git commit -m "{msg}"', shell=True, capture_output=True, text=True, cwd=str(repo))
+        out.stream(r.stdout.strip() or r.stderr.strip())
+        return msg
+
+    if "log" in t:
+        r = subprocess.run("git log --oneline -10", shell=True, capture_output=True, text=True, cwd=str(repo))
+        out.stream(r.stdout.strip())
+        return r.stdout.strip()
+
+    # Generic git command
+    out.stream("Use: git status, git diff, git commit, git log")
     return ""
 
 
-def _guess_target_file(user_text: str, existing_files: list[str]) -> str:
-    """Guess which file the user wants to edit/create."""
-    # Check for explicit filename in user text
+# ── Feature 11: SEARCH ─────────────────────────────────────────────
+
+def _do_search(app, user_text, out):
+    repo = app.repo_root
+    keywords = _extract_keywords(user_text)
+    pattern = "|".join(keywords) if keywords else user_text
+
+    out.log_tool("grep", pattern)
+    r = subprocess.run(
+        ["grep", "-rn", "--include=*.py", "--include=*.js", "--include=*.ts", pattern, "."],
+        capture_output=True, text=True, timeout=10, cwd=str(repo),
+    )
+    output = r.stdout.strip()[:3000]
+    if output:
+        out.stream(output)
+    else:
+        out.stream(f"No matches for: {pattern}")
+    return output
+
+
+# ── Feature: CHAT (no tools) ──────────────────────────────────────
+
+def _do_chat(app, user_text, messages, out):
+    response = app.engine.generate_once([*messages[-6:], {"role": "user", "content": user_text}])
+    out.stream(response)
+    return response
+
+
+# ── Feature: PLANNED (multi-step) ──────────────────────────────────
+
+def _handle_planned(app, user_text, messages, out, progress, checker, context, relevance):
+    """Layer 3 + Layer 2: Plan then orchestrate."""
+    repo = app.repo_root
+
+    # PLAN
+    progress.start("planning")
+    tree = _list_dir(repo, depth=2)
+    plan_response = app.engine.generate_once([
+        {"role": "system", "content": SYSTEM_PROMPTS["plan"]},
+        {"role": "user", "content": f"Project:\n{tree[:1000]}\n\nTask: {user_text}\n\nDecompose into steps."},
+    ])
+    out.print_info(f"Plan:\n{plan_response[:500]}")
+
+    # Parse steps
+    steps = re.findall(r'STEP\s*\d+:\s*(CREATE_FILE|EDIT_FILE|RUN_COMMAND|INSTALL_DEP|RUN_TESTS)\s*\|\s*(\S+)\s*\|\s*(.+)', plan_response)
+
+    if not steps:
+        # Plan parsing failed — fall back to create
+        return _do_create(app, user_text, messages, out, progress, checker, context, relevance)
+
+    # ORCHESTRATE: execute each step
+    for i, (action, target, desc) in enumerate(steps):
+        progress.start(f"step {i+1}/{len(steps)}: {desc[:50]}")
+
+        if action == "CREATE_FILE":
+            _do_create(app, desc, messages, out, progress, checker, context, relevance)
+        elif action == "EDIT_FILE":
+            _do_edit(app, desc, messages, out, progress, checker, context, relevance)
+        elif action == "RUN_COMMAND":
+            out.log_tool("bash", target)
+            r = subprocess.run(target, shell=True, capture_output=True, text=True, timeout=60, cwd=str(repo))
+            out.tool_result(r.stdout.strip()[:120] or r.stderr.strip()[:120])
+        elif action == "INSTALL_DEP":
+            out.log_tool("bash", f"pip install {target}")
+            subprocess.run(f"pip install {target}", shell=True, capture_output=True, text=True, timeout=60, cwd=str(repo))
+        elif action == "RUN_TESTS":
+            _do_test(app, "run tests", messages, out, progress, checker)
+
+    summary = f"Completed {len(steps)} steps for: {user_text[:60]}"
+    out.stream(summary)
+    return summary
+
+
+# ── Helpers ─────────────────────────────────────────────────────────
+
+def _guess_target_file(user_text: str, repo: Path) -> str:
+    """Guess which file the user wants."""
     match = re.search(r'(\w[\w.-]*\.(?:py|js|ts|html|css|json|md|txt))', user_text)
-    if match:
+    if match and (repo / match.group(1)).is_file():
         return match.group(1)
-
-    # Check if user is referring to an existing file by content
-    text_lower = user_text.lower()
-    for f in existing_files:
-        fname = Path(f).stem.lower()
-        if fname in text_lower and len(fname) > 2:
-            return f
-
+    # Check stems
+    for f in sorted(repo.iterdir()):
+        if f.is_file() and f.suffix in (".py", ".js", ".ts"):
+            if f.stem.lower() in user_text.lower():
+                return f.name
     return ""
 
 
 def _parse_code_response(response: str, user_text: str) -> tuple[str, str]:
     """Extract filename and code from model response."""
-    # Look for FILENAME: header
     fname_match = re.search(r'FILENAME:\s*(\S+)', response)
-
-    # Look for code block
     code_match = re.search(r'```\w*\n(.*?)```', response, re.DOTALL)
 
     filename = ""
     if fname_match:
         filename = fname_match.group(1)
-    elif not filename:
-        # Guess from user text
+    if not filename:
         name_match = re.search(r'(\w+\.py)', user_text)
         if name_match:
             filename = name_match.group(1)
         else:
-            # Generate from task description
             words = re.findall(r'\w+', user_text.lower())
             for w in words:
                 if w not in ("make", "create", "build", "a", "an", "the", "that", "can",
-                            "i", "run", "locally", "my", "laptop", "app", "game", "on"):
+                             "i", "run", "locally", "my", "laptop", "app", "game", "on", "okay"):
                     filename = f"{w}_game.py" if "game" in user_text.lower() else f"{w}.py"
                     break
             if not filename:
@@ -315,40 +531,35 @@ def _parse_code_response(response: str, user_text: str) -> tuple[str, str]:
     return filename, code
 
 
-def _verify_python(repo: Path, filename: str) -> str:
-    """Syntax check a Python file. Returns error string or empty."""
-    full = repo / filename
-    if not full.is_file() or not filename.endswith(".py"):
-        return ""
-    try:
-        code = full.read_text(errors="replace")
-        compile(code, filename, "exec")
-    except SyntaxError as e:
-        return f"SyntaxError in {filename} line {e.lineno}: {e.msg}"
-    return ""
+def _apply_search_replace(file_path: Path, response: str) -> bool:
+    """Apply <<<SEARCH...===...SEARCH>>> blocks."""
+    blocks = re.findall(r'<<<SEARCH\n(.*?)\n===\n(.*?)\nSEARCH>>>', response, re.DOTALL)
+    if not blocks:
+        return False
+    content = file_path.read_text(errors="replace")
+    for search, replace in blocks:
+        if search in content:
+            content = content.replace(search, replace, 1)
+    file_path.write_text(content)
+    return True
 
 
 def _check_deps(repo: Path, filename: str) -> str:
-    """Check if imports in a Python file are available."""
+    """Check if imports are available."""
     full = repo / filename
     try:
         env = {**__import__("os").environ, "SDL_VIDEODRIVER": "dummy", "PYGAME_HIDE_SUPPORT_PROMPT": "1"}
-        result = subprocess.run(
-            ["python3", "-c", f"import ast\nfor n in ast.walk(ast.parse(open('{full}').read())):\n"
-             f"  if isinstance(n, ast.Import):\n"
-             f"    for a in n.names:\n"
-             f"      __import__(a.name.split('.')[0])"],
-            capture_output=True, text=True, timeout=10, cwd=str(repo), env=env,
+        code = (
+            f"import ast\n"
+            f"for n in ast.walk(ast.parse(open('{full}').read())):\n"
+            f"  if isinstance(n, ast.Import):\n"
+            f"    for a in n.names: __import__(a.name.split('.')[0])\n"
         )
-        if result.returncode != 0:
-            stderr = [l for l in result.stderr.splitlines() if "MallocStackLogging" not in l]
-            return stderr[-1] if stderr else ""
+        r = subprocess.run(["python3", "-c", code], capture_output=True, text=True,
+                           timeout=10, cwd=str(repo), env=env)
+        if r.returncode != 0:
+            lines = [l for l in r.stderr.splitlines() if "MallocStackLogging" not in l]
+            return lines[-1] if lines else ""
     except Exception:
         pass
     return ""
-
-
-def _extract_module_name(error: str) -> str:
-    """Extract module name from an ImportError message."""
-    match = re.search(r"No module named '(\w+)'", error)
-    return match.group(1) if match else ""

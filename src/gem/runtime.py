@@ -158,9 +158,10 @@ class GemRuntimeGateway:
             "options": opts,
         }
 
+        # Long timeout for code generation — 26B at 8 tok/s needs ~5min for 150 lines
         response = self.client.post(
             f"{base}/api/generate", json=payload,
-            timeout=300,
+            timeout=httpx.Timeout(connect=10, read=600, write=30, pool=10),
         )
         response.raise_for_status()
         data = response.json()
