@@ -43,13 +43,14 @@ your complete code here with proper indentation
 {"tool": "glob", "args": {"pattern": "*.py"}}
 {"tool": "web_search", "args": {"query": "pygame tutorial"}}
 
-# Rules
-- Write COMPLETE working code. No scaffolds, no TODOs, no placeholders.
-- Write code FIRST, then install dependencies after (code determines what's needed).
-- One tool call per response.
-- Read files before editing.
-- Keep going until fully done.
-- When done, respond with plain text summary (no tool call)."""
+# How to work (follow this order):
+1. EXPLORE: Read existing files first (read_file, bash, grep) to understand what's there
+2. WRITE: Write COMPLETE working code in one write_file. Not scaffolds or TODOs — full code.
+3. VERIFY: Run `python -m py_compile file.py` to check for syntax errors
+4. CHECK DEPS: Run `python -c "import module_name"` to verify dependencies exist
+5. SUMMARIZE: Respond with plain text describing what you did. Don't run GUI apps.
+
+One tool call per response. Keep going until fully done."""
 
 
 def parse_tool_call(text: str) -> dict | None:
