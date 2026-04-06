@@ -226,6 +226,8 @@ def main(argv: list[str] | None = None) -> None:
     import os, warnings
     os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    os.environ["MallocStackLogging"] = "0"
+    os.environ["MallocStackLoggingNoCompact"] = "0"
     # Ollama performance optimizations (from mmap article)
     os.environ.setdefault("OLLAMA_FLASH_ATTENTION", "1")
     # Allow 2 models simultaneously for orchestrator (26B planner + e2b workers)
