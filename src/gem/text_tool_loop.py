@@ -214,30 +214,55 @@ def execute_tool(app: "GemApp", tool_name: str, args: dict) -> str:
 
 
 def _verify_python(app: "GemApp", fpath: str) -> str:
-    """Quick verify: syntax check + basic import check on a Python file.
+    """Verify a Python file: syntax check + quick import/runtime check.
+
+    Inspired by Claude Code's verification agent pattern:
+    "Before reporting complete, verify it works: run the test, check the output."
 
     Returns error string if problems found, empty string if OK.
     """
     full = app.repo_root / fpath
     if not full.is_file():
         return ""
+
+    code = full.read_text(errors="replace")
+
+    # 1. Syntax check (instant, catches SyntaxError)
     try:
-        code = full.read_text(errors="replace")
-        # 1. Syntax check
         compile(code, fpath, "exec")
     except SyntaxError as e:
         return f"SyntaxError in {fpath} line {e.lineno}: {e.msg}"
 
-    # 2. Quick import check — try to run it with python -c to catch import errors
+    # 2. Import/runtime check — run the file briefly to catch ImportError, AttributeError, etc.
+    # Only import the module, don't run main() — so GUI apps don't block
     try:
+        # Create a test script that imports but doesn't execute
+        test_code = (
+            f"import sys, importlib.util\n"
+            f"spec = importlib.util.spec_from_file_location('_test', '{full}')\n"
+            f"mod = importlib.util.module_from_spec(spec)\n"
+            f"try:\n"
+            f"    spec.loader.exec_module(mod)\n"
+            f"except SystemExit:\n"
+            f"    pass  # game loops call sys.exit()\n"
+            f"except Exception as e:\n"
+            f"    print(f'{{type(e).__name__}}: {{e}}', file=sys.stderr)\n"
+            f"    sys.exit(1)\n"
+        )
         result = subprocess.run(
-            ["python3", "-c", f"import ast; ast.parse(open('{full}').read()); print('OK')"],
-            capture_output=True, text=True, timeout=5,
+            ["python3", "-c", test_code],
+            capture_output=True, text=True, timeout=10,
             cwd=str(app.repo_root),
         )
         if result.returncode != 0:
-            err = result.stderr.strip().splitlines()[-1] if result.stderr.strip() else "unknown error"
-            return err
+            # Filter noise
+            stderr = result.stderr.strip()
+            lines = [l for l in stderr.splitlines()
+                     if "MallocStackLogging" not in l and "can't turn off" not in l]
+            if lines:
+                return lines[-1][:150]
+    except subprocess.TimeoutExpired:
+        pass  # timeout is OK — means the app started (GUI apps block)
     except Exception:
         pass
 
