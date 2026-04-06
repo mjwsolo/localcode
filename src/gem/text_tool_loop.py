@@ -361,16 +361,28 @@ def run_text_tool_loop(
             tool_name = tool_call["tool"]
             tool_args = tool_call.get("args", {})
 
-            # For write_file: ensure content exists and has real newlines
+            # For write_file: ensure content exists, has real newlines, isn't a bash command
             if tool_name == "write_file":
                 file_content = tool_args.get("content", "")
                 if not file_content:
-                    # Try extracting from code block in raw content
                     code_match = re.search(r'```\w*\n(.*?)```', content, re.DOTALL)
                     if code_match:
                         tool_args["content"] = code_match.group(1).strip()
-                elif "\\n" in file_content:
+                        file_content = tool_args["content"]
+                if "\\n" in file_content:
                     tool_args["content"] = file_content.replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"')
+                    file_content = tool_args["content"]
+                # Safety: don't overwrite a real file with what looks like a bash command
+                fpath = tool_args.get("path", "")
+                if file_content and len(file_content.splitlines()) <= 2:
+                    existing = app.repo_root / fpath
+                    if existing.is_file() and len(existing.read_text(errors="replace")) > len(file_content) * 2:
+                        # Existing file is much bigger — model is probably confused
+                        out.tool_result(f"Skipped: {fpath} already has more content", error=True)
+                        messages.append({"role": "assistant", "content": content})
+                        messages.append({"role": "user", "content": f"{fpath} already exists with {len(existing.read_text().splitlines())} lines. Use edit_file to modify it, or bash to run commands."})
+                        out.start_thinking(reset=False)
+                        continue
 
             # Show what's happening
             args_preview = str(tool_args.get("path", tool_args.get("command", tool_args.get("query", ""))))[:60]
