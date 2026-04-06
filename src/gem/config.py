@@ -69,6 +69,21 @@ piper_model_path = ""
 [ui]
 show_debug = false
 thinking_mode = "full"
+
+[safety]
+confirm_destructive = true
+confirm_installs = true
+show_diff_before_apply = true
+jail_to_project = true
+max_fix_retries = 3
+max_replan_attempts = 2
+auto_approve_agent = false
+
+[logging]
+enabled = true
+log_prompts = true
+log_responses = true
+max_days = 30
 """
 
 
@@ -141,12 +156,39 @@ class UIConfig:
 
 
 @dataclass(slots=True)
+class SafetyConfig:
+    confirm_destructive: bool = True
+    confirm_installs: bool = True
+    show_diff_before_apply: bool = True
+    jail_to_project: bool = True
+    max_fix_retries: int = 3
+    max_replan_attempts: int = 2
+    auto_approve_agent: bool = False  # auto-approve all tools in agent mode
+
+
+@dataclass(slots=True)
+class LoggingConfig:
+    enabled: bool = True
+    log_prompts: bool = True
+    log_responses: bool = True
+    max_days: int = 30
+
+
+@dataclass(slots=True)
 class AppConfig:
     runtime: RuntimeConfig
     search: SearchConfig
     browser: BrowserConfig
     voice: VoiceConfig
     ui: UIConfig
+    safety: SafetyConfig = None  # type: ignore[assignment]
+    logging: LoggingConfig = None  # type: ignore[assignment]
+
+    def __post_init__(self):
+        if self.safety is None:
+            self.safety = SafetyConfig()
+        if self.logging is None:
+            self.logging = LoggingConfig()
 
 
 def get_home_dir() -> Path:
@@ -220,7 +262,7 @@ def save_config(config: AppConfig) -> Path:
         f"enabled = {'true' if config.browser.enabled else 'false'}\n"
         f'mcp_server_name = "{config.browser.mcp_server_name}"\n'
         f'launch_command = "{config.browser.launch_command}"\n'
-        f"launch_args = [{', '.join(f'\"{arg}\"' for arg in (config.browser.launch_args or []))}]\n\n"
+        "launch_args = [" + ', '.join(f'"{arg}"' for arg in (config.browser.launch_args or [])) + "]\n\n"
         "[voice]\n"
         f'stt_provider = "{config.voice.stt_provider}"\n'
         f'tts_provider = "{config.voice.tts_provider}"\n'
@@ -230,7 +272,20 @@ def save_config(config: AppConfig) -> Path:
         f'piper_model_path = "{config.voice.piper_model_path}"\n\n'
         "[ui]\n"
         f"show_debug = {'true' if config.ui.show_debug else 'false'}\n"
-        f'thinking_mode = "{config.ui.thinking_mode}"\n'
+        f'thinking_mode = "{config.ui.thinking_mode}"\n\n'
+        "[safety]\n"
+        f"confirm_destructive = {'true' if config.safety.confirm_destructive else 'false'}\n"
+        f"confirm_installs = {'true' if config.safety.confirm_installs else 'false'}\n"
+        f"show_diff_before_apply = {'true' if config.safety.show_diff_before_apply else 'false'}\n"
+        f"jail_to_project = {'true' if config.safety.jail_to_project else 'false'}\n"
+        f"max_fix_retries = {config.safety.max_fix_retries}\n"
+        f"max_replan_attempts = {config.safety.max_replan_attempts}\n"
+        f"auto_approve_agent = {'true' if config.safety.auto_approve_agent else 'false'}\n\n"
+        "[logging]\n"
+        f"enabled = {'true' if config.logging.enabled else 'false'}\n"
+        f"log_prompts = {'true' if config.logging.log_prompts else 'false'}\n"
+        f"log_responses = {'true' if config.logging.log_responses else 'false'}\n"
+        f"max_days = {config.logging.max_days}\n"
     )
     path.write_text(content)
     return path
@@ -304,4 +359,73 @@ def load_config() -> AppConfig:
         show_debug=str(os.environ.get("GEM_SHOW_DEBUG", ui_data.get("show_debug", False))).lower() in {"1", "true", "yes", "on"},
         thinking_mode=os.environ.get("GEM_THINKING_MODE", ui_data.get("thinking_mode", "summary")),
     )
-    return AppConfig(runtime=runtime, search=search, browser=browser, voice=voice, ui=ui)
+    safety_data = data.get("safety", {})
+    safety = SafetyConfig(
+        confirm_destructive=str(safety_data.get("confirm_destructive", True)).lower() in {"1", "true", "yes", "on"},
+        confirm_installs=str(safety_data.get("confirm_installs", True)).lower() in {"1", "true", "yes", "on"},
+        show_diff_before_apply=str(safety_data.get("show_diff_before_apply", True)).lower() in {"1", "true", "yes", "on"},
+        jail_to_project=str(safety_data.get("jail_to_project", True)).lower() in {"1", "true", "yes", "on"},
+        max_fix_retries=int(safety_data.get("max_fix_retries", 3)),
+        max_replan_attempts=int(safety_data.get("max_replan_attempts", 2)),
+        auto_approve_agent=str(safety_data.get("auto_approve_agent", False)).lower() in {"1", "true", "yes", "on"},
+    )
+    logging_data = data.get("logging", {})
+    logging_cfg = LoggingConfig(
+        enabled=str(logging_data.get("enabled", True)).lower() in {"1", "true", "yes", "on"},
+        log_prompts=str(logging_data.get("log_prompts", True)).lower() in {"1", "true", "yes", "on"},
+        log_responses=str(logging_data.get("log_responses", True)).lower() in {"1", "true", "yes", "on"},
+        max_days=int(logging_data.get("max_days", 30)),
+    )
+    config = AppConfig(runtime=runtime, search=search, browser=browser, voice=voice,
+                       ui=ui, safety=safety, logging=logging_cfg)
+
+    # Layer project-level config on top (if .gem/config.toml exists)
+    config = _apply_project_config(config)
+    return config
+
+
+def _apply_project_config(config: AppConfig, project_root: Path | None = None) -> AppConfig:
+    """Layer project-level .gem/config.toml on top of global config.
+
+    Project config can override: runtime.mode, runtime.temperature,
+    safety settings, and ui settings. NOT provider/model (those are global).
+    """
+    if project_root is None:
+        project_root = Path.cwd()
+
+    project_config_path = project_root / ".gem" / "config.toml"
+    if not project_config_path.is_file():
+        return config
+
+    try:
+        data = tomllib.loads(project_config_path.read_text())
+    except Exception:
+        return config
+
+    # Override allowed runtime fields
+    rt = data.get("runtime", {})
+    if "mode" in rt:
+        config.runtime.mode = rt["mode"]
+    if "temperature" in rt:
+        config.runtime.temperature = float(rt["temperature"])
+    if "max_context_chars" in rt:
+        config.runtime.max_context_chars = int(rt["max_context_chars"])
+
+    # Override safety
+    sf = data.get("safety", {})
+    for field_name in ("confirm_destructive", "confirm_installs", "show_diff_before_apply",
+                       "jail_to_project", "auto_approve_agent"):
+        if field_name in sf:
+            setattr(config.safety, field_name, str(sf[field_name]).lower() in {"1", "true", "yes", "on"})
+    for field_name in ("max_fix_retries", "max_replan_attempts"):
+        if field_name in sf:
+            setattr(config.safety, field_name, int(sf[field_name]))
+
+    # Override UI
+    ui = data.get("ui", {})
+    if "thinking_mode" in ui:
+        config.ui.thinking_mode = ui["thinking_mode"]
+    if "show_debug" in ui:
+        config.ui.show_debug = str(ui["show_debug"]).lower() in {"1", "true", "yes", "on"}
+
+    return config

@@ -89,6 +89,16 @@ class ChangeLog:
     def change_count(self) -> int:
         return len(self.snapshots)
 
+    def recent_files(self, since: int = 0) -> list[str]:
+        """Get list of files changed since a given snapshot index."""
+        seen = set()
+        result = []
+        for snap in self.snapshots[since:]:
+            if snap.path not in seen:
+                seen.add(snap.path)
+                result.append(snap.path)
+        return result
+
     def start_transaction(self) -> int:
         """Mark the start of a multi-file edit transaction. Returns transaction ID."""
         return len(self.snapshots)

@@ -9,6 +9,7 @@ Model generates content. Harness handles sequencing, validation, retries.
 """
 from __future__ import annotations
 
+import difflib
 import json
 import re
 import subprocess
@@ -251,6 +252,31 @@ def _do_edit(app, user_text, messages, out, progress, checker, context, relevanc
             out.stream(response)
             return response
     else:
+        # Show diff preview before writing
+        diff_lines = list(difflib.unified_diff(
+            current.splitlines(keepends=True),
+            new_code.splitlines(keepends=True),
+            fromfile=f"a/{target}",
+            tofile=f"b/{target}",
+            n=3,
+        ))
+        if diff_lines:
+            preview = diff_lines[:20]
+            colored = []
+            for ln in preview:
+                ln = ln.rstrip("\n")
+                if ln.startswith("+"):
+                    colored.append(f"\033[32m{ln}\033[0m")
+                elif ln.startswith("-"):
+                    colored.append(f"\033[31m{ln}\033[0m")
+                elif ln.startswith("@@"):
+                    colored.append(f"\033[36m{ln}\033[0m")
+                else:
+                    colored.append(ln)
+            if len(diff_lines) > 20:
+                colored.append(f"… ({len(diff_lines) - 20} more diff lines)")
+            out.print_info("\n".join(colored))
+
         app.toolkit.changes.snapshot_before(target, "edit")
         full.write_text(new_code)
         out.log_tool("write_file", target)

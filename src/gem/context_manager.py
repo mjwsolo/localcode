@@ -19,6 +19,7 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 
 # ── 1. Token Budget ─────────────────────────────────────────────────
@@ -401,7 +402,7 @@ class ConversationManager:
 # ── 6. Syntax Checker ───────────────────────────────────────────────
 
 class SyntaxChecker:
-    """Language-aware syntax validation. No LLM needed."""
+    """Language-aware syntax validation. Tries LSP first, falls back to basic checks."""
 
     CHECKS = {
         ".py": 'python3 -c "import ast; ast.parse(open(\'{f}\').read())"',
@@ -413,7 +414,35 @@ class SyntaxChecker:
         ".rs": "cargo check 2>&1 | head -10",
     }
 
+    def __init__(self, project_root: str = "") -> None:
+        self._enhanced: Any = None
+        self._enhanced_failed = False
+        self._project_root = project_root
+
     def check(self, file_path: str, cwd: str = ".") -> dict:
+        # Try EnhancedChecker (LSP) first
+        if not self._enhanced_failed and not self._enhanced:
+            try:
+                from .lsp import EnhancedChecker
+                root = self._project_root or cwd
+                self._enhanced = EnhancedChecker(root)
+            except Exception:
+                self._enhanced_failed = True
+
+        if self._enhanced:
+            try:
+                result = self._enhanced.check(file_path)
+                if result.get("source") == "lsp":
+                    return result
+                # LSP returned offline result — use it
+                return result
+            except Exception:
+                pass
+
+        # Fallback: basic syntax check
+        return self._basic_check(file_path, cwd)
+
+    def _basic_check(self, file_path: str, cwd: str = ".") -> dict:
         ext = Path(file_path).suffix
         cmd_template = self.CHECKS.get(ext)
         if not cmd_template:
@@ -438,6 +467,14 @@ class SyntaxChecker:
             return {"ok": True, "skip": "check timed out"}
         except Exception as e:
             return {"ok": True, "skip": str(e)}
+
+    def notify_change(self, file_path: str) -> None:
+        """Notify LSP that a file changed (call after write/edit)."""
+        if self._enhanced:
+            try:
+                self._enhanced.notify_change(file_path)
+            except Exception:
+                pass
 
 
 # ── Undo Stack ──────────────────────────────────────────────────────

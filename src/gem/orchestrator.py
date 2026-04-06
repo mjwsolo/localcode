@@ -29,6 +29,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .diff_engine import DiffEngine, EditAction
+
 if TYPE_CHECKING:
     from .app import GemApp
 
@@ -173,10 +175,14 @@ class Orchestrator:
                 sys.stdout.write("\n")
                 sys.stdout.flush()
 
-                # Execute waves
-                for wave_num, wave in enumerate(waves, 1):
-                    self.out.set_stage(f"wave {wave_num}/{len(waves)}")
-                    self.out.print_info(f"wave {wave_num}/{len(waves)}: {len(wave)} worker{'s' if len(wave) > 1 else ''}")
+                # Execute waves (recomputed after replan)
+                replanned = False
+                waves = plan.get_waves()
+                while waves:
+                    wave = waves.pop(0)
+                    wave_num = len([s for s in plan.steps if s.status != "pending"]) // max(len(wave), 1) + 1
+                    self.out.set_stage(f"wave {wave_num}")
+                    self.out.print_info(f"wave {wave_num}: {len(wave)} worker{'s' if len(wave) > 1 else ''}")
                     self._execute_wave(wave, global_ctx)
                     for step in wave:
                         if step.status == "done":
@@ -190,6 +196,19 @@ class Orchestrator:
                                         global_ctx.existing_files[fpath] = full.read_text(errors="replace")
                                     except Exception:
                                         pass
+
+                    # Check for failures — attempt replan (max 1 per run)
+                    wave_failures = [s for s in wave if s.status == "error"]
+                    if wave_failures and not replanned:
+                        replanned = True
+                        self.out.print_info(f"{len(wave_failures)} step(s) failed — replanning...")
+                        new_plan = self._replan(plan, global_ctx)
+                        if new_plan and new_plan.steps:
+                            self.out.print_info(f"revised plan: {len(new_plan.steps)} steps")
+                            # Replace remaining pending steps
+                            plan.steps = [s for s in plan.steps if s.status != "pending"] + new_plan.steps
+                            # Recompute waves for remaining steps
+                            waves = plan.get_waves()
 
             # Phase 4: Review
             self.out.set_stage("reviewing")
@@ -333,19 +352,27 @@ Examples:
                 if code_match and step.file_targets:
                     matches = [(step.file_targets[0], code_match.group(1))]
 
+            diff_engine = DiffEngine(
+                global_ctx.repo_root,
+                undo_stack=self.app.toolkit.changes,
+                auto_approve=True,  # orchestrator auto-approves (user approved the plan)
+            )
             for fpath, content in matches:
                 fpath = fpath.strip()
                 content = content.strip()
                 if not content:
                     continue
                 full_path = global_ctx.repo_root / fpath
-                full_path.parent.mkdir(parents=True, exist_ok=True)
-                # Snapshot for undo
-                self.app.toolkit.changes.snapshot_before(fpath, f"orch_step_{step.id}")
-                full_path.write_text(content + "\n")
-                files_written.append(fpath)
-                # Update global context
-                global_ctx.existing_files[fpath] = content
+                if full_path.is_file():
+                    action = EditAction(fpath, "full_write", full_content=content + "\n")
+                else:
+                    action = EditAction(fpath, "create", full_content=content + "\n")
+                result = diff_engine._apply_without_preview(action)
+                if result.applied:
+                    files_written.append(fpath)
+                    global_ctx.existing_files[fpath] = content
+                else:
+                    step.error = f"Failed to write {fpath}: {result.reason}"
 
             if files_written:
                 step.result = f"wrote {', '.join(files_written)}"
@@ -420,6 +447,49 @@ ONLY the JSON."""
             plan.review_notes = "review failed"
 
         return plan
+
+    def _replan(self, original_plan: TaskPlan, global_ctx: GlobalContext) -> TaskPlan | None:
+        """Revise the plan after step failures. Returns new plan or None."""
+        completed = [s for s in original_plan.steps if s.status == "done"]
+        failed = [s for s in original_plan.steps if s.status == "error"]
+        remaining = [s for s in original_plan.steps if s.status == "pending"]
+
+        if not failed or not remaining:
+            return None
+
+        completed_summary = "\n".join(f"  [{s.id}] DONE: {s.description}" for s in completed)
+        failed_summary = "\n".join(f"  [{s.id}] FAILED: {s.description} — {s.error[:100]}" for s in failed)
+        remaining_summary = "\n".join(f"  [{s.id}] PENDING: {s.description}" for s in remaining)
+
+        prompt = f"""A plan partially failed. Revise the remaining steps.
+
+ORIGINAL TASK: {original_plan.task}
+
+COMPLETED:
+{completed_summary}
+
+FAILED:
+{failed_summary}
+
+REMAINING:
+{remaining_summary}
+
+Return a revised JSON array for the REMAINING work only. Keep completed work.
+Fix what caused the failures. Return valid JSON only."""
+
+        try:
+            response = self._call_planner(prompt)
+            steps = self._parse_plan_json(response)
+            if steps:
+                # Renumber to avoid ID conflicts
+                max_id = max((s.id for s in original_plan.steps), default=0)
+                for i, step in enumerate(steps):
+                    step.id = max_id + i + 1
+                return TaskPlan(task=original_plan.task, steps=steps)
+        except Exception as exc:
+            self.out.print_info(f"replan failed: {exc}")
+
+        return None
 
     # ── Model calls ─────────────────────────────────────────────────
 
