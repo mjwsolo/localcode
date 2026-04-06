@@ -182,6 +182,7 @@ class GemRuntimeGateway:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         think: bool = True,
+        format: dict[str, Any] | str | None = None,
     ) -> dict[str, Any]:
         if self.config.provider == "mlx-local":
             # Inject tool schemas into system prompt for MLX
@@ -206,6 +207,9 @@ class GemRuntimeGateway:
             return {"message": {"content": content, "tool_calls": []}}
 
         payload = self._payload(messages, stream=False, tools=tools, think=think)
+        # Structured output: Ollama grammar-constrains output to match this schema
+        if format is not None:
+            payload["format"] = format
         last_error: Exception | None = None
         for _ in range(max(1, self.config.max_retries + 1)):
             try:

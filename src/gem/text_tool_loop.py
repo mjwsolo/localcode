@@ -273,101 +273,91 @@ def run_text_tool_loop(
     out: "OutputManager",
     max_rounds: int = 15,
 ) -> str:
-    """Simple tool loop: model generates → we parse → execute → repeat.
+    """Tool loop using Ollama's structured output (format: json_schema).
 
-    No streaming tricks, no early-stop, no partial parsing.
-    Just clean rounds. The indicator shows activity during the wait.
+    The model is grammar-constrained to output valid JSON matching our tool
+    call schema. It physically cannot produce malformed output.
+    When the model is done, it outputs tool="done" with a message.
     """
     tool_prompt = build_tool_system_prompt()
 
     messages = list(composed_messages)
     if messages and messages[0].get("role") == "system":
-        messages[0]["content"] = messages[0]["content"] + "\n\n" + tool_prompt
+        messages[0] = {**messages[0], "content": messages[0]["content"] + "\n\n" + tool_prompt}
     else:
         messages.insert(0, {"role": "system", "content": tool_prompt})
+
+    # JSON schema — Ollama enforces this at token sampling level
+    tool_schema = {
+        "type": "object",
+        "properties": {
+            "tool": {
+                "type": "string",
+                "enum": list(TEXT_TOOLS.keys()) + ["done"],
+            },
+            "args": {"type": "object"},
+            "message": {"type": "string"},
+        },
+        "required": ["tool"],
+    }
 
     final_text = ""
 
     for round_num in range(max_rounds):
-        out.set_stage(f"▶ round {round_num + 1}" if round_num > 0 else "▶ processing prompt")
-
-        # Print the current phase as a permanent sub-item
         if round_num == 0:
             out.print_info("▶ processing prompt")
         else:
             out.print_info(f"▶ round {round_num + 1}")
+        out.set_stage(f"round {round_num + 1}")
 
-        # Stream to collect full response — shows token count in indicator
-        chunks: list[str] = []
-        generating_printed = False
-        for event in app.engine.stream_chat_events(messages, think=False):
-            if event["type"] == "content":
-                chunk = str(event["content"])
-                if "<|" in chunk or "|>" in chunk:
-                    chunk = re.sub(r'<\|[^>]*\|>', '', chunk)
-                if chunk:
-                    chunks.append(chunk)
-                    out.feed_thinking(chunk)
-                    if len(chunks) == 5 and not generating_printed:
-                        # Print "generating" as a permanent sub-item once tokens flow
-                        out.print_info("▶ generating")
-                        generating_printed = True
-                    if len(chunks) % 20 == 0:
-                        out.set_stage(f"generating ({len(chunks)} tok)")
+        # Call model with structured output — guaranteed valid JSON
+        response = app.engine.chat_once(messages, think=False, format=tool_schema)
+        content = response.get("message", {}).get("content", "").strip()
+        out.feed_thinking(content)
 
-        content = "".join(chunks).strip()
         if not content:
             break
 
-        # Try to parse a tool call
-        tool_call = parse_tool_call(content)
+        # Parse — guaranteed valid JSON from grammar constraint
+        try:
+            tool_call = json.loads(content)
+        except json.JSONDecodeError:
+            # Fallback for older Ollama without format support
+            tool_call = parse_tool_call(content)
+            if not tool_call:
+                final_text = content
+                out.stream(content)
+                break
 
-        if tool_call:
-            tool_name = tool_call["tool"]
-            tool_args = tool_call.get("args", {})
+        tool_name = tool_call.get("tool", "done")
+        tool_args = tool_call.get("args", {})
+        message = tool_call.get("message", "")
 
-            # Fix write_file content: unescape, extract from code block
-            if tool_name == "write_file":
-                file_content = tool_args.get("content", "")
-                if not file_content:
-                    # Try code block
-                    code_match = re.search(r'```\w*\n(.*?)```', content, re.DOTALL)
-                    if code_match:
-                        file_content = code_match.group(1).strip()
-                        tool_args["content"] = file_content
-                if "\\n" in file_content:
-                    tool_args["content"] = file_content.replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"')
-
-            # Show and execute — appears immediately in the UI
-            preview = tool_args.get("path", tool_args.get("command", tool_args.get("query", "")))
-            out.log_tool(tool_name, str(preview)[:60])  # prints ● tool_name immediately
-            result = execute_tool(app, tool_name, tool_args)
-            is_err = result.startswith("Error")
-            out.tool_result(result[:120], error=is_err)
-
-            # Feed result back — only the tool call, not closing text
-            messages.append({"role": "assistant", "content": json.dumps(tool_call)})
-            messages.append({"role": "user", "content": (
-                f"Tool result: {result}\n\n"
-                f"Next step? Install deps, fix bugs, or say DONE if complete."
-            )})
-            out.start_thinking(reset=False)
-
-        else:
-            # No tool call — check for code block we should write
-            code_match = re.search(r'```\w*\n(.*?)```', content, re.DOTALL)
-            path_hint = re.search(r'`(\w+\.(?:py|js|ts|html|css|json|md|txt))`', content)
-            if code_match and path_hint:
-                out.log_tool("write_file", path_hint.group(1))
-                result = execute_tool(app, "write_file", {
-                    "path": path_hint.group(1),
-                    "content": code_match.group(1).strip(),
-                })
-                out.tool_result(result[:120])
-
-            # Stream the text to user
-            final_text = content.split("```")[0].strip() if code_match else content
+        # "done" = task complete
+        if tool_name == "done":
+            final_text = message or "Done."
             out.stream(final_text)
             break
+
+        # Fix write_file: unescape content
+        if tool_name == "write_file":
+            c = tool_args.get("content", "")
+            if "\\n" in c:
+                tool_args["content"] = c.replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"')
+
+        # Show and execute
+        preview = str(tool_args.get("path", tool_args.get("command", tool_args.get("query", ""))))[:60]
+        out.log_tool(tool_name, preview)
+        result = execute_tool(app, tool_name, tool_args)
+        is_err = result.startswith("Error")
+        out.tool_result(result[:120], error=is_err)
+
+        # Feed result back
+        messages.append({"role": "assistant", "content": content})
+        messages.append({"role": "user", "content": (
+            f"Tool result: {result}\n\n"
+            f'Next step? Use another tool, or {{"tool": "done", "message": "summary"}} if complete.'
+        )})
+        out.start_thinking(reset=False)
 
     return final_text
