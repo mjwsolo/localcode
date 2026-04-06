@@ -213,6 +213,37 @@ def execute_tool(app: "GemApp", tool_name: str, args: dict) -> str:
         return f"Error: {exc}"
 
 
+def _verify_python(app: "GemApp", fpath: str) -> str:
+    """Quick verify: syntax check + basic import check on a Python file.
+
+    Returns error string if problems found, empty string if OK.
+    """
+    full = app.repo_root / fpath
+    if not full.is_file():
+        return ""
+    try:
+        code = full.read_text(errors="replace")
+        # 1. Syntax check
+        compile(code, fpath, "exec")
+    except SyntaxError as e:
+        return f"SyntaxError in {fpath} line {e.lineno}: {e.msg}"
+
+    # 2. Quick import check — try to run it with python -c to catch import errors
+    try:
+        result = subprocess.run(
+            ["python3", "-c", f"import ast; ast.parse(open('{full}').read()); print('OK')"],
+            capture_output=True, text=True, timeout=5,
+            cwd=str(app.repo_root),
+        )
+        if result.returncode != 0:
+            err = result.stderr.strip().splitlines()[-1] if result.stderr.strip() else "unknown error"
+            return err
+    except Exception:
+        pass
+
+    return ""
+
+
 def _apply_patch(app: "GemApp", patch_text: str) -> str:
     """Apply a Codex-style patch to files.
 
@@ -409,6 +440,15 @@ def run_text_tool_loop(
         result = execute_tool(app, tool_name, tool_args)
         is_err = result.startswith("Error")
         out.tool_result(result[:120], error=is_err)
+
+        # Auto-verify: if we just wrote a Python file, check for syntax/import errors
+        if tool_name in ("write_file", "edit_file") and not is_err:
+            fpath = tool_args.get("path", "")
+            if fpath.endswith(".py"):
+                verify = _verify_python(app, fpath)
+                if verify:
+                    result += f"\n⚠ Verification error: {verify}"
+                    out.tool_result(f"⚠ {verify[:100]}", error=True)
 
         # Detect loops — same tool called 3+ times in a row
         recent_tools = [m.get("content", "") for m in messages[-6:] if m.get("role") == "assistant"]
