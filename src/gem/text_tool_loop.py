@@ -410,6 +410,19 @@ def run_text_tool_loop(
         is_err = result.startswith("Error")
         out.tool_result(result[:120], error=is_err)
 
+        # Detect loops — same tool called 3+ times in a row
+        recent_tools = [m.get("content", "") for m in messages[-6:] if m.get("role") == "assistant"]
+        same_count = sum(1 for r in recent_tools if f'"tool": "{tool_name}"' in r)
+        if same_count >= 2:
+            out.print_info("▶ breaking loop (same tool repeated)")
+            messages.append({"role": "assistant", "content": content})
+            messages.append({"role": "user", "content": (
+                f"You've called {tool_name} multiple times. Stop exploring and START DOING. "
+                f"Use write_file to create the code NOW."
+            )})
+            out.start_thinking(reset=False)
+            continue
+
         # Feed result back and continue
         messages.append({"role": "assistant", "content": content})
         messages.append({"role": "user", "content": f"Tool result:\n{result}"})
