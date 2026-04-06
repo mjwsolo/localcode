@@ -82,6 +82,74 @@ Captured from OpenAI Codex CLI running real tasks. These sequences should be cod
 - Always verify after writing (Codex's reliability)
 - Don't install deps blindly — check first (Codex's approach)
 
+## Task: "make a pong game" — Claude Opus (detailed analysis)
+
+### Sequence (6 phases):
+
+**Phase 1: Context gathering (PARALLEL)**
+1. `glob *.py` — check existing python files
+2. `glob **/requirements*.txt` — check existing deps
+3. `bash python3 --version` — confirm python available
+4. `bash python3 -c 'import pygame'` — check pygame installed
+All 4 run in parallel.
+
+**Phase 2: Conditional install**
+5. `bash pip3 install pygame` — ONLY if step 4 failed
+
+**Phase 3: Write**
+6. `write_file pong.py` — complete game, 150-200 lines, one shot
+
+**Phase 4: Verify**
+7. `bash python3 -c 'import ast; ast.parse(...); print("syntax ok")'`
+
+**Phase 5: Fix loop (if needed, max 2-3 iterations)**
+8. `read_file pong.py`
+9. `edit_file pong.py` — targeted fix
+10. Re-verify
+
+**Phase 6: Done** — plain text summary
+
+### Key rules to codify:
+
+| Rule | Why |
+|------|-----|
+| Parallel-first | Independent reads/checks batch together |
+| Glob before Write | Never create without checking what exists |
+| Write > Edit for new files | Edit is for surgical changes to existing files |
+| Single Write for small files | Don't split 200-line file across multiple writes |
+| Syntax-check, don't run | GUI apps can't be verified in CLI |
+| Read before Edit | Hard rule — reject edits to unread files |
+| Fix loop is bounded | Max 2-3 iterations, then surface error to user |
+| No gratuitous verification | Don't re-read what you just wrote unless something failed |
+
+### What NOT to do:
+- No planning step for single files
+- No mkdir for current directory
+- No tests/README/git unless asked
+- No incremental "skeleton then fill in" — wasted round trips
+
+## Gemma 4 Specific Recommendations (from Claude Opus)
+
+**Don't replicate autonomous sequencing. Build a state machine:**
+
+```
+GATHER_CONTEXT → PLAN → WRITE → VERIFY → FIX_LOOP → DONE
+```
+
+Each state has:
+- Fixed tool calls the HARNESS makes (glob, read, bash)
+- ONE LLM call to Gemma 4 for the creative part (generate code, diagnose error)
+- Transition rules the HARNESS controls
+
+**Key difference: Model generates content. Harness handles sequencing.**
+
+| Cloud model approach | Local Gemma 4 approach |
+|---------------------|----------------------|
+| Model decides tool call order | Harness orchestrates, model fills in content |
+| Model emits full file in one call | Harness may need to prompt section-by-section |
+| Model picks which tools to parallelize | Harness defines the DAG statically |
+| Model self-corrects on errors | Harness parses errors, re-prompts with context |
+
 ---
 
 ### Universal:
