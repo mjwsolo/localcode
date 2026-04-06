@@ -360,18 +360,32 @@ def run_text_tool_loop(
         tool_call = parse_tool_call(content)
 
         if not tool_call:
-            # Couldn't parse as tool call
-            # If it looks like corrupted JSON (has "tool" but didn't parse), retry
+            # No tool call found. Three cases:
+            # 1. Corrupted JSON — retry
             if '"tool"' in content and len(content) > 500:
-                out.print_info("▶ retrying (output was corrupted)")
-                messages.append({"role": "assistant", "content": "Error: my output was too long and got corrupted."})
-                messages.append({"role": "user", "content": "Try again but keep the code SHORTER. Max 30 lines per write_file. Write a scaffold first, then edit_file to add features."})
+                out.print_info("▶ retrying (corrupted output)")
+                messages.append({"role": "assistant", "content": "Error: output corrupted."})
+                messages.append({"role": "user", "content": "Try again. Keep code under 30 lines per write_file call."})
                 out.start_thinking(reset=False)
                 continue
-            # Otherwise treat as final text
-            # Don't dump raw JSON/garbage — clean it up
+
+            # 2. Model explained what it would do instead of doing it — push it
+            if round_num == 0 and any(w in content.lower() for w in
+                    ("i have created", "i will create", "here's", "here is",
+                     "i've created", "prototype", "scaffold", "i'll create")):
+                out.print_info("▶ pushing model to use tools")
+                messages.append({"role": "assistant", "content": content})
+                messages.append({"role": "user", "content": (
+                    "You described what you'd do but didn't actually do it. "
+                    "Use the write_file tool NOW to create the file. "
+                    'Output: {"tool": "write_file", "args": {"path": "filename.py", "content": "code"}}'
+                )})
+                out.start_thinking(reset=False)
+                continue
+
+            # 3. Actual final response (model is done after tool calls)
             if "\\n" in content and len(content) > 200:
-                content = "I encountered an issue generating the code. Please try again with a simpler request."
+                content = "Something went wrong. Please try again."
             out.stream(content)
             return content
 
