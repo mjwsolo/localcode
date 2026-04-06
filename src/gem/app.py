@@ -1088,18 +1088,9 @@ class GemApp:
         plan_result = None
         draft_result = ""
 
-        # Simple creation tasks (make X, build Y) don't need repo context — just go
-        text_lower = user_text.lower()
-        is_creation = any(w in text_lower for w in ("make", "create", "build", "write")) and \
-                      not any(w in text_lower for w in ("edit", "fix", "change", "update", "refactor"))
-
         try:
-            if is_creation:
-                # Light context — skip cartridge/skills/planner but keep retrieval
-                context_result = build_context_block(self.repo_root, self.session.pinned_files, min(ctx_chars, 4000))
-                retrieval_result = self._retrieval_context(user_text)
-            else:
-                with ThreadPoolExecutor(max_workers=5) as pool:
+            # Always gather context — model needs to know what files exist
+            with ThreadPoolExecutor(max_workers=5) as pool:
                     futures = {
                         pool.submit(build_context_block, self.repo_root, self.session.pinned_files, ctx_chars): "context",
                         pool.submit(self._retrieval_context, user_text): "retrieval",
