@@ -76,7 +76,7 @@ class GemRuntimeGateway:
             "llama-server",
             "--model", model_path,
             "--port", str(port),
-            "--ctx-size", str(max(4096, self.config.max_context_chars // 4)),
+            "--ctx-size", str(self._target_num_ctx()),
             "--threads", str(self.config.llama_cpp_threads),
             "--flash-attn", "on",
             "--mmap",
@@ -201,20 +201,31 @@ class GemRuntimeGateway:
             return [m.get("id", "") for m in data.get("data", []) if m.get("id")]
         return [m["name"] for m in data.get("models", []) if "name" in m]
 
+    def _target_num_ctx(self, num_ctx_override: int | None = None) -> int:
+        if num_ctx_override is not None:
+            return max(1024, num_ctx_override)
+
+        # `max_context_chars` is our primary policy knob. Convert it to an
+        # approximate token budget without forcing a large 16k floor that
+        # defeats the small-machine presets.
+        num_ctx = max(2048, self.config.max_context_chars // 4)
+
+        if self.config.quant_preset == "smallest":
+            return min(num_ctx, 2048)
+        if self.config.quant_preset == "fastest":
+            return min(num_ctx, 3072)
+        return num_ctx
+
     def _options(self, num_ctx_override: int | None = None) -> dict[str, Any]:
         opts: dict[str, Any] = {
             "temperature": self.config.temperature,
-            "num_ctx": num_ctx_override or max(16384, self.config.max_context_chars // 4),
+            "num_ctx": self._target_num_ctx(num_ctx_override),
             "top_p": 0.95,
             "top_k": 64,
         }
         if self.config.mode == "fast":
             opts["temperature"] = min(opts["temperature"], 0.15)
             opts["num_predict"] = 4096  # cap generation for speed
-        if self.config.quant_preset == "smallest":
-            opts["num_ctx"] = min(opts["num_ctx"], 2048)
-        elif self.config.quant_preset == "fastest":
-            opts["num_ctx"] = min(opts["num_ctx"], 3072)
         return opts
 
     def chat_once(
