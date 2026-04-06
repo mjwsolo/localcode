@@ -163,8 +163,14 @@ def execute_tool(app: "GemApp", tool_name: str, args: dict) -> str:
             result = subprocess.run(
                 cmd, shell=True, capture_output=True, text=True,
                 timeout=120, cwd=str(app.repo_root),
+                env={**__import__("os").environ, "MallocStackLogging": "0"},
             )
-            output = (result.stdout + result.stderr).strip()
+            # Filter noisy stderr (MallocStackLogging, pygame init messages)
+            stderr = result.stderr
+            stderr_lines = [l for l in stderr.splitlines()
+                           if "MallocStackLogging" not in l
+                           and "can't turn off" not in l]
+            output = (result.stdout + "\n".join(stderr_lines)).strip()
             if len(output) > 4000:
                 output = output[:4000] + "\n... (truncated)"
             return output or "(no output)"
@@ -378,6 +384,9 @@ def run_text_tool_loop(
             final = message or "Done."
             out.stream(final)
             return final
+
+        # Stop indicator before printing tool results (prevents interleaved output)
+        out._stop_indicator()
 
         # Execute the tool
         preview = str(tool_args.get("path", tool_args.get("command", tool_args.get("query", ""))))[:60]
