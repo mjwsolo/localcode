@@ -63,6 +63,27 @@ Captured from OpenAI Codex CLI running real tasks. These sequences should be cod
 3. Verify: `python -m py_compile file.py`
 4. Summarize in plain text
 
+## Task: "make a pong game" — Claude Code (Anthropic)
+
+### Sequence (2 steps):
+1. **bash** `pip install pygame` — install deps first
+2. **write_file** `pong.py` (119 lines) — write complete game
+
+### Key differences from OpenAI Codex:
+- No exploration (doesn't read existing files)
+- Installs deps BEFORE writing (opposite of Codex)
+- No verification step (no py_compile, no import check)
+- Only 2 tool calls vs Codex's 6
+- Much faster but less careful
+
+### Best of both for LocalCode:
+- Skip exploration for NEW files (Claude's speed)
+- Read existing files before EDITING (Codex's carefulness)
+- Always verify after writing (Codex's reliability)
+- Don't install deps blindly — check first (Codex's approach)
+
+---
+
 ### Universal:
 - NEVER run GUI apps via bash
 - NEVER install deps without checking first
