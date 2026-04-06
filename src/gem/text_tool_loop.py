@@ -276,8 +276,15 @@ def run_text_tool_loop(
     for round_num in range(max_rounds):
         out.set_stage(f"▶ round {round_num + 1}" if round_num > 0 else "▶ processing prompt")
 
-        # Stream to collect full response — shows token count during generation
+        # Print the current phase as a permanent sub-item
+        if round_num == 0:
+            out.print_info("▶ processing prompt")
+        else:
+            out.print_info(f"▶ round {round_num + 1}")
+
+        # Stream to collect full response — shows token count in indicator
         chunks: list[str] = []
+        generating_printed = False
         for event in app.engine.stream_chat_events(messages, think=False):
             if event["type"] == "content":
                 chunk = str(event["content"])
@@ -286,8 +293,12 @@ def run_text_tool_loop(
                 if chunk:
                     chunks.append(chunk)
                     out.feed_thinking(chunk)
-                    if len(chunks) % 10 == 0:
-                        out.set_stage(f"▶ generating ({len(chunks)} tok)")
+                    if len(chunks) == 5 and not generating_printed:
+                        # Print "generating" as a permanent sub-item once tokens flow
+                        out.print_info("▶ generating")
+                        generating_printed = True
+                    if len(chunks) % 20 == 0:
+                        out.set_stage(f"generating ({len(chunks)} tok)")
 
         content = "".join(chunks).strip()
         if not content:
