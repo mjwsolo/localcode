@@ -184,9 +184,14 @@ class OutputManager:
         sys.stdout.flush()
 
     def print_info(self, text: str) -> None:
-        """Print dim info text."""
+        """Print dim info text. Pauses indicator to prevent interleaving."""
+        was_running = self._indicator_running
+        if was_running:
+            self._stop_indicator()
         sys.stdout.write(f"\033[2m  {text}\033[0m\n")
         sys.stdout.flush()
+        if was_running:
+            self._start_indicator()
 
     # ── Indicator (background thread) ────────────────────────────────
 
