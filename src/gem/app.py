@@ -1195,11 +1195,10 @@ class GemApp:
         out = self.out
 
         try:
-            # Text-based tool loop: model outputs JSON tool calls, we execute.
-            # Works with ALL models (quantized or not). No special tokens needed.
-            # This is the Codex approach — one loop, model drives tools until done.
-            from .text_tool_loop import run_text_tool_loop
-            assistant_text = run_text_tool_loop(
+            # State machine agent loop: harness controls sequencing, model generates content.
+            # Based on Codex/Claude analysis: GATHER → WRITE → VERIFY → FIX → DONE
+            from .agent_loop import run_agent_loop
+            assistant_text = run_agent_loop(
                 self, user_text, composed_messages, self.out,
             )
         except KeyboardInterrupt:
