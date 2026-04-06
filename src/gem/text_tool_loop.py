@@ -30,7 +30,7 @@ You can use tools by outputting a JSON object on its own line:
 {"tool": "tool_name", "args": {"param": "value"}}
 
 After each tool call, I'll show you the result. Then keep going until the task is fully done.
-When you're finished, respond with a normal text message (no JSON) summarizing what you did.
+When finished, respond with: {"tool": "done", "message": "what you did"}
 
 Available tools:
 
@@ -41,6 +41,18 @@ Available tools:
 **edit_file** — Replace specific text in an existing file. Read the file first!
   Args: path (string), old_string (string), new_string (string)
   old_string must match EXACTLY. Use 2-4 lines for uniqueness.
+
+**apply_patch** — Apply a diff patch to one or more files. Best for multi-line edits.
+  Args: patch (string — the patch text)
+  Patch format:
+  *** Begin Patch
+  *** Update File: path/to/file.py
+   context line (unchanged)
+  -old line to remove
+  +new line to add
+   context line (unchanged)
+  *** End Patch
+  Use 1-2 context lines before/after changes. Prefix: space=keep, -=remove, +=add.
 
 **read_file** — Read a file's contents. Always read before editing.
   Args: path (string)
@@ -137,6 +149,12 @@ def execute_tool(app: "GemApp", tool_name: str, args: dict) -> str:
             full.write_text(text.replace(old, new, 1))
             return f"Edited {path}"
 
+        elif tool_name == "apply_patch":
+            patch_text = args.get("patch", "")
+            if not patch_text:
+                return "Error: need patch text"
+            return _apply_patch(app, patch_text)
+
         elif tool_name == "read_file":
             path = args.get("path", "")
             full = app.repo_root / path
@@ -198,6 +216,108 @@ def execute_tool(app: "GemApp", tool_name: str, args: dict) -> str:
         return f"Error: {exc}"
 
 
+def _apply_patch(app: "GemApp", patch_text: str) -> str:
+    """Apply a Codex-style patch to files.
+
+    Format:
+    *** Begin Patch
+    *** Update File: path/to/file.py
+     context line
+    -removed line
+    +added line
+     context line
+    *** Add File: path/to/new.py
+    +line 1
+    +line 2
+    *** Delete File: path/to/old.py
+    *** End Patch
+    """
+    lines = patch_text.splitlines()
+    results = []
+    current_file = None
+    action = None  # "update", "add", "delete"
+    old_lines: list[str] = []
+    new_lines: list[str] = []
+    context_before: list[str] = []
+
+    def flush_hunk():
+        nonlocal current_file, old_lines, new_lines, context_before
+        if not current_file:
+            return
+        full = app.repo_root / current_file
+        if action == "add":
+            full.parent.mkdir(parents=True, exist_ok=True)
+            app.toolkit.changes.snapshot_before(current_file, "patch")
+            content = "\n".join(l.lstrip("+") for l in new_lines)
+            full.write_text(content + "\n")
+            results.append(f"Added {current_file}")
+        elif action == "delete":
+            if full.is_file():
+                app.toolkit.changes.snapshot_before(current_file, "patch")
+                full.unlink()
+                results.append(f"Deleted {current_file}")
+        elif action == "update" and full.is_file():
+            app.toolkit.changes.snapshot_before(current_file, "patch")
+            text = full.read_text(errors="replace")
+            file_lines = text.splitlines()
+            # Find the context in the file
+            search = [l for l in context_before if l]
+            if search:
+                # Find where the context matches
+                for i in range(len(file_lines)):
+                    if i + len(search) <= len(file_lines):
+                        if all(file_lines[i + j].strip() == search[j].strip() for j in range(len(search))):
+                            # Found context — apply the patch here
+                            insert_at = i + len(search)
+                            # Remove old lines
+                            for old in old_lines:
+                                old_stripped = old.lstrip("-").strip()
+                                for k in range(insert_at, min(insert_at + 5, len(file_lines))):
+                                    if file_lines[k].strip() == old_stripped:
+                                        file_lines.pop(k)
+                                        break
+                            # Insert new lines
+                            for j, new in enumerate(new_lines):
+                                file_lines.insert(insert_at + j, new.lstrip("+"))
+                            break
+                full.write_text("\n".join(file_lines) + "\n")
+                results.append(f"Updated {current_file}")
+            else:
+                results.append(f"Error: could not find context in {current_file}")
+        old_lines.clear()
+        new_lines.clear()
+        context_before.clear()
+
+    for line in lines:
+        if line.startswith("*** Begin Patch"):
+            continue
+        elif line.startswith("*** End Patch"):
+            flush_hunk()
+            break
+        elif line.startswith("*** Update File:"):
+            flush_hunk()
+            current_file = line.split(":", 1)[1].strip()
+            action = "update"
+        elif line.startswith("*** Add File:"):
+            flush_hunk()
+            current_file = line.split(":", 1)[1].strip()
+            action = "add"
+        elif line.startswith("*** Delete File:"):
+            flush_hunk()
+            current_file = line.split(":", 1)[1].strip()
+            action = "delete"
+        elif line.startswith("-"):
+            old_lines.append(line)
+        elif line.startswith("+"):
+            new_lines.append(line)
+        elif line.startswith(" ") or line == "":
+            if not old_lines and not new_lines:
+                context_before.append(line.lstrip(" "))
+
+    flush_hunk()
+    return "; ".join(results) if results else "No changes applied"
+
+
 def run_text_tool_loop(
     app: "GemApp",
     user_text: str,
@@ -222,13 +342,16 @@ def run_text_tool_loop(
         out.set_stage(f"round {round_num + 1}" if round_num > 0 else "processing")
         out.print_info(f"▶ {'processing' if round_num == 0 else f'round {round_num + 1}'}")
 
-        # Call model — no format constraint, no thinking, just generate
-        response = app.engine.chat_once(messages, think=False)
+        # Call model with format: "json" to force valid JSON output
+        # This prevents the model from hallucinating special tokens
+        response = app.engine.chat_once(messages, think=False, format="json")
         content = response.get("message", {}).get("content", "").strip()
 
-        # Clean special tokens
-        if "<|" in content or "|>" in content:
-            content = re.sub(r'<\|[^>]*\|>', '', content).strip()
+        # Strip markdown code fences if model wraps JSON in them
+        if content.startswith("```"):
+            content = re.sub(r'^```\w*\n?', '', content)
+            content = re.sub(r'\n?```$', '', content)
+            content = content.strip()
 
         out.feed_thinking(content)
 
@@ -238,25 +361,32 @@ def run_text_tool_loop(
         # Try to parse a tool call
         tool_call = parse_tool_call(content)
 
-        if tool_call:
-            # ── Tool call: execute and loop ──
-            tool_name = tool_call.get("tool", "")
-            tool_args = tool_call.get("args", {})
-
-            preview = str(tool_args.get("path", tool_args.get("command", tool_args.get("query", ""))))[:60]
-            out.log_tool(tool_name, preview)
-
-            result = execute_tool(app, tool_name, tool_args)
-            is_err = result.startswith("Error")
-            out.tool_result(result[:120], error=is_err)
-
-            # Append to conversation and continue
-            messages.append({"role": "assistant", "content": content})
-            messages.append({"role": "user", "content": f"Tool result:\n{result}"})
-            out.start_thinking(reset=False)
-        else:
-            # ── Plain text: model is done ──
+        if not tool_call:
+            # Couldn't parse — try as plain text
             out.stream(content)
             return content
+
+        tool_name = tool_call.get("tool", "")
+        tool_args = tool_call.get("args", {})
+        message = tool_call.get("message", "")
+
+        # "done" = model says task is complete
+        if tool_name == "done":
+            final = message or "Done."
+            out.stream(final)
+            return final
+
+        # Execute the tool
+        preview = str(tool_args.get("path", tool_args.get("command", tool_args.get("query", ""))))[:60]
+        out.log_tool(tool_name, preview)
+
+        result = execute_tool(app, tool_name, tool_args)
+        is_err = result.startswith("Error")
+        out.tool_result(result[:120], error=is_err)
+
+        # Feed result back and continue
+        messages.append({"role": "assistant", "content": content})
+        messages.append({"role": "user", "content": f"Tool result:\n{result}"})
+        out.start_thinking(reset=False)
 
     return ""
