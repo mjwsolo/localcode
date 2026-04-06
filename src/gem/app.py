@@ -56,7 +56,7 @@ from .live_display import GemLiveDisplay
 from .tool_router import route_tools, expand_tools_for_retry
 from .cache import BackgroundIndexer, SpeculativeExecutor, ToolResultCache
 from .network import is_online
-from .watcher import FileWatcher
+from .watcher import FileWatcher, ProjectWatcher
 from .keybindings import get_editing_mode, load_keybindings
 from .plan_mode import Plan, PlanStep, parse_plan_from_response
 from .permissions_v2 import PermissionManager
@@ -66,6 +66,9 @@ from .output import OutputManager
 from .project_context import load_project_context, has_project_context
 from .skills import list_skills, resolve_referenced_skills
 from .toolkit import GemToolkit
+from .embeddings import EmbeddingSearch
+from .history import HistoryDB
+from .traces import SessionLogger
 from .ui_art import (
     GEM_BANNER,
     center_ascii_block,
@@ -78,6 +81,15 @@ from .ui_art import (
 )
 from .verification import build_verification_plan, guess_verify_command, run_verification
 from .voice import speak_text, transcribe_audio, voice_status
+from .auto_compact import compact_if_needed
+from .autonomy import AutonomyLevel, apply_autonomy_to_permissions, format_autonomy_status, get_policy
+from .hooks import HookRunner
+from .notify import TaskNotifier, notify_if_slow
+from .snapshots import SnapshotStore, create_snapshot, restore_snapshot
+from .turn_diff import TurnDiffTracker, print_turn_diff
+
+import os
+import time
 
 
 _SLASH_COMMANDS = [
@@ -86,10 +98,11 @@ _SLASH_COMMANDS = [
     "/shell", "/bg", "/jobs", "/log", "/verify",
     "/agent", "/agentbg",
     "/tools", "/skills", "/mcp", "/permissions",
-    "/search", "/browser", "/voice",
+    "/search", "/history", "/browser", "/voice",
     "/thinking", "/timeline",
     "/audio", "/image", "/paste", "/screenshot",
     "/undo", "/changes",
+    "/autonomy", "/snapshot",
     "/clear", "/quit",
 ]
 
@@ -213,12 +226,27 @@ class GemApp:
         self.file_watcher.start()
         for f in self.session.pinned_files:
             self.file_watcher.track(f)
+        self.project_watcher = ProjectWatcher(self.repo_root, poll_interval=3.0)
+        self.project_watcher.on_change(self._on_project_files_changed)
+        self.project_watcher.start()
         self._vim_mode = False
         self._active_plan: Plan | None = None
         self._output_style: str = ""
         self.task_store = TaskStore()
         self.out = OutputManager()  # centralized output
+        self.logger = SessionLogger()
+        self.history = HistoryDB()  # unified SQLite history
+        self.embedding_search = EmbeddingSearch(str(self.repo_root))
         self.perms = PermissionManager()  # tool permissions
+        self.hooks = HookRunner(str(self.repo_root), self.session.session_id, self.runtime_model)
+        self.snapshot_store = SnapshotStore()
+        self.turn_tracker = TurnDiffTracker(self.repo_root)
+        # Apply autonomy mode
+        autonomy_level = os.environ.get("GEM_AUTONOMY", "auto_edit")
+        self._autonomy = AutonomyLevel(autonomy_level) if autonomy_level in ("suggest", "auto_edit", "full_auto") else AutonomyLevel.AUTO_EDIT
+        apply_autonomy_to_permissions(self.perms, get_policy(self._autonomy))
+        # Run session start hook
+        self.hooks.on_session_start()
         self._spec_executor = SpeculativeExecutor(self.toolkit.execute_tool_calls)
         self._memory = self._load_memory()
 
@@ -236,6 +264,20 @@ class GemApp:
         import json
         p = ensure_home_dirs() / "memory.json"
         p.write_text(json.dumps(self._memory, indent=2))
+
+    def _on_project_files_changed(self, modified: list[str], created: list[str], deleted: list[str]) -> None:
+        """Called by ProjectWatcher when files change externally."""
+        # Invalidate tool cache for modified/deleted files
+        for f in modified + deleted:
+            self.tool_cache.invalidate(f)
+        # Update embedding index incrementally if it exists
+        if hasattr(self, 'embedding_search') and self.embedding_search.is_indexed():
+            all_changed = modified + created + deleted
+            if all_changed:
+                try:
+                    self.embedding_search.update_files(all_changed)
+                except Exception:
+                    pass
 
     def run(self) -> None:
         self.console.print(self._welcome_view())
@@ -554,7 +596,103 @@ class GemApp:
             if not arg:
                 self.console.print("Usage: /search <query>")
                 return True
+            # Try semantic code search first
+            if self.embedding_search.is_indexed():
+                results = self.embedding_search.search(arg, top_k=5)
+                if results:
+                    table = Table("file", "lines", "score", "preview")
+                    for r in results:
+                        table.add_row(r.file, f"{r.start_line}-{r.end_line}", f"{r.score:.2f}", r.preview[:60])
+                    self.console.print(table)
+                    return True
+            # Fall back to web search
             self.console.print(Panel(self.toolkit._web_search(arg), title=f"Search: {arg}"))
+            return True
+        if name == "/history":
+            if arg == "stats":
+                stats = self.history.get_stats(str(self.repo_root))
+                table = Table("metric", "value")
+                table.add_row("prompts", str(stats["prompts"]))
+                table.add_row("responses", str(stats["responses"]))
+                table.add_row("tool calls", str(stats["tool_calls"]))
+                table.add_row("sessions", str(stats["sessions"]))
+                table.add_row("tokens (in)", f"{stats['total_tokens_in']:,}")
+                table.add_row("tokens (out)", f"{stats['total_tokens_out']:,}")
+                table.add_row("total time", f"{stats['total_duration_s']}s")
+                if stats["top_tools"]:
+                    table.add_row("top tools", ", ".join(f"{t}({c})" for t, c in stats["top_tools"][:5]))
+                if stats["top_files"]:
+                    table.add_row("top files", ", ".join(f"{f}({c})" for f, c in stats["top_files"][:5]))
+                self.console.print(table)
+            elif arg:
+                # Search history
+                results = self.history.search_history(arg, str(self.repo_root), limit=10)
+                if results:
+                    table = Table("role", "content", "time")
+                    for r in results:
+                        from datetime import datetime
+                        ts = datetime.fromtimestamp(r["timestamp"]).strftime("%m/%d %H:%M")
+                        table.add_row(r["role"], r["content"][:80], ts)
+                    self.console.print(table)
+                else:
+                    self.console.print(f"No history matching: {arg}")
+            else:
+                # Show recent prompts
+                recent = self.history.get_recent_prompts(str(self.repo_root), limit=15)
+                if recent:
+                    table = Table("time", "prompt")
+                    for r in recent:
+                        from datetime import datetime
+                        ts = datetime.fromtimestamp(r["timestamp"]).strftime("%m/%d %H:%M")
+                        table.add_row(ts, r["content"][:80])
+                    self.console.print(table)
+                else:
+                    self.console.print("No history yet.")
+            return True
+        if name == "/autonomy":
+            if not arg:
+                self.console.print(format_autonomy_status(self._autonomy))
+                return True
+            if arg in ("suggest", "auto_edit", "full_auto"):
+                self._autonomy = AutonomyLevel(arg)
+                apply_autonomy_to_permissions(self.perms, get_policy(self._autonomy))
+                self.console.print(f"Autonomy set to: {arg}")
+            else:
+                self.console.print("Usage: /autonomy [suggest|auto_edit|full_auto]")
+            return True
+        if name == "/snapshot":
+            if not arg or arg == "list":
+                snaps = self.snapshot_store.list_for_repo(str(self.repo_root))
+                if snaps:
+                    table = Table("id", "reason", "messages", "time")
+                    for s in snaps[:10]:
+                        from datetime import datetime
+                        ts = datetime.fromtimestamp(s.created_at).strftime("%m/%d %H:%M")
+                        table.add_row(s.id[:8], s.reason, str(len(s.messages)), ts)
+                    self.console.print(table)
+                else:
+                    self.console.print("No snapshots saved.")
+                return True
+            if arg.startswith("restore "):
+                snap_id = arg.split(" ", 1)[1].strip()
+                snap = self.snapshot_store.load(snap_id)
+                if snap:
+                    self.session.messages = list(snap.messages)
+                    self.session.pinned_files = list(snap.pinned_files)
+                    restored = restore_snapshot(snap)
+                    self.store.save(self.session)
+                    self.console.print(f"Restored snapshot {snap_id[:8]}: {len(snap.messages)} messages, {len(restored)} files")
+                else:
+                    self.console.print(f"Snapshot not found: {snap_id}")
+                return True
+            if arg == "save":
+                snap = create_snapshot(
+                    self.session.session_id, str(self.repo_root),
+                    self.session.messages, self.session.pinned_files,
+                    model=self.runtime_model, reason="manual",
+                )
+                self.console.print(f"Snapshot saved: {snap.id[:8]}")
+                return True
             return True
         if name == "/browser":
             if not arg or arg == "status":
@@ -653,7 +791,13 @@ class GemApp:
             return True
         if name == "/index":
             count, path = build_index(self.repo_root)
-            self.console.print(f"Built code index for {count} files at {path}")
+            self.console.print(f"Built text index for {count} files at {path}")
+            # Also build embedding index
+            if self.embedding_search.setup():
+                embed_count = self.embedding_search.build_index()
+                self.console.print(f"Built embedding index: {embed_count} chunks")
+            else:
+                self.console.print("[dim]Embedding search unavailable (install sentence-transformers for semantic search)[/dim]")
             return True
         if name == "/find":
             results = search_index(self.repo_root, arg)
@@ -1185,8 +1329,21 @@ class GemApp:
         if images:
             self.store.append_event(self.session, "images", f"{len(images)} image(s), {sum(i.size_kb for i in images)}KB")
 
+        # Lifecycle hook: user prompt submit
+        hook_result = self.hooks.on_user_prompt_submit(user_text)
+        if hook_result.blocked:
+            self.console.print(f"[dim]  Hook blocked prompt: {hook_result.error or hook_result.output}[/]")
+            return
+        # Start turn tracking
+        self.turn_tracker.start_turn(watched_files=self.session.pinned_files)
+        _turn_start = time.time()
+
         self.session.messages.append({"role": "user", "content": user_text})
         self.store.append_event(self.session, "user", user_text[:160])
+        self.history.record_user_prompt(
+            self.session.session_id, str(self.repo_root),
+            user_text, model=self.runtime_model,
+        )
 
         changes_before = self.toolkit.changes.change_count
         assistant_text = ""
@@ -1203,7 +1360,14 @@ class GemApp:
             )
         except KeyboardInterrupt:
             self.out.done()
-            self.console.print("\n  [dim]interrupted[/]")
+            # Auto-save ghost snapshot on interrupt
+            create_snapshot(
+                self.session.session_id, str(self.repo_root),
+                self.session.messages, self.session.pinned_files,
+                model=self.runtime_model, reason="interrupt",
+                capture_files=self.session.pinned_files,
+            )
+            self.console.print("\n[dim]  Snapshot saved. Use /snapshot list to see saved points.[/]")
             return ""
         except RuntimeErrorWithContext as exc:
             self.out.set_error(f"Connection issue: {exc}")
@@ -1229,6 +1393,19 @@ class GemApp:
         self.session.messages.append({"role": "assistant", "content": assistant_text})
         self.store.append_event(self.session, "assistant", assistant_text[:160])
         self.store.save(self.session)
+        # Turn diff summary
+        turn_diff = self.turn_tracker.end_turn()
+        if turn_diff.changes:
+            print_turn_diff(turn_diff)
+        # Desktop notification for slow tasks
+        notify_if_slow("gem", f"Task complete: {user_text[:40]}", _turn_start)
+        # Record in unified history
+        changed_files = self.toolkit.changes.recent_files(since=changes_before)
+        self.history.record_assistant_response(
+            self.session.session_id, str(self.repo_root),
+            assistant_text, model=self.runtime_model,
+            files_changed=changed_files if changed_files else [],
+        )
 
         # Show file changes + context budget
         changes_after = self.toolkit.changes.change_count
@@ -1236,9 +1413,15 @@ class GemApp:
             diff = changes_after - changes_before
             self.console.print(f"  [dim]{diff} file(s) changed. Use /verify to run tests, /undo to revert.[/]")
 
+        # Auto-compact if approaching context limit
+        max_ctx = self._effective_context_chars()
+        self.session.messages, was_compacted = compact_if_needed(self.session.messages, max_ctx)
+        if was_compacted:
+            self.console.print("[dim]  Context compacted — older messages summarized.[/]")
+            self.store.save(self.session)
+
         # Context budget indicator
         total_ctx = sum(len(m.get("content", "")) for m in self.session.messages)
-        max_ctx = self._effective_context_chars()
         if total_ctx > max_ctx * 0.5:  # only show when over 50%
             ContextBudgetDisplay.show(total_ctx, max_ctx)
 
@@ -1368,6 +1551,7 @@ class GemApp:
             conversation_history=self.session.messages[-4:],
             online=is_online(),
         )
+        self.logger.log_user_input(user_text, intent=",".join(routing.intents))
         if not routing.tool_names:
             return self._run_stream_simple(composed_messages, stream)
 
@@ -1500,6 +1684,14 @@ class GemApp:
                             try: args = _json.loads(args)
                             except: args = {}
 
+                        # Lifecycle hook: pre-tool
+                        hook = self.hooks.on_pre_tool_use(name, args)
+                        if hook.blocked:
+                            if stream:
+                                out.log_tool(name, f"BLOCKED by hook: {hook.output or hook.error}")
+                            tool_messages.append({"role": "tool", "content": f"Blocked by hook: {hook.output or hook.error}"})
+                            continue
+
                         allowed, reason = self.perms.check(name, args)
                         if not allowed:
                             if stream:
@@ -1518,6 +1710,11 @@ class GemApp:
                         is_err = result["content"].startswith("Error") or result["content"].startswith("Tool error")
                         if stream:
                             out.tool_result(result["content"][:120], error=is_err)
+                        self.logger.log_tool_call(name, args, result["content"], duration_ms=0)
+                        self.hooks.on_post_tool_use(name, args, result["content"], is_err)
+                        # Track file changes for turn diff
+                        if name in ("write_file", "edit_file") and "path" in args:
+                            self.turn_tracker.track_file(str(args["path"]))
                         tool_messages.append(result)
 
                     # Check for errors — if too many consecutive, break and force-edit

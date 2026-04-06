@@ -19,9 +19,12 @@ import re
 import subprocess
 from typing import TYPE_CHECKING, Any
 
+from .streaming import StreamingParser
+
 if TYPE_CHECKING:
     from .app import GemApp
     from .output import OutputManager
+    from .permissions_v2 import PermissionManager
 
 
 TOOL_PROMPT = """# Tools
@@ -379,6 +382,7 @@ def run_text_tool_loop(
     composed_messages: list[dict],
     out: "OutputManager",
     max_rounds: int = 15,
+    permissions: "PermissionManager | None" = None,
 ) -> str:
     """Codex-style agent loop. Model calls tools until it stops on its own.
 
@@ -402,6 +406,16 @@ def run_text_tool_loop(
         # No format: "json" either — it was causing degeneration on long outputs.
         # The model outputs clean JSON from our prompt instructions alone.
         content = app.engine.generate_once(messages)
+
+        # Parse response for early stop detection
+        parser = StreamingParser(mode="auto")
+        for char_chunk in [content[i:i+10] for i in range(0, len(content), 10)]:
+            chunk = parser.feed(char_chunk)
+            if chunk.is_complete:
+                # Trim response at early stop point
+                content = parser.state.full_text
+                out.print_info(f"▶ early stop: {chunk.stop_reason}")
+                break
 
         # Strip markdown code fences if present
         if content.startswith("```"):
@@ -464,6 +478,15 @@ def run_text_tool_loop(
         preview = str(tool_args.get("path", tool_args.get("command", tool_args.get("query", ""))))[:60]
         out.log_tool(tool_name, preview)
 
+        if permissions is not None:
+            allowed, reason = permissions.check(tool_name, tool_args)
+            if not allowed:
+                result = reason
+                is_err = True
+                out.tool_result(result[:120], error=True)
+                messages.append({"role": "tool", "content": result})
+                continue
+
         result = execute_tool(app, tool_name, tool_args)
         is_err = result.startswith("Error")
         out.tool_result(result[:120], error=is_err)
@@ -489,6 +512,13 @@ def run_text_tool_loop(
             )})
             out.start_thinking(reset=False)
             continue
+
+        # Check for response repetition
+        if len(messages) >= 4:
+            last_two = [m.get("content", "") for m in messages[-4:] if m.get("role") == "assistant"]
+            if len(last_two) >= 2 and last_two[-1] == last_two[-2] and len(last_two[-1]) > 50:
+                out.print_info("▶ breaking loop (repeated response)")
+                break
 
         # Feed result back — remind model to keep going until FULLY done
         messages.append({"role": "assistant", "content": content})

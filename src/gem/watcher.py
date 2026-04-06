@@ -92,3 +92,95 @@ class FileWatcher:
                 except FileNotFoundError:
                     if rel_path not in self._changes:
                         self._changes.append(rel_path)
+
+
+class ProjectWatcher:
+    """Watch entire project for changes. Uses git for efficiency."""
+
+    def __init__(self, repo_root: Path, poll_interval: float = 2.0) -> None:
+        self.repo_root = repo_root
+        self.interval = poll_interval
+        self._running = False
+        self._thread: threading.Thread | None = None
+        self._snapshot: dict[str, float] = {}  # path → mtime
+        self._callbacks: list[callable] = []
+        self._has_git = (repo_root / ".git").is_dir()
+
+    def on_change(self, callback: callable) -> None:
+        """Register callback: fn(changed: list[str], created: list[str], deleted: list[str])"""
+        self._callbacks.append(callback)
+
+    def start(self) -> None:
+        if self._running:
+            return
+        self._snapshot = self._take_snapshot()
+        self._running = True
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._running = False
+        if self._thread:
+            self._thread.join(timeout=3)
+
+    def _loop(self) -> None:
+        while self._running:
+            try:
+                new_snapshot = self._take_snapshot()
+                changes = self._diff(self._snapshot, new_snapshot)
+                if any(changes.values()):
+                    for cb in self._callbacks:
+                        try:
+                            cb(changes["modified"], changes["created"], changes["deleted"])
+                        except Exception:
+                            pass
+                self._snapshot = new_snapshot
+            except Exception:
+                pass
+            # Sleep in small increments for responsive shutdown
+            for _ in range(int(self.interval * 10)):
+                if not self._running:
+                    return
+                time.sleep(0.1)
+
+    def _take_snapshot(self) -> dict[str, float]:
+        """Get mtime for tracked files. Uses git ls-files for speed."""
+        snapshot: dict[str, float] = {}
+        if self._has_git:
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ["git", "ls-files"],
+                    capture_output=True, text=True, timeout=5,
+                    cwd=str(self.repo_root),
+                )
+                for line in result.stdout.splitlines():
+                    fpath = self.repo_root / line
+                    try:
+                        snapshot[line] = fpath.stat().st_mtime
+                    except (OSError, FileNotFoundError):
+                        pass
+                return snapshot
+            except Exception:
+                pass
+
+        # Fallback: walk directory
+        skip = {".git", "node_modules", "__pycache__", "venv", ".venv"}
+        for p in self.repo_root.rglob("*"):
+            if p.is_file() and not any(s in p.parts for s in skip):
+                rel = str(p.relative_to(self.repo_root))
+                try:
+                    snapshot[rel] = p.stat().st_mtime
+                except OSError:
+                    pass
+        return snapshot
+
+    @staticmethod
+    def _diff(old: dict[str, float], new: dict[str, float]) -> dict[str, list[str]]:
+        old_keys = set(old)
+        new_keys = set(new)
+        return {
+            "created": list(new_keys - old_keys),
+            "deleted": list(old_keys - new_keys),
+            "modified": [p for p in old_keys & new_keys if old[p] != new[p]],
+        }

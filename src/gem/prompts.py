@@ -28,11 +28,14 @@ VARIANT_APPENDIX = {
 }
 
 
-def build_system_prompt(profile: ModelProfile) -> str:
+def build_system_prompt(profile: ModelProfile, project_context: str = "") -> str:
     # Short prompt for small models, longer for bigger ones
     if profile.feature_variant in ("compact", "balanced"):
         base = BASE_PROMPT_COMPACT
     else:
         base = BASE_PROMPT_FULL
     appendix = VARIANT_APPENDIX.get(profile.feature_variant, "")
-    return f"{base}{appendix}"
+    prompt = f"{base}{appendix}"
+    if project_context:
+        prompt += f"\n# Project Context\n{project_context}\n"
+    return prompt
