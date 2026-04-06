@@ -233,26 +233,29 @@ def _verify_python(app: "GemApp", fpath: str) -> str:
     except SyntaxError as e:
         return f"SyntaxError in {fpath} line {e.lineno}: {e.msg}"
 
-    # 2. Import/runtime check — run the file briefly to catch ImportError, AttributeError, etc.
-    # Only import the module, don't run main() — so GUI apps don't block
+    # 2. Quick import check — only check syntax and imports, don't execute
+    # Set SDL_VIDEODRIVER=dummy to prevent GUI windows from opening
     try:
-        # Create a test script that imports but doesn't execute
         test_code = (
-            f"import sys, importlib.util\n"
-            f"spec = importlib.util.spec_from_file_location('_test', '{full}')\n"
-            f"mod = importlib.util.module_from_spec(spec)\n"
-            f"try:\n"
-            f"    spec.loader.exec_module(mod)\n"
-            f"except SystemExit:\n"
-            f"    pass  # game loops call sys.exit()\n"
-            f"except Exception as e:\n"
-            f"    print(f'{{type(e).__name__}}: {{e}}', file=sys.stderr)\n"
-            f"    sys.exit(1)\n"
+            f"import sys, ast\n"
+            f"# Parse and check for obvious issues\n"
+            f"with open('{full}') as f:\n"
+            f"    tree = ast.parse(f.read())\n"
+            f"# Check imports exist\n"
+            f"for node in ast.walk(tree):\n"
+            f"    if isinstance(node, ast.Import):\n"
+            f"        for alias in node.names:\n"
+            f"            try:\n"
+            f"                __import__(alias.name.split('.')[0])\n"
+            f"            except ImportError as e:\n"
+            f"                print(f'ImportError: {{e}}', file=sys.stderr)\n"
+            f"                sys.exit(1)\n"
         )
+        env = {**__import__("os").environ, "SDL_VIDEODRIVER": "dummy", "PYGAME_HIDE_SUPPORT_PROMPT": "1"}
         result = subprocess.run(
             ["python3", "-c", test_code],
-            capture_output=True, text=True, timeout=10,
-            cwd=str(app.repo_root),
+            capture_output=True, text=True, timeout=5,
+            cwd=str(app.repo_root), env=env,
         )
         if result.returncode != 0:
             # Filter noise
@@ -488,9 +491,13 @@ def run_text_tool_loop(
             out.start_thinking(reset=False)
             continue
 
-        # Feed result back and continue
+        # Feed result back — remind model to keep going until FULLY done
         messages.append({"role": "assistant", "content": content})
-        messages.append({"role": "user", "content": f"Tool result:\n{result}"})
+        messages.append({"role": "user", "content": (
+            f"Tool result:\n{result}\n\n"
+            f"Keep going. The task is NOT done until the code is COMPLETE and working. "
+            f"Don't stop at a scaffold — add all the features needed."
+        )})
         out.start_thinking(reset=False)
 
     return ""

@@ -253,12 +253,7 @@ class OutputManager:
 
             line1 = f"\033[32m {icon} {gem_label}... ({timer}{savings})\033[0m"
 
-            # Line 2: what the model is actually doing (task context)
-            context_line = custom or ""
-            if context_line:
-                ctx_text = context_line[:cols - 6]
-                sys.stderr.write(f"\r{line1}\033[K\n\033[2m    {ctx_text}\033[0m\033[K\033[A")
-            else:
-                sys.stderr.write(f"\r{line1}\033[K")
+            # Single line only — no second line (prevents spam)
+            sys.stderr.write(f"\r{line1}\033[K")
             sys.stderr.flush()
             time.sleep(0.12)
