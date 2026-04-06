@@ -26,62 +26,59 @@ if TYPE_CHECKING:
 
 TOOL_PROMPT = """# Tools
 
-You can use tools by outputting a JSON object on its own line:
-{"tool": "tool_name", "args": {"param": "value"}}
+You have two ways to call tools:
 
-After each tool call, I'll show you the result. Then keep going until the task is fully done.
-When finished, respond with: {"tool": "done", "message": "what you did"}
+## For creating/overwriting files — use code block format:
+TOOL: write_file
+PATH: filename.py
+```python
+your complete code here with proper indentation
+```
 
-Available tools:
+## For other tools — use JSON on a single line:
+{"tool": "edit_file", "args": {"path": "file.py", "old_string": "old text", "new_string": "new text"}}
+{"tool": "read_file", "args": {"path": "file.py"}}
+{"tool": "bash", "args": {"command": "pip install pygame"}}
+{"tool": "grep", "args": {"pattern": "def main"}}
+{"tool": "glob", "args": {"pattern": "*.py"}}
+{"tool": "web_search", "args": {"query": "pygame tutorial"}}
 
-**write_file** — Create or overwrite a file.
-  Args: path (string), content (string — use \\n for newlines)
-  IMPORTANT: Keep content SHORT. Max 30 lines per write_file call.
-  For larger files, write a scaffold first, then use edit_file to add more.
-  Example: {"tool": "write_file", "args": {"path": "game.py", "content": "import pygame\\npygame.init()\\nscreen = pygame.display.set_mode((800,600))\\n# TODO: add game logic\\npygame.quit()"}}
-
-**edit_file** — Replace text in a file. Read the file first!
-  Args: path (string), old_string (string), new_string (string)
-  old_string must match EXACTLY. Use 2-4 lines of context for uniqueness.
-  This is the PREFERRED way to add code to existing files.
-
-**read_file** — Read a file's contents. Always read before editing.
-  Args: path (string)
-
-**bash** — Run a shell command.
-  Args: command (string)
-
-**grep** — Search file contents with regex.
-  Args: pattern (string), path (string, optional)
-
-**glob** — Find files by pattern.
-  Args: pattern (string)
-
-**web_search** — Search the web.
-  Args: query (string)
-
-**current_datetime** — Get current date/time.
-  Args: (none)
-
-# How to work
-
-- Build code INCREMENTALLY. Write a small scaffold first (imports + skeleton), then use edit_file to add features one at a time. NEVER try to write an entire large file in one call.
-- One tool call per response. Keep each call SHORT (under 30 lines of code).
-- Read files before editing them.
-- Keep going until the task is fully done — install dependencies if needed.
-- Make MINIMAL changes when editing. Don't rewrite what's already working."""
+# Rules
+- Write COMPLETE working code. No scaffolds, no TODOs, no placeholders.
+- One tool call per response.
+- Read files before editing.
+- Keep going until fully done. Install dependencies if needed.
+- When done, respond with plain text summary (no tool call)."""
 
 
 def parse_tool_call(text: str) -> dict | None:
-    """Extract a JSON tool call from model text. Returns None if no tool call found."""
+    """Extract a tool call from model text.
+
+    Supports two formats:
+    1. Code block: TOOL: write_file\\nPATH: file.py\\n```python\\ncode\\n```
+    2. JSON: {"tool": "bash", "args": {"command": "..."}}
+
+    Returns None if no tool call found (model is done).
+    """
     text = text.strip()
 
-    # Quick check
+    # Format 1: Code block for write_file
+    # TOOL: write_file
+    # PATH: filename.py
+    # ```python
+    # code
+    # ```
+    tool_match = re.match(r'TOOL:\s*write_file\s*\nPATH:\s*(\S+)', text)
+    if tool_match:
+        path = tool_match.group(1)
+        code_match = re.search(r'```\w*\n(.*?)```', text, re.DOTALL)
+        if code_match:
+            return {"tool": "write_file", "args": {"path": path, "content": code_match.group(1)}}
+
+    # Format 2: JSON tool call
     if '"tool"' not in text:
         return None
 
-    # Find JSON objects containing "tool"
-    # Try each { ... } block
     depth = 0
     start = -1
     for i, ch in enumerate(text):
@@ -115,8 +112,8 @@ def execute_tool(app: "GemApp", tool_name: str, args: dict) -> str:
                 return "Error: need path"
             if not content:
                 return "Error: need content"
-            # Unescape JSON string escapes
-            if "\\n" in content:
+            # Unescape if content came from JSON (not code block)
+            if "\\n" in content and "\n" not in content:
                 content = content.replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"')
             full = app.repo_root / path
             full.parent.mkdir(parents=True, exist_ok=True)
