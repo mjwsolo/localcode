@@ -764,7 +764,11 @@ class ProjectIndex:
 # ── System Prompts (TINY) ───────────────────────────────────────────
 
 SYSTEM_PROMPTS = {
-    "create": "You generate code files. Output ONLY valid code in a code block. No explanations.",
+    "create": (
+        "You generate complete runnable code files. Output ONLY valid code in a code block. "
+        "For apps, games, and UIs, prefer a recognizable polished result over minimal scaffolding. "
+        "Do not return placeholders, TODOs, or truncated sections."
+    ),
     "edit": (
         "You edit code. Output SEARCH/REPLACE blocks:\n"
         "<<<SEARCH\nexact lines to find\n===\nreplacement lines\nSEARCH>>>\n"

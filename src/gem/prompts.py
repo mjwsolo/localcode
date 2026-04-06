@@ -28,6 +28,27 @@ VARIANT_APPENDIX = {
 }
 
 
+QUALITY_SIGNALS = (
+    "app", "game", "website", "landing page", "ui", "dashboard", "clone",
+    "polish", "authentic", "sonic", "visual", "look like", "feel like",
+    "playable", "production", "high quality", "fidelity",
+)
+
+
+def build_task_appendix(user_text: str) -> str:
+    text = user_text.lower()
+    if not any(signal in text for signal in QUALITY_SIGNALS):
+        return ""
+    return (
+        "\nTask quality bar:\n"
+        "- For app, game, and UI requests, optimize for recognizability and product feel, not bare scaffolding.\n"
+        "- Prefer one polished, coherent outcome over a thin placeholder implementation.\n"
+        "- Make the first runnable version feel intentionally designed.\n"
+        "- Before finishing, do one refinement pass focused on fidelity, UX clarity, and completeness.\n"
+        "- If the user references a specific product or character, preserve the core identity in the result.\n"
+    )
+
+
 def build_system_prompt(profile: ModelProfile, project_context: str = "") -> str:
     # Short prompt for small models, longer for bigger ones
     if profile.feature_variant in ("compact", "balanced"):

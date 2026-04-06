@@ -15,3 +15,9 @@ venv/
 *.safetensors
 tests/test_results.json
 gem_traces_test.jsonl
+.gem-test/
+*.db
+*.db-shm
+*.db-wal
+sonic.py
+sonic_clone.py

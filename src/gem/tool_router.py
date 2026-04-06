@@ -38,6 +38,11 @@ class RoutingResult:
 # Each intent maps to keywords/patterns that trigger it
 
 INTENT_PATTERNS: dict[str, list[str]] = {
+    "quality_create": [
+        r"\bclone\b", r"\bpolish\b", r"\bfeel like\b", r"\blook like\b",
+        r"\bauthentic\b", r"\bhigh quality\b", r"\bfidelity\b",
+        r"\bplayable\b", r"\bsonic\b", r"\bbeautiful\b",
+    ],
     "file_read": [
         r"\bread\b", r"\bshow\b", r"\bcat\b", r"\bview\b", r"\blook at\b",
         r"\bopen\b", r"\bcheck\b.*file", r"\bwhat.s in\b",
@@ -97,6 +102,7 @@ INTENT_PATTERNS: dict[str, list[str]] = {
 # ── Intent → tool mapping ────────────────────────────────────────────────
 
 INTENT_TOOLS: dict[str, list[str]] = {
+    "quality_create": ["read_file", "write_file", "bash"],
     "time":        ["current_datetime", "bash"],
     "file_read":   ["read_file"],
     "file_write":  ["write_file", "read_file"],
