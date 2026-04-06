@@ -127,6 +127,47 @@ class GemRuntimeGateway:
             pass
         return model_name  # fallback: return as-is
 
+    def generate_json(self, messages: list[dict[str, Any]]) -> str:
+        """Call model via /api/generate with format: json.
+
+        Uses /api/generate instead of /api/chat because Gemma 4's chat
+        template injects <|tool_response> tokens that break JSON output.
+        The generate endpoint doesn't apply the chat template.
+        """
+        # Flatten messages into a single prompt
+        parts = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if role == "system":
+                parts.append(content)
+            elif role == "user":
+                parts.append(f"\nUser: {content}")
+            elif role == "assistant":
+                parts.append(f"\nAssistant: {content}")
+        prompt = "\n".join(parts) + "\nAssistant:"
+
+        base = self.config.base_url.rstrip("/")
+        opts = self._options()
+        opts["num_predict"] = 4096  # enough for a full file
+
+        payload = {
+            "model": self.config.model,
+            "prompt": prompt,
+            "stream": False,
+            "think": False,
+            "format": "json",
+            "options": opts,
+        }
+
+        response = self.client.post(
+            f"{base}/api/generate", json=payload,
+            timeout=300,
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data.get("response", "").strip()
+
     def healthcheck(self) -> tuple[bool, str]:
         if self.config.provider == "mlx-local":
             try:
