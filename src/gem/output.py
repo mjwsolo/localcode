@@ -146,8 +146,16 @@ class OutputManager:
         self._start_indicator()  # resume indicator
         return idx
 
+    @staticmethod
+    def _filter_noise(text: str) -> str:
+        """Filter noisy system messages from output."""
+        lines = text.splitlines()
+        filtered = [l for l in lines if "MallocStackLogging" not in l and "can't turn off" not in l]
+        return "\n".join(filtered)
+
     def tool_result(self, result: str, error: bool = False, idx: int = -1) -> None:
         """Show tool result inline."""
+        result = self._filter_noise(result)
         if idx >= 0 and idx < len(self.state.tool_actions):
             self.state.tool_actions[idx].status = "error" if error else "done"
             self.state.tool_actions[idx].result = result
@@ -155,7 +163,6 @@ class OutputManager:
         if error:
             sys.stdout.write(f"\033[31m    ⎿ {result[:80]}\033[0m\n")
         else:
-            # Format nicely based on content
             lines = result.strip().splitlines()
             if "Added" in result and "removed" in result:
                 sys.stdout.write(f"\033[2m    ⎿ {result[:80]}\033[0m\n")
