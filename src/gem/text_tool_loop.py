@@ -1,22 +1,22 @@
-"""Text-based tool calling loop — the model drives tools via JSON, not special tokens.
+"""Agent tool loop — modeled after OpenAI Codex CLI architecture.
 
-Why: Quantized local models (IQ3_S, Q4) can't reliably produce native tool call tokens.
-But they CAN output valid JSON consistently. So we describe tools in the system prompt
-and parse JSON tool calls from the model's text output.
+The loop is simple:
+  1. Send messages to model
+  2. Model responds with text
+  3. If text contains a tool call → parse, execute, append result, loop
+  4. If text is plain (no tool call) → model is done, show to user
 
-This is how Aider, and most local-first tools work. The model drives itself — just like
-Codex — but using text JSON instead of native function calling tokens.
+The model decides when to stop by simply NOT making a tool call.
+No "done" signal, no structured schema — just natural conversation.
 
-Flow:
-  1. System prompt describes available tools as text
-  2. Model outputs {"tool": "name", "args": {...}} to call a tool
-  3. We parse, execute, and feed the result back
-  4. Model continues until it responds with plain text (no tool call)
+Tool calls use JSON: {"tool": "name", "args": {...}}
+Parsed from the model's text output (works with any model, quantized or not).
 """
 from __future__ import annotations
 
 import json
 import re
+import subprocess
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -24,195 +24,133 @@ if TYPE_CHECKING:
     from .output import OutputManager
 
 
-# Tools exposed to the model via text (not Ollama native)
-TEXT_TOOLS = {
-    "write_file": {
-        "desc": "Create or overwrite a file",
-        "args": "path (string), content (string)",
-    },
-    "edit_file": {
-        "desc": "Edit a file by replacing text",
-        "args": "path (string), old_string (string), new_string (string)",
-    },
-    "read_file": {
-        "desc": "Read a file's contents",
-        "args": "path (string)",
-    },
-    "bash": {
-        "desc": "Run a shell command",
-        "args": "command (string)",
-    },
-    "grep": {
-        "desc": "Search file contents with regex",
-        "args": "pattern (string), path (string, optional)",
-    },
-    "glob": {
-        "desc": "Find files matching a pattern",
-        "args": "pattern (string)",
-    },
-    "web_search": {
-        "desc": "Search the web",
-        "args": "query (string)",
-    },
-    "current_datetime": {
-        "desc": "Get current date and time",
-        "args": "(none)",
-    },
-}
+TOOL_PROMPT = """# Tools
 
-
-def build_tool_system_prompt(tools: dict[str, dict] | None = None) -> str:
-    """Build the tool prompt — modeled after Codex's approach."""
-    tools = tools or TEXT_TOOLS
-    return """# Tools
-
-You have access to these tools. To use one, respond with a JSON object:
+You can use tools by outputting a JSON object on its own line:
 {"tool": "tool_name", "args": {"param": "value"}}
+
+After each tool call, I'll show you the result. Then keep going until the task is fully done.
+When you're finished, respond with a normal text message (no JSON) summarizing what you did.
 
 Available tools:
 
-write_file(path, content) — Create or overwrite a file. Use \\n for newlines in the content string.
-  - Use this to create NEW files with complete, working code.
-  - If modifying an existing file, prefer edit_file instead.
+**write_file** — Create or overwrite a file.
+  Args: path (string), content (string — use \\n for newlines)
+  Example: {"tool": "write_file", "args": {"path": "game.py", "content": "import pygame\\nprint('hello')"}}
 
-edit_file(path, old_string, new_string) — Replace text in a file.
-  - old_string must be an EXACT match of existing text in the file (2-4 lines for uniqueness).
-  - You MUST read_file first before editing, so you know the exact text to match.
-  - Make MINIMAL changes. If the fix is 2 lines, change 2 lines.
+**edit_file** — Replace specific text in an existing file. Read the file first!
+  Args: path (string), old_string (string), new_string (string)
+  old_string must match EXACTLY. Use 2-4 lines for uniqueness.
 
-read_file(path) — Read a file's contents. Always read before editing.
+**read_file** — Read a file's contents. Always read before editing.
+  Args: path (string)
 
-bash(command) — Run a shell command. Use for installing packages, running tests, etc.
+**bash** — Run a shell command.
+  Args: command (string)
 
-grep(pattern, path) — Search file contents with regex.
+**grep** — Search file contents with regex.
+  Args: pattern (string), path (string, optional)
 
-glob(pattern) — Find files matching a pattern.
+**glob** — Find files by pattern.
+  Args: pattern (string)
 
-web_search(query) — Search the web.
+**web_search** — Search the web.
+  Args: query (string)
 
-current_datetime() — Get current date and time.
+**current_datetime** — Get current date/time.
+  Args: (none)
 
-# Doing tasks
+# Guidelines
 
 - Complete the task fully. Don't gold-plate, but don't leave it half-done.
-- Don't add features or make improvements beyond what was asked.
-- Make MINIMAL changes. A bug fix doesn't need surrounding code cleaned up.
-- Before reporting complete, verify it works if possible (run the test, check the output).
-- Do not propose changes to code you haven't read. Read first, then edit.
-- One tool call per response. I will show you the result, then you continue.
-- When truly done, respond with a short summary (no JSON)."""
+- Make MINIMAL changes. Don't refactor or clean up code you weren't asked to change.
+- Read files before editing them.
+- One tool call per response.
+- Keep going until done — install dependencies, fix bugs, verify if possible."""
 
 
 def parse_tool_call(text: str) -> dict | None:
-    """Try to parse a tool call from model output.
-
-    Supports two formats:
-    1. Full JSON: {"tool": "write_file", "args": {"path": "x", "content": "..."}}
-    2. Hybrid: {"tool": "write_file", "args": {"path": "x"}} followed by ```code```
-       (faster — model doesn't need to JSON-escape the code)
-
-    Returns {"tool": str, "args": dict} or None if it's plain text.
-    """
+    """Extract a JSON tool call from model text. Returns None if no tool call found."""
     text = text.strip()
 
-    # Quick check: does it contain a tool call?
-    if '{"tool"' not in text and '"tool"' not in text:
+    # Quick check
+    if '"tool"' not in text:
         return None
 
-    # Strategy 1: Look for a code block after a JSON tool call line
-    # {"tool": "write_file", "args": {"path": "game.py"}}
-    # ```python
-    # code here
-    # ```
-    code_block_match = re.search(r'```\w*\n(.*?)```', text, re.DOTALL)
-    # Match JSON with one level of nested braces: {"tool": "x", "args": {"key": "val"}}
-    simple_json = re.search(r'(\{"tool"\s*:\s*"(\w+)"\s*,\s*"args"\s*:\s*\{[^}]*\}\s*\})', text)
-    if simple_json and code_block_match:
-        try:
-            tool_call = json.loads(simple_json.group(1))
-            if tool_call.get("tool") == "write_file":
-                tool_call.setdefault("args", {})["content"] = code_block_match.group(1).strip()
-                return tool_call
-        except json.JSONDecodeError:
-            pass
-
-    # Strategy 2: Full JSON with nested args (model put content in JSON)
-    # Find the largest valid JSON object containing "tool"
-    # Use a greedy approach since content may have special chars
-    start = text.find('{"tool"')
-    if start == -1:
-        start = text.find('"tool"')
-    if start >= 0:
-        # Try parsing from this point with increasing length
-        substr = text[start:]
-        # Try the whole thing first
-        for end_pos in range(len(substr), 10, -1):
-            candidate = substr[:end_pos]
-            if not candidate.rstrip().endswith("}"):
-                continue
-            try:
-                parsed = json.loads(candidate)
-                if isinstance(parsed, dict) and "tool" in parsed:
-                    # Unescape content if it has literal \n
-                    args = parsed.get("args", {})
-                    if "content" in args and isinstance(args["content"], str):
-                        if "\\n" in args["content"]:
-                            args["content"] = args["content"].replace("\\n", "\n").replace("\\t", "\t")
-                            parsed["args"] = args
-                    return parsed
-            except json.JSONDecodeError:
-                continue
+    # Find JSON objects containing "tool"
+    # Try each { ... } block
+    depth = 0
+    start = -1
+    for i, ch in enumerate(text):
+        if ch == '{':
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0 and start >= 0:
+                candidate = text[start:i + 1]
+                if '"tool"' in candidate:
+                    try:
+                        parsed = json.loads(candidate)
+                        if isinstance(parsed, dict) and "tool" in parsed:
+                            return parsed
+                    except json.JSONDecodeError:
+                        pass
+                start = -1
 
     return None
 
 
 def execute_tool(app: "GemApp", tool_name: str, args: dict) -> str:
-    """Execute a tool call and return the result as text."""
+    """Execute a tool and return the result as text."""
     try:
         if tool_name == "write_file":
             path = args.get("path", "")
             content = args.get("content", "")
-            if not path or not content:
-                return "Error: write_file needs path and content"
-            full_path = app.repo_root / path
-            full_path.parent.mkdir(parents=True, exist_ok=True)
-            app.toolkit.changes.snapshot_before(path, "text_tool")
-            full_path.write_text(content)
-            lines = len(content.splitlines())
-            return f"Written {path} ({lines} lines)"
+            if not path:
+                return "Error: need path"
+            if not content:
+                return "Error: need content"
+            # Unescape JSON string escapes
+            if "\\n" in content:
+                content = content.replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"')
+            full = app.repo_root / path
+            full.parent.mkdir(parents=True, exist_ok=True)
+            app.toolkit.changes.snapshot_before(path, "agent")
+            full.write_text(content)
+            return f"Written {path} ({len(content.splitlines())} lines)"
 
         elif tool_name == "edit_file":
             path = args.get("path", "")
             old = args.get("old_string", "")
             new = args.get("new_string", "")
-            if not path:
-                return "Error: edit_file needs path"
-            full_path = app.repo_root / path
-            if not full_path.is_file():
+            if not path or not old:
+                return "Error: need path and old_string"
+            full = app.repo_root / path
+            if not full.is_file():
                 return f"Error: {path} not found"
-            text = full_path.read_text(errors="replace")
+            text = full.read_text(errors="replace")
             if old not in text:
                 return f"Error: old_string not found in {path}"
-            app.toolkit.changes.snapshot_before(path, "text_tool_edit")
-            text = text.replace(old, new, 1)
-            full_path.write_text(text)
+            app.toolkit.changes.snapshot_before(path, "agent_edit")
+            full.write_text(text.replace(old, new, 1))
             return f"Edited {path}"
 
         elif tool_name == "read_file":
             path = args.get("path", "")
-            full_path = app.repo_root / path
-            if not full_path.is_file():
+            full = app.repo_root / path
+            if not full.is_file():
                 return f"Error: {path} not found"
-            content = full_path.read_text(errors="replace")
+            content = full.read_text(errors="replace")
             if len(content) > 8000:
                 content = content[:8000] + "\n... (truncated)"
             return content
 
         elif tool_name == "bash":
-            import subprocess
             cmd = args.get("command", "")
             if not cmd:
-                return "Error: bash needs command"
+                return "Error: need command"
             result = subprocess.run(
                 cmd, shell=True, capture_output=True, text=True,
                 timeout=120, cwd=str(app.repo_root),
@@ -223,45 +161,39 @@ def execute_tool(app: "GemApp", tool_name: str, args: dict) -> str:
             return output or "(no output)"
 
         elif tool_name == "grep":
-            import subprocess
             pattern = args.get("pattern", "")
             path = args.get("path", ".")
             result = subprocess.run(
                 ["grep", "-rn", "--include=*.py", "--include=*.js", "--include=*.ts",
                  "--include=*.json", "--include=*.md", pattern, path],
-                capture_output=True, text=True, timeout=10,
-                cwd=str(app.repo_root),
+                capture_output=True, text=True, timeout=10, cwd=str(app.repo_root),
             )
-            output = result.stdout.strip()
-            if len(output) > 4000:
-                output = output[:4000] + "\n... (truncated)"
-            return output or "No matches"
+            return result.stdout.strip()[:4000] or "No matches"
 
         elif tool_name == "glob":
-            import subprocess
             pattern = args.get("pattern", "**/*")
             result = subprocess.run(
                 ["find", ".", "-name", pattern, "-not", "-path", "*/.git/*",
                  "-not", "-path", "*/__pycache__/*"],
-                capture_output=True, text=True, timeout=10,
-                cwd=str(app.repo_root),
+                capture_output=True, text=True, timeout=10, cwd=str(app.repo_root),
             )
-            return result.stdout.strip() or "No files found"
+            return result.stdout.strip()[:4000] or "No files found"
 
         elif tool_name == "web_search":
             query = args.get("query", "")
-            # Use existing web search tool
             call = {"function": {"name": "web_search", "arguments": {"query": query}}}
             results = app.toolkit.execute_tool_calls([call])
             return results[0].get("content", "No results") if results else "No results"
 
         elif tool_name == "current_datetime":
             from datetime import datetime
-            return datetime.now().strftime("%Y-%m-%d %H:%M:%S %Z")
+            return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         else:
             return f"Unknown tool: {tool_name}"
 
+    except subprocess.TimeoutExpired:
+        return "Error: command timed out after 120s"
     except Exception as exc:
         return f"Error: {exc}"
 
@@ -273,91 +205,58 @@ def run_text_tool_loop(
     out: "OutputManager",
     max_rounds: int = 15,
 ) -> str:
-    """Tool loop using Ollama's structured output (format: json_schema).
+    """Codex-style agent loop. Model calls tools until it stops on its own.
 
-    The model is grammar-constrained to output valid JSON matching our tool
-    call schema. It physically cannot produce malformed output.
-    When the model is done, it outputs tool="done" with a message.
+    The model stops by responding with plain text (no JSON tool call).
+    No "done" signal needed — just like Codex's architecture.
     """
-    tool_prompt = build_tool_system_prompt()
-
+    # Inject tool prompt into system message
     messages = list(composed_messages)
     if messages and messages[0].get("role") == "system":
-        messages[0] = {**messages[0], "content": messages[0]["content"] + "\n\n" + tool_prompt}
+        messages[0] = {**messages[0], "content": messages[0]["content"] + "\n\n" + TOOL_PROMPT}
     else:
-        messages.insert(0, {"role": "system", "content": tool_prompt})
-
-    # JSON schema — Ollama enforces this at token sampling level
-    tool_schema = {
-        "type": "object",
-        "properties": {
-            "tool": {
-                "type": "string",
-                "enum": list(TEXT_TOOLS.keys()) + ["done"],
-            },
-            "args": {"type": "object"},
-            "message": {"type": "string"},
-        },
-        "required": ["tool"],
-    }
-
-    final_text = ""
+        messages.insert(0, {"role": "system", "content": TOOL_PROMPT})
 
     for round_num in range(max_rounds):
-        if round_num == 0:
-            out.print_info("▶ processing prompt")
-        else:
-            out.print_info(f"▶ round {round_num + 1}")
-        out.set_stage(f"round {round_num + 1}")
+        # Show progress
+        out.set_stage(f"round {round_num + 1}" if round_num > 0 else "processing")
+        out.print_info(f"▶ {'processing' if round_num == 0 else f'round {round_num + 1}'}")
 
-        # Call model with structured output — guaranteed valid JSON
-        response = app.engine.chat_once(messages, think=False, format=tool_schema)
+        # Call model — no format constraint, no thinking, just generate
+        response = app.engine.chat_once(messages, think=False)
         content = response.get("message", {}).get("content", "").strip()
+
+        # Clean special tokens
+        if "<|" in content or "|>" in content:
+            content = re.sub(r'<\|[^>]*\|>', '', content).strip()
+
         out.feed_thinking(content)
 
         if not content:
             break
 
-        # Parse — guaranteed valid JSON from grammar constraint
-        try:
-            tool_call = json.loads(content)
-        except json.JSONDecodeError:
-            # Fallback for older Ollama without format support
-            tool_call = parse_tool_call(content)
-            if not tool_call:
-                final_text = content
-                out.stream(content)
-                break
+        # Try to parse a tool call
+        tool_call = parse_tool_call(content)
 
-        tool_name = tool_call.get("tool", "done")
-        tool_args = tool_call.get("args", {})
-        message = tool_call.get("message", "")
+        if tool_call:
+            # ── Tool call: execute and loop ──
+            tool_name = tool_call.get("tool", "")
+            tool_args = tool_call.get("args", {})
 
-        # "done" = task complete
-        if tool_name == "done":
-            final_text = message or "Done."
-            out.stream(final_text)
-            break
+            preview = str(tool_args.get("path", tool_args.get("command", tool_args.get("query", ""))))[:60]
+            out.log_tool(tool_name, preview)
 
-        # Fix write_file: unescape content
-        if tool_name == "write_file":
-            c = tool_args.get("content", "")
-            if "\\n" in c:
-                tool_args["content"] = c.replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"')
+            result = execute_tool(app, tool_name, tool_args)
+            is_err = result.startswith("Error")
+            out.tool_result(result[:120], error=is_err)
 
-        # Show and execute
-        preview = str(tool_args.get("path", tool_args.get("command", tool_args.get("query", ""))))[:60]
-        out.log_tool(tool_name, preview)
-        result = execute_tool(app, tool_name, tool_args)
-        is_err = result.startswith("Error")
-        out.tool_result(result[:120], error=is_err)
+            # Append to conversation and continue
+            messages.append({"role": "assistant", "content": content})
+            messages.append({"role": "user", "content": f"Tool result:\n{result}"})
+            out.start_thinking(reset=False)
+        else:
+            # ── Plain text: model is done ──
+            out.stream(content)
+            return content
 
-        # Feed result back
-        messages.append({"role": "assistant", "content": content})
-        messages.append({"role": "user", "content": (
-            f"Tool result: {result}\n\n"
-            f'Next step? Use another tool, or {{"tool": "done", "message": "summary"}} if complete.'
-        )})
-        out.start_thinking(reset=False)
-
-    return final_text
+    return ""
