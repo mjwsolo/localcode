@@ -292,6 +292,7 @@ def run_text_tool_loop(
             out.set_stage(f"round {round_num + 1}")
 
         got_tool_call = False
+        streaming_file = ""  # track file being created live
         for event in app.engine.stream_chat_events(messages, think=use_think):
             if event["type"] == "thinking":
                 chunk = str(event["content"])
@@ -307,42 +308,40 @@ def run_text_tool_loop(
                     continue
                 chunks.append(chunk)
                 token_count += 1
-                # Count tokens for $ savings display
                 out.feed_thinking(chunk)
-
-                # Show meaningful status — not raw code
                 partial = "".join(chunks)
+
+                # ── Live file creation: create file as soon as we see the path ──
+                if not streaming_file and '"write_file"' in partial and '"path"' in partial:
+                    import re as _re
+                    path_match = _re.search(r'"path"\s*:\s*"([^"]+)"', partial)
+                    if path_match:
+                        streaming_file = path_match.group(1)
+                        # Create the file immediately (empty) so user sees it in their editor
+                        full_path = app.repo_root / streaming_file
+                        full_path.parent.mkdir(parents=True, exist_ok=True)
+                        app.toolkit.changes.snapshot_before(streaming_file, "text_tool")
+                        full_path.write_text("")  # create empty, will fill later
+                        out.log_tool("write_file", streaming_file)
+                        out.set_stage(f"writing {streaming_file} ({token_count} tok)")
+
+                # Update status every 10 tokens
                 if token_count % 10 == 0:
-                    if '"write_file"' in partial:
-                        # Extract filename being written
-                        import re as _re
-                        path_match = _re.search(r'"path"\s*:\s*"([^"]+)"', partial)
-                        fname = path_match.group(1) if path_match else "file"
-                        out.set_stage(f"writing {fname} ({token_count} tok)")
+                    if streaming_file:
+                        out.set_stage(f"writing {streaming_file} ({token_count} tok)")
                     elif '"edit_file"' in partial:
-                        path_match = _re.search(r'"path"\s*:\s*"([^"]+)"', partial)
-                        fname = path_match.group(1) if path_match else "file"
-                        out.set_stage(f"editing {fname} ({token_count} tok)")
+                        out.set_stage(f"editing ({token_count} tok)")
                     elif '"bash"' in partial:
                         out.set_stage(f"running command ({token_count} tok)")
                     else:
                         out.set_stage(f"generating ({token_count} tok)")
 
-                # Check if we have a complete tool call — stop streaming early
+                # Check if tool call is complete — stop streaming
                 if '{"tool"' in partial:
-                    # For hybrid format: JSON line + code block
-                    if "```" in partial:
-                        fences = partial.count("```")
-                        if fences >= 2:
-                            got_tool_call = True
-                            break
-                    # For full JSON: try to parse every few tokens
+                    if "```" in partial and partial.count("```") >= 2:
+                        got_tool_call = True
+                        break
                     elif token_count % 5 == 0:
-                        tc = parse_tool_call(partial)
-                        if tc and tc.get("args", {}).get("content", ""):
-                            got_tool_call = True
-                            break
-                        # Also stop if we see the JSON closing pattern "}}\n or "}} at end
                         stripped = partial.rstrip()
                         if stripped.endswith("}}") or stripped.endswith('"}'):
                             tc = parse_tool_call(partial)
