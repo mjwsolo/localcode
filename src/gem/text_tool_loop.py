@@ -62,22 +62,45 @@ TEXT_TOOLS = {
 
 
 def build_tool_system_prompt(tools: dict[str, dict] | None = None) -> str:
-    """Build the system prompt section describing available tools."""
+    """Build the tool prompt — modeled after Codex's approach."""
     tools = tools or TEXT_TOOLS
-    lines = ["You have these tools:"]
-    for name, info in tools.items():
-        lines.append(f"  {name}({info['args']}): {info['desc']}")
-    lines.append("")
-    lines.append('To call a tool, output ONLY JSON: {"tool": "name", "args": {"key": "value"}}')
-    lines.append("Do NOT write any text before or after the JSON. ONLY the JSON object.")
-    lines.append("")
-    lines.append("For write_file, put ALL the code inside the content field.")
-    lines.append("Use \\n for newlines inside the JSON string.")
-    lines.append("")
-    lines.append("For edit_file, use small old_string/new_string. Don't rewrite entire files.")
-    lines.append("")
-    lines.append("After I execute the tool, I'll show you the result. Then continue or say DONE.")
-    return "\n".join(lines)
+    return """# Tools
+
+You have access to these tools. To use one, respond with a JSON object:
+{"tool": "tool_name", "args": {"param": "value"}}
+
+Available tools:
+
+write_file(path, content) — Create or overwrite a file. Use \\n for newlines in the content string.
+  - Use this to create NEW files with complete, working code.
+  - If modifying an existing file, prefer edit_file instead.
+
+edit_file(path, old_string, new_string) — Replace text in a file.
+  - old_string must be an EXACT match of existing text in the file (2-4 lines for uniqueness).
+  - You MUST read_file first before editing, so you know the exact text to match.
+  - Make MINIMAL changes. If the fix is 2 lines, change 2 lines.
+
+read_file(path) — Read a file's contents. Always read before editing.
+
+bash(command) — Run a shell command. Use for installing packages, running tests, etc.
+
+grep(pattern, path) — Search file contents with regex.
+
+glob(pattern) — Find files matching a pattern.
+
+web_search(query) — Search the web.
+
+current_datetime() — Get current date and time.
+
+# Doing tasks
+
+- Complete the task fully. Don't gold-plate, but don't leave it half-done.
+- Don't add features or make improvements beyond what was asked.
+- Make MINIMAL changes. A bug fix doesn't need surrounding code cleaned up.
+- Before reporting complete, verify it works if possible (run the test, check the output).
+- Do not propose changes to code you haven't read. Read first, then edit.
+- One tool call per response. I will show you the result, then you continue.
+- When truly done, respond with a short summary (no JSON)."""
 
 
 def parse_tool_call(text: str) -> dict | None:
