@@ -538,6 +538,192 @@ def _is_boundary(line: str) -> bool:
             or stripped.startswith("export "))
 
 
+# ── 7. Output Parser ─────────────────────────────────────────────────
+
+class OutputParser:
+    """Robust extraction from messy LLM output. The model WILL produce garbage."""
+
+    def extract_code(self, raw: str, language: str = None) -> str:
+        """Strip markdown fences, preamble, postamble."""
+        # Try fenced code block
+        matches = re.findall(r'```(?:\w*)\n(.*?)```', raw, re.DOTALL)
+        if matches:
+            return matches[0].strip()
+
+        # Try: starts with code-like line
+        lines = raw.strip().splitlines()
+        code_start = 0
+        for i, line in enumerate(lines):
+            if self._looks_like_code(line):
+                code_start = i
+                break
+
+        code_end = len(lines)
+        for i in range(len(lines) - 1, code_start, -1):
+            if self._looks_like_code(lines[i]):
+                code_end = i + 1
+                break
+
+        return "\n".join(lines[code_start:code_end])
+
+    def extract_search_replace(self, raw: str) -> list[dict]:
+        """Parse search/replace blocks with fallback patterns."""
+        # Pattern 1: <<<SEARCH ... === ... SEARCH>>>
+        blocks = []
+        for m in re.finditer(r'<<<SEARCH\n(.*?)\n===\n(.*?)\nSEARCH>>>', raw, re.DOTALL):
+            blocks.append({"search": m.group(1), "replace": m.group(2)})
+        if blocks:
+            return blocks
+
+        # Pattern 2: SEARCH:/REPLACE: with fences
+        for m in re.finditer(r'(?:SEARCH|FIND|OLD):\n```\n(.*?)\n```\n(?:REPLACE|NEW):\n```\n(.*?)\n```', raw, re.DOTALL):
+            blocks.append({"search": m.group(1), "replace": m.group(2)})
+        if blocks:
+            return blocks
+
+        # Pattern 3: model output whole file
+        stripped = self.extract_code(raw)
+        if stripped and len(stripped.splitlines()) > 10:
+            blocks.append({"full_file": stripped})
+        return blocks
+
+    def extract_plan_steps(self, raw: str) -> list[dict]:
+        """Parse planning output into structured steps."""
+        steps = []
+        current = None
+        for line in raw.splitlines():
+            line = line.strip()
+            m = re.match(
+                r'STEP\s*(\d+):\s*(CREATE_FILE|EDIT_FILE|RUN_COMMAND|INSTALL_DEP|RUN_TESTS)'
+                r'\s*\|\s*(.*?)\s*\|\s*(.*)', line)
+            if m:
+                if current:
+                    steps.append(current)
+                current = {"id": int(m.group(1)), "action": m.group(2),
+                           "target": m.group(3), "desc": m.group(4), "depends_on": []}
+            dep_m = re.match(r'DEPENDS_ON:\s*(.*)', line)
+            if dep_m and current:
+                deps = dep_m.group(1).strip()
+                current["depends_on"] = [] if deps.lower() == "none" else [int(d.strip()) for d in deps.split(",") if d.strip().isdigit()]
+        if current:
+            steps.append(current)
+        return steps
+
+    @staticmethod
+    def _looks_like_code(line: str) -> bool:
+        indicators = ("import ", "from ", "def ", "class ", "function ",
+                      "const ", "let ", "var ", "return ", "if ", "for ",
+                      "#!/", "# ", "//", "print(", "module.")
+        return any(line.strip().startswith(ind) for ind in indicators)
+
+
+# ── 8. Safety Layer ─────────────────────────────────────────────────
+
+class SafetyLayer:
+    """Prevent destructive operations."""
+
+    BLOCKED = [
+        r"rm\s+(-rf?|--recursive)", r"rm\s+-[a-zA-Z]*f",
+        r"mkfs\.", r"dd\s+if=", r">\s*/dev/sd",
+        r"chmod\s+-R\s+777", r"curl.*\|\s*(bash|sh)",
+        r"wget.*\|\s*(bash|sh)", r"sudo\s+",
+        r":\(\)\{.*\}", r"git\s+push.*--force",
+        r"git\s+reset\s+--hard", r"drop\s+table", r"truncate\s+table",
+    ]
+
+    CONFIRM = [
+        r"rm\s+", r"git\s+push", r"git\s+checkout\s+--",
+        r"pip\s+install", r"npm\s+install", r"mv\s+", r"git\s+reset",
+    ]
+
+    SENSITIVE_FILES = [".env", "id_rsa", "credentials", ".ssh/",
+                       "passwd", "shadow", ".git/config"]
+
+    def check_command(self, command: str) -> dict:
+        for p in self.BLOCKED:
+            if re.search(p, command, re.IGNORECASE):
+                return {"allowed": False, "reason": f"Blocked: {command[:50]}"}
+        for p in self.CONFIRM:
+            if re.search(p, command, re.IGNORECASE):
+                return {"allowed": "confirm", "reason": f"Needs approval: {command[:50]}"}
+        return {"allowed": True}
+
+    def check_file_write(self, file_path: str, project_root: str = None) -> dict:
+        for s in self.SENSITIVE_FILES:
+            if s in file_path:
+                return {"allowed": False, "reason": f"Sensitive: {file_path}"}
+        if project_root and not os.path.abspath(file_path).startswith(os.path.abspath(project_root)):
+            return {"allowed": False, "reason": f"Outside project: {file_path}"}
+        return {"allowed": True}
+
+
+# ── 9. Project Indexer ──────────────────────────────────────────────
+
+class ProjectIndex:
+    """Lightweight project index. Build once, query fast."""
+
+    def __init__(self, root: Path):
+        self.root = root
+        self.files: dict[str, dict] = {}
+        self.symbols: dict[str, dict] = {}
+        self._build()
+
+    def _build(self):
+        for p in self.root.rglob("*"):
+            if not p.is_file():
+                continue
+            rel = str(p.relative_to(self.root))
+            if any(skip in rel for skip in (".git/", "node_modules/", "__pycache__/", ".venv/", "venv/")):
+                continue
+            try:
+                self.files[rel] = {
+                    "mtime": p.stat().st_mtime,
+                    "size": p.stat().st_size,
+                    "lines": sum(1 for _ in open(p, errors="ignore")),
+                }
+            except Exception:
+                continue
+            if p.suffix == ".py":
+                self._index_python(p, rel)
+
+    def _index_python(self, path: Path, rel: str):
+        try:
+            tree = ast.parse(path.read_text(errors="replace"))
+        except Exception:
+            return
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                self.symbols[node.name] = {"file": rel, "line": node.lineno, "type": "function"}
+            elif isinstance(node, ast.ClassDef):
+                self.symbols[node.name] = {"file": rel, "line": node.lineno, "type": "class"}
+
+    def lookup(self, name: str) -> list[dict]:
+        exact = self.symbols.get(name)
+        if exact:
+            return [exact]
+        return [v for k, v in self.symbols.items() if name.lower() in k.lower()]
+
+    def summary(self) -> str:
+        langs = {}
+        for f in self.files:
+            ext = Path(f).suffix
+            langs[ext] = langs.get(ext, 0) + 1
+        top = sorted(langs.items(), key=lambda x: -x[1])[:3]
+        entries = [f for f in self.files if any(n in f.lower() for n in ("main", "app", "index", "__main__"))]
+        return f"{len(self.files)} files | {', '.join(f'{e}({c})' for e,c in top)} | entry: {', '.join(entries[:3])}"
+
+    def refresh(self):
+        """Incremental update — only reindex changed files."""
+        for rel, info in list(self.files.items()):
+            full = self.root / rel
+            if not full.exists():
+                del self.files[rel]
+                continue
+            if full.stat().st_mtime > info["mtime"]:
+                self._build()  # rebuild all for simplicity
+                return
+
+
 # ── System Prompts (TINY) ───────────────────────────────────────────
 
 SYSTEM_PROMPTS = {
