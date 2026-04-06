@@ -45,9 +45,10 @@ your complete code here with proper indentation
 
 # Rules
 - Write COMPLETE working code. No scaffolds, no TODOs, no placeholders.
+- Write code FIRST, then install dependencies after (code determines what's needed).
 - One tool call per response.
 - Read files before editing.
-- Keep going until fully done. Install dependencies if needed.
+- Keep going until fully done.
 - When done, respond with plain text summary (no tool call)."""
 
 
