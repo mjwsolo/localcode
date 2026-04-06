@@ -274,21 +274,24 @@ def run_text_tool_loop(
     final_text = ""
 
     for round_num in range(max_rounds):
-        out.set_stage(f"round {round_num + 1}" if round_num > 0 else "processing")
+        out.set_stage(f"▶ round {round_num + 1}" if round_num > 0 else "▶ processing prompt")
 
-        # Call model — wait for complete response
-        response = app.engine.chat_once(messages, think=False)
-        content = response.get("message", {}).get("content", "").strip()
+        # Stream to collect full response — shows token count during generation
+        chunks: list[str] = []
+        for event in app.engine.stream_chat_events(messages, think=False):
+            if event["type"] == "content":
+                chunk = str(event["content"])
+                if "<|" in chunk or "|>" in chunk:
+                    chunk = re.sub(r'<\|[^>]*\|>', '', chunk)
+                if chunk:
+                    chunks.append(chunk)
+                    out.feed_thinking(chunk)
+                    if len(chunks) % 10 == 0:
+                        out.set_stage(f"▶ generating ({len(chunks)} tok)")
 
-        # Clean special tokens
-        if "<|" in content or "|>" in content:
-            content = re.sub(r'<\|[^>]*\|>', '', content).strip()
-
+        content = "".join(chunks).strip()
         if not content:
             break
-
-        # Count tokens for $ display
-        out.feed_thinking(content)
 
         # Try to parse a tool call
         tool_call = parse_tool_call(content)
@@ -309,9 +312,9 @@ def run_text_tool_loop(
                 if "\\n" in file_content:
                     tool_args["content"] = file_content.replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"')
 
-            # Show and execute
+            # Show and execute — appears immediately in the UI
             preview = tool_args.get("path", tool_args.get("command", tool_args.get("query", "")))
-            out.log_tool(tool_name, str(preview)[:60])
+            out.log_tool(tool_name, str(preview)[:60])  # prints ● tool_name immediately
             result = execute_tool(app, tool_name, tool_args)
             is_err = result.startswith("Error")
             out.tool_result(result[:120], error=is_err)
