@@ -333,10 +333,11 @@ def run_text_tool_loop(
         out.set_stage(f"round {round_num + 1}" if round_num > 0 else "processing")
         out.print_info(f"▶ {'processing' if round_num == 0 else f'round {round_num + 1}'}")
 
-        # Use /api/generate with format: json (NOT /api/chat)
-        # Gemma 4's chat template injects <|tool_response> tokens that break everything.
-        # The generate endpoint doesn't apply the chat template → clean JSON output.
-        content = app.engine.generate_json(messages)
+        # Use /api/generate (NOT /api/chat) — Gemma 4's chat template
+        # injects <|tool_response> tokens that break JSON output.
+        # No format: "json" either — it was causing degeneration on long outputs.
+        # The model outputs clean JSON from our prompt instructions alone.
+        content = app.engine.generate_once(messages)
 
         # Strip markdown code fences if present
         if content.startswith("```"):
