@@ -36,23 +36,14 @@ Available tools:
 
 **write_file** — Create or overwrite a file.
   Args: path (string), content (string — use \\n for newlines)
-  Example: {"tool": "write_file", "args": {"path": "game.py", "content": "import pygame\\nprint('hello')"}}
+  IMPORTANT: Keep content SHORT. Max 30 lines per write_file call.
+  For larger files, write a scaffold first, then use edit_file to add more.
+  Example: {"tool": "write_file", "args": {"path": "game.py", "content": "import pygame\\npygame.init()\\nscreen = pygame.display.set_mode((800,600))\\n# TODO: add game logic\\npygame.quit()"}}
 
-**edit_file** — Replace specific text in an existing file. Read the file first!
+**edit_file** — Replace text in a file. Read the file first!
   Args: path (string), old_string (string), new_string (string)
-  old_string must match EXACTLY. Use 2-4 lines for uniqueness.
-
-**apply_patch** — Apply a diff patch to one or more files. Best for multi-line edits.
-  Args: patch (string — the patch text)
-  Patch format:
-  *** Begin Patch
-  *** Update File: path/to/file.py
-   context line (unchanged)
-  -old line to remove
-  +new line to add
-   context line (unchanged)
-  *** End Patch
-  Use 1-2 context lines before/after changes. Prefix: space=keep, -=remove, +=add.
+  old_string must match EXACTLY. Use 2-4 lines of context for uniqueness.
+  This is the PREFERRED way to add code to existing files.
 
 **read_file** — Read a file's contents. Always read before editing.
   Args: path (string)
@@ -72,13 +63,13 @@ Available tools:
 **current_datetime** — Get current date/time.
   Args: (none)
 
-# Guidelines
+# How to work
 
-- Complete the task fully. Don't gold-plate, but don't leave it half-done.
-- Make MINIMAL changes. Don't refactor or clean up code you weren't asked to change.
+- Build code INCREMENTALLY. Write a small scaffold first (imports + skeleton), then use edit_file to add features one at a time. NEVER try to write an entire large file in one call.
+- One tool call per response. Keep each call SHORT (under 30 lines of code).
 - Read files before editing them.
-- One tool call per response.
-- Keep going until done — install dependencies, fix bugs, verify if possible."""
+- Keep going until the task is fully done — install dependencies if needed.
+- Make MINIMAL changes when editing. Don't rewrite what's already working."""
 
 
 def parse_tool_call(text: str) -> dict | None:
@@ -362,7 +353,18 @@ def run_text_tool_loop(
         tool_call = parse_tool_call(content)
 
         if not tool_call:
-            # Couldn't parse — try as plain text
+            # Couldn't parse as tool call
+            # If it looks like corrupted JSON (has "tool" but didn't parse), retry
+            if '"tool"' in content and len(content) > 500:
+                out.print_info("▶ retrying (output was corrupted)")
+                messages.append({"role": "assistant", "content": "Error: my output was too long and got corrupted."})
+                messages.append({"role": "user", "content": "Try again but keep the code SHORTER. Max 30 lines per write_file. Write a scaffold first, then edit_file to add features."})
+                out.start_thinking(reset=False)
+                continue
+            # Otherwise treat as final text
+            # Don't dump raw JSON/garbage — clean it up
+            if "\\n" in content and len(content) > 200:
+                content = "I encountered an issue generating the code. Please try again with a simpler request."
             out.stream(content)
             return content
 
