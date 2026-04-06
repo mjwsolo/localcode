@@ -127,14 +127,13 @@ class GemRuntimeGateway:
             pass
         return model_name  # fallback: return as-is
 
-    def generate_json(self, messages: list[dict[str, Any]]) -> str:
-        """Call model via /api/generate with format: json.
+    def generate_once(self, messages: list[dict[str, Any]]) -> str:
+        """Call model via /api/generate (bypasses chat template).
 
         Uses /api/generate instead of /api/chat because Gemma 4's chat
-        template injects <|tool_response> tokens that break JSON output.
-        The generate endpoint doesn't apply the chat template.
+        template injects <|tool_response> tokens that break output.
+        No format constraint — the model outputs JSON from prompt instructions.
         """
-        # Flatten messages into a single prompt
         parts = []
         for msg in messages:
             role = msg.get("role", "user")
@@ -149,14 +148,13 @@ class GemRuntimeGateway:
 
         base = self.config.base_url.rstrip("/")
         opts = self._options()
-        opts["num_predict"] = 4096  # enough for a full file
+        opts["num_predict"] = 4096
 
         payload = {
             "model": self.config.model,
             "prompt": prompt,
             "stream": False,
             "think": False,
-            "format": "json",
             "options": opts,
         }
 
