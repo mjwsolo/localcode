@@ -24,11 +24,48 @@ Captured from OpenAI Codex CLI running real tasks. These sequences should be cod
 ### Order: explore → write → verify → summarize
 ### NOT: install → scaffold → edit → edit → edit → run
 
-## Codified Rules (from this observation):
+## Task: "add an AI opponent to pong.py"
 
-1. Read existing files first to understand what's there
-2. Write complete working code in ONE write_file (not scaffolds)
-3. After writing Python: run `python -m py_compile` to verify
-4. After verifying: check if dependencies are importable
-5. Don't run GUI apps (they block) — just tell user how to run
-6. End with plain text summary + next steps
+### Sequence (3 steps):
+
+1. **bash** `sed -n '1,240p' pong.py` — read the full current code first
+2. **write_file** `pong.py` — surgical edit: +12 lines, -7 lines (not a full rewrite)
+   - Added `AI_SPEED = 6` constant
+   - Added `track_ball()` method to Paddle class (6 lines)
+   - Replaced keyboard controls for right paddle with `right_paddle.track_ball(ball)` (1 line)
+   - Updated UI text: "W/S vs UP/DOWN" → "W/S vs CPU"
+   - Updated message text
+3. **bash** `python -m py_compile pong.py` — verify it still parses
+
+### Key patterns:
+- **Read FIRST**: reads entire file before making changes
+- **Minimal edit**: only +12/-7 lines changed, not a full rewrite
+- **Codex uses write_file for edits too**: it doesn't use edit_file/old_string/new_string — it replaces the whole file but with minimal diff
+- **Verify AFTER**: py_compile check
+- **3 steps total**: read → write → verify. That's it.
+
+### Order: read → write (minimal diff) → verify → summarize
+
+---
+
+## Codified Rules (from observations):
+
+### For NEW files:
+1. Explore: read existing files to understand project
+2. Write complete code in ONE write_file (not scaffolds)
+3. Verify: `python -m py_compile file.py`
+4. Check deps: `python -c "import module"`
+5. Summarize in plain text
+
+### For EDITING existing files:
+1. Read the entire file first
+2. Write the modified file (whole file, minimal diff)
+3. Verify: `python -m py_compile file.py`
+4. Summarize in plain text
+
+### Universal:
+- NEVER run GUI apps via bash
+- NEVER install deps without checking first
+- ALWAYS verify after writing
+- ALWAYS read before editing
+- Complete code, not scaffolds/TODOs
