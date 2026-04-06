@@ -258,185 +258,87 @@ def run_text_tool_loop(
     out: "OutputManager",
     max_rounds: int = 15,
 ) -> str:
-    """Main loop: model calls tools via JSON text, we execute, model continues.
+    """Simple tool loop: model generates → we parse → execute → repeat.
 
-    This replaces the native Ollama tool calling loop for models that
-    can't reliably produce special tool tokens (quantized models).
+    No streaming tricks, no early-stop, no partial parsing.
+    Just clean rounds. The indicator shows activity during the wait.
     """
-    # Build system prompt with tool descriptions
     tool_prompt = build_tool_system_prompt()
 
-    # Inject tool descriptions into the system message
     messages = list(composed_messages)
     if messages and messages[0].get("role") == "system":
-        messages[0] = {
-            "role": "system",
-            "content": messages[0]["content"] + "\n\n" + tool_prompt,
-        }
+        messages[0]["content"] = messages[0]["content"] + "\n\n" + tool_prompt
     else:
         messages.insert(0, {"role": "system", "content": tool_prompt})
 
     final_text = ""
 
     for round_num in range(max_rounds):
-        # Skip thinking — it adds 1min+ delay on 26B with no benefit for tool calls.
-        # The model plans fine without explicit thinking mode.
-        use_think = False
+        out.set_stage(f"round {round_num + 1}" if round_num > 0 else "processing")
 
-        # Stream response — stop as soon as we see a complete tool call
-        chunks: list[str] = []
-        token_count = 0
-        if round_num == 0:
-            out.set_stage("processing prompt")
-        else:
-            out.set_stage(f"round {round_num + 1}")
+        # Call model — wait for complete response
+        response = app.engine.chat_once(messages, think=False)
+        content = response.get("message", {}).get("content", "").strip()
 
-        got_tool_call = False
-        streaming_file = ""  # track file being created live
-        for event in app.engine.stream_chat_events(messages, think=use_think):
-            if event["type"] == "thinking":
-                chunk = str(event["content"])
-                peek = chunk.replace("\n", " ").strip()
-                if peek and len(peek) > 3:
-                    out.feed_thinking(peek)
-            elif event["type"] == "content":
-                chunk = str(event["content"])
-                if "<|" in chunk or "|>" in chunk:
-                    import re as _re
-                    chunk = _re.sub(r'<\|[^>]*\|>', '', chunk)
-                if not chunk:
-                    continue
-                chunks.append(chunk)
-                token_count += 1
-                out.feed_thinking(chunk)
-                partial = "".join(chunks)
-
-                # ── Live file creation: create file as soon as we see the path ──
-                if not streaming_file and '"write_file"' in partial and '"path"' in partial:
-                    import re as _re
-                    path_match = _re.search(r'"path"\s*:\s*"([^"]+)"', partial)
-                    if path_match:
-                        streaming_file = path_match.group(1)
-                        # Create the file immediately (empty) so user sees it in their editor
-                        full_path = app.repo_root / streaming_file
-                        full_path.parent.mkdir(parents=True, exist_ok=True)
-                        app.toolkit.changes.snapshot_before(streaming_file, "text_tool")
-                        full_path.write_text("")  # create empty, will fill later
-                        out.log_tool("write_file", streaming_file)
-                        out.set_stage(f"writing {streaming_file} ({token_count} tok)")
-
-                # Update status every 10 tokens
-                if token_count % 10 == 0:
-                    if streaming_file:
-                        out.set_stage(f"writing {streaming_file} ({token_count} tok)")
-                    elif '"edit_file"' in partial:
-                        out.set_stage(f"editing ({token_count} tok)")
-                    elif '"bash"' in partial:
-                        out.set_stage(f"running command ({token_count} tok)")
-                    else:
-                        out.set_stage(f"generating ({token_count} tok)")
-
-                # Check if tool call is complete — stop streaming
-                if '{"tool"' in partial:
-                    if "```" in partial and partial.count("```") >= 2:
-                        got_tool_call = True
-                        break
-                    elif token_count % 5 == 0:
-                        stripped = partial.rstrip()
-                        if stripped.endswith("}}") or stripped.endswith('"}'):
-                            tc = parse_tool_call(partial)
-                            if tc:
-                                got_tool_call = True
-                                break
-
-        content = "".join(chunks).strip()
+        # Clean special tokens
+        if "<|" in content or "|>" in content:
+            content = re.sub(r'<\|[^>]*\|>', '', content).strip()
 
         if not content:
             break
 
-        # Try to parse as a tool call
+        # Count tokens for $ display
+        out.feed_thinking(content)
+
+        # Try to parse a tool call
         tool_call = parse_tool_call(content)
 
         if tool_call:
             tool_name = tool_call["tool"]
             tool_args = tool_call.get("args", {})
 
-            # For write_file: ensure content exists, has real newlines, isn't a bash command
+            # Fix write_file content: unescape, extract from code block
             if tool_name == "write_file":
                 file_content = tool_args.get("content", "")
                 if not file_content:
+                    # Try code block
                     code_match = re.search(r'```\w*\n(.*?)```', content, re.DOTALL)
                     if code_match:
-                        tool_args["content"] = code_match.group(1).strip()
-                        file_content = tool_args["content"]
+                        file_content = code_match.group(1).strip()
+                        tool_args["content"] = file_content
                 if "\\n" in file_content:
                     tool_args["content"] = file_content.replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"')
-                    file_content = tool_args["content"]
-                # Safety: don't overwrite a real file with what looks like a bash command
-                fpath = tool_args.get("path", "")
-                if file_content and len(file_content.splitlines()) <= 2:
-                    existing = app.repo_root / fpath
-                    if existing.is_file() and len(existing.read_text(errors="replace")) > len(file_content) * 2:
-                        # Existing file is much bigger — model is probably confused
-                        out.tool_result(f"Skipped: {fpath} already has more content", error=True)
-                        messages.append({"role": "assistant", "content": content})
-                        messages.append({"role": "user", "content": f"{fpath} already exists with {len(existing.read_text().splitlines())} lines. Use edit_file to modify it, or bash to run commands."})
-                        out.start_thinking(reset=False)
-                        continue
 
-            # Show what's happening
-            args_preview = str(tool_args.get("path", tool_args.get("command", tool_args.get("query", ""))))[:60]
-            out.log_tool(tool_name, args_preview)
-
-            # Execute directly
+            # Show and execute
+            preview = tool_args.get("path", tool_args.get("command", tool_args.get("query", "")))
+            out.log_tool(tool_name, str(preview)[:60])
             result = execute_tool(app, tool_name, tool_args)
             is_err = result.startswith("Error")
             out.tool_result(result[:120], error=is_err)
 
-            # Feed ONLY the tool call back (strip any closing text the model added).
-            # If we include "I created pong.py, you can run it..." the model thinks
-            # the task is done and won't continue to fix bugs / install deps.
-            tool_call_json = json.dumps(tool_call)
-            messages.append({"role": "assistant", "content": tool_call_json})
+            # Feed result back — only the tool call, not closing text
+            messages.append({"role": "assistant", "content": json.dumps(tool_call)})
             messages.append({"role": "user", "content": (
                 f"Tool result: {result}\n\n"
-                f"What's the next step? If there are bugs to fix, dependencies to install, "
-                f"or tests to run — do it now. Output another tool call. "
-                f"If everything is truly complete and working, say DONE."
+                f"Next step? Install deps, fix bugs, or say DONE if complete."
             )})
-            # Restart indicator for next round — keep accumulated tokens/time
             out.start_thinking(reset=False)
 
         else:
-            # No JSON tool call found — but maybe there's a code block we should write
+            # No tool call — check for code block we should write
             code_match = re.search(r'```\w*\n(.*?)```', content, re.DOTALL)
             path_hint = re.search(r'`(\w+\.(?:py|js|ts|html|css|json|md|txt))`', content)
-
             if code_match and path_hint:
-                # Model described what it did + included code — write it ourselves
-                fpath = path_hint.group(1)
-                code = code_match.group(1).strip()
-                out.log_tool("write_file", fpath)
-                result = execute_tool(app, "write_file", {"path": fpath, "content": code})
+                out.log_tool("write_file", path_hint.group(1))
+                result = execute_tool(app, "write_file", {
+                    "path": path_hint.group(1),
+                    "content": code_match.group(1).strip(),
+                })
                 out.tool_result(result[:120])
-                final_text = content.split("```")[0].strip()  # text before code block
-                out.stream(final_text)
-                break
 
-            # Plain text response — check if model is done
-            content_lower = content.lower()
-            sounds_done = any(w in content_lower for w in (
-                "done", "complete", "finished", "created", "ready to run",
-                "you can run", "you can now", "all set",
-            ))
-
-            if sounds_done or round_num >= max_rounds - 1:
-                final_text = content
-                out.stream(content)
-                break
-            else:
-                messages.append({"role": "assistant", "content": content})
-                messages.append({"role": "user", "content": "Don't explain — just do it. Use a tool call."})
-                out.start_thinking(reset=False)
+            # Stream the text to user
+            final_text = content.split("```")[0].strip() if code_match else content
+            out.stream(final_text)
+            break
 
     return final_text
