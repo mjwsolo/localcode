@@ -31,7 +31,7 @@ from .onboarding import onboarding_panel
 from .patching import apply_diff, build_diff, extract_last_diff_block, parse_diff
 from .planner import build_plan_note
 from .permissions import PermissionStore
-from .prompts import build_system_prompt
+from .prompts import build_system_prompt, build_task_appendix
 from .runtime import GemRuntimeGateway, RuntimeErrorWithContext
 from .session import SessionStore
 from .shell import run_shell
@@ -1270,6 +1270,9 @@ class GemApp:
             context = f"{context}\n\nRepo cartridge:\n{cartridge_result}"
 
         system_prompt = build_system_prompt(self.profile)
+        task_appendix = build_task_appendix(user_text)
+        if task_appendix:
+            system_prompt = f"{system_prompt}\n{task_appendix}"
 
         # Output style
         if self._output_style:
@@ -1555,16 +1558,7 @@ class GemApp:
         if not routing.tool_names:
             return self._run_stream_simple(composed_messages, stream)
 
-        # ── Speed optimization: dynamic context sizing ──
-        # Smaller KV cache = faster first token + less memory
-        simple_intents = {"time", "chat", "git", "web"}
-        complex_intents = {"file_edit", "file_write", "search_code"}
-        if routing.intents and set(routing.intents) <= simple_intents:
-            ctx_size = 4096   # simple queries need minimal context
-        elif set(routing.intents) & complex_intents:
-            ctx_size = 16384  # code tasks need full context
-        else:
-            ctx_size = 8192   # middle ground
+        ctx_size = self._select_task_context(user_text, routing.intents)
 
         # ── Speed optimization: speculative pre-execution ──
         # Start running predicted tools NOW while model thinks
@@ -1626,6 +1620,9 @@ class GemApp:
                         thinking_parts.append(chunk)
                         if stream:
                             out.feed_thinking(chunk)
+                            peek = " ".join("".join(thinking_parts).split())[-120:]
+                            if peek:
+                                out.set_thinking_peek(peek)
                     elif event["type"] == "content":
                         chunk = str(event["content"])
                         # Filter special tokens
@@ -1933,6 +1930,9 @@ class GemApp:
         tool_display = ToolCallDisplay()
         response = ResponseDisplay()
 
+        if not force_file and self._is_quality_sensitive_creation(user_text):
+            return None
+
         # Find file path
         fpath = force_file  # use forced file if provided (follow-up edit)
 
@@ -2178,6 +2178,22 @@ class GemApp:
 
         return "".join(chunks).strip()
 
+    def _select_task_context(self, user_text: str, intents: list[str]) -> int:
+        text = user_text.lower()
+        simple_intents = {"time", "chat", "git", "web"}
+        if intents and set(intents) <= simple_intents:
+            return 4096
+
+        quality_task = self._is_quality_sensitive_creation(text)
+        single_file = bool(Path(text.split()[-1]).suffix) or any(ext in text for ext in (".py", ".js", ".ts", ".html", ".css"))
+        if quality_task and ("game" in text or "app" in text):
+            return 8192 if single_file else 12288
+
+        if set(intents) & {"file_edit", "file_write", "search_code", "quality_create"}:
+            return 8192 if single_file else 12288
+
+        return 6144
+
     def _maybe_auto_verify(self) -> None:
         """Auto-suggest running tests after file changes in interactive mode."""
         verify_cmd = guess_verify_command(self.repo_root)
@@ -2377,7 +2393,18 @@ class GemApp:
         import re
         has_multiple_actions = len(re.findall(r'\b(?:and|then|also|plus)\b', text)) >= 2
 
-        return (has_creation and has_complex_target) or has_complexity or has_multiple_actions
+        return (has_creation and has_complex_target) or has_complexity or has_multiple_actions or self._is_quality_sensitive_creation(text)
+
+    @staticmethod
+    def _is_quality_sensitive_creation(user_text: str) -> bool:
+        text = user_text.lower().strip()
+        creation_words = ("make", "build", "create", "generate", "implement")
+        quality_words = (
+            "app", "game", "website", "dashboard", "ui", "clone",
+            "polish", "authentic", "look like", "feel like", "sonic",
+            "beautiful", "high quality", "fidelity", "playable",
+        )
+        return any(w in text for w in creation_words) and any(w in text for w in quality_words)
 
     def _generate_task_name(self, user_text: str) -> str:
         """Generate a short dynamic task name from user input (like Codex)."""

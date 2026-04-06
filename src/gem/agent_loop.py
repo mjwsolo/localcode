@@ -85,6 +85,7 @@ def run_agent_loop(
     out: "OutputManager",
 ) -> str:
     """Route to the right executor based on intent."""
+    out.start_thinking()
     repo = app.repo_root
     progress = ProgressTracker(out.print_info)
     checker = SyntaxChecker()
@@ -121,21 +122,32 @@ def run_agent_loop(
 
 def _do_create(app, user_text, messages, out, progress, checker, context, relevance):
     repo = app.repo_root
+    quality_task = _is_quality_sensitive_task(user_text)
+    aggressive_quality_task = _needs_aggressive_quality_pass(user_text)
 
     # GATHER
     progress.start("gathering context")
     related = relevance.find_related(user_text, repo, max_files=2)
     ctx = context.build_for_create(user_text, repo, related)
+    if quality_task:
+        progress.start("extracting product cues")
+        out.set_stage("extracting product cues")
 
     # WRITE
     progress.start("generating code")
     out.set_stage("generating code")
-    prompt = f"{ctx}\n\nWrite the COMPLETE code in a code block:\nFILENAME: <filename>\n```python\ncomplete code\n```"
-    response = app.engine.generate_once([
-        {"role": "system", "content": SYSTEM_PROMPTS["create"]},
-        *messages[-4:],
-        {"role": "user", "content": prompt},
-    ])
+    prompt = _build_create_prompt(ctx, user_text, quality_task)
+    response = _generate_text(
+        app,
+        [
+            {"role": "system", "content": SYSTEM_PROMPTS["create"]},
+            *messages[-4:],
+            {"role": "user", "content": prompt},
+        ],
+        out,
+        stage="generating code",
+        stream_preview=quality_task,
+    )
 
     filename, code = _parse_code_response(response, user_text)
     if not code:
@@ -146,9 +158,11 @@ def _do_create(app, user_text, messages, out, progress, checker, context, releva
     full = repo / filename
     full.parent.mkdir(parents=True, exist_ok=True)
     app.toolkit.changes.snapshot_before(filename, "agent")
+    progress.start(f"writing {filename}")
+    out.set_stage(f"writing {filename}")
     full.write_text(code)
     lines = len(code.splitlines())
-    out.log_tool("write_file", filename)
+    out.log_tool("write_file", f"path={filename}")
     out.tool_result(f"Written {filename} ({lines} lines)")
     progress.done("write", f"{filename} ({lines} lines)")
 
@@ -186,6 +200,34 @@ def _do_create(app, user_text, messages, out, progress, checker, context, releva
     else:
         progress.done("verify", "syntax OK")
 
+    if aggressive_quality_task and lines <= 220:
+        progress.start("refining output quality")
+        out.set_stage("refining output quality")
+        refined_response = _generate_text(
+            app,
+            [
+                {"role": "system", "content": SYSTEM_PROMPTS["create"]},
+                {"role": "user", "content": _build_refine_prompt(filename, full.read_text(errors="replace"), user_text)},
+            ],
+            out,
+            stage="refining output quality",
+            stream_preview=False,
+        )
+        _, refined_code = _parse_code_response(refined_response, filename)
+        if refined_code and refined_code.strip() and refined_code.strip() != full.read_text(errors="replace").strip():
+            app.toolkit.changes.snapshot_before(filename, "quality_refine")
+            progress.start(f"rewriting {filename}")
+            out.set_stage(f"rewriting {filename}")
+            full.write_text(refined_code)
+            lines = len(refined_code.splitlines())
+            out.log_tool("write_file", f"path={filename} (refined)")
+            out.tool_result(f"Refined {filename} ({lines} lines)")
+            verify2 = checker.check(filename, str(repo))
+            if verify2["ok"]:
+                progress.done("quality", "fidelity pass applied")
+            else:
+                progress.fail("quality", verify2["error"][:80])
+
     # CHECK DEPS
     if filename.endswith(".py"):
         progress.start("checking dependencies")
@@ -202,6 +244,10 @@ def _do_create(app, user_text, messages, out, progress, checker, context, releva
                 progress.fail("deps", dep_err[:60])
         else:
             progress.done("deps", "all imports OK")
+
+    outcome_notes = _run_outcome_checks(repo, user_text, [filename])
+    for note in outcome_notes:
+        out.print_info(note)
 
     summary = f"Created {filename} ({lines} lines). Run: python {filename}"
     out.stream(summary)
@@ -514,6 +560,96 @@ def _handle_planned(app, user_text, messages, out, progress, checker, context, r
     summary = f"Completed {len(steps)} steps for: {user_text[:60]}"
     out.stream(summary)
     return summary
+
+
+def _is_quality_sensitive_task(user_text: str) -> bool:
+    text = user_text.lower()
+    return any(token in text for token in (
+        "game", "app", "website", "dashboard", "ui", "clone", "sonic",
+        "look like", "feel like", "authentic", "polish", "playable",
+    ))
+
+
+def _needs_aggressive_quality_pass(user_text: str) -> bool:
+    text = user_text.lower()
+    return any(token in text for token in (
+        "sonic", "clone", "look like", "feel like", "authentic", "polish", "fidelity",
+    ))
+
+
+def _build_create_prompt(ctx: str, user_text: str, quality_task: bool) -> str:
+    quality = ""
+    if quality_task:
+        quality = (
+            "\nQuality bar:\n"
+            "- Make the result recognizably match the requested product or vibe.\n"
+            "- Avoid placeholder mechanics and bland scaffolding.\n"
+            "- Include concrete details that make the experience feel intentional.\n"
+            "- Return a complete runnable file, not a minimal stub.\n"
+        )
+    return (
+        f"{ctx}\n\nTask request:\n{user_text}\n"
+        f"{quality}\n"
+        "Write the COMPLETE code in a code block:\n"
+        "FILENAME: <filename>\n```python\ncomplete code\n```"
+    )
+
+
+def _build_refine_prompt(filename: str, current_code: str, user_text: str) -> str:
+    return (
+        f"The first pass works but needs more fidelity and polish.\n"
+        f"Original request: {user_text}\n\n"
+        f"Current {filename}:\n```python\n{current_code}\n```\n\n"
+        "Improve recognizability, game feel, visual clarity, and completeness without breaking runnability.\n"
+        "Return the COMPLETE updated file only.\n"
+        f"FILENAME: {filename}\n```python\ncomplete code\n```"
+    )
+
+
+def _generate_text(app, messages, out, stage: str, stream_preview: bool = False) -> str:
+    chunks: list[str] = []
+    thinking = []
+    for event in app.engine.stream_chat_events(messages, think=False):
+        if event["type"] == "thinking":
+            chunk = str(event["content"])
+            thinking.append(chunk)
+            out.feed_thinking(chunk)
+            peek = " ".join("".join(thinking).split())[-120:]
+            if peek:
+                out.set_thinking_peek(peek)
+            continue
+        if event["type"] != "content":
+            continue
+        chunk = str(event["content"])
+        chunks.append(chunk)
+        if stream_preview:
+            flat = " ".join("".join(chunks).split())
+            if flat:
+                out.set_thinking_peek(flat[-120:])
+    return "".join(chunks).strip()
+
+
+def _run_outcome_checks(repo: Path, user_text: str, files: list[str]) -> list[str]:
+    notes: list[str] = []
+    for filename in files:
+        full = repo / filename
+        if not full.is_file():
+            continue
+        if filename.endswith(".py"):
+            result = subprocess.run(
+                ["python3", "-m", "py_compile", str(full)],
+                capture_output=True,
+                text=True,
+                timeout=20,
+                cwd=str(repo),
+            )
+            if result.returncode == 0:
+                notes.append(f"outcome check: {filename} compiles cleanly")
+            else:
+                notes.append(f"outcome check: {filename} compile issue: {(result.stderr or result.stdout).splitlines()[-1][:80]}")
+        if _is_quality_sensitive_task(user_text):
+            notes.append(f"quality check: {filename} was given a refinement pass for fidelity, not just syntax")
+    return notes
 
 
 # ── Helpers ─────────────────────────────────────────────────────────

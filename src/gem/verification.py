@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import shutil
+import subprocess
 
 from .shell import run_shell
 
@@ -66,6 +67,31 @@ def build_verification_plan(repo_root: Path, bias: str = "balanced") -> list[Ver
     return deduped
 
 
+def build_outcome_verification_plan(task: str, changed_files: list[str]) -> list[VerificationStep]:
+    task_lower = task.lower()
+    plan: list[VerificationStep] = []
+    python_files = [f for f in changed_files if f.endswith(".py")]
+
+    for file_name in python_files:
+        plan.append(VerificationStep(f'python3 -m py_compile "{file_name}"', f"py_compile:{file_name}"))
+
+    if any(token in task_lower for token in ("game", "app", "ui", "website", "dashboard")) and python_files:
+        primary = python_files[0]
+        plan.append(VerificationStep(
+            f'python3 - <<\'PY\'\nimport ast, pathlib\npath = pathlib.Path("{primary}")\nast.parse(path.read_text())\nprint("ast ok:", path.name)\nPY',
+            "ast-smoke",
+        ))
+
+    seen: set[str] = set()
+    deduped: list[VerificationStep] = []
+    for step in plan:
+        if step.command in seen:
+            continue
+        deduped.append(step)
+        seen.add(step.command)
+    return deduped
+
+
 def run_verification(repo_root: Path, command: str | None = None, bias: str = "balanced") -> tuple[str, int]:
     plan = [VerificationStep(command, "user")] if command else build_verification_plan(repo_root, bias=bias)
     if not plan:
@@ -80,6 +106,28 @@ def run_verification(repo_root: Path, command: str | None = None, bias: str = "b
             continue
         result = run_shell(chosen, str(repo_root))
         outputs.append(f"[{step.label}] $ {chosen}\n{result.output}")
+        if result.returncode != 0:
+            exit_code = result.returncode
+            break
+    return "\n\n".join(outputs), exit_code
+
+
+def run_outcome_verification(repo_root: Path, task: str, changed_files: list[str]) -> tuple[str, int]:
+    plan = build_outcome_verification_plan(task, changed_files)
+    if not plan:
+        return "No outcome verification steps detected.", 0
+    outputs: list[str] = []
+    exit_code = 0
+    for step in plan:
+        result = subprocess.run(
+            step.command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            cwd=str(repo_root),
+            timeout=30,
+        )
+        outputs.append(f"[{step.label}] $ {step.command}\n{result.stdout or result.stderr}".rstrip())
         if result.returncode != 0:
             exit_code = result.returncode
             break

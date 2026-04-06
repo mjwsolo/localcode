@@ -134,6 +134,10 @@ class OutputManager:
         with self._lock:
             self._custom_stage = stage
 
+    def set_thinking_peek(self, text: str) -> None:
+        with self._lock:
+            self.state.thinking_peek = text[:120]
+
     # ── Tool calls ───────────────────────────────────────────────────
 
     def log_tool(self, name: str, args: str = "") -> int:
@@ -247,13 +251,16 @@ class OutputManager:
                 custom = getattr(self, '_custom_stage', '')
 
             # Line 1: gem label (always rotating) + timer + savings
-            gem_label = LABELS[int(elapsed) // 6 % len(LABELS)]
+            gem_label = custom or LABELS[int(elapsed) // 6 % len(LABELS)]
             cost = tokens * 0.000015
             savings = f" · ${cost:.3f} saved" if tokens > 10 else ""
 
             line1 = f"\033[32m {icon} {gem_label}... ({timer}{savings})\033[0m"
 
-            # Single line only — no second line (prevents spam)
-            sys.stderr.write(f"\r{line1}\033[K")
+            if peek:
+                line2 = peek[:max(20, cols - 6)]
+                sys.stderr.write(f"\r{line1}\033[K\n\033[2m   {line2}\033[0m\033[K\033[A")
+            else:
+                sys.stderr.write(f"\r{line1}\033[K")
             sys.stderr.flush()
             time.sleep(0.12)

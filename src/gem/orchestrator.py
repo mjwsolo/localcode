@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .diff_engine import DiffEngine, EditAction
+from .verification import run_outcome_verification
 
 if TYPE_CHECKING:
     from .app import GemApp
@@ -246,9 +247,18 @@ class Orchestrator:
 
     def _plan(self, task: str, global_ctx: GlobalContext) -> TaskPlan:
         """Use 26B to generate a task DAG."""
+        quality_bar = ""
+        if _is_quality_sensitive_task(task):
+            quality_bar = (
+                "\nQuality bar:\n"
+                "- If the task is an app, game, UI, or clone, preserve recognizability and polish.\n"
+                "- Keep the plan compact, but reserve a final refinement/review step when fidelity matters.\n"
+            )
+
         prompt = f"""You decide how many steps this task needs. Simple = fewer steps. Complex = more.
 
 TASK: {task}
+{quality_bar}
 
 EXISTING FILES:
 {global_ctx.file_tree[:1000]}
@@ -321,10 +331,19 @@ Examples:
 
         # Worker prompt: generate COMPLETE code, no truncation
         file_targets_str = ", ".join(step.file_targets) if step.file_targets else "the file"
+        quality_bar = ""
+        if _is_quality_sensitive_task(step.description) or _is_quality_sensitive_task(self.app.session.last_assistant_text or ""):
+            quality_bar = (
+                "\nQuality bar:\n"
+                "- Make the output recognizably match the requested product, vibe, or interaction style.\n"
+                "- Prefer a polished, intentional result over a bare scaffold.\n"
+                "- If this is a game or app, improve feel, clarity, and completeness while keeping it runnable.\n"
+            )
         if file_section:
             prompt = (
                 f"TASK: {step.description}\n\n"
                 f"EXISTING FILES:{file_section}\n\n"
+                f"{quality_bar}\n"
                 f"Return the COMPLETE updated file. Do NOT truncate or abbreviate.\n"
                 f"Write the ENTIRE file from start to finish.\n\n"
                 f"FILE: {file_targets_str}\n```\n"
@@ -332,6 +351,7 @@ Examples:
         else:
             prompt = (
                 f"TASK: {step.description}\n\n"
+                f"{quality_bar}\n"
                 f"Write the COMPLETE file. Do NOT truncate or use '# ... rest of code'.\n"
                 f"Write EVERY line from start to finish.\n\n"
                 f"FILE: {file_targets_str}\n```\n"
@@ -412,12 +432,32 @@ Examples:
                     except Exception:
                         pass
 
+        changed_files = [f for s in plan.steps for f in s.file_targets]
+        syntax_notes = _syntax_review(global_ctx.repo_root, changed_files)
+        outcome_output, outcome_code = run_outcome_verification(global_ctx.repo_root, task, changed_files)
+        quality_bar = ""
+        if _is_quality_sensitive_task(task):
+            quality_bar = (
+                "\nExtra review rules:\n"
+                "- Penalize generic or low-fidelity output for app, game, UI, or clone requests.\n"
+                "- A runnable but bland placeholder should not score above 75.\n"
+                "- A recognizable, polished result that matches the request can score 85+.\n"
+            )
+
         prompt = f"""Score this implementation. Be practical, not perfectionist.
 
 TASK: {task}
+{quality_bar}
 
 FILES CREATED:
 {modified_files[:6000]}
+
+HARNESS CHECKS:
+{syntax_notes or 'No harness checks available.'}
+
+OUTCOME VERIFICATION:
+exit={outcome_code}
+{outcome_output[:2500]}
 
 Score 0-100:
 - 80+: Code runs and does what was asked. Minor issues ok.
@@ -513,7 +553,8 @@ Fix what caused the failures. Return valid JSON only."""
         # Use draft model (e2b) for workers when available.
         # With OLLAMA_MAX_LOADED_MODELS=2, both stay loaded — no swap penalty.
         draft_model = self.app.config.runtime.draft_model
-        if draft_model and draft_model != self.app.runtime_model:
+        quality_sensitive = _is_quality_sensitive_task(step.description)
+        if draft_model and draft_model != self.app.runtime_model and not quality_sensitive:
             try:
                 worker_config = replace(
                     self.app.config.runtime,
@@ -561,3 +602,41 @@ Fix what caused the failures. Return valid JSON only."""
                 depends_on=list(item.get("depends_on", [])),
             ))
         return steps
+
+
+def _is_quality_sensitive_task(text: str) -> bool:
+    lowered = text.lower()
+    return any(token in lowered for token in (
+        "game", "app", "website", "dashboard", "ui", "clone", "sonic",
+        "look like", "feel like", "authentic", "polish", "playable",
+    ))
+
+
+def _syntax_review(repo_root: Path, files: list[str]) -> str:
+    notes: list[str] = []
+    seen: set[str] = set()
+    for fpath in files:
+        if fpath in seen:
+            continue
+        seen.add(fpath)
+        full = repo_root / fpath
+        if not full.is_file():
+            continue
+        if full.suffix == ".py":
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ["python3", "-m", "py_compile", str(full)],
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                    cwd=str(repo_root),
+                )
+                if result.returncode == 0:
+                    notes.append(f"{fpath}: syntax OK")
+                else:
+                    err = (result.stderr or result.stdout).splitlines()
+                    notes.append(f"{fpath}: syntax error: {(err[-1] if err else 'unknown')[:120]}")
+            except Exception as exc:
+                notes.append(f"{fpath}: syntax check failed: {exc}")
+    return "\n".join(notes)
