@@ -812,8 +812,15 @@ def main(argv: list[str] | None = None) -> None:
     app = GemApp(config=config, cwd=Path.cwd(), profile_name=args.profile, model_name=args.model)
     try:
         app.run()
+    except KeyboardInterrupt:
+        print("\n  Exiting.")
+    except Exception:
+        pass
     finally:
-        app.close()
+        try:
+            app.close()
+        except Exception:
+            pass
 
 
 def _gpu_memory_unlocked() -> bool:
