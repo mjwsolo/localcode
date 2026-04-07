@@ -18,7 +18,7 @@ def _strip_thinking_tokens(text: str) -> str:
     # Strip actual channel tags if present
     text = re.sub(r"<\|channel>thought\n?", "", text)
     text = re.sub(r"<channel\|>\n?", "", text)
-    return text.strip()
+    return text
 from .tool_parsing import (
     build_tool_result_message,
     build_tool_response,
@@ -429,6 +429,8 @@ class GemRuntimeGateway:
         last_error: Exception | None = None
         for attempt in range(max(1, self.config.max_retries + 1)):
             try:
+                # Accumulate tool call deltas (OpenAI streams them incrementally)
+                pending_tools: dict[int, dict] = {}  # index -> {id, name, arguments}
                 with self.client.stream("POST", self.endpoint, json=payload) as response:
                     response.raise_for_status()
                     for line in response.iter_lines():
@@ -442,10 +444,21 @@ class GemRuntimeGateway:
                         if "error" in data:
                             raise RuntimeErrorWithContext(data["error"])
                         message = self._extract_message(data)
-                        # Yield tool_calls from streaming if present
-                        tool_calls = message.get("tool_calls")
-                        if tool_calls:
-                            yield {"type": "tool_calls", "tool_calls": tool_calls}
+                        # Accumulate tool call deltas
+                        tool_calls = message.get("tool_calls") or []
+                        for tc in tool_calls:
+                            idx = tc.get("index", 0)
+                            fn = tc.get("function", {})
+                            if idx not in pending_tools:
+                                pending_tools[idx] = {
+                                    "id": tc.get("id", f"call_{idx}"),
+                                    "type": "function",
+                                    "function": {"name": "", "arguments": ""},
+                                }
+                            if fn.get("name"):
+                                pending_tools[idx]["function"]["name"] = fn["name"]
+                            if fn.get("arguments"):
+                                pending_tools[idx]["function"]["arguments"] += fn["arguments"]
                         thinking = message.get("thinking")
                         if thinking:
                             yield {"type": "thinking", "content": thinking}
@@ -457,7 +470,12 @@ class GemRuntimeGateway:
                             final_msg = data.get("message", {})
                             final_tools = final_msg.get("tool_calls")
                             if final_tools:
-                                yield {"type": "tool_calls", "tool_calls": final_tools}
+                                for ft in final_tools:
+                                    idx = ft.get("index", len(pending_tools))
+                                    pending_tools[idx] = ft
+                # Yield accumulated tool calls at the end
+                if pending_tools:
+                    yield {"type": "tool_calls", "tool_calls": list(pending_tools.values())}
                 return
             except Exception as exc:
                 last_error = exc

@@ -385,6 +385,6 @@ def run_text_tool_loop(
     permissions: "PermissionManager | None" = None,
 ) -> str:
     """Compatibility wrapper that now delegates to Gem's unified execution loop."""
-    from .agent_loop import run_agent_loop
+    from .agent import run_agent_loop
 
     return run_agent_loop(app, user_text, composed_messages, out)
