@@ -803,9 +803,9 @@ def _generate_text(
             chunk = str(event["content"])
             thinking.append(chunk)
             out.feed_thinking(chunk)
-            peek = _summarize_live_preview("".join(thinking))
-            if peek:
-                out.set_thinking_peek(peek)
+            if use_thinking:
+                # Stream thinking live in reasoning mode
+                out.set_thinking_peek("".join(thinking)[-120:])
             continue
         if event["type"] != "content":
             continue
