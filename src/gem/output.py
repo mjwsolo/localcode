@@ -164,7 +164,25 @@ class OutputManager:
         idx = len(self.state.tool_actions)
         self.state.tool_actions.append(ToolAction(name=name, args=args))
         self._emit_event("tool_start", name=name, args=args[:200], index=str(idx))
-        sys.stdout.write(f"\033[32m  ● {name}\033[0m \033[2m{args[:60]}\033[0m\n")
+        # Human-readable tool display
+        if name == "bash":
+            sys.stdout.write(f"\033[2m  $\033[0m \033[2m{args[:70]}\033[0m\n")
+        elif name == "read_file":
+            sys.stdout.write(f"\033[2m  reading\033[0m {args[:60]}\n")
+        elif name == "write_file":
+            sys.stdout.write(f"\033[32m  writing\033[0m {args[:60]}\n")
+        elif name == "edit_file":
+            sys.stdout.write(f"\033[33m  editing\033[0m {args[:60]}\n")
+        elif name == "grep":
+            sys.stdout.write(f"\033[2m  searching\033[0m \033[3m{args[:60]}\033[0m\n")
+        elif name == "list_files":
+            sys.stdout.write(f"\033[2m  listing\033[0m {args[:60]}\n")
+        elif name == "glob":
+            sys.stdout.write(f"\033[2m  finding\033[0m \033[3m{args[:60]}\033[0m\n")
+        elif name == "web_search":
+            sys.stdout.write(f"\033[2m  searching web\033[0m \033[3m{args[:60]}\033[0m\n")
+        else:
+            sys.stdout.write(f"\033[2m  {name}\033[0m \033[2m{args[:60]}\033[0m\n")
         sys.stdout.flush()
         self._start_indicator()  # resume indicator
         return idx
@@ -190,13 +208,11 @@ class OutputManager:
         )
         self._stop_indicator()
         if error:
-            sys.stdout.write(f"\033[31m    ⎿ {result[:80]}\033[0m\n")
+            sys.stdout.write(f"\033[31m    → {result[:80]}\033[0m\n")
         else:
             lines = result.strip().splitlines()
-            if "Added" in result and "removed" in result:
-                sys.stdout.write(f"\033[2m    ⎿ {result[:80]}\033[0m\n")
-            elif lines:
-                sys.stdout.write(f"\033[2m    ⎿ {lines[0][:80]}\033[0m\n")
+            if lines:
+                sys.stdout.write(f"\033[2m    → {lines[0][:80]}\033[0m\n")
         sys.stdout.flush()
         self._start_indicator()
 
@@ -276,12 +292,10 @@ class OutputManager:
                 peek = self.state.thinking_peek
                 custom = getattr(self, '_custom_stage', '')
 
-            # Line 1: gem label (always rotating) + timer + savings
+            # Line 1: stage label + timer
             gem_label = custom or LABELS[int(elapsed) // 6 % len(LABELS)]
-            cost = tokens * 0.000015
-            savings = f" · ${cost:.3f} saved" if tokens > 10 else ""
 
-            line1 = f"\033[32m {icon} {gem_label}... ({timer}{savings})\033[0m"
+            line1 = f"\033[32m {icon} {gem_label}... ({timer})\033[0m"
 
             if peek:
                 line2 = peek[:max(20, cols - 6)]

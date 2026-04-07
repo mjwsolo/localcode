@@ -9,7 +9,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from .agent import AgentRunner
+from .agent import run_agent_loop
 from .agent_background import launch_background_agent
 from .app import GemApp
 from .benchmarks import compare_explicit_models, compare_gguf_models, compare_laptop_runtime_modes, run_task_benchmarks
@@ -657,9 +657,10 @@ def main(argv: list[str] | None = None) -> None:
                 # Fall through to run as a regular agent task
                 app = GemApp(config=config, cwd=Path.cwd(), profile_name=args.profile, model_name=args.model)
                 try:
-                    outcome = AgentRunner(app).run(args.prompt, auto_verify=True)
-                    if outcome.verification_output:
-                        console.print(outcome.verification_output)
+                    composed = [{"role": "user", "content": args.prompt}]
+                    result = run_agent_loop(app, args.prompt, composed, app.out)
+                    if result:
+                        console.print(result)
                 finally:
                     app.close()
                 return
@@ -747,9 +748,10 @@ def main(argv: list[str] | None = None) -> None:
     if args.command in {"agent", "agent-runner"}:
         app = GemApp(config=config, cwd=Path.cwd(), profile_name=args.profile, model_name=args.model)
         try:
-            outcome = AgentRunner(app).run(args.prompt, auto_verify=True)
-            if outcome.verification_output:
-                console.print(outcome.verification_output)
+            composed = [{"role": "user", "content": args.prompt}]
+            result = run_agent_loop(app, args.prompt, composed, app.out)
+            if result:
+                console.print(result)
         finally:
             app.close()
         return
@@ -803,19 +805,22 @@ def main(argv: list[str] | None = None) -> None:
         if best and best != config.runtime.model:
             config.runtime.model = best
 
-    # Always show mode picker for TurboQuant configs
-    if (config.runtime.provider == "llama_cpp"
-            and config.runtime.kv_cache_type_v.startswith("turbo")
-            and not getattr(args, "prompt", None)):
-        config = _pick_runtime_mode(config, console)
+    show_mode_picker = (
+        config.runtime.provider == "llama_cpp"
+        and config.runtime.kv_cache_type_v.startswith("turbo")
+        and not getattr(args, "prompt", None)
+    )
 
     app = GemApp(config=config, cwd=Path.cwd(), profile_name=args.profile, model_name=args.model)
+    app._show_mode_picker = show_mode_picker
     try:
         app.run()
     except KeyboardInterrupt:
         print("\n  Exiting.")
-    except Exception:
-        pass
+    except Exception as exc:
+        import traceback
+        console.print(f"[red]  Error: {exc}[/]")
+        traceback.print_exc()
     finally:
         try:
             app.close()
@@ -835,40 +840,6 @@ def _gpu_memory_unlocked() -> bool:
         return False
 
 
-def _pick_runtime_mode(config, console) -> "AppConfig":
-    """Simple mode picker."""
-    import subprocess
-
-    # Auto-unlock GPU if needed
-    if not _gpu_memory_unlocked():
-        print("\n  GPU needs a one-time unlock (resets on reboot).")
-        if input("  Allow? [Y/n]: ").strip().lower() in ("", "y", "yes"):
-            subprocess.run(["sudo", "sysctl", "iogpu.wired_limit_mb=14336"])
-
-    gpu_ok = _gpu_memory_unlocked()
-    if gpu_ok:
-        import tty, termios
-        print("\n  1. Fast         27 tok/s  32K")
-        print("  2. Reasoning    26 tok/s  32K")
-        sys.stdout.write("  > ")
-        sys.stdout.flush()
-        fd = sys.stdin.fileno()
-        old = termios.tcgetattr(fd)
-        try:
-            tty.setraw(fd)
-            ch = sys.stdin.read(1)
-        finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old)
-        if ch == "2":
-            config.runtime.laptop_26b_runtime_mode = "turbo-think"
-            print("Reasoning\n")
-        else:
-            config.runtime.laptop_26b_runtime_mode = "turbo"
-            print("Fast\n")
-    else:
-        config.runtime.laptop_26b_runtime_mode = "speed"
-
-    return config
 
 
 def _auto_select_model(config) -> str:

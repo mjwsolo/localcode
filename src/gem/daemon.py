@@ -216,17 +216,15 @@ class TaskRunner:
         try:
             # Late import to avoid circular dependency
             from .app import GemApp
-            from .agent import AgentRunner
+            from .agent import run_agent_loop
 
             app = GemApp(
                 config=self.config,
                 cwd=Path(task.cwd),
             )
             try:
-                outcome = AgentRunner(app).run(task.prompt, auto_verify=True)
-                task.result = outcome.answer
-                if outcome.verification_output:
-                    task.result += f"\n\n--- Verification (exit {outcome.verification_code}) ---\n{outcome.verification_output}"
+                composed = [{"role": "user", "content": task.prompt}]
+                task.result = run_agent_loop(app, task.prompt, composed, app.out)
                 task.status = "done"
             finally:
                 app.close()

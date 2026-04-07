@@ -20,7 +20,6 @@ from .composer import compose_messages
 from .browser import browser_status, ensure_browser_mcp, find_browser_tool
 from .config import AppConfig, ensure_home_dirs, save_config
 from .context import build_context_block, find_repo_root, git_diff, git_status, list_repo_files, read_file
-from .agent import AgentRunner
 from .agent_background import launch_background_agent
 from .cartridge import build_repo_cartridge
 from .indexer import build_index, load_index, search_index
@@ -98,7 +97,7 @@ _SLASH_COMMANDS = [
     "/help", "/status", "/model", "/files", "/find", "/index",
     "/read", "/add", "/drop", "/context", "/diff", "/apply",
     "/shell", "/bg", "/jobs", "/log", "/verify",
-    "/agent", "/agentbg",
+    "/agentbg",
     "/tools", "/skills", "/mcp", "/permissions",
     "/search", "/history", "/browser", "/voice",
     "/thinking", "/timeline",
@@ -212,12 +211,18 @@ class GemApp:
         self.permissions = PermissionStore(self.repo_root)
         self.store.save(self.session)
         history_path = ensure_home_dirs() / "prompt_history.txt"
+        from prompt_toolkit.styles import Style
         self.prompt = PromptSession(
             history=FileHistory(str(history_path)),
             auto_suggest=AutoSuggestFromHistory(),
             completer=GemCompleter(self.repo_root),
             complete_while_typing=False,
             complete_in_thread=True,
+            style=Style.from_dict({
+                "bottom-toolbar": "noreverse #888888 bg:default",
+                "": "bg:#2d2d2d",
+                "prompt": "bg:#2d2d2d #ffffff",
+            }),
         )
         self.approvals = ApprovalQueue(self.console, self.prompt)
         self.session_allows: set[str] = set()
@@ -322,7 +327,11 @@ class GemApp:
 
     def run(self) -> None:
         self.console.print(self._welcome_view())
-        self.console.print()
+        # Mode picker right after banner
+        if getattr(self, "_show_mode_picker", False):
+            self._pick_mode()
+        else:
+            self.console.print()
         # Show last messages if resuming a session
         if len(self.session.messages) > 0:
             recent = self.session.messages[-4:]
@@ -407,7 +416,15 @@ class GemApp:
                     self.tool_cache.invalidate_all()
                     self.console.print(f"  [dim yellow]files changed externally: {', '.join(changes[:5])}[/]")
                 self.console.rule(style="dim")
-                raw = self.prompt.prompt(self._prompt_label()).strip()
+                import sys
+                sys.stdout.write("\033[5 q")  # blinking bar cursor
+                sys.stdout.flush()
+                raw = self.prompt.prompt(
+                    self._prompt_label(),
+                    bottom_toolbar=self._bottom_toolbar,
+                ).strip()
+                sys.stdout.write("\033[0 q")  # restore default cursor
+                sys.stdout.flush()
             except (EOFError, KeyboardInterrupt):
                 self.out.done()
                 self.console.print("\nExiting.")
@@ -436,6 +453,19 @@ class GemApp:
         if parts:
             return f"> ({', '.join(parts)}) "
         return "> "
+
+    def _bottom_toolbar(self) -> str:
+        """Status bar: model · context left · path."""
+        # Estimate context usage from session messages
+        chars = sum(len(str(m.get("content", ""))) for m in self.session.messages)
+        tokens_used = chars // 4
+        ctx_limit = 32_000
+        pct_left = max(0, 100 - int(tokens_used / ctx_limit * 100))
+        mode = self.config.runtime.laptop_26b_runtime_mode
+        mode_label = "fast" if not mode.endswith("-think") else "reasoning"
+        model_short = self.runtime_model.split("/")[-1] if "/" in self.runtime_model else self.runtime_model
+        path = f"~/{self.repo_root.name}" if self.repo_root != Path.home() else "~"
+        return f" {model_short} {mode_label} · {pct_left}% left · {path}"
 
     def _check_clipboard_image(self) -> None:
         """Silently check if clipboard has a new image."""
@@ -478,11 +508,57 @@ class GemApp:
         banner_text = self._banner()
         return Panel(
             Align.center(banner_text),
-            title="[bold]◆  L O C A L  code[/]",
+            title="[bold]◆ LOCALcode[/]",
             border_style="green",
             style="green",
             expand=True,
         )
+
+    def _pick_mode(self) -> None:
+        """Mode picker shown after banner."""
+        import subprocess, sys, tty, termios
+        # Auto-unlock GPU if needed
+        try:
+            r = subprocess.run(["sysctl", "-n", "iogpu.wired_limit_mb"],
+                               capture_output=True, text=True, timeout=2)
+            gpu_ok = int(r.stdout.strip()) >= 14000
+        except Exception:
+            gpu_ok = False
+        if not gpu_ok:
+            print("  GPU needs a one-time unlock (resets on reboot).")
+            if input("  Allow? [Y/n]: ").strip().lower() in ("", "y", "yes"):
+                subprocess.run(["sudo", "sysctl", "iogpu.wired_limit_mb=14336"])
+                gpu_ok = True
+        if gpu_ok:
+            print("  1. \033[1mFast\033[0m         27 tok/s  32K context")
+            print("  2. \033[1mReasoning\033[0m    26 tok/s  32K context")
+            ch = ""
+            # Try single-keypress read, fall back to input()
+            try:
+                fd = sys.stdin.fileno()
+                old = termios.tcgetattr(fd)
+                try:
+                    sys.stdout.write("  > ")
+                    sys.stdout.flush()
+                    tty.setraw(fd)
+                    ch = sys.stdin.read(1)
+                finally:
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old)
+            except Exception:
+                try:
+                    ch = input("  > ").strip()
+                except EOFError:
+                    ch = "1"
+            sys.stdout.write(f"\r                    \n")
+            if ch == "2":
+                self.config.runtime.laptop_26b_runtime_mode = "turbo-think"
+                sys.stdout.write(f"\033[32m  reasoning ✓\033[0m\n")
+            else:
+                self.config.runtime.laptop_26b_runtime_mode = "turbo"
+                sys.stdout.write(f"\033[32m  fast ✓\033[0m\n")
+            sys.stdout.flush()
+        else:
+            self.config.runtime.laptop_26b_runtime_mode = "speed"
 
     def _confirm(self, prompt: str, default: bool = False) -> bool:
         suffix = " [Y/n] " if default else " [y/N] "
@@ -829,11 +905,6 @@ class GemApp:
             output, code = run_verification(self.repo_root, arg or None, bias=self.profile.verification_bias)
             self.store.append_event(self.session, "verify", f"exit={code} {arg or guess_verify_command(self.repo_root) or 'none'}")
             self.console.print(Panel(output[-6000:], title=f"Verification exit={code}"))
-            return True
-        if name == "/agent":
-            outcome = AgentRunner(self).run(arg, auto_verify=True)
-            if outcome.verification_output:
-                self.console.print(Panel(outcome.verification_output[-4000:], title=f"Verification exit={outcome.verification_code}"))
             return True
         if name == "/agentbg":
             job_id = launch_background_agent(arg, self.repo_root, self.profile.key, self.runtime_model)
@@ -1398,7 +1469,7 @@ class GemApp:
         try:
             # State machine agent loop: harness controls sequencing, model generates content.
             # Based on Codex/Claude analysis: GATHER → WRITE → VERIFY → FIX → DONE
-            from .agent_loop import run_agent_loop
+            from .agent import run_agent_loop
             assistant_text = run_agent_loop(
                 self, user_text, composed_messages, self.out,
             )
@@ -1424,7 +1495,7 @@ class GemApp:
                     self.store.append_event(self.session, "exec:reactive_compact", "Compacted context after runtime overflow", error=str(exc)[:200])
                     self.store.save(self.session)
                     try:
-                        from .agent_loop import run_agent_loop
+                        from .agent import run_agent_loop
                         assistant_text = run_agent_loop(self, user_text, composed_messages, self.out)
                         retried = True
                     except Exception:

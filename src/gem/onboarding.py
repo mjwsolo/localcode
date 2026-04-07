@@ -20,7 +20,7 @@ def onboarding_panel(config: AppConfig, model_name: str, profile_name: str) -> P
             "quick start:",
             "  /help        - commands",
             "  /tools       - available tools",
-            "  /agent <task> - agentic mode",
+            "  just type    - start coding",
             "  /undo        - revert changes",
             "  /paste       - attach image",
         ]
