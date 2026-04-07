@@ -81,6 +81,24 @@ GEMMA_PROFILES: dict[str, ModelProfile] = {
         retrieval_budget=6,
         context_strategy="broad",
     ),
+    "gemma4-26b-laptop": ModelProfile(
+        key="gemma4-26b-laptop",
+        display_name="Gemma 4 26B Laptop",
+        default_model="gemma26b-iq3",
+        family="gemma4",
+        feature_variant="balanced",
+        recommended_context_chars=14000,
+        advertised_context_window=256000,
+        summary="Disciplined 26B profile for 16 GB Apple Silicon laptops: tight context, patch-first execution.",
+        supports_vision=True,
+        supports_native_system=True,
+        tool_strategy="native",
+        agent_steps=3,
+        approval_style="balanced",
+        verification_bias="balanced",
+        retrieval_budget=4,
+        context_strategy="tight",
+    ),
     "gemma4-31b": ModelProfile(
         key="gemma4-31b",
         display_name="Gemma 4 31B Dense",
@@ -107,6 +125,7 @@ MLX_MODEL_IDS: dict[str, str] = {
     "gemma4-e2b": "mlx-community/gemma-4-e4b-it-8bit",       # no e2b MLX exists, use e4b
     "gemma4-e4b": "mlx-community/gemma-4-e4b-it-8bit",
     "gemma4-26b-moe": "mlx-community/gemma-4-26b-a4b-it-4bit",
+    "gemma4-26b-laptop": "mlx-community/gemma-4-26b-a4b-it-4bit",
     "gemma4-31b": "mlx-community/gemma-4-31b-it-4bit",
 }
 
@@ -115,12 +134,15 @@ ALIASES = {
     "e2b": "gemma4-e2b",
     "e4b": "gemma4-e4b",
     "26b": "gemma4-26b-moe",
+    "26b-laptop": "gemma4-26b-laptop",
+    "26blaptop": "gemma4-26b-laptop",
     "26b-moe": "gemma4-26b-moe",
     "31b": "gemma4-31b",
     "gemma4:e2b": "gemma4-e2b",
     "gemma4:e4b": "gemma4-e4b",
     "gemma4:26b": "gemma4-26b-moe",
     "gemma4:26b-moe": "gemma4-26b-moe",
+    "gemma4:26b-laptop": "gemma4-26b-laptop",
     "gemma4:31b": "gemma4-31b",
 }
 
@@ -134,6 +156,8 @@ def infer_profile_from_model(model_name: str) -> ModelProfile | None:
             return profile
     if "31b" in name:
         return GEMMA_PROFILES["gemma4-31b"]
+    if "26b-laptop" in name:
+        return GEMMA_PROFILES["gemma4-26b-laptop"]
     if "26b" in name:
         return GEMMA_PROFILES["gemma4-26b-moe"]
     return None

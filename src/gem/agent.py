@@ -139,11 +139,12 @@ class AgentRunner:
         )
 
     def _run_agent_step(self, prompt: str, display: GemLiveDisplay | None = None) -> str:
-        """Run a single agent step using the app's engine with live display."""
+        """Run a single agent step using the app's primary unified execution loop."""
         from .composer import compose_messages
         from .context import build_context_block
         from .prompts import build_system_prompt
         from .project_context import load_project_context
+        from .agent_loop import run_agent_loop
 
         ctx_chars = self.app._effective_context_chars()
         context = build_context_block(
@@ -164,11 +165,7 @@ class AgentRunner:
             prompt,
         )
 
-        tool_enabled = self.app.profile.tool_strategy == "native"
-        if tool_enabled:
-            return self.app._run_tool_loop_streaming(composed, stream=True)
-        else:
-            return self.app._run_stream_simple(composed, stream=True)
+        return run_agent_loop(self.app, prompt, composed, self.app.out)
 
     @staticmethod
     def _build_task_labels(task: str, max_steps: int, auto_verify: bool) -> list[str]:

@@ -103,13 +103,14 @@ class SessionStore:
                 )
         return matches[0] if matches else None
 
-    def append_event(self, session: SessionState, event_type: str, detail: str) -> None:
-        session.events.append(
-            {
-                "time": utc_now(),
-                "type": event_type,
-                "detail": detail,
-            }
-        )
+    def append_event(self, session: SessionState, event_type: str, detail: str, **metadata: str) -> None:
+        event = {
+            "time": utc_now(),
+            "type": event_type,
+            "detail": detail,
+        }
+        if metadata:
+            event.update({k: str(v) for k, v in metadata.items()})
+        session.events.append(event)
         session.events = session.events[-200:]
         self.save(session)

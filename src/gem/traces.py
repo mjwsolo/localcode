@@ -10,6 +10,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from .config import ensure_home_dirs
 from .session import SessionStore
 
 
@@ -24,7 +25,6 @@ class EventType(str, Enum):
 class SessionLogger:
     """Real-time session logger that writes events to JSONL files in ~/.gem/logs/."""
 
-    LOG_DIR = Path.home() / ".gem" / "logs"
     COMPRESS_AFTER_DAYS = 7
     DELETE_AFTER_DAYS = 30
 
@@ -32,6 +32,7 @@ class SessionLogger:
         self.session_id = session_id or uuid.uuid4().hex[:12]
         self.started_at = time.monotonic()
         self.start_ts = datetime.now(timezone.utc).isoformat()
+        self.LOG_DIR = ensure_home_dirs() / "logs"
         self.LOG_DIR.mkdir(parents=True, exist_ok=True)
 
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")

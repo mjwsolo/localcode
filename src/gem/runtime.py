@@ -72,8 +72,9 @@ class GemRuntimeGateway:
 
         Usage: subprocess.Popen(engine.llama_server_command("/path/to/model.gguf"))
         """
+        binary = self.config.llama_cpp_binary or "llama-server"
         cmd = [
-            "llama-server",
+            binary,
             "--model", model_path,
             "--port", str(port),
             "--ctx-size", str(self._target_num_ctx()),
@@ -81,17 +82,19 @@ class GemRuntimeGateway:
             "--flash-attn", "on",
             "--mmap",
         ]
-        # GPU layers
+        # GPU layers (explicit -ngl 0 prevents auto-fitter from using GPU on 16GB)
         ngl = self.config.llama_cpp_gpu_layers
-        if ngl > 0:
-            cmd.extend(["-ngl", str(ngl)])
+        cmd.extend(["-ngl", str(ngl)])
         # Expert offloading (MoE models: keep attention on GPU, experts on CPU)
         if self.config.llama_cpp_expert_offload:
             cmd.extend(["-ngl", "999", "-ot", "exps=CPU"])
-        # KV cache compression
-        if self.config.kv_cache_type and self.config.kv_cache_type != "f16":
-            cmd.extend(["--cache-type-k", self.config.kv_cache_type,
-                        "--cache-type-v", self.config.kv_cache_type])
+        # KV cache compression (asymmetric: q8_0 K + turbo4 V recommended)
+        ctk = self.config.kv_cache_type_k
+        ctv = self.config.kv_cache_type_v
+        if ctk and ctk != "f16":
+            cmd.extend(["--cache-type-k", ctk])
+        if ctv and ctv != "f16":
+            cmd.extend(["--cache-type-v", ctv])
         # Speculative decoding (mutual exclusion: draft model > lookup > ngram)
         if self.config.llama_cpp_draft_model:
             draft_path = self.config.llama_cpp_draft_model
@@ -127,13 +130,32 @@ class GemRuntimeGateway:
             pass
         return model_name  # fallback: return as-is
 
-    def generate_once(self, messages: list[dict[str, Any]]) -> str:
-        """Call model via /api/generate (bypasses chat template).
+    def generate_once(self, messages: list[dict[str, Any]], max_tokens: int | None = None) -> str:
+        """Call model for a one-shot generation (no streaming, no tool calls).
 
-        Uses /api/generate instead of /api/chat because Gemma 4's chat
-        template injects <|tool_response> tokens that break output.
-        No format constraint — the model outputs JSON from prompt instructions.
+        Routes to the correct endpoint per provider:
+        - Ollama: /api/generate (bypasses chat template to avoid <|tool_response> tokens)
+        - llama.cpp: /v1/chat/completions (OpenAI-compatible)
+        - MLX/HF: in-process generation
         """
+        if self.config.provider == "llama_cpp":
+            # Use OpenAI-compatible chat completions endpoint
+            result = self.chat_once(messages, tools=None, think=False,
+                                     num_predict=max_tokens or 4096)
+            msg = result.get("message", {})
+            content = (msg.get("content", "") or "").strip()
+            # Fallback: if content is empty, thinking may contain the real response
+            if not content:
+                content = (msg.get("thinking", "") or "").strip()
+            return content
+
+        if self.config.provider == "mlx-local":
+            return self._mlx_generate(messages)
+
+        if self.config.provider == "huggingface-local":
+            return self._hf_generate(messages)
+
+        # Ollama: use /api/generate to bypass chat template
         parts = []
         for msg in messages:
             role = msg.get("role", "user")
@@ -147,8 +169,7 @@ class GemRuntimeGateway:
         prompt = "\n".join(parts) + "\nAssistant:"
 
         base = self.config.base_url.rstrip("/")
-        opts = self._options()
-        opts["num_predict"] = 4096
+        opts = self._options(num_predict_override=max_tokens or 4096)
 
         payload = {
             "model": self.config.model,
@@ -213,10 +234,12 @@ class GemRuntimeGateway:
         if self.config.quant_preset == "smallest":
             return min(num_ctx, 2048)
         if self.config.quant_preset == "fastest":
-            return min(num_ctx, 3072)
+            # TurboQuant KV cache is tiny (~374 MiB at 32K), allow more context
+            turbo = self.config.kv_cache_type_v.startswith("turbo")
+            return min(num_ctx, 16384 if turbo else 3072)
         return num_ctx
 
-    def _options(self, num_ctx_override: int | None = None) -> dict[str, Any]:
+    def _options(self, num_ctx_override: int | None = None, num_predict_override: int | None = None) -> dict[str, Any]:
         opts: dict[str, Any] = {
             "temperature": self.config.temperature,
             "num_ctx": self._target_num_ctx(num_ctx_override),
@@ -226,6 +249,8 @@ class GemRuntimeGateway:
         if self.config.mode == "fast":
             opts["temperature"] = min(opts["temperature"], 0.15)
             opts["num_predict"] = 4096  # cap generation for speed
+        if num_predict_override is not None:
+            opts["num_predict"] = max(64, int(num_predict_override))
         return opts
 
     def chat_once(
@@ -234,6 +259,7 @@ class GemRuntimeGateway:
         tools: list[dict[str, Any]] | None = None,
         think: bool = True,
         format: dict[str, Any] | str | None = None,
+        num_predict: int | None = None,
     ) -> dict[str, Any]:
         if self.config.provider == "mlx-local":
             # Inject tool schemas into system prompt for MLX
@@ -257,7 +283,7 @@ class GemRuntimeGateway:
                     return {"message": {"content": parsed.content, "tool_calls": parsed.to_ollama_format()}}
             return {"message": {"content": content, "tool_calls": []}}
 
-        payload = self._payload(messages, stream=False, tools=tools, think=think)
+        payload = self._payload(messages, stream=False, tools=tools, think=think, num_predict=num_predict)
         # Structured output: Ollama grammar-constrains output to match this schema
         if format is not None:
             payload["format"] = format
@@ -286,6 +312,7 @@ class GemRuntimeGateway:
         tools: list[dict[str, Any]] | None = None,
         think: bool = True,
         num_ctx: int | None = None,
+        num_predict: int | None = None,
     ) -> Iterator[dict[str, Any]]:
         if self.config.provider == "mlx-local":
             effective_messages = messages
@@ -353,7 +380,7 @@ class GemRuntimeGateway:
                     yield {"type": "content", "content": chunk}
             return
 
-        payload = self._payload(messages, stream=True, tools=tools, think=think, num_ctx=num_ctx)
+        payload = self._payload(messages, stream=True, tools=tools, think=think, num_ctx=num_ctx, num_predict=num_predict)
         last_error: Exception | None = None
         for attempt in range(max(1, self.config.max_retries + 1)):
             try:
@@ -397,8 +424,9 @@ class GemRuntimeGateway:
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
+        num_predict: int | None = None,
     ) -> Iterator[str]:
-        for event in self.stream_chat_events(messages, tools):
+        for event in self.stream_chat_events(messages, tools, num_predict=num_predict):
             if event["type"] == "content":
                 yield str(event["content"])
 
@@ -409,8 +437,9 @@ class GemRuntimeGateway:
         tools: list[dict[str, Any]] | None = None,
         think: bool = True,
         num_ctx: int | None = None,
+        num_predict: int | None = None,
     ) -> dict[str, Any]:
-        opts = self._options(num_ctx_override=num_ctx)
+        opts = self._options(num_ctx_override=num_ctx, num_predict_override=num_predict)
         if self.config.provider == "llama_cpp":
             extra: dict[str, Any] = {
                 "n_gpu_layers": self.config.llama_cpp_gpu_layers,
@@ -420,19 +449,20 @@ class GemRuntimeGateway:
             # Speed: expert offloading — keep attention on GPU, experts on CPU
             if self.config.llama_cpp_expert_offload:
                 extra["ot"] = "exps=CPU"
-            # Speed: KV cache compression
-            if self.config.kv_cache_type and self.config.kv_cache_type != "f16":
-                extra["cache_type_k"] = self.config.kv_cache_type
-                extra["cache_type_v"] = self.config.kv_cache_type
+            # Speed: KV cache compression (asymmetric K/V)
+            if self.config.kv_cache_type_k and self.config.kv_cache_type_k != "f16":
+                extra["cache_type_k"] = self.config.kv_cache_type_k
+            if self.config.kv_cache_type_v and self.config.kv_cache_type_v != "f16":
+                extra["cache_type_v"] = self.config.kv_cache_type_v
             payload: dict[str, Any] = {
                 "model": self.config.model,
                 "stream": stream,
                 "messages": messages,
                 "temperature": opts["temperature"],
-                "n_ctx": opts["num_ctx"],
-                "cache_prompt": True,
-                "extra_body": extra,
+                "chat_template_kwargs": {"enable_thinking": think},
             }
+            if "num_predict" in opts:
+                payload["max_tokens"] = opts["num_predict"]
             if tools:
                 payload["tools"] = tools
             return payload
@@ -457,10 +487,15 @@ class GemRuntimeGateway:
             if not choices:
                 return {}
             delta = choices[0].get("delta") or choices[0].get("message") or {}
-            return {
+            result: dict[str, Any] = {
                 "content": delta.get("content", ""),
                 "tool_calls": delta.get("tool_calls") or [],
             }
+            # Gemma 4 thinking: llama.cpp returns reasoning in reasoning_content
+            thinking = delta.get("reasoning_content", "")
+            if thinking:
+                result["thinking"] = thinking
+            return result
         return data.get("message", {})
 
     # ── Local backends ───────────────────────────────────────────────────

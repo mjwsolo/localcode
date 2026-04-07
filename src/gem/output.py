@@ -82,6 +82,17 @@ class OutputManager:
         self._lock = threading.Lock()
         self._indicator_thread: threading.Thread | None = None
         self._indicator_running = False
+        self._event_callback = None
+
+    def set_event_callback(self, callback) -> None:
+        self._event_callback = callback
+
+    def _emit_event(self, event_type: str, **payload) -> None:
+        if self._event_callback is not None:
+            try:
+                self._event_callback(event_type, payload)
+            except Exception:
+                pass
 
     # ── Phase transitions ────────────────────────────────────────────
 
@@ -98,6 +109,7 @@ class OutputManager:
             else:
                 # Keep accumulated state (tokens, peek) between tool rounds
                 self.state.thinking_peek = ""
+        self._emit_event("thinking_start", reset=str(reset).lower())
         self._start_indicator()
 
     def start_streaming(self) -> None:
@@ -105,12 +117,14 @@ class OutputManager:
         self._stop_indicator()
         with self._lock:
             self.state.phase = Phase.STREAMING
+        self._emit_event("stream_start")
 
     def done(self) -> None:
         """Finished — cleanup."""
         self._stop_indicator()
         with self._lock:
             self.state.phase = Phase.DONE
+        self._emit_event("done")
         sys.stdout.write("\n")
         sys.stdout.flush()
 
@@ -119,6 +133,7 @@ class OutputManager:
         with self._lock:
             self.state.phase = Phase.ERROR
             self.state.error = msg
+        self._emit_event("error", message=msg[:240])
         sys.stdout.write(f"\033[31m  error: {msg}\033[0m\n")
         sys.stdout.flush()
 
@@ -133,10 +148,13 @@ class OutputManager:
         """Override the indicator label (e.g. 'editing hello.py')."""
         with self._lock:
             self._custom_stage = stage
+        self._emit_event("stage", stage=stage[:120])
 
     def set_thinking_peek(self, text: str) -> None:
         with self._lock:
             self.state.thinking_peek = text[:120]
+        if text.strip():
+            self._emit_event("thinking_peek", text=text[:120])
 
     # ── Tool calls ───────────────────────────────────────────────────
 
@@ -145,6 +163,7 @@ class OutputManager:
         self._stop_indicator()  # pause indicator to print cleanly
         idx = len(self.state.tool_actions)
         self.state.tool_actions.append(ToolAction(name=name, args=args))
+        self._emit_event("tool_start", name=name, args=args[:200], index=str(idx))
         sys.stdout.write(f"\033[32m  ● {name}\033[0m \033[2m{args[:60]}\033[0m\n")
         sys.stdout.flush()
         self._start_indicator()  # resume indicator
@@ -163,6 +182,12 @@ class OutputManager:
         if idx >= 0 and idx < len(self.state.tool_actions):
             self.state.tool_actions[idx].status = "error" if error else "done"
             self.state.tool_actions[idx].result = result
+        self._emit_event(
+            "tool_result",
+            error=str(error).lower(),
+            index=str(idx),
+            result=result[:240],
+        )
         self._stop_indicator()
         if error:
             sys.stdout.write(f"\033[31m    ⎿ {result[:80]}\033[0m\n")
@@ -184,6 +209,7 @@ class OutputManager:
         with self._lock:
             self.state.content_chunks.append(chunk)
             self.state.tokens += max(1, len(chunk) // 4)
+        self._emit_event("content", chunk=chunk[:240], chars=str(len(chunk)))
         sys.stdout.write(chunk)
         sys.stdout.flush()
 

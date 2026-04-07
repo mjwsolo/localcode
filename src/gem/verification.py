@@ -23,6 +23,22 @@ class VerificationStep:
     label: str
 
 
+def classify_artifact(file_name: str, task: str = "") -> str:
+    lower = file_name.lower()
+    task_lower = task.lower()
+    if lower.endswith(".py"):
+        if any(token in task_lower for token in ("app", "game", "ui", "dashboard", "server", "cli")):
+            return "python_app"
+        return "python_module"
+    if lower.endswith((".sh", ".bash")):
+        return "shell_script"
+    if lower.endswith((".html", ".css", ".js", ".ts", ".tsx", ".jsx")):
+        return "web_asset"
+    if lower.endswith((".json", ".toml", ".yaml", ".yml")):
+        return "config"
+    return "generic"
+
+
 def _has_any(repo_root: Path, *names: str) -> bool:
     return any((repo_root / name).exists() for name in names)
 
@@ -70,17 +86,40 @@ def build_verification_plan(repo_root: Path, bias: str = "balanced") -> list[Ver
 def build_outcome_verification_plan(task: str, changed_files: list[str]) -> list[VerificationStep]:
     task_lower = task.lower()
     plan: list[VerificationStep] = []
+    for file_name in changed_files:
+        artifact = classify_artifact(file_name, task)
+        if artifact in {"python_app", "python_module"}:
+            plan.append(VerificationStep(f'python3 -m py_compile "{file_name}"', f"py_compile:{file_name}"))
+        if artifact == "python_app":
+            plan.append(VerificationStep(
+                f'python3 - <<\'PY\'\nimport ast, pathlib\npath = pathlib.Path("{file_name}")\nast.parse(path.read_text())\nprint("ast ok:", path.name)\nPY',
+                f"ast-smoke:{file_name}",
+            ))
+            plan.append(VerificationStep(
+                f'python3 - <<\'PY\'\nimport pathlib, runpy, os\nos.environ.setdefault("SDL_VIDEODRIVER", "dummy")\nos.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")\npath = pathlib.Path("{file_name}")\ncode = path.read_text()\nns = {{}}\nexec(compile(code, str(path), "exec"), ns, ns)\nprint("load ok:", path.name)\nPY',
+                f"load-smoke:{file_name}",
+            ))
+        elif artifact == "shell_script":
+            plan.append(VerificationStep(f'bash -n "{file_name}"', f"shellcheck-lite:{file_name}"))
+        elif artifact == "web_asset":
+            plan.append(VerificationStep(
+                f'python3 - <<\'PY\'\nfrom pathlib import Path\npath = Path("{file_name}")\ntext = path.read_text(errors="replace")\nassert text.strip(), "empty file"\nprint("asset ok:", path.name)\nPY',
+                f"asset-smoke:{file_name}",
+            ))
+        elif artifact == "config":
+            plan.append(VerificationStep(
+                f'python3 - <<\'PY\'\nfrom pathlib import Path\npath = Path("{file_name}")\ntext = path.read_text(errors="replace")\nassert text.strip(), "empty config"\nprint("config ok:", path.name)\nPY',
+                f"config-smoke:{file_name}",
+            ))
+
     python_files = [f for f in changed_files if f.endswith(".py")]
-
-    for file_name in python_files:
-        plan.append(VerificationStep(f'python3 -m py_compile "{file_name}"', f"py_compile:{file_name}"))
-
-    if any(token in task_lower for token in ("game", "app", "ui", "website", "dashboard")) and python_files:
-        primary = python_files[0]
-        plan.append(VerificationStep(
-            f'python3 - <<\'PY\'\nimport ast, pathlib\npath = pathlib.Path("{primary}")\nast.parse(path.read_text())\nprint("ast ok:", path.name)\nPY',
-            "ast-smoke",
-        ))
+    if any(token in task_lower for token in ("website", "dashboard", "frontend", "landing page")) and not python_files:
+        for file_name in changed_files:
+            if classify_artifact(file_name, task) == "web_asset":
+                plan.append(VerificationStep(
+                    f'python3 - <<\'PY\'\nfrom pathlib import Path\npath = Path("{file_name}")\nprint("preview bytes:", len(path.read_text(errors="replace")))\nPY',
+                    f"web-preview:{file_name}",
+                ))
 
     seen: set[str] = set()
     deduped: list[VerificationStep] = []
