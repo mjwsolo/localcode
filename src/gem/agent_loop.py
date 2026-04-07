@@ -582,8 +582,10 @@ def _do_chat(app, user_text, messages, out):
         "You have full access to the local filesystem and terminal. "
         "Keep responses concise."
     )
+    # Only keep short recent messages — exclude long code/tool output
+    recent = [m for m in messages[-6:] if len(m.get("content", "")) < 500]
     response = app.engine.generate_once(
-        [{"role": "system", "content": system}, *messages[-6:], {"role": "user", "content": user_text}],
+        [{"role": "system", "content": system}, *recent[-4:], {"role": "user", "content": user_text}],
         max_tokens=512,
     )
     out.stream(response)
