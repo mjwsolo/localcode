@@ -309,7 +309,8 @@ def _do_create(app, user_text, messages, out, progress, checker, context, releva
         for note in quality_gate:
             out.print_info(note)
 
-    summary = f"Created {filename} ({lines} lines). Run: python {filename}"
+    out.stop_thinking()
+    summary = f"\n  {lines} file(s) changed. Use /verify to run tests, /undo to revert.\n\n  Created {filename} ({lines} lines)\n  Run: python {filename}"
     out.stream(summary)
     return summary
 
@@ -558,7 +559,10 @@ def _do_search(app, user_text, out):
 
     out.log_tool("grep", pattern)
     r = subprocess.run(
-        ["grep", "-rn", "--include=*.py", "--include=*.js", "--include=*.ts", pattern, "."],
+        ["grep", "-rn", "--include=*.py", "--include=*.js", "--include=*.ts",
+         "--exclude-dir=.venv", "--exclude-dir=node_modules", "--exclude-dir=__pycache__",
+         "--exclude-dir=.git", "--exclude-dir=.tox", "--exclude-dir=dist",
+         pattern, "."],
         capture_output=True, text=True, timeout=10, cwd=str(repo),
     )
     output = r.stdout.strip()[:3000]
