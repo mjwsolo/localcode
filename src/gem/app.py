@@ -359,16 +359,12 @@ class GemApp:
         anim = threading.Thread(target=_animate, daemon=True)
         anim.start()
         try:
-            # Unload any other model first so ours gets full GPU
+            # Quick healthcheck instead of full warmup request
             import httpx as _httpx
             try:
-                for _m in ["gemma4:e4b", "gemma4:e2b"]:
-                    if _m != self.runtime_model:
-                        _httpx.post(f"{self.config.runtime.base_url}/api/generate",
-                                    json={"model": _m, "keep_alive": 0}, timeout=5)
+                _httpx.get(f"{self.config.runtime.base_url.rstrip('/')}/health", timeout=10)
             except Exception:
                 pass
-            self.engine.chat_once([{"role": "user", "content": "hi"}])
             _loading = False
             anim.join(timeout=1)
             _sys.stderr.write(f"\r\033[32m  model ready ✓       \033[0m\n\n")
