@@ -836,74 +836,24 @@ def _gpu_memory_unlocked() -> bool:
 
 
 def _pick_runtime_mode(config, console) -> "AppConfig":
-    """Arrow key mode picker. Auto-unlocks GPU if needed."""
-    modes = [
-        ("turbo",       "Fast         27 tok/s  32K"),
-        ("turbo-think", "Reasoning    26 tok/s  32K"),
-    ]
-
-    current = config.runtime.laptop_26b_runtime_mode
-    sel = next((i for i, (k, _) in enumerate(modes) if k == current), 0)
-    if sel >= len(modes):
-        sel = 0
-
-    import sys, tty, termios
-
-    def draw():
-        for i, (_, desc) in enumerate(modes):
-            if i == sel:
-                sys.stdout.write(f"\033[2K  \033[32m> {desc}\033[0m\n")
-            else:
-                sys.stdout.write(f"\033[2K    {desc}\n")
-        sys.stdout.flush()
-
-    sys.stdout.write("\n")
-    draw()
-
-    fd = sys.stdin.fileno()
-    old = termios.tcgetattr(fd)
-    try:
-        tty.setraw(fd)
-        while True:
-            ch = sys.stdin.read(1)
-            if ch in ("\r", "\n"):
-                break
-            if ch == "\x03":  # ctrl-c
-                break
-            if ch == "\x1b":
-                sys.stdin.read(1)  # [
-                arrow = sys.stdin.read(1)
-                if arrow == "A" and sel > 0:
-                    sel -= 1
-                elif arrow == "B" and sel < len(modes) - 1:
-                    sel += 1
-                sys.stdout.write(f"\033[{len(modes)}A")
-                draw()
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
-
-    config.runtime.laptop_26b_runtime_mode = modes[sel][0]
-    sys.stdout.write("\n")
+    """Simple mode picker."""
+    import subprocess
 
     # Auto-unlock GPU if needed
     if not _gpu_memory_unlocked():
-        sys.stdout.write("  GPU needs memory unlock (resets on reboot).\n")
-        sys.stdout.write("  Allow? [Y/n]: ")
-        sys.stdout.flush()
-        answer = input().strip().lower()
-        if answer in ("", "y", "yes"):
-            import subprocess
-            r = subprocess.run(
-                ["sudo", "-S", "sysctl", "iogpu.wired_limit_mb=14336"],
-                capture_output=False, text=True, timeout=30,
-            )
-            if r.returncode == 0:
-                sys.stdout.write("  \033[32mGPU unlocked.\033[0m\n\n")
-            else:
-                sys.stdout.write("  \033[33mFailed — falling back to CPU mode.\033[0m\n\n")
-                config.runtime.laptop_26b_runtime_mode = "speed"
-        else:
-            config.runtime.laptop_26b_runtime_mode = "speed"
+        print("\n  GPU needs a one-time unlock (resets on reboot).")
+        if input("  Allow? [Y/n]: ").strip().lower() in ("", "y", "yes"):
+            subprocess.run(["sudo", "sysctl", "iogpu.wired_limit_mb=14336"])
+
+    gpu_ok = _gpu_memory_unlocked()
+    if gpu_ok:
+        print("\n  1. Fast         27 tok/s  32K")
+        print("  2. Reasoning    26 tok/s  32K")
+        c = input("  [1]: ").strip()
+        config.runtime.laptop_26b_runtime_mode = "turbo-think" if c == "2" else "turbo"
+    else:
+        print("\n  Running in CPU mode (18 tok/s, 10K ctx)")
+        config.runtime.laptop_26b_runtime_mode = "speed"
 
     return config
 
