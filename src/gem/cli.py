@@ -495,9 +495,15 @@ def main(argv: list[str] | None = None) -> None:
         # Default: show status
         console.print("[bold]Speed Optimizations[/bold]\n")
         table = Table("Setting", "Value", "Effect")
+        mode = config.runtime.laptop_26b_runtime_mode
+        mode_desc = {
+            "turbo":   "GPU Turbo — 27 tok/s decode, 32K ctx, 85 tok/s prompt (sysctl required)",
+            "speed":   "CPU mmap — 18.5 tok/s decode, 10K ctx",
+            "context": "GPU Safe — 13 tok/s decode, 32K ctx (no sysctl needed)",
+        }.get(mode, mode)
+        table.add_row("Runtime mode", f"{mode} ({mode_desc})", "speed or context")
         table.add_row("KV cache K", config.runtime.kv_cache_type_k, "q8_0 = preserve key quality")
         table.add_row("KV cache V", config.runtime.kv_cache_type_v, "turbo4 = 3.8x compression, +0.23% PPL")
-        table.add_row("Expert offload", str(config.runtime.llama_cpp_expert_offload), "MoE experts on CPU, attention on GPU")
         table.add_row("Spec type", config.runtime.llama_cpp_spec_type or "(none)", "ngram-mod = 1.5-2x speedup")
         table.add_row("Draft max", str(config.runtime.llama_cpp_draft_max), "Max speculative tokens")
         table.add_row("Draft model", config.runtime.llama_cpp_draft_model or "(none)", "Small model for speculation")
@@ -797,11 +803,68 @@ def main(argv: list[str] | None = None) -> None:
         if best and best != config.runtime.model:
             config.runtime.model = best
 
+    # Interactive mode selector for TurboQuant-enabled configs
+    if (config.runtime.provider == "llama_cpp"
+            and config.runtime.kv_cache_type_v.startswith("turbo")
+            and not getattr(args, "prompt", None)):
+        config = _pick_runtime_mode(config, console)
+
     app = GemApp(config=config, cwd=Path.cwd(), profile_name=args.profile, model_name=args.model)
     try:
         app.run()
     finally:
         app.close()
+
+
+def _pick_runtime_mode(config, console) -> "AppConfig":
+    """Interactive mode picker — arrow keys to select, enter to confirm."""
+    modes = [
+        ("turbo",   "GPU Turbo (27 tok/s)  | 32K context | requires: sudo sysctl iogpu.wired_limit_mb=14336"),
+        ("speed",   "CPU Fast  (18 tok/s)  | 10K context | no setup needed"),
+        ("context", "GPU Safe  (13 tok/s)  | 32K context | no setup needed"),
+    ]
+    current = config.runtime.laptop_26b_runtime_mode
+    selected = next((i for i, (k, _) in enumerate(modes) if k == current), 0)
+
+    import sys, tty, termios
+    fd = sys.stdin.fileno()
+    try:
+        old = termios.tcgetattr(fd)
+        tty.setraw(fd)
+
+        while True:
+            # Render
+            sys.stdout.write("\r\033[K")  # clear line
+            sys.stdout.write("\033[1A\033[K" * len(modes))  # clear previous
+            for i, (key, desc) in enumerate(modes):
+                marker = "\033[32m>\033[0m " if i == selected else "  "
+                highlight = f"\033[1m{desc}\033[0m" if i == selected else f"\033[90m{desc}\033[0m"
+                sys.stdout.write(f"  {marker}{highlight}\n")
+            sys.stdout.write("  \033[90m[arrow keys to select, enter to confirm]\033[0m")
+            sys.stdout.flush()
+
+            # Read key
+            ch = sys.stdin.read(1)
+            if ch == "\r" or ch == "\n":
+                break
+            if ch == "\x1b":
+                ch2 = sys.stdin.read(1)
+                if ch2 == "[":
+                    ch3 = sys.stdin.read(1)
+                    if ch3 == "A":  # up
+                        selected = max(0, selected - 1)
+                    elif ch3 == "B":  # down
+                        selected = min(len(modes) - 1, selected + 1)
+            if ch == "q" or ch == "\x03":  # q or ctrl-c
+                break
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+    chosen_key = modes[selected][0]
+    config.runtime.laptop_26b_runtime_mode = chosen_key
+    sys.stdout.write(f"\n  \033[32mMode: {chosen_key}\033[0m\n\n")
+    sys.stdout.flush()
+    return config
 
 
 def _auto_select_model(config) -> str:

@@ -70,24 +70,39 @@ class GemRuntimeGateway:
     def llama_server_command(self, model_path: str, port: int = 8081) -> list[str]:
         """Build the optimal llama-server launch command with all speed flags.
 
+        Two runtime modes for 16GB Apple Silicon:
+        - "speed": CPU mmap (ngl=0) — fastest decode (18.5 tok/s), 10K context
+        - "context": GPU attention + CPU experts — 32K context, fast prompt eval (45 tok/s)
+
         Usage: subprocess.Popen(engine.llama_server_command("/path/to/model.gguf"))
         """
         binary = self.config.llama_cpp_binary or "llama-server"
+        mode = self.config.laptop_26b_runtime_mode
+
+        # Context mode benefits from all CPU cores for expert computation
+        threads = 10 if mode == "context" else self.config.llama_cpp_threads
         cmd = [
             binary,
             "--model", model_path,
             "--port", str(port),
             "--ctx-size", str(self._target_num_ctx()),
-            "--threads", str(self.config.llama_cpp_threads),
+            "--threads", str(threads),
             "--flash-attn", "on",
-            "--mmap",
         ]
-        # GPU layers (explicit -ngl 0 prevents auto-fitter from using GPU on 16GB)
-        ngl = self.config.llama_cpp_gpu_layers
-        cmd.extend(["-ngl", str(ngl)])
-        # Expert offloading (MoE models: keep attention on GPU, experts on CPU)
-        if self.config.llama_cpp_expert_offload:
-            cmd.extend(["-ngl", "999", "-ot", "exps=CPU"])
+
+        if mode == "turbo":
+            # Full GPU: all layers on Metal via mmap shared buffers, 2 graph splits
+            # Requires: sudo sysctl iogpu.wired_limit_mb=14336
+            cmd.extend(["--mmap", "-ngl", "999", "-fit", "off"])
+        elif mode == "context":
+            # GPU mode: attention on Metal, experts on CPU, mmap for SSD paging
+            cmd.extend(["--mmap", "-ngl", "999", "-ot", "exps=CPU"])
+        elif self.config.llama_cpp_expert_offload:
+            # Explicit expert offload (legacy config)
+            cmd.extend(["--mmap", "-ngl", "999", "-ot", "exps=CPU"])
+        else:
+            # Speed mode (default): CPU mmap, no GPU — fastest decode
+            cmd.extend(["--mmap", "-ngl", str(self.config.llama_cpp_gpu_layers)])
         # KV cache compression (asymmetric: q8_0 K + turbo4 V recommended)
         ctk = self.config.kv_cache_type_k
         ctv = self.config.kv_cache_type_v
@@ -109,9 +124,12 @@ class GemRuntimeGateway:
         elif self.config.llama_cpp_spec_type:
             cmd.extend(["--spec-type", self.config.llama_cpp_spec_type,
                         "--draft-max", str(self.config.llama_cpp_draft_max)])
-        # Batch sizes for MoE CPU inference
-        cmd.extend(["-b", str(self.config.llama_cpp_batch_size),
-                    "-ub", str(min(512, self.config.llama_cpp_batch_size))])
+        # Batch sizes — larger batches for GPU mode, smaller for CPU
+        if mode == "context":
+            cmd.extend(["-b", "2048", "-ub", "512"])  # GPU benefits from bigger batches
+        else:
+            cmd.extend(["-b", str(self.config.llama_cpp_batch_size),
+                        "-ub", str(min(512, self.config.llama_cpp_batch_size))])
         return cmd
 
     @staticmethod
@@ -234,8 +252,9 @@ class GemRuntimeGateway:
         if self.config.quant_preset == "smallest":
             return min(num_ctx, 2048)
         if self.config.quant_preset == "fastest":
-            # TurboQuant KV cache is tiny (~374 MiB at 32K), allow more context
             turbo = self.config.kv_cache_type_v.startswith("turbo")
+            if self.config.laptop_26b_runtime_mode in ("context", "turbo") and turbo:
+                return 32768  # GPU + TurboQuant: 32K context, KV cache only 355 MiB
             return min(num_ctx, 16384 if turbo else 3072)
         return num_ctx
 
