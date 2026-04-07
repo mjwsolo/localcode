@@ -836,21 +836,11 @@ def _gpu_memory_unlocked() -> bool:
 
 
 def _pick_runtime_mode(config, console) -> "AppConfig":
-    """Arrow key mode picker. Auto-detects GPU availability."""
-    gpu_ok = _gpu_memory_unlocked()
-
-    if gpu_ok:
-        modes = [
-            ("turbo",       "Fast         27 tok/s  32K"),
-            ("turbo-think", "Reasoning    26 tok/s  32K"),
-        ]
-    else:
-        modes = [
-            ("speed",       "Fast         18 tok/s  10K"),
-            ("speed-think", "Reasoning    17 tok/s  10K"),
-        ]
-        sys.stdout.write("\n  \033[33mGPU locked. Run: sudo sysctl iogpu.wired_limit_mb=14336\033[0m\n")
-        sys.stdout.flush()
+    """Arrow key mode picker. Auto-unlocks GPU if needed."""
+    modes = [
+        ("turbo",       "Fast         27 tok/s  32K"),
+        ("turbo-think", "Reasoning    26 tok/s  32K"),
+    ]
 
     current = config.runtime.laptop_26b_runtime_mode
     sel = next((i for i, (k, _) in enumerate(modes) if k == current), 0)
@@ -894,6 +884,27 @@ def _pick_runtime_mode(config, console) -> "AppConfig":
 
     config.runtime.laptop_26b_runtime_mode = modes[sel][0]
     sys.stdout.write("\n")
+
+    # Auto-unlock GPU if needed
+    if not _gpu_memory_unlocked():
+        sys.stdout.write("  GPU needs memory unlock (resets on reboot).\n")
+        sys.stdout.write("  Allow? [Y/n]: ")
+        sys.stdout.flush()
+        answer = input().strip().lower()
+        if answer in ("", "y", "yes"):
+            import subprocess
+            r = subprocess.run(
+                ["sudo", "-S", "sysctl", "iogpu.wired_limit_mb=14336"],
+                capture_output=False, text=True, timeout=30,
+            )
+            if r.returncode == 0:
+                sys.stdout.write("  \033[32mGPU unlocked.\033[0m\n\n")
+            else:
+                sys.stdout.write("  \033[33mFailed — falling back to CPU mode.\033[0m\n\n")
+                config.runtime.laptop_26b_runtime_mode = "speed"
+        else:
+            config.runtime.laptop_26b_runtime_mode = "speed"
+
     return config
 
 
