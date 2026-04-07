@@ -819,9 +819,10 @@ def main(argv: list[str] | None = None) -> None:
 def _pick_runtime_mode(config, console) -> "AppConfig":
     """Interactive mode picker — arrow keys to select, enter to confirm."""
     modes = [
-        ("turbo",   "GPU Turbo (27 tok/s)  | 32K context | requires: sudo sysctl iogpu.wired_limit_mb=14336"),
-        ("speed",   "CPU Fast  (18 tok/s)  | 10K context | no setup needed"),
-        ("context", "GPU Safe  (13 tok/s)  | 32K context | no setup needed"),
+        ("turbo",       "GPU Turbo        27 tok/s | 32K ctx | thinking off"),
+        ("turbo-think", "GPU Turbo+Think  26 tok/s | 32K ctx | deeper reasoning"),
+        ("speed",       "CPU Fast         18 tok/s | 10K ctx | no GPU setup"),
+        ("speed-think", "CPU Fast+Think   17 tok/s | 10K ctx | deeper reasoning"),
     ]
     current = config.runtime.laptop_26b_runtime_mode
     selected = next((i for i, (k, _) in enumerate(modes) if k == current), 0)
