@@ -576,16 +576,9 @@ def _do_search(app, user_text, out):
 # ── Feature: CHAT (no tools) ──────────────────────────────────────
 
 def _do_chat(app, user_text, messages, out):
-    system = (
-        "You are a local coding assistant running on the user's machine. "
-        "You CAN read files, write files, edit files, and run bash commands. "
-        "You have full access to the local filesystem and terminal. "
-        "Keep responses concise."
-    )
-    # Only keep short recent messages — exclude long code/tool output
-    recent = [m for m in messages[-6:] if len(m.get("content", "")) < 500]
+    # Simple chat — no system prompt (IQ3_S hallucinates with complex system prompts)
     response = app.engine.generate_once(
-        [{"role": "system", "content": system}, *recent[-4:], {"role": "user", "content": user_text}],
+        [{"role": "user", "content": user_text}],
         max_tokens=512,
     )
     out.stream(response)
