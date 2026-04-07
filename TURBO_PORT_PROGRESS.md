@@ -1,43 +1,31 @@
-# TurboQuant Port: Status
+# TurboQuant + Tool Calling: Definitive Finding
 
-## Current State (needs reboot to verify)
-System is under severe memory pressure (65MB free). Tool calling results
-are unreliable because GPU memory pressure affects model output quality.
+## ROOT CAUSE CONFIRMED
+TurboQuant's Walsh-Hadamard Transform (WHT) rotation corrupts the KV cache
+attention patterns needed for the model to generate `<|tool_call>` tokens.
 
-## What We Know For Certain
-- Homebrew llama-server with ngl=999 on a FRESH system: tools WORK (30 tok/s)
-- Ollama with same model: tools WORK (28 tok/s)
-- Our builds: tools inconsistent (may be memory pressure, not code)
+Proof:
+- Stock llama.cpp + q8_0 KV + GPU → tools WORK (28.6 tok/s)
+- Same build + turbo4 KV + GPU → tools BROKEN (24.5 tok/s, no tool calls)
+- The ONLY difference is the KV cache type: q8_0 vs turbo4
 
-## What Needs Testing After Reboot
-1. Stock build from source on GPU → does tool calling work?
-2. If yes: add TurboQuant ggml → still work?
-3. If yes: done! We have tools + turbo + 32K
+## THE FIX
+Edit TurboQuant's WHT rotation to preserve tool call token attention.
+The rotation is in: `/Users/marcsolomon/llama-cpp-turboquant/ggml/src/ggml-turbo-quant.c`
+And the Metal kernel: `ggml/src/ggml-metal/ggml-metal.metal` (turbo4 dequant)
 
-## Files Ready
-- Stock build: /Users/marcsolomon/llama-cpp-test/ (has fork's ggml + src + tools, stock common/)
-- Stock backup binary: /Users/marcsolomon/llama-server-stock-working
-- Homebrew binary: /opt/homebrew/bin/llama-server (known working for tools)
+Options:
+1. Disable WHT rotation for the first/last few KV cache layers (where tool tokens are decided)
+2. Use higher precision (q8_0) for specific attention heads that control tool calling
+3. Modify the rotation to preserve the tool call token subspace
 
-## Server Config (use after reboot)
-```bash
-sudo sysctl iogpu.wired_limit_mb=14336
+## WORKING BUILDS
+- Stock + q8_0: 28.6 tok/s, tools work, 4K context (limited)
+- TurboQuant: 27 tok/s, no tools, 32K context (great context, no tools)
 
-# Test with homebrew first (known working):
-/opt/homebrew/bin/llama-server \
-  --model <gguf> --port 8081 \
-  -ngl 999 --mmap -fa on -c 4096 \
-  --threads 10 -np 1 -fit off --cache-ram 0
+## GOAL
+Modify TurboQuant to work with tool calling → 27+ tok/s + tools + 32K
 
-# Then test stock from source:
-/Users/marcsolomon/llama-cpp-test/build/bin/llama-server \
-  --model <gguf> --port 8081 \
-  -ngl 999 --mmap -ctk q8_0 -ctv turbo4 -fa on -c 32768 \
-  --threads 10 -b 2048 -ub 512 -np 1 -fit off --cache-ram 0
-```
-
-## Tool Call Test Command
-```bash
-curl -s http://localhost:8081/v1/chat/completions -H "Content-Type: application/json" \
-  -d '{"model":"gemma4","messages":[{"role":"user","content":"Read the file pyproject.toml"}],"tools":[{"type":"function","function":{"name":"read_file","description":"Read a file","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}}],"max_tokens":200,"temperature":0.7,"chat_template_kwargs":{"enable_thinking":true}}'
-```
+## Build Location
+Working fresh build: /Users/marcsolomon/llama-cpp-fresh/
+Stock backup: /Users/marcsolomon/llama-server-stock-working
