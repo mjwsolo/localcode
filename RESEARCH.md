@@ -162,3 +162,25 @@ Or: add TurboQuant to homebrew's ggml package.
 
 **For now: use homebrew binary at 4K-8K context (30 tok/s + tools).**
 TurboQuant 32K context can come later once ggml integration is fixed.
+
+### SOLUTION FOUND: Stock llama.cpp + Surgical TurboQuant Port (2026-04-07)
+
+**CONFIRMED: Fresh stock llama.cpp from source with bundled ggml + GPU = tool calling WORKS.**
+The earlier "stock build that failed" had contaminated files from the fork.
+
+**Working binary saved:** `/Users/marcsolomon/llama-server-stock-working`
+- Tools: ✅ `read_file({"path":"pyproject.toml"})`
+- Speed: ~30 tok/s on GPU
+- Context: 4K (no TurboQuant KV yet)
+
+**Plan: Add turbo4 KV cache to stock build, one file at a time:**
+1. ggml.h — add GGML_TYPE_TURBO4_0 enum
+2. ggml-common.h — add block_turbo4 struct
+3. ggml-turbo-quant.c — core quantize/dequantize
+4. ggml-cpu.c — CPU backend dispatch
+5. ggml-metal.metal — Metal kernels
+6. arg.cpp — CLI flag
+7. llama-kv-cache.cpp — registration
+8. Test after EACH step — tool calling must keep working
+
+**The goal: 30 tok/s + tool calling + turbo4 32K context**
