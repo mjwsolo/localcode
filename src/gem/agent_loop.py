@@ -813,7 +813,8 @@ def _generate_text(
     first_token_s: float | None = None
     out.set_thinking_peek("contacting model and waiting for first tokens")
     total_tokens = 0
-    for event in app.engine.stream_chat_events(messages, think=False, num_ctx=num_ctx_override, num_predict=max_tokens):
+    use_thinking = app.config.runtime.laptop_26b_runtime_mode.endswith("-think")
+    for event in app.engine.stream_chat_events(messages, think=use_thinking, num_ctx=num_ctx_override, num_predict=max_tokens):
         if event["type"] == "thinking":
             chunk = str(event["content"])
             thinking.append(chunk)
