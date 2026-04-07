@@ -177,8 +177,18 @@ def _do_create(app, user_text, messages, out, progress, checker, context, releva
 
     filename, code = _parse_code_response(response, user_text)
     if not code:
-        out.stream(response)
-        return response
+        # Try harder: maybe the closing ``` was cut off
+        fence_match = re.search(r'```\w*\n(.+)', response, re.DOTALL)
+        if fence_match and len(fence_match.group(1).strip()) > 50:
+            code = fence_match.group(1).strip()
+            # Remove trailing ``` if present
+            if code.endswith("```"):
+                code = code[:-3].strip()
+            if not filename:
+                filename, _ = _parse_code_response("", user_text)
+        if not code:
+            out.stream(response)
+            return response
     out.print_info(f"target file: {filename}")
 
     # APPLY
