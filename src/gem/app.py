@@ -1326,24 +1326,8 @@ class GemApp:
         if cartridge_result:
             context = f"{context}\n\nRepo cartridge:\n{cartridge_result}"
 
-        system_prompt = build_system_prompt(self.profile)
-        task_appendix = build_task_appendix(user_text)
-        if task_appendix:
-            system_prompt = f"{system_prompt}\n{task_appendix}"
-
-        # Output style
-        if self._output_style:
-            system_prompt = f"{system_prompt}\n\nOutput style: {self._output_style}"
-
-        # GEM.md project context injection
-        project_ctx = load_project_context(self.repo_root)
-        if project_ctx:
-            system_prompt = f"{system_prompt}\n\n{project_ctx}"
-
-        if plan_result:
-            system_prompt = f"{system_prompt}\n\nExecution mode: {self.config.runtime.mode}.\nPlanner note: {plan_result.summary}"
-        if skill_result:
-            system_prompt = f"{system_prompt}\n\nActive skills:\n{skill_result}"
+        # Keep system prompt short — agent_loop adds task-specific prompts
+        system_prompt = "You are a helpful coding assistant."
 
         # Handle audio: for HF/MLX pass natively, for Ollama transcribe first
         effective_text = user_text
