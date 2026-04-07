@@ -812,29 +812,36 @@ def _generate_text(
     started_at = time.time()
     first_token_s: float | None = None
     out.set_thinking_peek("contacting model and waiting for first tokens")
-    # Thinking only for CHAT — code generation degenerates with thinking at IQ3_S
+    total_tokens = 0
     for event in app.engine.stream_chat_events(messages, think=False, num_ctx=num_ctx_override, num_predict=max_tokens):
         if event["type"] == "thinking":
             chunk = str(event["content"])
             thinking.append(chunk)
             out.feed_thinking(chunk)
-            if use_thinking:
-                # Stream thinking live in reasoning mode
-                out.set_thinking_peek("".join(thinking)[-120:])
+            total_tokens += max(1, len(chunk) // 4)
+            # Always show token count so user knows model is working
+            all_text = "".join(thinking)
+            lines = all_text.count("\n")
+            out.set_thinking_peek(f"generating ({total_tokens} tokens, {lines} lines)")
+            if first_token_s is None:
+                first_token_s = time.time() - started_at
             continue
         if event["type"] != "content":
             continue
         chunk = str(event["content"])
         if chunk and first_token_s is None:
             first_token_s = time.time() - started_at
-            out.set_thinking_peek("model responded, assembling output")
+        total_tokens += max(1, len(chunk) // 4)
         chunks.append(chunk)
-        if stream_preview:
-            peek = _summarize_live_preview("".join(chunks))
-            if peek:
-                out.set_thinking_peek(peek)
+        all_text = "".join(chunks)
+        lines = all_text.count("\n")
+        out.set_thinking_peek(f"generating ({total_tokens} tokens, {lines} lines)")
     app._record_runtime_sample(first_token_s=first_token_s, total_s=time.time() - started_at)
-    return "".join(chunks).strip()
+    # Use content if available, fall back to thinking
+    result = "".join(chunks).strip()
+    if not result and thinking:
+        result = "".join(thinking).strip()
+    return result
 
 
 def _run_quality_gate(app, repo: Path, user_text: str, filename: str, full: Path, outcome_notes: list[str], checker) -> list[str]:
