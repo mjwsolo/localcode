@@ -775,42 +775,14 @@ class ProjectIndex:
 # ── System Prompts (TINY) ───────────────────────────────────────────
 
 SYSTEM_PROMPTS = {
-    "create": (
-        "You are a coding assistant. You write complete, working code. "
-        "Always put code inside a fenced code block with the language specified. "
-        "Make code self-contained and ready to run."
-    ),
-    "edit": (
-        "You are a code editor. You make precise, minimal changes to existing code. "
-        "Only change what is necessary. Preserve the original style and structure."
-    ),
-    "chat": (
-        "You are a helpful coding assistant. Answer questions clearly and concisely. "
-        "When relevant, include short code examples."
-    ),
-    "fix": (
-        "You are a bug fixer. Diagnose the root cause, then fix it with minimal changes. "
-        "Do not refactor or improve unrelated code."
-    ),
-    "review": (
-        "You are a code reviewer. Identify bugs, security issues, and logic errors. "
-        "Be specific about line numbers and severity."
-    ),
-    "explain": (
-        "You are a code explainer. Describe what the code does and why. "
-        "Be concise. Focus on intent, not line-by-line narration."
-    ),
-    "run": (
-        "You are a code execution assistant. Help the user run their code, "
-        "interpret output, and debug runtime errors."
-    ),
-    "search": (
-        "You are a code search assistant. Help find functions, classes, patterns, "
-        "and files in the codebase. Be precise about file paths."
-    ),
-    "plan": (
-        "You are a task planner. Break down coding tasks into clear, ordered steps. "
-        "Each step should be a single concrete action."
-    ),
-    "classify": "You classify user intent into exactly one category. Respond with a single word.",
+    "create": "You write complete runnable code.",
+    "edit": "You edit code precisely.",
+    "chat": "You are helpful.",
+    "fix": "You fix bugs.",
+    "review": "You review code for bugs.",
+    "explain": "You explain code concisely.",
+    "run": "You help run code.",
+    "search": "You search codebases.",
+    "plan": "You plan coding tasks.",
+    "classify": "Classify intent. One word.",
 }
