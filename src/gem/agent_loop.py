@@ -745,8 +745,8 @@ def _build_quality_refine_prompt(filename: str, user_text: str, code: str, issue
 
 
 def _create_output_budget(user_text: str, quality_task: bool, compact_task: bool) -> int:
-    # No artificial cap — model stops at EOS token naturally.
-    return -1
+    # Generous max — model stops at EOS naturally, this is just a safety net.
+    return 4096
 
 
 def _should_use_planner_hints(user_text: str, quality_task: bool, compact_task: bool) -> bool:
