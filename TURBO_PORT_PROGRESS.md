@@ -29,3 +29,20 @@ Modify TurboQuant to work with tool calling → 27+ tok/s + tools + 32K
 ## Build Location
 Working fresh build: /Users/marcsolomon/llama-cpp-fresh/
 Stock backup: /Users/marcsolomon/llama-server-stock-working
+
+## DEFINITIVE ROOT CAUSE (2026-04-07)
+TurboQuant's kernel-level WHT rotation (simd_shuffle_xor in Metal)
+corrupts the attention patterns needed for tool call token generation.
+
+## POTENTIAL FIXES
+1. Disable kernel-level WHT for turbo4 KV cache (keep simple 4-bit quant)
+2. Use RotorQuant instead (https://github.com/scrya-com/rotorquant)
+   - "beats TurboQuant: better PPL, 28% faster decode"
+   - Uses simpler block-diagonal rotations
+   - Drop-in llama.cpp integration
+3. Use turbo4 with "nowht" mode for V cache (mentioned in TurboQuant+ docs)
+
+## NEXT SESSION PLAN
+1. Try RotorQuant — it's reportedly better AND simpler
+2. Or: disable WHT in turbo4 and test if plain 4-bit PolarQuant works for tools
+3. The quantization itself (4-bit with codebooks) should work — it's the ROTATION that breaks tools
