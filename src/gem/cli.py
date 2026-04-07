@@ -817,40 +817,35 @@ def main(argv: list[str] | None = None) -> None:
 
 
 def _pick_runtime_mode(config, console) -> "AppConfig":
-    """Simple mode picker — press 1-4 to select."""
-    modes = [
-        ("turbo",       "27 tok/s", "32K ctx", "GPU, fast"),
-        ("turbo-think", "26 tok/s", "32K ctx", "GPU, reasoning"),
-        ("speed",       "18 tok/s", "10K ctx", "CPU, stable"),
-        ("speed-think", "17 tok/s", "10K ctx", "CPU, reasoning"),
-    ]
+    """Mode picker — press 1-4 or enter for default."""
     current = config.runtime.laptop_26b_runtime_mode
-    selected = next((i for i, (k, _, _, _) in enumerate(modes) if k == current), 0)
+    modes = [
+        ("turbo",       "1", "27 tok/s  32K  fast"),
+        ("turbo-think", "2", "26 tok/s  32K  reasoning"),
+        ("speed",       "3", "18 tok/s  10K  no GPU setup"),
+        ("speed-think", "4", "17 tok/s  10K  reasoning"),
+    ]
+    default_idx = next((i for i, (k, _, _) in enumerate(modes) if k == current), 0)
 
-    import sys, tty, termios
+    print("\n  GPU modes (requires sysctl):")
+    for i in range(2):
+        k, n, desc = modes[i]
+        marker = "*" if i == default_idx else " "
+        print(f"   {marker}{n}. {desc}")
+    print("  CPU modes:")
+    for i in range(2, 4):
+        k, n, desc = modes[i]
+        marker = "*" if i == default_idx else " "
+        print(f"   {marker}{n}. {desc}")
 
-    print()
-    for i, (key, speed, ctx, desc) in enumerate(modes):
-        marker = ">" if i == selected else " "
-        print(f"  {marker} {i+1}. {speed}  {ctx}  {desc}")
-    sys.stdout.write("  [1-4]: ")
-    sys.stdout.flush()
+    choice = input(f"  [{default_idx+1}]: ").strip()
 
-    fd = sys.stdin.fileno()
-    try:
-        old = termios.tcgetattr(fd)
-        tty.setraw(fd)
-        ch = sys.stdin.read(1)
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
-
-    if ch in "1234":
-        selected = int(ch) - 1
+    if choice in "1234" and choice:
+        selected = int(choice) - 1
+    else:
+        selected = default_idx
 
     config.runtime.laptop_26b_runtime_mode = modes[selected][0]
-    _, speed, ctx, desc = modes[selected]
-    print(f" {speed} {ctx} {desc}")
-    print()
     return config
 
 
