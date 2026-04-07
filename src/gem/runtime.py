@@ -90,7 +90,7 @@ class GemRuntimeGateway:
             "--flash-attn", "on",
         ]
 
-        if mode == "turbo":
+        if mode in ("turbo", "turbo-think"):
             # Full GPU: all layers on Metal via mmap shared buffers, 2 graph splits
             # Requires: sudo sysctl iogpu.wired_limit_mb=14336
             cmd.extend(["--mmap", "-ngl", "999", "-fit", "off"])
@@ -157,8 +157,8 @@ class GemRuntimeGateway:
         - MLX/HF: in-process generation
         """
         if self.config.provider == "llama_cpp":
-            # Use OpenAI-compatible chat completions endpoint
-            result = self.chat_once(messages, tools=None, think=False,
+            use_think = self.config.laptop_26b_runtime_mode.endswith("-think")
+            result = self.chat_once(messages, tools=None, think=use_think,
                                      num_predict=max_tokens or 4096)
             msg = result.get("message", {})
             content = (msg.get("content", "") or "").strip()
@@ -253,7 +253,7 @@ class GemRuntimeGateway:
             return min(num_ctx, 2048)
         if self.config.quant_preset == "fastest":
             turbo = self.config.kv_cache_type_v.startswith("turbo")
-            if self.config.laptop_26b_runtime_mode in ("context", "turbo") and turbo:
+            if self.config.laptop_26b_runtime_mode in ("context", "turbo", "turbo-think") and turbo:
                 return 32768  # GPU + TurboQuant: 32K context, KV cache only 355 MiB
             return min(num_ctx, 16384 if turbo else 3072)
         return num_ctx
