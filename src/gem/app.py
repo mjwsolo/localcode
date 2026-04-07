@@ -1326,8 +1326,8 @@ class GemApp:
         if cartridge_result:
             context = f"{context}\n\nRepo cartridge:\n{cartridge_result}"
 
-        # Keep system prompt short — agent_loop adds task-specific prompts
-        system_prompt = "You are a helpful coding assistant."
+        # No system prompt here — agent_loop sets task-specific ones
+        system_prompt = ""
 
         # Handle audio: for HF/MLX pass natively, for Ollama transcribe first
         effective_text = user_text

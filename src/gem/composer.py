@@ -25,9 +25,10 @@ def compose_messages(
     user_msg = _build_user_message(user_text, images, profile, provider)
 
     if profile.supports_native_system:
-        messages = [{"role": "system", "content": system_prompt}]
-        # Only inject repo context for substantive tasks, not simple chat
-        # Short messages like "hi" don't need project file listings
+        messages = []
+        if system_prompt.strip():
+            messages.append({"role": "system", "content": system_prompt})
+        # Only inject repo context for substantive tasks
         if context_block.strip() and len(user_text) > 20:
             messages.append({"role": "user", "content": f"[Context]\n{context_block}"})
             messages.append({"role": "assistant", "content": "Got it."})
