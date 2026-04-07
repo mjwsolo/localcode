@@ -273,7 +273,10 @@ class GemRuntimeGateway:
             opts["temperature"] = min(opts["temperature"], 0.15)
             opts["num_predict"] = 4096  # cap generation for speed
         if num_predict_override is not None:
-            opts["num_predict"] = max(64, int(num_predict_override))
+            if num_predict_override == -1:
+                opts["num_predict"] = -1  # unlimited — model stops at EOS
+            else:
+                opts["num_predict"] = max(64, int(num_predict_override))
         return opts
 
     def chat_once(
