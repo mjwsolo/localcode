@@ -141,3 +141,24 @@ should come from stock llama.cpp, not the TurboQuant fork.
 - `common/chat*.cpp` — use stock versions (they work for tools)
 - `common/jinja/` — use stock
 - Our custom patches (mmap bloat detection etc.) — re-apply on stock base
+
+### BREAKTHROUGH: Homebrew Works, Our Build Doesn't (2026-04-07 late)
+
+| Build | Tools | Speed | Context | GPU |
+|-------|-------|-------|---------|-----|
+| **Homebrew ngl=999 4K** | ✅ | **30.6 tok/s** | 4K | ✅ |
+| Homebrew ngl=999 q4_0 32K | ✅ | 13.1 tok/s | 32K | ✅ |
+| TurboQuant fork turbo4 32K | ❌ | 28.8 tok/s | 32K | ✅ |
+| TurboQuant fork q8_0 CPU | ❌ | ~18 tok/s | 10K | ❌ |
+
+**Root cause: Homebrew uses `-DLLAMA_USE_SYSTEM_GGML=ON`.**
+It links against `brew install ggml` (stock ggml) instead of the bundled ggml.
+Our builds use bundled ggml which has TurboQuant modifications that break
+tool call token generation.
+
+**Fix: Build with system ggml + add TurboQuant types to system ggml.**
+Or: just use homebrew binary with q4_0 KV (tools work, 13 tok/s at 32K).
+Or: add TurboQuant to homebrew's ggml package.
+
+**For now: use homebrew binary at 4K-8K context (30 tok/s + tools).**
+TurboQuant 32K context can come later once ggml integration is fixed.
