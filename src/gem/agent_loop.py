@@ -168,7 +168,7 @@ def _do_create(app, user_text, messages, out, progress, checker, context, releva
         quality_task,
         related,
     )
-    out.stop_thinking()  # stop indicator so progress steps show sequentially
+    out.start_streaming()  # stop indicator so progress steps show sequentially
     post_generate_hint = (
         app.planner_checkpoint_hint(
             "create:post_generate",
@@ -312,7 +312,7 @@ def _do_create(app, user_text, messages, out, progress, checker, context, releva
         for note in quality_gate:
             out.print_info(note)
 
-    out.stop_thinking()
+    out.start_streaming()
     summary = f"\n  {lines} file(s) changed. Use /verify to run tests, /undo to revert.\n\n  Created {filename} ({lines} lines)\n  Run: python {filename}"
     out.stream(summary)
     return summary
