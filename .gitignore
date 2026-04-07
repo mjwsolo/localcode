@@ -9,6 +9,7 @@ build/
 .venv/
 venv/
 env/
+new/
 .env
 .DS_Store
 *.gguf
