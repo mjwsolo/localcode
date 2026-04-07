@@ -1,48 +1,31 @@
-# TurboQuant + Tool Calling: Definitive Finding
+# Current State: Need Reboot Then Final Tests
 
-## ROOT CAUSE CONFIRMED
-TurboQuant's Walsh-Hadamard Transform (WHT) rotation corrupts the KV cache
-attention patterns needed for the model to generate `<|tool_call>` tokens.
+## DEFINITIVE FINDINGS
+1. Stock llama.cpp (fresh build) + GPU + q8_0 KV: **tools WORK, 28.6 tok/s** ✅
+2. ANY TurboQuant fork build: **tools BROKEN** ❌  
+3. Root cause: TurboQuant WHT rotation corrupts tool call attention
+4. RotorQuant fork: also based on TurboQuant, same issue
+5. System has 65MB free RAM — all results unreliable under this pressure
 
-Proof:
-- Stock llama.cpp + q8_0 KV + GPU → tools WORK (28.6 tok/s)
-- Same build + turbo4 KV + GPU → tools BROKEN (24.5 tok/s, no tool calls)
-- The ONLY difference is the KV cache type: q8_0 vs turbo4
+## WHAT WORKS RIGHT NOW
+**Stock llama.cpp + q8_0 KV + GPU at 4K context: 28.6 tok/s + tools**
 
-## THE FIX
-Edit TurboQuant's WHT rotation to preserve tool call token attention.
-The rotation is in: `/Users/marcsolomon/llama-cpp-turboquant/ggml/src/ggml-turbo-quant.c`
-And the Metal kernel: `ggml/src/ggml-metal/ggml-metal.metal` (turbo4 dequant)
+To get more context without TurboQuant:
+- q4_0 KV gives 3.56x compression but is slow under memory pressure
+- q8_0 KV gives 2x compression, 4-8K context practical
 
-Options:
-1. Disable WHT rotation for the first/last few KV cache layers (where tool tokens are decided)
-2. Use higher precision (q8_0) for specific attention heads that control tool calling
-3. Modify the rotation to preserve the tool call token subspace
+## AFTER REBOOT
+1. `sudo sysctl iogpu.wired_limit_mb=14336`
+2. Test stock build + q4_0 KV at 16K-32K with fresh memory
+3. If q4_0 at 16K gives ~25+ tok/s, that's the shipping config
+4. Then work on fixing TurboQuant rotation for tool calling
 
-## WORKING BUILDS
-- Stock + q8_0: 28.6 tok/s, tools work, 4K context (limited)
-- TurboQuant: 27 tok/s, no tools, 32K context (great context, no tools)
+## THE REAL FIX (future)
+Modify TurboQuant's quantize function to skip WHT rotation for
+the first generation position (where tool call tokens are decided).
+Or use RotorQuant's simpler 2D rotation that may not corrupt tools.
 
-## GOAL
-Modify TurboQuant to work with tool calling → 27+ tok/s + tools + 32K
-
-## Build Location
-Working fresh build: /Users/marcsolomon/llama-cpp-fresh/
-Stock backup: /Users/marcsolomon/llama-server-stock-working
-
-## DEFINITIVE ROOT CAUSE (2026-04-07)
-TurboQuant's kernel-level WHT rotation (simd_shuffle_xor in Metal)
-corrupts the attention patterns needed for tool call token generation.
-
-## POTENTIAL FIXES
-1. Disable kernel-level WHT for turbo4 KV cache (keep simple 4-bit quant)
-2. Use RotorQuant instead (https://github.com/scrya-com/rotorquant)
-   - "beats TurboQuant: better PPL, 28% faster decode"
-   - Uses simpler block-diagonal rotations
-   - Drop-in llama.cpp integration
-3. Use turbo4 with "nowht" mode for V cache (mentioned in TurboQuant+ docs)
-
-## NEXT SESSION PLAN
-1. Try RotorQuant — it's reportedly better AND simpler
-2. Or: disable WHT in turbo4 and test if plain 4-bit PolarQuant works for tools
-3. The quantization itself (4-bit with codebooks) should work — it's the ROTATION that breaks tools
+## BUILDS
+- Stock (tools work): /Users/marcsolomon/llama-cpp-fresh/build/bin/llama-server  
+- TurboQuant (fast, no tools): /Users/marcsolomon/llama-cpp-turboquant/build/bin/llama-server
+- Backup: /Users/marcsolomon/llama-server-stock-working
