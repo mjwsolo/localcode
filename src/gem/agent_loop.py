@@ -600,9 +600,9 @@ def _do_run(app, user_text, out):
 # ── Feature: CHAT (no tools) ──────────────────────────────────────
 
 def _do_chat(app, user_text, messages, out):
-    recent = [m for m in messages[-4:] if len(m.get("content", "")) < 500]
+    # messages already contains user_text from compose_messages — don't duplicate
     response = app.engine.generate_once(
-        [{"role": "system", "content": SYSTEM_PROMPTS["chat"]}, *recent, {"role": "user", "content": user_text}],
+        [{"role": "system", "content": SYSTEM_PROMPTS["chat"]}, *messages[-4:]],
         max_tokens=512,
     )
     out.stream(response)
