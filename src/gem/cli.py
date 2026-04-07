@@ -819,20 +819,20 @@ def main(argv: list[str] | None = None) -> None:
 def _pick_runtime_mode(config, console) -> "AppConfig":
     """Simple mode picker — press 1-4 to select."""
     modes = [
-        ("turbo",       "Turbo 27t/s 32K"),
-        ("turbo-think", "Turbo+Think 32K"),
-        ("speed",       "Fast 18t/s 10K"),
-        ("speed-think", "Fast+Think 10K"),
+        ("turbo",       "27 tok/s", "32K ctx", "GPU, fast"),
+        ("turbo-think", "26 tok/s", "32K ctx", "GPU, reasoning"),
+        ("speed",       "18 tok/s", "10K ctx", "CPU, stable"),
+        ("speed-think", "17 tok/s", "10K ctx", "CPU, reasoning"),
     ]
     current = config.runtime.laptop_26b_runtime_mode
-    selected = next((i for i, (k, _) in enumerate(modes) if k == current), 0)
+    selected = next((i for i, (k, _, _, _) in enumerate(modes) if k == current), 0)
 
     import sys, tty, termios
 
     print()
-    for i, (key, desc) in enumerate(modes):
+    for i, (key, speed, ctx, desc) in enumerate(modes):
         marker = ">" if i == selected else " "
-        print(f"  {marker} {i+1}. {desc}")
+        print(f"  {marker} {i+1}. {speed}  {ctx}  {desc}")
     sys.stdout.write("  [1-4]: ")
     sys.stdout.flush()
 
@@ -848,7 +848,8 @@ def _pick_runtime_mode(config, console) -> "AppConfig":
         selected = int(ch) - 1
 
     config.runtime.laptop_26b_runtime_mode = modes[selected][0]
-    print(f" {modes[selected][1]}")
+    _, speed, ctx, desc = modes[selected]
+    print(f" {speed} {ctx} {desc}")
     print()
     return config
 
