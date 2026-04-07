@@ -158,8 +158,12 @@ class GemRuntimeGateway:
         """
         if self.config.provider == "llama_cpp":
             use_think = self.config.laptop_26b_runtime_mode.endswith("-think")
+            # Thinking uses tokens from the same budget — 3x for thinking overhead
+            budget = max_tokens or 4096
+            if use_think:
+                budget = max(budget * 3, 2048)
             result = self.chat_once(messages, tools=None, think=use_think,
-                                     num_predict=max_tokens or 4096)
+                                     num_predict=budget)
             msg = result.get("message", {})
             content = (msg.get("content", "") or "").strip()
             # Fallback: if content is empty, thinking may contain the real response
