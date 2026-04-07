@@ -1479,6 +1479,14 @@ class GemApp:
         if was_compacted:
             self.console.print("[dim]  Context compacted — older messages summarized.[/]")
             self.store.save(self.session)
+            # Clear server-side KV cache so stale tokens don't persist
+            try:
+                import httpx
+                httpx.post(f"{self.config.runtime.base_url.rstrip('/')}/v1/chat/completions",
+                          json={"model": self.config.runtime.model, "messages": [], "max_tokens": 1,
+                                "cache_prompt": False}, timeout=5)
+            except Exception:
+                pass
 
         # Context budget indicator
         total_ctx = sum(len(m.get("content", "")) for m in self.session.messages)
