@@ -212,12 +212,33 @@ class GemApp:
         self.store.save(self.session)
         history_path = ensure_home_dirs() / "prompt_history.txt"
         from prompt_toolkit.styles import Style
+        from prompt_toolkit.key_binding import KeyBindings
+        kb = KeyBindings()
+
+        @kb.add("c-v")
+        def _paste_handler(event):
+            """Handle Cmd+V / Ctrl+V — check clipboard for image."""
+            # Let prompt_toolkit do the normal text paste first
+            data = event.app.clipboard.get_data()
+            if data.text:
+                event.current_buffer.insert_text(data.text)
+            # Check if clipboard has an image (empty paste = image)
+            if not data.text or not data.text.strip():
+                if clipboard_has_image():
+                    img = read_clipboard_image()
+                    if img and not any(e.base64_data == img.base64_data for e in self._pending_images):
+                        self._pending_images.append(img)
+                        import sys
+                        sys.stdout.write(f"\033[2m  image attached ({img.size_kb}KB)\033[0m\n")
+                        sys.stdout.flush()
+
         self.prompt = PromptSession(
             history=FileHistory(str(history_path)),
             auto_suggest=AutoSuggestFromHistory(),
             completer=GemCompleter(self.repo_root),
             complete_while_typing=False,
             complete_in_thread=True,
+            key_bindings=kb,
             style=Style.from_dict({
                 "bottom-toolbar": "noreverse #888888 bg:default",
                 "": "bg:#2d2d2d",
@@ -429,7 +450,11 @@ class GemApp:
                 self.console.print("\nExiting.")
                 return
             if not raw:
-                continue
+                # Empty input after paste = image-only message
+                if self._pending_images:
+                    raw = "What's in this image?"
+                else:
+                    continue
             if raw.startswith("/"):
                 should_continue = self._handle_command(raw)
                 if not should_continue:
@@ -455,11 +480,9 @@ class GemApp:
 
     def _bottom_toolbar(self) -> str:
         """Status bar: model · context left · path."""
-        # Estimate context usage from session messages
-        chars = sum(len(str(m.get("content", ""))) for m in self.session.messages)
-        tokens_used = chars // 4
-        ctx_limit = 32_000
-        pct_left = max(0, 100 - int(tokens_used / ctx_limit * 100))
+        chars_used = sum(len(str(m.get("content", ""))) for m in self.session.messages)
+        max_chars = self._effective_context_chars()
+        pct_left = max(0, 100 - int(chars_used / max(1, max_chars) * 100))
         mode = self.config.runtime.laptop_26b_runtime_mode
         mode_label = "fast" if not mode.endswith("-think") else "reasoning"
         model_short = self.runtime_model.split("/")[-1] if "/" in self.runtime_model else self.runtime_model
@@ -1565,11 +1588,6 @@ class GemApp:
                                 "cache_prompt": False}, timeout=5)
             except Exception:
                 pass
-
-        # Context budget indicator
-        total_ctx = sum(len(m.get("content", "")) for m in self.session.messages)
-        if total_ctx > max_ctx * 0.5:  # only show when over 50%
-            ContextBudgetDisplay.show(total_ctx, max_ctx)
 
         return assistant_text
 
