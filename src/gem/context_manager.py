@@ -775,7 +775,10 @@ class ProjectIndex:
 # ── System Prompts (TINY) ───────────────────────────────────────────
 
 SYSTEM_PROMPTS = {
-    "create": "You are a coding assistant.",
+    "create": (
+        "You are a coding assistant that writes complete, runnable programs. "
+        "Output code in a code block. Keep it self-contained and ready to run."
+    ),
     "edit": (
         "You edit code. Output SEARCH/REPLACE blocks:\n"
         "<<<SEARCH\nexact lines to find\n===\nreplacement lines\nSEARCH>>>\n"
