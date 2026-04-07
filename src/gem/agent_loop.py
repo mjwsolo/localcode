@@ -166,6 +166,7 @@ def _do_create(app, user_text, messages, out, progress, checker, context, releva
         quality_task,
         related,
     )
+    out.stop_thinking()  # stop indicator so progress steps show sequentially
     post_generate_hint = (
         app.planner_checkpoint_hint(
             "create:post_generate",
