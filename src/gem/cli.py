@@ -817,64 +817,39 @@ def main(argv: list[str] | None = None) -> None:
 
 
 def _pick_runtime_mode(config, console) -> "AppConfig":
-    """Interactive mode picker — number keys or arrow keys to select."""
+    """Simple mode picker — press 1-4 to select."""
     modes = [
-        ("turbo",       "GPU Turbo       27 tok/s  32K ctx"),
-        ("turbo-think", "GPU Turbo+Think 26 tok/s  32K ctx  reasoning"),
-        ("speed",       "CPU Fast        18 tok/s  10K ctx"),
-        ("speed-think", "CPU Fast+Think  17 tok/s  10K ctx  reasoning"),
+        ("turbo",       "Turbo 27t/s 32K"),
+        ("turbo-think", "Turbo+Think 32K"),
+        ("speed",       "Fast 18t/s 10K"),
+        ("speed-think", "Fast+Think 10K"),
     ]
     current = config.runtime.laptop_26b_runtime_mode
     selected = next((i for i, (k, _) in enumerate(modes) if k == current), 0)
 
     import sys, tty, termios
+
+    print()
+    for i, (key, desc) in enumerate(modes):
+        marker = ">" if i == selected else " "
+        print(f"  {marker} {i+1}. {desc}")
+    sys.stdout.write("  [1-4]: ")
+    sys.stdout.flush()
+
     fd = sys.stdin.fileno()
-
-    def render():
-        # Move cursor up to redraw (skip on first render)
-        sys.stdout.write(f"\r")
-        for i, (key, desc) in enumerate(modes):
-            if i == selected:
-                sys.stdout.write(f"\033[2K  \033[32m> {i+1}. {desc}\033[0m\n")
-            else:
-                sys.stdout.write(f"\033[2K    {i+1}. \033[90m{desc}\033[0m\n")
-        sys.stdout.write(f"\033[2K  \033[90m[1-{len(modes)}/arrows + enter]\033[0m")
-        sys.stdout.flush()
-
     try:
         old = termios.tcgetattr(fd)
         tty.setraw(fd)
-        render()
-
-        while True:
-            ch = sys.stdin.read(1)
-            if ch == "\r" or ch == "\n":
-                break
-            if ch in "1234"[:len(modes)]:
-                selected = int(ch) - 1
-                # Move cursor up to redraw
-                sys.stdout.write(f"\033[{len(modes)}A")
-                render()
-                break
-            if ch == "\x1b":
-                ch2 = sys.stdin.read(1)
-                if ch2 == "[":
-                    ch3 = sys.stdin.read(1)
-                    if ch3 == "A":
-                        selected = max(0, selected - 1)
-                    elif ch3 == "B":
-                        selected = min(len(modes) - 1, selected + 1)
-                    sys.stdout.write(f"\033[{len(modes)}A")
-                    render()
-            if ch == "q" or ch == "\x03":
-                break
+        ch = sys.stdin.read(1)
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
-    chosen_key = modes[selected][0]
-    config.runtime.laptop_26b_runtime_mode = chosen_key
-    sys.stdout.write(f"\n\n")
-    sys.stdout.flush()
+    if ch in "1234":
+        selected = int(ch) - 1
+
+    config.runtime.laptop_26b_runtime_mode = modes[selected][0]
+    print(f" {modes[selected][1]}")
+    print()
     return config
 
 
