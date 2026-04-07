@@ -816,16 +816,39 @@ def main(argv: list[str] | None = None) -> None:
         app.close()
 
 
+def _gpu_memory_unlocked() -> bool:
+    """Check if iogpu.wired_limit_mb has been raised for GPU turbo mode."""
+    import subprocess
+    try:
+        r = subprocess.run(["sysctl", "-n", "iogpu.wired_limit_mb"],
+                          capture_output=True, text=True, timeout=2)
+        val = int(r.stdout.strip())
+        return val >= 14000
+    except Exception:
+        return False
+
+
 def _pick_runtime_mode(config, console) -> "AppConfig":
-    """Arrow key mode picker."""
-    modes = [
-        ("turbo",       "Fast         27 tok/s  32K"),
-        ("turbo-think", "Reasoning    26 tok/s  32K"),
-        ("speed",       "Fast (CPU)   18 tok/s  10K"),
-        ("speed-think", "Reason (CPU) 17 tok/s  10K"),
-    ]
+    """Arrow key mode picker. Auto-detects GPU availability."""
+    gpu_ok = _gpu_memory_unlocked()
+
+    if gpu_ok:
+        modes = [
+            ("turbo",       "Fast         27 tok/s  32K"),
+            ("turbo-think", "Reasoning    26 tok/s  32K"),
+        ]
+    else:
+        modes = [
+            ("speed",       "Fast         18 tok/s  10K"),
+            ("speed-think", "Reasoning    17 tok/s  10K"),
+        ]
+        sys.stdout.write("\n  \033[33mGPU locked. Run: sudo sysctl iogpu.wired_limit_mb=14336\033[0m\n")
+        sys.stdout.flush()
+
     current = config.runtime.laptop_26b_runtime_mode
     sel = next((i for i, (k, _) in enumerate(modes) if k == current), 0)
+    if sel >= len(modes):
+        sel = 0
 
     import sys, tty, termios
 
