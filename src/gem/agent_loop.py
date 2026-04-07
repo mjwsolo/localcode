@@ -13,6 +13,7 @@ import difflib
 import json
 import re
 import subprocess
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -31,6 +32,7 @@ from .context_manager import (
     _extract_keywords,
     _list_dir,
 )
+from .verification import classify_artifact, run_outcome_verification
 
 
 # ── Intent Classifier (rule-based, LLM fallback) ───────────────────
@@ -38,7 +40,9 @@ from .context_manager import (
 def classify_intent(text: str) -> str:
     """Route user request to the right feature. Rule-based first, LLM fallback."""
     t = text.lower()
-    if any(w in t for w in ("create", "make", "new file", "generate", "scaffold", "build")):
+    if any(w in t for w in ("create", "make", "new file", "generate", "scaffold", "build", "write a", "write an", "write ")) or (
+        any(noun in t for noun in ("script", "program", "tool", "app", "game")) and any(verb in t for verb in ("write", "make", "build", "create", "generate"))
+    ):
         if any(w in t for w in ("test", "tests")):
             return "TEST"
         return "CREATE"
@@ -54,6 +58,8 @@ def classify_intent(text: str) -> str:
         return "TEST"
     if any(w in t for w in ("commit", "push", "git ", "branch", "diff", "status")):
         return "GIT"
+    if any(w in t for w in ("run ", "run it", "execute", "launch", "start it", "try it", "open it")):
+        return "CREATE"  # route to CREATE which can run bash
     if any(w in t for w in ("find", "search", "where", "grep", "locate")):
         return "SEARCH"
     if any(w in t for w in ("install", "add package", "dependency", "requirements")):
@@ -87,7 +93,7 @@ def run_agent_loop(
     """Route to the right executor based on intent."""
     out.start_thinking()
     repo = app.repo_root
-    progress = ProgressTracker(out.print_info)
+    progress = ProgressTracker(out.print_info, out.set_stage)
     checker = SyntaxChecker()
     context = ContextAssembler()
     relevance = RelevanceFinder()
@@ -124,42 +130,62 @@ def _do_create(app, user_text, messages, out, progress, checker, context, releva
     repo = app.repo_root
     quality_task = _is_quality_sensitive_task(user_text)
     aggressive_quality_task = _needs_aggressive_quality_pass(user_text)
+    compact_task = _should_use_fast_create_lane(app, user_text, [], quality_task)
 
     # GATHER
     progress.start("gathering context")
-    related = relevance.find_related(user_text, repo, max_files=2)
-    ctx = context.build_for_create(user_text, repo, related)
+    related: list[str] = []
+    if compact_task:
+        ctx = _build_compact_create_context(user_text)
+    else:
+        related = relevance.find_related(user_text, repo, max_files=2)
+        ctx = context.build_for_create(user_text, repo, related)
     if quality_task:
         progress.start("extracting product cues")
-        out.set_stage("extracting product cues")
+    route_label = "create: compact single-file path" if compact_task else "create: full generation path"
+    out.print_info(route_label)
+    use_planner_hints = app.config.runtime.planner_hints_enabled and _should_use_planner_hints(user_text, quality_task, compact_task)
+    initial_hint = app.planner_checkpoint_hint("create:start", user_text, ctx[:1200]) if use_planner_hints else None
+    if initial_hint:
+        hint_bits = [bit for bit in (initial_hint.next_action, initial_hint.likely_file, initial_hint.risk) if bit]
+        if hint_bits:
+            out.print_info("planner hint: " + " | ".join(hint_bits[:3]))
 
     # WRITE
     progress.start("generating code")
-    out.set_stage("generating code")
     prompt = _build_create_prompt(ctx, user_text, quality_task)
-    response = _generate_text(
+    response = _generate_create_response(
         app,
+        user_text,
         [
             {"role": "system", "content": SYSTEM_PROMPTS["create"]},
             *messages[-4:],
             {"role": "user", "content": prompt},
         ],
         out,
-        stage="generating code",
-        stream_preview=quality_task,
+        quality_task,
+        related,
+    )
+    post_generate_hint = (
+        app.planner_checkpoint_hint(
+            "create:post_generate",
+            user_text,
+            response[:1200],
+        )
+        if use_planner_hints else None
     )
 
     filename, code = _parse_code_response(response, user_text)
     if not code:
         out.stream(response)
         return response
+    out.print_info(f"target file: {filename}")
 
     # APPLY
     full = repo / filename
     full.parent.mkdir(parents=True, exist_ok=True)
     app.toolkit.changes.snapshot_before(filename, "agent")
     progress.start(f"writing {filename}")
-    out.set_stage(f"writing {filename}")
     full.write_text(code)
     lines = len(code.splitlines())
     out.log_tool("write_file", f"path={filename}")
@@ -168,7 +194,7 @@ def _do_create(app, user_text, messages, out, progress, checker, context, releva
 
     # VERIFY
     progress.start("verifying")
-    result = checker.check(filename, str(repo))
+    result = checker.check(filename, str(repo), prefer_basic=True)
     if not result["ok"]:
         progress.fail("verify", result["error"][:80])
         # FIX LOOP (max 2)
@@ -184,7 +210,7 @@ def _do_create(app, user_text, messages, out, progress, checker, context, releva
                 # Try extracting search/replace blocks
                 fixed = _apply_search_replace(full, fix_response)
                 if fixed:
-                    result = checker.check(filename, str(repo))
+                    result = checker.check(filename, str(repo), prefer_basic=True)
                     if result["ok"]:
                         progress.done("fix", "verified OK")
                         break
@@ -192,37 +218,56 @@ def _do_create(app, user_text, messages, out, progress, checker, context, releva
             app.toolkit.changes.snapshot_before(filename, "fix")
             full.write_text(fixed)
             out.log_tool("write_file", f"{filename} (fixed)")
-            result = checker.check(filename, str(repo))
+            result = checker.check(filename, str(repo), prefer_basic=True)
             if result["ok"]:
                 progress.done("fix", "verified OK")
                 break
             progress.fail("fix", result["error"][:60])
     else:
         progress.done("verify", "syntax OK")
+    verify_hint = app.planner_checkpoint_hint(
+        "create:post_verify",
+        user_text,
+        "\n".join(
+            part for part in [
+                f"file={filename}",
+                f"verify_ok={result['ok']}",
+                post_generate_hint.quality_gap if post_generate_hint else "",
+                post_generate_hint.risk if post_generate_hint else "",
+            ] if part
+        ),
+    )
+    if verify_hint and verify_hint.quality_gap:
+        out.print_info(f"planner quality note: {verify_hint.quality_gap[:140]}")
 
-    if aggressive_quality_task and lines <= 220:
+    if aggressive_quality_task and lines <= 260:
         progress.start("refining output quality")
-        out.set_stage("refining output quality")
+        current_code = full.read_text(errors="replace")
         refined_response = _generate_text(
             app,
             [
-                {"role": "system", "content": SYSTEM_PROMPTS["create"]},
-                {"role": "user", "content": _build_refine_prompt(filename, full.read_text(errors="replace"), user_text)},
+                {
+                    "role": "system",
+                    "content": (
+                        "You refine existing code using SEARCH/REPLACE patches only.\n"
+                        "Return one or more blocks in this exact format:\n"
+                        "<<<SEARCH\nexact old text\n===\nnew text\nSEARCH>>>\n"
+                        "Make a small number of high-impact improvements. Do not rewrite the full file."
+                    ),
+                },
+                {"role": "user", "content": _build_refine_prompt(filename, current_code, user_text)},
             ],
             out,
             stage="refining output quality",
             stream_preview=False,
+            max_tokens=900,
         )
-        _, refined_code = _parse_code_response(refined_response, filename)
-        if refined_code and refined_code.strip() and refined_code.strip() != full.read_text(errors="replace").strip():
-            app.toolkit.changes.snapshot_before(filename, "quality_refine")
-            progress.start(f"rewriting {filename}")
-            out.set_stage(f"rewriting {filename}")
-            full.write_text(refined_code)
-            lines = len(refined_code.splitlines())
-            out.log_tool("write_file", f"path={filename} (refined)")
-            out.tool_result(f"Refined {filename} ({lines} lines)")
-            verify2 = checker.check(filename, str(repo))
+        app.toolkit.changes.snapshot_before(filename, "quality_refine")
+        if _apply_search_replace(full, refined_response):
+            lines = len(full.read_text(errors="replace").splitlines())
+            out.log_tool("edit_file", f"path={filename} (refined)")
+            out.tool_result(f"Refined {filename} with targeted patch")
+            verify2 = checker.check(filename, str(repo), prefer_basic=True)
             if verify2["ok"]:
                 progress.done("quality", "fidelity pass applied")
             else:
@@ -248,6 +293,11 @@ def _do_create(app, user_text, messages, out, progress, checker, context, releva
     outcome_notes = _run_outcome_checks(repo, user_text, [filename])
     for note in outcome_notes:
         out.print_info(note)
+
+    quality_gate = _run_quality_gate(app, repo, user_text, filename, full, outcome_notes, checker)
+    if quality_gate:
+        for note in quality_gate:
+            out.print_info(note)
 
     summary = f"Created {filename} ({lines} lines). Run: python {filename}"
     out.stream(summary)
@@ -330,7 +380,7 @@ def _do_edit(app, user_text, messages, out, progress, checker, context, relevanc
 
     # VERIFY
     progress.start("verifying")
-    result = checker.check(target, str(repo))
+    result = checker.check(target, str(repo), prefer_basic=True)
     if not result["ok"]:
         progress.fail("verify", result["error"][:80])
         # One fix attempt
@@ -343,7 +393,7 @@ def _do_edit(app, user_text, messages, out, progress, checker, context, relevanc
         if fixed:
             app.toolkit.changes.snapshot_before(target, "fix")
             full.write_text(fixed)
-            r2 = checker.check(target, str(repo))
+            r2 = checker.check(target, str(repo), prefer_basic=True)
             if r2["ok"]:
                 progress.done("fix", "verified OK")
     else:
@@ -512,7 +562,16 @@ def _do_search(app, user_text, out):
 # ── Feature: CHAT (no tools) ──────────────────────────────────────
 
 def _do_chat(app, user_text, messages, out):
-    response = app.engine.generate_once([*messages[-6:], {"role": "user", "content": user_text}])
+    system = (
+        "You are a local coding assistant running on the user's machine. "
+        "You CAN read files, write files, edit files, and run bash commands. "
+        "You have full access to the local filesystem and terminal. "
+        "Keep responses concise."
+    )
+    response = app.engine.generate_once(
+        [{"role": "system", "content": system}, *messages[-6:], {"role": "user", "content": user_text}],
+        max_tokens=512,
+    )
     out.stream(response)
     return response
 
@@ -577,6 +636,17 @@ def _needs_aggressive_quality_pass(user_text: str) -> bool:
     ))
 
 
+def _should_run_quality_gate(user_text: str, filename: str) -> bool:
+    artifact = classify_artifact(filename, user_text)
+    if artifact in {"python_app", "web_asset"}:
+        return True
+    text = user_text.lower()
+    return any(token in text for token in (
+        "clone", "look like", "feel like", "polish", "fidelity", "ui", "dashboard",
+        "landing page", "game", "app", "website", "tool",
+    ))
+
+
 def _build_create_prompt(ctx: str, user_text: str, quality_task: bool) -> str:
     quality = ""
     if quality_task:
@@ -595,60 +665,235 @@ def _build_create_prompt(ctx: str, user_text: str, quality_task: bool) -> str:
     )
 
 
+def _build_compact_create_context(user_text: str) -> str:
+    return (
+        "## Task\n"
+        f"{user_text}\n\n"
+        "Constraints:\n"
+        "- Prefer one small runnable file.\n"
+        "- Keep the implementation tight and direct.\n"
+        "- Do not add explanation text outside the requested code block.\n"
+    )
+
+
 def _build_refine_prompt(filename: str, current_code: str, user_text: str) -> str:
     return (
         f"The first pass works but needs more fidelity and polish.\n"
         f"Original request: {user_text}\n\n"
         f"Current {filename}:\n```python\n{current_code}\n```\n\n"
         "Improve recognizability, game feel, visual clarity, and completeness without breaking runnability.\n"
-        "Return the COMPLETE updated file only.\n"
-        f"FILENAME: {filename}\n```python\ncomplete code\n```"
+        "Prefer 2-5 surgical improvements with high payoff.\n"
+        "Return SEARCH/REPLACE blocks only, not the whole file."
     )
 
 
-def _generate_text(app, messages, out, stage: str, stream_preview: bool = False) -> str:
+def _build_quality_gate_prompt(filename: str, user_text: str, code: str, outcome_notes: list[str]) -> str:
+    notes = "\n".join(f"- {n}" for n in outcome_notes[:8]) or "- no outcome notes"
+    return (
+        "Assess whether this generated artifact is actually good enough for the request.\n"
+        "Score harshly. Runnable but generic work should not pass.\n"
+        "Return strict JSON with keys: score, verdict, issues, strengths.\n"
+        "score must be 0-100. verdict must be one of pass or refine.\n\n"
+        f"Request:\n{user_text}\n\n"
+        f"Outcome notes:\n{notes}\n\n"
+        f"File: {filename}\n```text\n{code[:12000]}\n```"
+    )
+
+
+def _build_quality_refine_prompt(filename: str, user_text: str, code: str, issues: list[str]) -> str:
+    issue_lines = "\n".join(f"- {issue}" for issue in issues[:6]) or "- improve fidelity and completeness"
+    return (
+        f"Improve {filename} so it better satisfies the original request.\n"
+        f"Original request:\n{user_text}\n\n"
+        f"Observed quality issues:\n{issue_lines}\n\n"
+        f"Current file:\n```text\n{code[:12000]}\n```\n\n"
+        "Return SEARCH/REPLACE blocks only.\n"
+        "Make the smallest high-impact changes that improve recognizability, completeness, and user experience.\n"
+    )
+
+
+def _create_output_budget(user_text: str, quality_task: bool, compact_task: bool) -> int:
+    text = user_text.lower()
+    if compact_task:
+        return 900
+    if quality_task:
+        if any(token in text for token in ("game", "app", "website", "dashboard", "clone", "landing page")):
+            return 2600
+        return 1800
+    if any(token in text for token in ("single-file", "single file", "cli", "script", ".py", ".html", ".css", ".js")):
+        return 1400
+    return 1800
+
+
+def _should_use_planner_hints(user_text: str, quality_task: bool, compact_task: bool) -> bool:
+    if compact_task:
+        return False
+    text = user_text.lower()
+    if quality_task:
+        return True
+    if len(text) > 180:
+        return True
+    return any(token in text for token in ("app", "game", "website", "dashboard", "multi", "full", "polish", "clone"))
+
+
+def _should_use_fast_create_lane(app, user_text: str, related: list[str], quality_task: bool) -> bool:
+    text = user_text.lower()
+    if quality_task:
+        return False
+    if len(text) > 140:
+        return False
+    if not re.search(r'\b\w+\.(?:py|js|ts|html|css|sh)\b', text):
+        return False
+    simple_signals = (
+        "tiny", "small", "simple", "one file", "single file", "prints ", "print ",
+        "hello", "cli", "script", "utility",
+    )
+    return any(token in text for token in simple_signals)
+
+
+def _generate_create_response(app, user_text: str, messages, out, quality_task: bool, related: list[str]) -> str:
+    if _should_use_fast_create_lane(app, user_text, related, quality_task):
+        out.set_stage("generating code (compact)")
+        compact_messages = [messages[0], messages[-1]] if len(messages) >= 2 else messages
+        return _generate_text(
+            app,
+            compact_messages,
+            out,
+            stage="generating code",
+            stream_preview=False,
+            num_ctx_override=2048,
+            max_tokens=_create_output_budget(user_text, quality_task, compact_task=True),
+        )
+    return _generate_text(
+        app,
+        messages,
+        out,
+        stage="generating code",
+        stream_preview=True,  # always show live progress during code generation
+        max_tokens=_create_output_budget(user_text, quality_task, compact_task=False),
+    )
+
+
+def _generate_text(
+    app,
+    messages,
+    out,
+    stage: str,
+    stream_preview: bool = False,
+    num_ctx_override: int | None = None,
+    max_tokens: int | None = None,
+) -> str:
     chunks: list[str] = []
     thinking = []
-    for event in app.engine.stream_chat_events(messages, think=False):
+    started_at = time.time()
+    first_token_s: float | None = None
+    out.set_thinking_peek("contacting model and waiting for first tokens")
+    for event in app.engine.stream_chat_events(messages, think=False, num_ctx=num_ctx_override, num_predict=max_tokens):
         if event["type"] == "thinking":
             chunk = str(event["content"])
             thinking.append(chunk)
             out.feed_thinking(chunk)
-            peek = " ".join("".join(thinking).split())[-120:]
+            peek = _summarize_live_preview("".join(thinking))
             if peek:
                 out.set_thinking_peek(peek)
             continue
         if event["type"] != "content":
             continue
         chunk = str(event["content"])
+        if chunk and first_token_s is None:
+            first_token_s = time.time() - started_at
+            out.set_thinking_peek("model responded, assembling output")
         chunks.append(chunk)
         if stream_preview:
-            flat = " ".join("".join(chunks).split())
-            if flat:
-                out.set_thinking_peek(flat[-120:])
+            peek = _summarize_live_preview("".join(chunks))
+            if peek:
+                out.set_thinking_peek(peek)
+    app._record_runtime_sample(first_token_s=first_token_s, total_s=time.time() - started_at)
     return "".join(chunks).strip()
 
 
+def _run_quality_gate(app, repo: Path, user_text: str, filename: str, full: Path, outcome_notes: list[str], checker) -> list[str]:
+    if not _should_run_quality_gate(user_text, filename):
+        return []
+    code = full.read_text(errors="replace")
+    if len(code.splitlines()) > 450:
+        return ["quality gate: skipped for very large generated file"]
+    try:
+        response = app.engine.generate_once([
+            {
+                "role": "system",
+                "content": (
+                    "You are Gem's quality gate.\n"
+                    "Return strict JSON only.\n"
+                    "Be skeptical of generic outputs that merely run."
+                ),
+            },
+            {"role": "user", "content": _build_quality_gate_prompt(filename, user_text, code, outcome_notes)},
+        ], max_tokens=700)
+        match = re.search(r"\{.*\}", response, re.DOTALL)
+        payload = json.loads(match.group(0) if match else response)
+    except Exception:
+        return []
+
+    score = int(payload.get("score", 0) or 0)
+    verdict = str(payload.get("verdict", "")).strip().lower()
+    issues = [str(item).strip() for item in payload.get("issues", []) if str(item).strip()]
+    notes = [f"quality gate: score {score}/100"]
+    if verdict == "pass" or score >= 82 or not issues:
+        return notes + ["quality gate: accepted"]
+
+    refine_response = app.engine.generate_once([
+        {
+            "role": "system",
+            "content": (
+                "You refine existing code using SEARCH/REPLACE patches only.\n"
+                "Return one or more blocks in this exact format:\n"
+                "<<<SEARCH\nexact old text\n===\nnew text\nSEARCH>>>\n"
+                "Make a small number of high-impact improvements."
+            ),
+        },
+        {"role": "user", "content": _build_quality_refine_prompt(filename, user_text, code, issues)},
+    ], max_tokens=900)
+    app.toolkit.changes.snapshot_before(filename, "quality_gate_refine")
+    if not _apply_search_replace(full, refine_response):
+        return notes + ["quality gate: refine requested but no patch was produced"]
+
+    verify = checker.check(filename, str(repo), prefer_basic=True)
+    if not verify["ok"]:
+        return notes + [f"quality gate: refinement rejected by verification: {verify['error'][:80]}"]
+    return notes + ["quality gate: applied targeted refinement"]
+
+
+def _summarize_live_preview(text: str) -> str:
+    lines = text.count("\n")
+    tokens_approx = len(text.split())
+    # Show meaningful progress with line count
+    if lines > 5:
+        # Find the last function/class being written
+        last_def = ""
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith(("def ", "class ", "function ")):
+                last_def = stripped[:60]
+        if last_def:
+            return f"generating code ({lines} lines) — {last_def}"
+        return f"generating code ({lines} lines, {tokens_approx} tokens)"
+    if tokens_approx > 10:
+        return f"generating ({tokens_approx} tokens)"
+    return ""
+
+
 def _run_outcome_checks(repo: Path, user_text: str, files: list[str]) -> list[str]:
-    notes: list[str] = []
-    for filename in files:
-        full = repo / filename
-        if not full.is_file():
-            continue
-        if filename.endswith(".py"):
-            result = subprocess.run(
-                ["python3", "-m", "py_compile", str(full)],
-                capture_output=True,
-                text=True,
-                timeout=20,
-                cwd=str(repo),
-            )
-            if result.returncode == 0:
-                notes.append(f"outcome check: {filename} compiles cleanly")
-            else:
-                notes.append(f"outcome check: {filename} compile issue: {(result.stderr or result.stdout).splitlines()[-1][:80]}")
-        if _is_quality_sensitive_task(user_text):
-            notes.append(f"quality check: {filename} was given a refinement pass for fidelity, not just syntax")
+    output, code = run_outcome_verification(repo, user_text, files)
+    notes = []
+    for block in output.split("\n\n"):
+        line = block.strip().splitlines()
+        if line:
+            notes.append(line[0][:160])
+    if _is_quality_sensitive_task(user_text):
+        notes.append("quality check: output path used patch-first refinement and artifact verification")
+    if code != 0 and not notes:
+        notes.append("outcome check: verification reported an issue")
     return notes
 
 
@@ -675,6 +920,11 @@ def _parse_code_response(response: str, user_text: str) -> tuple[str, str]:
     filename = ""
     if fname_match:
         filename = fname_match.group(1)
+    code = code_match.group(1).strip() if code_match else ""
+    if not filename and code:
+        header_match = re.search(r'^\s*(?:#|//)\s*([\w./-]+\.(?:py|js|ts|tsx|jsx|html|css|sh))\s*$', code, re.MULTILINE)
+        if header_match:
+            filename = header_match.group(1)
     if not filename:
         name_match = re.search(r'(\w+\.py)', user_text)
         if name_match:
@@ -682,14 +932,23 @@ def _parse_code_response(response: str, user_text: str) -> tuple[str, str]:
         else:
             words = re.findall(r'\w+', user_text.lower())
             for w in words:
-                if w not in ("make", "create", "build", "a", "an", "the", "that", "can",
-                             "i", "run", "locally", "my", "laptop", "app", "game", "on", "okay"):
+                if w not in ("make", "create", "build", "write", "generate", "tiny", "small",
+                             "script", "python", "file", "called", "named", "a", "an", "the",
+                             "that", "can", "i", "run", "locally", "my", "laptop", "app",
+                             "game", "on", "okay", "prints", "print", "hello"):
                     filename = f"{w}_game.py" if "game" in user_text.lower() else f"{w}.py"
                     break
             if not filename:
                 filename = "main.py"
 
-    code = code_match.group(1).strip() if code_match else ""
+    if code:
+        lines = code.splitlines()
+        if lines:
+            first = lines[0].strip()
+            if re.fullmatch(r'[\w./-]+\.(?:py|js|ts|tsx|jsx|html|css|sh)', first):
+                code = "\n".join(lines[1:]).lstrip()
+            elif re.fullmatch(r'(?:#|//)\s*[\w./-]+\.(?:py|js|ts|tsx|jsx|html|css|sh)', first):
+                code = "\n".join(lines[1:]).lstrip()
     return filename, code
 
 

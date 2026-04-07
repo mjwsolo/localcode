@@ -8,7 +8,9 @@ import re
 import shutil
 import subprocess
 
-from .config import AppConfig, save_config
+import json
+
+from .config import AppConfig, ensure_home_dirs, save_config
 from .models import ModelProfile
 
 
@@ -44,8 +46,64 @@ class PerformancePreset:
     llama_cpp_expert_offload: bool = False
     llama_cpp_draft_model: str = ""
     llama_cpp_lookup_cache: bool = False
-    kv_cache_type: str = "q8_0"
+    kv_cache_type_k: str = "q8_0"
+    kv_cache_type_v: str = "turbo4"
+    low_overhead_mode: bool = False
+    laptop_26b_runtime_mode: str = "speed"
     notes: list[str] = None  # type: ignore[assignment]
+
+
+def should_promote_legacy_default_to_laptop_26b(config: AppConfig, machine: MachineProfile) -> bool:
+    profile = (config.runtime.profile or "").strip().lower()
+    model = (config.runtime.model or "").strip()
+    if model:
+        return False
+    if profile not in {"", "e4b", "gemma4-e4b"}:
+        return False
+    return machine.system == "darwin" and machine.has_gpu and machine.tier in {"small", "medium"}
+
+
+def resolve_laptop_26b_runtime_mode(config: AppConfig, machine: MachineProfile) -> str:
+    requested = (config.runtime.laptop_26b_runtime_mode or "auto").strip().lower()
+    if requested in {"speed", "fit"}:
+        return requested
+    if machine.system != "darwin" or not machine.has_gpu:
+        return "fit"
+
+    explicit_model = (config.runtime.model or "").strip().lower()
+    explicit_provider = (config.runtime.provider or "").strip().lower()
+    if explicit_provider == "llama_cpp":
+        return "fit"
+    if explicit_provider == "ollama" and explicit_model and not explicit_model.endswith(".gguf"):
+        return "speed"
+    if explicit_model.endswith(".gguf") or any(token in explicit_model for token in ("iq", "q2_", "q3_", "q4_", "q5_", "q6_", "q8_")):
+        return "fit"
+    telemetry = _load_runtime_telemetry()
+    speed_stats = telemetry.get("speed", {})
+    fit_stats = telemetry.get("fit", {})
+    if speed_stats.get("samples", 0) >= 2 and fit_stats.get("samples", 0) >= 2:
+        speed_first = float(speed_stats.get("ema_first_token_s", 0.0) or 0.0)
+        fit_first = float(fit_stats.get("ema_first_token_s", 0.0) or 0.0)
+        if speed_first and fit_first:
+            return "fit" if fit_first <= speed_first * 0.9 else "speed"
+    if shutil.which("ollama") is not None:
+        return "speed"
+    if shutil.which("llama-server") is not None or shutil.which("llama_cpp.server") is not None:
+        return "fit"
+    return "speed"
+
+
+def _load_runtime_telemetry() -> dict[str, dict]:
+    path = ensure_home_dirs() / "memory.json"
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        return {}
+    telemetry = data.get("runtime_telemetry", {})
+    bucket = telemetry.get("gemma4-26b-laptop", {})
+    return bucket if isinstance(bucket, dict) else {}
 
 
 def _run_capture(command: list[str]) -> str:
@@ -108,7 +166,11 @@ def _detect_gpu_summary(system: str) -> str:
     return ""
 
 
-def recommend_preset(machine: MachineProfile, requested_mode: str | None = None) -> PerformancePreset:
+def recommend_preset(
+    machine: MachineProfile,
+    requested_mode: str | None = None,
+    laptop_26b_runtime_mode: str = "auto",
+) -> PerformancePreset:
     mode = requested_mode or ("fast" if machine.tier == "small" else "balanced")
     runtime_provider = "ollama"
     notes: list[str] = []
@@ -118,20 +180,34 @@ def recommend_preset(machine: MachineProfile, requested_mode: str | None = None)
     llama_cpp_gpu_layers = 0
     llama_cpp_threads = max(2, min(machine.cpu_cores, 8))
     llama_cpp_batch_size = 128
+    if str(laptop_26b_runtime_mode).lower() in {"speed", "fit"}:
+        laptop_runtime_mode = str(laptop_26b_runtime_mode).lower()
+    else:
+        laptop_runtime_mode = "speed"
     if machine.system == "darwin" and machine.has_gpu:
-        runtime_provider = "mlx-local" if mode in {"fast", "balanced"} else "ollama"
+        runtime_provider = "ollama"
         notes.append("Apple Silicon detected: prefer MLX-local quantized models when available.")
     if machine.tier in {"small", "medium"}:
-        profile = "gemma4-e2b" if mode == "fast" else "gemma4-e4b"
-        max_context_chars = 10000 if mode == "fast" else 18000
-        planner_enabled = True
-        adaptive_execution = True
-        draft_model = "gemma4:e2b"
-        planner_model = "gemma4:e2b"
-        quant_preset = "smallest" if mode == "fast" else "balanced"
+        use_laptop_26b = machine.system == "darwin" and machine.has_gpu
+        profile = "gemma4-26b-laptop" if use_laptop_26b else ("gemma4-e2b" if mode == "fast" else "gemma4-e4b")
+        max_context_chars = 10000 if use_laptop_26b else (10000 if mode == "fast" else 18000)
+        planner_enabled = False if use_laptop_26b else True
+        adaptive_execution = False if use_laptop_26b else True
+        draft_model = ""
+        planner_model = ""
+        quant_preset = "fastest" if use_laptop_26b else ("smallest" if mode == "fast" else "balanced")
         cache_policy = "rolling"
-        rolling_window_messages = 16 if mode == "fast" else 20
-        notes.append("Prefer quantized small variants and early compaction.")
+        rolling_window_messages = 12 if use_laptop_26b else (16 if mode == "fast" else 20)
+        if use_laptop_26b:
+            notes.append("Disciplined 26B A4B laptop mode: single-model path, tight context, early compaction, low-overhead runtime.")
+            notes.append(
+                "Runtime preference: "
+                + ("speed-first MLX/Ollama path." if laptop_runtime_mode == "speed" else "fit-first llama.cpp mmap path.")
+            )
+        else:
+            draft_model = "gemma4:e2b"
+            planner_model = "gemma4:e2b"
+            notes.append("Prefer quantized small variants and early compaction.")
     elif machine.tier == "large":
         profile = "gemma4-e4b" if mode == "fast" else "gemma4-26b-moe"
         max_context_chars = 22000 if mode == "fast" else 36000
@@ -170,20 +246,31 @@ def recommend_preset(machine: MachineProfile, requested_mode: str | None = None)
     expert_offload = False
     llama_cpp_draft_model_path = ""
     lookup_cache = False
-    kv_cache_type = "q8_0"
+    kv_cache_type_k = "q8_0"
+    kv_cache_type_v = "turbo4"
 
-    # Small tier (≤16GB): aggressive memory savings
+    # Small tier (≤16GB): TurboQuant KV compression + CPU mmap
     if machine.tier == "small":
-        kv_cache_type = "q4_0"  # aggressive KV compression (8x less cache memory)
+        kv_cache_type_k = "q8_0"   # preserve key quality
+        kv_cache_type_v = "turbo4"  # 3.8x V compression, +0.23% PPL — avoids pre-M5 turbo3 regression
         # Note: expert_offload with -ngl 999 causes OOM on 16GB.
         # Use -ngl 0 (pure CPU + mmap) which is stable and fast enough.
         expert_offload = False
         llama_cpp_gpu_layers = 0  # CPU mmap is more stable on 16GB
-        notes.append("KV cache q4_0 + CPU mmap for 16GB memory constraint.")
+        notes.append("TurboQuant KV (q8_0-K + turbo4-V) + CPU mmap for 16GB.")
 
     # Apple Silicon + MoE model: prefer MLX (3x faster than llama.cpp for MoE)
-    if machine.system == "darwin" and machine.has_gpu and profile in ("gemma4-26b-moe",):
-        runtime_provider = "ollama"  # Ollama now uses MLX backend on Apple Silicon
+    if machine.system == "darwin" and machine.has_gpu and profile == "gemma4-26b-laptop":
+        if laptop_runtime_mode == "fit":
+            runtime_provider = "llama_cpp"
+            llama_cpp_gpu_layers = 0
+            lookup_cache = True
+            notes.append("llama.cpp mmap path selected for fit-first 26B A4B laptop mode.")
+        else:
+            runtime_provider = "ollama"
+            notes.append("Ollama MLX backend preferred for speed-first 26B A4B laptop mode.")
+    elif machine.system == "darwin" and machine.has_gpu and profile == "gemma4-26b-moe":
+        runtime_provider = "ollama"
         notes.append("Ollama MLX backend preferred for MoE models on Apple Silicon (3x faster).")
 
     # When using llama.cpp: enable n-gram speculation + prompt lookup
@@ -213,7 +300,10 @@ def recommend_preset(machine: MachineProfile, requested_mode: str | None = None)
         llama_cpp_expert_offload=expert_offload,
         llama_cpp_draft_model=llama_cpp_draft_model_path,
         llama_cpp_lookup_cache=lookup_cache,
-        kv_cache_type=kv_cache_type,
+        kv_cache_type_k=kv_cache_type_k,
+        kv_cache_type_v=kv_cache_type_v,
+        low_overhead_mode=(profile == "gemma4-26b-laptop"),
+        laptop_26b_runtime_mode=laptop_runtime_mode,
         notes=notes,
     )
 
@@ -240,12 +330,17 @@ def apply_preset(config: AppConfig, preset: PerformancePreset, model: str | None
     config.runtime.llama_cpp_expert_offload = preset.llama_cpp_expert_offload
     config.runtime.llama_cpp_draft_model = preset.llama_cpp_draft_model
     config.runtime.llama_cpp_lookup_cache = preset.llama_cpp_lookup_cache
-    config.runtime.kv_cache_type = preset.kv_cache_type
+    config.runtime.kv_cache_type_k = preset.kv_cache_type_k
+    config.runtime.kv_cache_type_v = preset.kv_cache_type_v
+    config.runtime.low_overhead_mode = preset.low_overhead_mode
+    config.runtime.laptop_26b_runtime_mode = preset.laptop_26b_runtime_mode
+    config.runtime.execution_engine = "unified"
     save_config(config)
     return config
 
 
 def benchmark_report(config: AppConfig, requested_mode: str | None = None) -> tuple[MachineProfile, PerformancePreset]:
     machine = detect_machine_profile()
-    preset = recommend_preset(machine, requested_mode)
+    laptop_mode = resolve_laptop_26b_runtime_mode(config, machine)
+    preset = recommend_preset(machine, requested_mode, laptop_mode)
     return machine, preset

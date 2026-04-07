@@ -19,11 +19,15 @@ base_url = "http://localhost:11434"
 profile = "e4b"
 model = ""
 mode = "balanced"
+execution_engine = "unified"
 planner_model = "gemma4:e2b"
 draft_model = "gemma4:e2b"
 planner_enabled = true
+planner_hints_enabled = false
 adaptive_execution = true
 escalation_enabled = true
+low_overhead_mode = false
+laptop_26b_runtime_mode = "auto"
 huggingface_model_id = ""
 huggingface_device = "auto"
 huggingface_dtype = "auto"
@@ -39,7 +43,9 @@ llama_cpp_draft_max = 64
 llama_cpp_expert_offload = false
 llama_cpp_draft_model = ""
 llama_cpp_lookup_cache = false
-kv_cache_type = "q8_0"
+kv_cache_type_k = "q8_0"
+kv_cache_type_v = "turbo4"
+llama_cpp_binary = ""
 temperature = 0.2
 max_context_chars = 40000
 request_timeout_seconds = 120
@@ -94,11 +100,15 @@ class RuntimeConfig:
     profile: str = "e4b"
     model: str = ""
     mode: str = "balanced"
+    execution_engine: str = "unified"
     planner_model: str = "gemma4:e2b"
     draft_model: str = "gemma4:e2b"
     planner_enabled: bool = True
+    planner_hints_enabled: bool = False
     adaptive_execution: bool = True
     escalation_enabled: bool = True
+    low_overhead_mode: bool = False
+    laptop_26b_runtime_mode: str = "auto"
     huggingface_model_id: str = ""
     huggingface_device: str = "auto"
     huggingface_dtype: str = "auto"
@@ -115,7 +125,9 @@ class RuntimeConfig:
     llama_cpp_expert_offload: bool = False # offload MoE experts to CPU (-ot exps=CPU)
     llama_cpp_draft_model: str = ""       # path to draft GGUF for speculative decoding
     llama_cpp_lookup_cache: bool = False   # prompt lookup decoding (2-4x on code edits)
-    kv_cache_type: str = "q8_0"           # KV cache quantization: q8_0, q4_0, f16
+    kv_cache_type_k: str = "q8_0"          # K cache type: q8_0, q4_0, f16, turbo2, turbo3, turbo4
+    kv_cache_type_v: str = "turbo4"        # V cache type: turbo4 recommended (3.8x compression, +0.23% PPL)
+    llama_cpp_binary: str = ""             # custom llama-server path (e.g. TurboQuant fork)
     temperature: float = 0.7  # Gemma 4 recommended (Unsloth: 1.0, we use 0.7 for coding focus)
     max_context_chars: int = 40000
     request_timeout_seconds: int = 120
@@ -227,11 +239,15 @@ def save_config(config: AppConfig) -> Path:
         f'profile = "{config.runtime.profile}"\n'
         f'model = "{config.runtime.model}"\n'
         f'mode = "{config.runtime.mode}"\n'
+        f'execution_engine = "{config.runtime.execution_engine}"\n'
         f'planner_model = "{config.runtime.planner_model}"\n'
         f'draft_model = "{config.runtime.draft_model}"\n'
         f"planner_enabled = {'true' if config.runtime.planner_enabled else 'false'}\n"
+        f"planner_hints_enabled = {'true' if config.runtime.planner_hints_enabled else 'false'}\n"
         f"adaptive_execution = {'true' if config.runtime.adaptive_execution else 'false'}\n"
         f"escalation_enabled = {'true' if config.runtime.escalation_enabled else 'false'}\n"
+        f"low_overhead_mode = {'true' if config.runtime.low_overhead_mode else 'false'}\n"
+        f'laptop_26b_runtime_mode = "{config.runtime.laptop_26b_runtime_mode}"\n'
         f'huggingface_model_id = "{config.runtime.huggingface_model_id}"\n'
         f'huggingface_device = "{config.runtime.huggingface_device}"\n'
         f'huggingface_dtype = "{config.runtime.huggingface_dtype}"\n'
@@ -247,7 +263,9 @@ def save_config(config: AppConfig) -> Path:
         f"llama_cpp_expert_offload = {'true' if config.runtime.llama_cpp_expert_offload else 'false'}\n"
         f'llama_cpp_draft_model = "{config.runtime.llama_cpp_draft_model}"\n'
         f"llama_cpp_lookup_cache = {'true' if config.runtime.llama_cpp_lookup_cache else 'false'}\n"
-        f'kv_cache_type = "{config.runtime.kv_cache_type}"\n'
+        f'kv_cache_type_k = "{config.runtime.kv_cache_type_k}"\n'
+        f'kv_cache_type_v = "{config.runtime.kv_cache_type_v}"\n'
+        f'llama_cpp_binary = "{config.runtime.llama_cpp_binary}"\n'
         f"temperature = {config.runtime.temperature}\n"
         f"max_context_chars = {config.runtime.max_context_chars}\n"
         f"request_timeout_seconds = {config.runtime.request_timeout_seconds}\n"
@@ -308,11 +326,15 @@ def load_config() -> AppConfig:
         profile=os.environ.get("GEM_PROFILE", runtime_data.get("profile", "e4b")),
         model=os.environ.get("GEM_MODEL", runtime_data.get("model", "")),
         mode=os.environ.get("GEM_MODE", runtime_data.get("mode", "balanced")),
+        execution_engine=os.environ.get("GEM_EXECUTION_ENGINE", runtime_data.get("execution_engine", "unified")),
         planner_model=os.environ.get("GEM_PLANNER_MODEL", runtime_data.get("planner_model", "gemma4:e2b")),
         draft_model=os.environ.get("GEM_DRAFT_MODEL", runtime_data.get("draft_model", "gemma4:e2b")),
         planner_enabled=str(os.environ.get("GEM_PLANNER_ENABLED", runtime_data.get("planner_enabled", True))).lower() in {"1", "true", "yes", "on"},
+        planner_hints_enabled=str(os.environ.get("GEM_PLANNER_HINTS_ENABLED", runtime_data.get("planner_hints_enabled", False))).lower() in {"1", "true", "yes", "on"},
         adaptive_execution=str(os.environ.get("GEM_ADAPTIVE_EXECUTION", runtime_data.get("adaptive_execution", True))).lower() in {"1", "true", "yes", "on"},
         escalation_enabled=str(os.environ.get("GEM_ESCALATION_ENABLED", runtime_data.get("escalation_enabled", True))).lower() in {"1", "true", "yes", "on"},
+        low_overhead_mode=str(os.environ.get("GEM_LOW_OVERHEAD_MODE", runtime_data.get("low_overhead_mode", False))).lower() in {"1", "true", "yes", "on"},
+        laptop_26b_runtime_mode=os.environ.get("GEM_LAPTOP_26B_RUNTIME_MODE", runtime_data.get("laptop_26b_runtime_mode", "auto")),
         huggingface_model_id=os.environ.get("GEM_HF_MODEL_ID", runtime_data.get("huggingface_model_id", "")),
         huggingface_device=os.environ.get("GEM_HF_DEVICE", runtime_data.get("huggingface_device", "auto")),
         huggingface_dtype=os.environ.get("GEM_HF_DTYPE", runtime_data.get("huggingface_dtype", "auto")),
@@ -328,7 +350,9 @@ def load_config() -> AppConfig:
         llama_cpp_expert_offload=str(os.environ.get("GEM_LLAMA_CPP_EXPERT_OFFLOAD", runtime_data.get("llama_cpp_expert_offload", False))).lower() in {"1", "true", "yes", "on"},
         llama_cpp_draft_model=os.environ.get("GEM_LLAMA_CPP_DRAFT_MODEL", runtime_data.get("llama_cpp_draft_model", "")),
         llama_cpp_lookup_cache=str(os.environ.get("GEM_LLAMA_CPP_LOOKUP_CACHE", runtime_data.get("llama_cpp_lookup_cache", False))).lower() in {"1", "true", "yes", "on"},
-        kv_cache_type=os.environ.get("GEM_KV_CACHE_TYPE", runtime_data.get("kv_cache_type", "q8_0")),
+        kv_cache_type_k=os.environ.get("GEM_KV_CACHE_TYPE_K", runtime_data.get("kv_cache_type_k", runtime_data.get("kv_cache_type", "q8_0"))),
+        kv_cache_type_v=os.environ.get("GEM_KV_CACHE_TYPE_V", runtime_data.get("kv_cache_type_v", runtime_data.get("kv_cache_type", "turbo4"))),
+        llama_cpp_binary=os.environ.get("GEM_LLAMA_CPP_BINARY", runtime_data.get("llama_cpp_binary", "")),
         temperature=float(os.environ.get("GEM_TEMPERATURE", runtime_data.get("temperature", 0.2))),
         max_context_chars=int(os.environ.get("GEM_MAX_CONTEXT_CHARS", runtime_data.get("max_context_chars", 40000))),
         request_timeout_seconds=int(os.environ.get("GEM_REQUEST_TIMEOUT_SECONDS", runtime_data.get("request_timeout_seconds", 120))),
@@ -406,10 +430,18 @@ def _apply_project_config(config: AppConfig, project_root: Path | None = None) -
     rt = data.get("runtime", {})
     if "mode" in rt:
         config.runtime.mode = rt["mode"]
+    if "execution_engine" in rt:
+        config.runtime.execution_engine = str(rt["execution_engine"])
     if "temperature" in rt:
         config.runtime.temperature = float(rt["temperature"])
     if "max_context_chars" in rt:
         config.runtime.max_context_chars = int(rt["max_context_chars"])
+    if "low_overhead_mode" in rt:
+        config.runtime.low_overhead_mode = str(rt["low_overhead_mode"]).lower() in {"1", "true", "yes", "on"}
+    if "laptop_26b_runtime_mode" in rt:
+        config.runtime.laptop_26b_runtime_mode = str(rt["laptop_26b_runtime_mode"]).strip() or "auto"
+    if "planner_hints_enabled" in rt:
+        config.runtime.planner_hints_enabled = str(rt["planner_hints_enabled"]).lower() in {"1", "true", "yes", "on"}
 
     # Override safety
     sf = data.get("safety", {})

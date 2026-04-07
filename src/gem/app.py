@@ -30,6 +30,7 @@ from .models import GEMMA_PROFILES, get_runtime_model, infer_profile_from_model,
 from .onboarding import onboarding_panel
 from .patching import apply_diff, build_diff, extract_last_diff_block, parse_diff
 from .planner import build_plan_note
+from .planner_hints import PlannerHint, PlannerHintState, parse_planner_hint
 from .permissions import PermissionStore
 from .prompts import build_system_prompt, build_task_appendix
 from .runtime import GemRuntimeGateway, RuntimeErrorWithContext
@@ -87,6 +88,7 @@ from .hooks import HookRunner
 from .notify import TaskNotifier, notify_if_slow
 from .snapshots import SnapshotStore, create_snapshot, restore_snapshot
 from .turn_diff import TurnDiffTracker, print_turn_diff
+from .performance import detect_machine_profile, benchmark_report, apply_preset, should_promote_legacy_default_to_laptop_26b
 
 import os
 import time
@@ -181,6 +183,10 @@ class GemApp:
         self.console = Console()
         self.log = logging.getLogger("gem")
         self.config = config
+        machine = detect_machine_profile()
+        if should_promote_legacy_default_to_laptop_26b(self.config, machine):
+            _, preset = benchmark_report(self.config, self.config.runtime.mode)
+            apply_preset(self.config, preset, model=self.config.runtime.model)
         self.repo_root = find_repo_root(cwd or Path.cwd())
         self.store = SessionStore()
         if session_id:
@@ -220,20 +226,26 @@ class GemApp:
         self._pending_audio: list[AudioInputData] = []
         self.stats = SessionStats()
         self.tool_cache = ToolResultCache(self.repo_root)
-        self.bg_indexer = BackgroundIndexer(self.repo_root)
-        self.bg_indexer.start()
-        self.file_watcher = FileWatcher(self.repo_root)
-        self.file_watcher.start()
-        for f in self.session.pinned_files:
-            self.file_watcher.track(f)
-        self.project_watcher = ProjectWatcher(self.repo_root, poll_interval=3.0)
-        self.project_watcher.on_change(self._on_project_files_changed)
-        self.project_watcher.start()
+        self.bg_indexer = None
+        self.file_watcher = None
+        self.project_watcher = None
+        if not self.config.runtime.low_overhead_mode:
+            self.bg_indexer = BackgroundIndexer(self.repo_root)
+            self.bg_indexer.start()
+            self.file_watcher = FileWatcher(self.repo_root)
+            self.file_watcher.start()
+            for f in self.session.pinned_files:
+                self.file_watcher.track(f)
+            self.project_watcher = ProjectWatcher(self.repo_root, poll_interval=3.0)
+            self.project_watcher.on_change(self._on_project_files_changed)
+            self.project_watcher.start()
         self._vim_mode = False
         self._active_plan: Plan | None = None
         self._output_style: str = ""
         self.task_store = TaskStore()
+        self.planner_hints = PlannerHintState()
         self.out = OutputManager()  # centralized output
+        self.out.set_event_callback(self._record_exec_event)
         self.logger = SessionLogger()
         self.history = HistoryDB()  # unified SQLite history
         self.embedding_search = EmbeddingSearch(str(self.repo_root))
@@ -250,6 +262,16 @@ class GemApp:
         self._spec_executor = SpeculativeExecutor(self.toolkit.execute_tool_calls)
         self._memory = self._load_memory()
 
+    def _record_exec_event(self, event_type: str, payload: dict) -> None:
+        detail = payload.get("stage") or payload.get("name") or payload.get("message") or payload.get("chunk") or event_type
+        detail_text = str(detail).replace("\n", " ")[:200]
+        self.store.append_event(
+            self.session,
+            f"exec:{event_type}",
+            detail_text,
+            **{k: str(v)[:240] for k, v in payload.items() if v is not None},
+        )
+
     def _load_memory(self) -> dict:
         p = ensure_home_dirs() / "memory.json"
         if p.exists():
@@ -264,6 +286,25 @@ class GemApp:
         import json
         p = ensure_home_dirs() / "memory.json"
         p.write_text(json.dumps(self._memory, indent=2))
+
+    def _record_runtime_sample(self, *, first_token_s: float | None, total_s: float | None) -> None:
+        if self.profile.key != "gemma4-26b-laptop":
+            return
+        mode = "fit" if self.config.runtime.provider == "llama_cpp" else "speed"
+        bucket = self._memory.setdefault("runtime_telemetry", {}).setdefault("gemma4-26b-laptop", {}).setdefault(mode, {})
+        samples = int(bucket.get("samples", 0)) + 1
+        bucket["samples"] = samples
+        alpha = 0.35
+        if first_token_s is not None:
+            prev = float(bucket.get("ema_first_token_s", first_token_s))
+            bucket["ema_first_token_s"] = round(prev * (1 - alpha) + first_token_s * alpha, 3)
+        if total_s is not None:
+            prev_total = float(bucket.get("ema_total_s", total_s))
+            bucket["ema_total_s"] = round(prev_total * (1 - alpha) + total_s * alpha, 3)
+        bucket["provider"] = self.config.runtime.provider
+        bucket["model"] = self.runtime_model
+        bucket["updated_at"] = int(time.time())
+        self._save_memory()
 
     def _on_project_files_changed(self, modified: list[str], created: list[str], deleted: list[str]) -> None:
         """Called by ProjectWatcher when files change externally."""
@@ -345,7 +386,7 @@ class GemApp:
         while True:
             try:
                 # Check for external file changes
-                changes = self.file_watcher.get_changes()
+                changes = self.file_watcher.get_changes() if self.file_watcher is not None else []
                 if changes:
                     self.tool_cache.invalidate_all()
                     self.console.print(f"  [dim yellow]files changed externally: {', '.join(changes[:5])}[/]")
@@ -1373,16 +1414,32 @@ class GemApp:
             self.console.print("\n[dim]  Snapshot saved. Use /snapshot list to see saved points.[/]")
             return ""
         except RuntimeErrorWithContext as exc:
-            self.out.set_error(f"Connection issue: {exc}")
-            self.log.exception("Runtime error")
-            try:
-                simple = [{"role": "user", "content": user_text}]
-                response = self.engine.chat_once(simple)
-                assistant_text = response.get("message", {}).get("content", "")
-                if stream and assistant_text:
-                    self.console.print(f"\n{assistant_text}\n")
-            except Exception:
-                self.console.print(f"  [red]Failed: {exc}[/]")
+            lowered_exc = str(exc).lower()
+            retried = False
+            if any(token in lowered_exc for token in ("context", "prompt too long", "token", "overflow")):
+                max_ctx = self._effective_context_chars()
+                compacted, was_compacted = compact_if_needed(self.session.messages, max_ctx, keep_recent=3)
+                if was_compacted:
+                    self.session.messages = compacted
+                    self.store.append_event(self.session, "exec:reactive_compact", "Compacted context after runtime overflow", error=str(exc)[:200])
+                    self.store.save(self.session)
+                    try:
+                        from .agent_loop import run_agent_loop
+                        assistant_text = run_agent_loop(self, user_text, composed_messages, self.out)
+                        retried = True
+                    except Exception:
+                        retried = False
+            if not retried:
+                self.out.set_error(f"Connection issue: {exc}")
+                self.log.exception("Runtime error")
+                try:
+                    simple = [{"role": "user", "content": user_text}]
+                    response = self.engine.chat_once(simple)
+                    assistant_text = response.get("message", {}).get("content", "")
+                    if stream and assistant_text:
+                        self.console.print(f"\n{assistant_text}\n")
+                except Exception:
+                    self.console.print(f"  [red]Failed: {exc}[/]")
                 return ""
         except Exception as exc:
             self.out.set_error(str(exc))
@@ -1557,8 +1614,15 @@ class GemApp:
         self.logger.log_user_input(user_text, intent=",".join(routing.intents))
         if not routing.tool_names:
             return self._run_stream_simple(composed_messages, stream)
+        if stream:
+            route_bits = ", ".join(routing.intents[:3]) or "chat"
+            tool_bits = ", ".join(routing.tool_names[:3])
+            self.out.print_info(f"route: {route_bits}")
+            if tool_bits:
+                self.out.print_info(f"tool lane: {tool_bits}")
 
         ctx_size = self._select_task_context(user_text, routing.intents)
+        output_budget = self._select_task_output_budget(user_text, routing.intents)
 
         # ── Speed optimization: speculative pre-execution ──
         # Start running predicted tools NOW while model thinks
@@ -1584,6 +1648,9 @@ class GemApp:
             ])
         )
         if (is_edit_intent or is_followup_edit) and self.profile.feature_variant in ("compact", "balanced"):
+            if stream and (recent_edit_file if is_followup_edit else True):
+                target = recent_edit_file if is_followup_edit else "resolved from request"
+                self.out.print_info(f"edit path: direct file edit ({target})")
             result = self._direct_file_edit(
                 user_text, stream,
                 force_file=recent_edit_file if is_followup_edit else None,
@@ -1606,6 +1673,8 @@ class GemApp:
                 content_parts: list[str] = []
                 tool_calls_found: list[dict] = []
                 content_started = False
+                round_started = time.time()
+                first_token_s: float | None = None
 
                 # ── Speed optimization: disable thinking for tool dispatch rounds ──
                 # Round 0: think only for complex tasks (file edits, multi-step)
@@ -1614,7 +1683,14 @@ class GemApp:
                     use_think = len(user_text) > 30 or bool({"file_edit", "file_write"} & set(routing.intents))
                 else:
                     use_think = False  # continuation rounds don't need reasoning
-                for event in self.engine.stream_chat_events(working_messages, tools=tools, think=use_think, num_ctx=ctx_size):
+                round_budget = output_budget if _round == 0 else min(800, output_budget)
+                for event in self.engine.stream_chat_events(
+                    working_messages,
+                    tools=tools,
+                    think=use_think,
+                    num_ctx=ctx_size,
+                    num_predict=round_budget,
+                ):
                     if event["type"] == "thinking":
                         chunk = str(event["content"])
                         thinking_parts.append(chunk)
@@ -1636,6 +1712,8 @@ class GemApp:
                             chunk = _re.sub(r'<\|[^>]*\|>', '', chunk)
                         if not chunk.strip():
                             continue
+                        if first_token_s is None:
+                            first_token_s = time.time() - round_started
                         content_parts.append(chunk)
                         if stream:
                             out.stream(chunk)
@@ -1646,6 +1724,7 @@ class GemApp:
 
                 thinking = "".join(thinking_parts)
                 content = "".join(content_parts).strip()
+                self._record_runtime_sample(first_token_s=first_token_s, total_s=time.time() - round_started)
                 self.stats.record(self.engine.last_response_meta)
 
                 # Check if content contains a text-format tool call (model output it as text)
@@ -1997,18 +2076,17 @@ class GemApp:
         old_max = self.config.runtime.max_context_chars
         try:
             num_lines = len(old_content.splitlines())
+            use_patch_format = num_lines > 40 or len(old_content) > 1800
 
-            if num_lines <= 100:
-                # Small file: ask for complete updated file (Aider "whole" format)
+            if not use_patch_format:
                 r = self.engine.chat_once([
                     {"role": "user", "content": (
                         f"Here is {fpath}:\n```\n{old_content}\n```\n\n"
                         f"Apply this change: {user_text}\n\n"
                         f"Return the COMPLETE updated file. Keep ALL existing code. No explanation."
                     )}
-                ], think=False)
+                ], think=False, num_predict=min(2200, max(600, len(old_content) // 2)))
             else:
-                # Large file: ask for search/replace pairs (Codex "edit" format)
                 r = self.engine.chat_once([
                     {"role": "user", "content": (
                         f"Here is {fpath} ({num_lines} lines):\n```\n{old_content}\n```\n\n"
@@ -2016,9 +2094,9 @@ class GemApp:
                         f"Return ONLY the changes. For each change write:\n"
                         f"SEARCH:\n```\nexact old lines\n```\n"
                         f"REPLACE:\n```\nnew lines\n```\n\n"
-                        f"Use 2-4 lines of context in SEARCH to match uniquely. No explanation."
+                        f"Use 2-6 lines of context in SEARCH to match uniquely. No explanation."
                     )}
-                ], think=False)
+                ], think=False, num_predict=1200)
 
             # Restore
             self.config.runtime.max_context_chars = old_max
@@ -2029,7 +2107,7 @@ class GemApp:
         raw_response = r.get("message", {}).get("content", "").strip()
 
         # For large files, parse SEARCH/REPLACE blocks and apply them
-        if num_lines > 100 and ("SEARCH:" in raw_response or "SEARCH\n" in raw_response):
+        if use_patch_format and ("SEARCH:" in raw_response or "SEARCH\n" in raw_response):
             new_content = old_content
             # Extract search/replace pairs from the response
             search_blocks = re.split(r'SEARCH:\s*\n```[^\n]*\n', raw_response)
@@ -2105,18 +2183,9 @@ class GemApp:
                     color = "red" if d.severity == "error" else "yellow"
                     self.console.print(f"  [{color}]{d}[/]")
 
-        # Generate a one-line summary of what changed
         if diff:
-            diff_text = "\n".join(diff[:30])
-            try:
-                summary_r = self.engine.chat_once([
-                    {"role": "user", "content": f"Summarize these code changes in ONE sentence. No preamble:\n{diff_text}"}
-                ], think=False)
-                summary = summary_r.get("message", {}).get("content", "").strip()
-                if summary:
-                    self.console.print(f"\n  [dim]{summary}[/]"  )
-            except Exception:
-                pass
+            changed_chunks = max(1, sum(1 for line in diff if line.startswith("@@")))
+            self.console.print(f"\n  [dim]{fpath}: {changed_chunks} changed region(s), +{added}/-{removed} lines[/]")
 
         return f"Updated {fpath}."
 
@@ -2152,9 +2221,14 @@ class GemApp:
         chunks: list[str] = []
         started_content = False
         out = self.out
+        started_at = time.time()
+        first_token_s: float | None = None
+        max_tokens = 1200
+        if stream:
+            out.set_thinking_peek("contacting model and waiting for first tokens")
 
         try:
-            for event in self.engine.stream_chat_events(composed_messages):
+            for event in self.engine.stream_chat_events(composed_messages, num_predict=max_tokens):
                 if event["type"] == "thinking":
                     if stream:
                         out.feed_thinking(str(event["content"]))
@@ -2167,6 +2241,10 @@ class GemApp:
                         chunk = _re.sub(r'<\|[^>]*\|>', '', chunk)
                     if not chunk:
                         continue
+                    if first_token_s is None:
+                        first_token_s = time.time() - started_at
+                        if stream:
+                            out.set_thinking_peek("model responded, streaming answer")
                     chunks.append(chunk)
                     if stream:
                         out.stream(chunk)
@@ -2174,7 +2252,7 @@ class GemApp:
             if stream:
                 out.done()
         finally:
-            pass  # out.done() handles cleanup
+            self._record_runtime_sample(first_token_s=first_token_s, total_s=time.time() - started_at)
 
         return "".join(chunks).strip()
 
@@ -2193,6 +2271,20 @@ class GemApp:
             return 8192 if single_file else 12288
 
         return 6144
+
+    def _select_task_output_budget(self, user_text: str, intents: list[str]) -> int:
+        text = user_text.lower()
+        if set(intents) & {"quality_create"}:
+            return 2200
+        if set(intents) & {"file_edit"}:
+            return 1200
+        if set(intents) & {"file_write"}:
+            if any(ext in text for ext in (".py", ".js", ".ts", ".html", ".css")):
+                return 1600
+            return 1200
+        if set(intents) & {"search_code", "git"}:
+            return 700
+        return 900
 
     def _maybe_auto_verify(self) -> None:
         """Auto-suggest running tests after file changes in interactive mode."""
@@ -2338,6 +2430,53 @@ class GemApp:
         except Exception:
             pass
         return note
+
+    def planner_checkpoint_hint(self, checkpoint: str, task: str, context_snippet: str = "") -> PlannerHint | None:
+        if not self.config.runtime.planner_hints_enabled:
+            return None
+        if self.profile.key == "gemma4-e2b":
+            return None
+        compact_context = context_snippet.strip()[:1200]
+        prompt = (
+            "Return strict JSON only with keys: next_action, likely_file, risk, quality_gap, stop.\n"
+            "Be terse. Think like a coding assistant control loop, not a chat assistant.\n"
+            "Only suggest the next high-value action.\n\n"
+            f"Checkpoint: {checkpoint}\n"
+            f"Task: {task}\n"
+        )
+        if compact_context:
+            prompt += f"Context:\n{compact_context}\n"
+        try:
+            response = self.engine.generate_once(
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are Gem's checkpoint planner.\n"
+                            "Produce tiny structured execution hints.\n"
+                            "No prose. JSON only."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                max_tokens=220,
+            )
+            hint = parse_planner_hint(response, checkpoint)
+            if not hint:
+                return None
+            self.planner_hints.record(hint)
+            self.store.append_event(
+                self.session,
+                "planner_hint",
+                f"{checkpoint}: {hint.next_action or hint.risk or hint.quality_gap or 'hint'}",
+                likely_file=hint.likely_file,
+                risk=hint.risk,
+                quality_gap=hint.quality_gap,
+                stop=str(hint.stop).lower(),
+            )
+            return hint
+        except Exception:
+            return None
 
     def maybe_escalate_for_task(self, task: str) -> None:
         if not self.config.runtime.escalation_enabled:
@@ -2524,12 +2663,17 @@ class GemApp:
 
     def _effective_context_chars(self) -> int:
         base = min(self.config.runtime.max_context_chars, self.profile.recommended_context_chars)
+        if self.profile.key == "gemma4-26b-laptop":
+            base = min(base, 14000)
         if self.config.runtime.mode == "fast":
             return max(6000, min(base, 12000))
         if self.config.runtime.mode == "deep":
             return max(base, min(self.config.runtime.max_context_chars, base + 12000))
         if self.config.runtime.cache_policy == "rolling":
-            return max(8000, min(base, 16000))
+            cap = 14000 if self.profile.key == "gemma4-26b-laptop" else 16000
+            return max(8000, min(base, cap))
+        if self.config.runtime.low_overhead_mode:
+            return max(6000, min(base, 12000))
         return base
 
     def _adapt_to_prompt(self, prompt: str) -> None:
@@ -2608,5 +2752,9 @@ class GemApp:
             self._ask_out.done()
         self.toolkit.close()
         self.engine.close()
-        self.bg_indexer.stop()
-        self.file_watcher.stop()
+        if self.bg_indexer is not None:
+            self.bg_indexer.stop()
+        if self.file_watcher is not None:
+            self.file_watcher.stop()
+        if self.project_watcher is not None:
+            self.project_watcher.stop()

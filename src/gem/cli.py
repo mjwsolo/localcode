@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 import sys
 
@@ -11,9 +12,9 @@ from rich.table import Table
 from .agent import AgentRunner
 from .agent_background import launch_background_agent
 from .app import GemApp
-from .benchmarks import run_task_benchmarks
+from .benchmarks import compare_explicit_models, compare_gguf_models, compare_laptop_runtime_modes, run_task_benchmarks
 from .browser import browser_status, ensure_browser_mcp
-from .bootstrap import run_setup
+from .bootstrap import pull_model, run_setup
 from .daemon import (
     daemon_status,
     get_task,
@@ -31,7 +32,7 @@ from .logging_utils import configure_logging
 from .mcp import add_mcp_config, load_mcp_configs
 from .models import GEMMA_PROFILES, get_runtime_model, resolve_profile
 from .model_recommend import recommend_for_model_tag
-from .performance import apply_preset, benchmark_report
+from .performance import apply_preset, benchmark_report, detect_machine_profile, resolve_laptop_26b_runtime_mode
 from .provider_checks import browser_voice_readiness, provider_readiness
 from .runtime import GemRuntimeGateway
 from .runtime_launch import launch_runtime, runtime_command
@@ -53,7 +54,7 @@ from .voice import voice_status
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="localcode", description="LocalCode — AI coding assistant running entirely on your machine")
-    parser.add_argument("--profile", help="Gemma 4 profile: e2b, e4b, 26b-moe, 31b")
+    parser.add_argument("--profile", help="Gemma 4 profile: e2b, e4b, 26b-laptop, 26b-moe, 31b")
     parser.add_argument("--model", help="Explicit local runtime model tag")
     subparsers = parser.add_subparsers(dest="command")
 
@@ -64,6 +65,13 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark = subparsers.add_parser("benchmark", help="inspect the local machine and recommend a Gem performance preset")
     benchmark.add_argument("--mode", choices=["fast", "balanced", "deep"])
     benchmark.add_argument("--tasks", help="Run task-completion benchmarks from a JSON task file")
+    benchmark.add_argument("--compare-26b-laptop", action="store_true", help="Compare 26B laptop runtime modes (speed vs fit) on benchmark tasks")
+    benchmark.add_argument("--compare-models", nargs="+", help="Compare explicit local model tags on benchmark tasks")
+    benchmark.add_argument("--compare-26b-quants", action="store_true", help="Compare the installed 26B quant candidate set on benchmark tasks")
+    benchmark.add_argument("--compare-gguf-dir", help="Compare all candidate GGUF files present in this directory via llama.cpp")
+    benchmark.add_argument("--install-missing", action="store_true", help="When comparing 26B quants, install any missing candidate tags before running")
+    benchmark.add_argument("--provider", choices=["ollama", "llama_cpp", "mlx-local", "huggingface-local"], help="Provider to use for explicit model comparison")
+    benchmark.add_argument("--repeats", type=int, default=1, help="Repeat each benchmark task this many times")
     subparsers.add_parser("doctor", help="check local runtime connectivity")
     subparsers.add_parser("browser-setup", help="install the Playwright MCP browser preset into Gem config")
     subparsers.add_parser("voice-status", help="show local voice subsystem readiness")
@@ -188,6 +196,10 @@ def run_doctor() -> int:
         table.add_row("hf_device", config.runtime.huggingface_device)
         table.add_row("hf_dtype", config.runtime.huggingface_dtype)
     table.add_row("mode", config.runtime.mode)
+    table.add_row("execution_engine", config.runtime.execution_engine)
+    table.add_row("low_overhead_mode", str(config.runtime.low_overhead_mode))
+    if config.runtime.profile == "gemma4-26b-laptop":
+        table.add_row("26b_laptop_runtime", "automatic")
     table.add_row("quant_preset", config.runtime.quant_preset)
     table.add_row("cache_policy", config.runtime.cache_policy)
     table.add_row("rolling_window_messages", str(config.runtime.rolling_window_messages))
@@ -230,14 +242,14 @@ def main(argv: list[str] | None = None) -> None:
     os.environ["MallocStackLoggingNoCompact"] = "0"
     # Ollama performance optimizations (from mmap article)
     os.environ.setdefault("OLLAMA_FLASH_ATTENTION", "1")
-    # Allow 2 models simultaneously for orchestrator (26B planner + e2b workers)
-    os.environ.setdefault("OLLAMA_MAX_LOADED_MODELS", "2")
+    # Keep one hot A4B model resident on small laptops unless the user overrides it.
+    os.environ.setdefault("OLLAMA_MAX_LOADED_MODELS", "1")
     warnings.filterwarnings("ignore", category=UserWarning)
     parser = build_parser()
     args = parser.parse_args(argv)
     config = load_config()
     # Set KV cache type from config (after config loads)
-    os.environ["OLLAMA_KV_CACHE_TYPE"] = config.runtime.kv_cache_type
+    os.environ["OLLAMA_KV_CACHE_TYPE"] = config.runtime.kv_cache_type_k
     configure_logging(config.ui.show_debug)
     console = Console()
 
@@ -249,6 +261,159 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(run_setup(config, args.profile, args.model, args.install, args.benchmark))
     if args.command == "benchmark":
         if args.tasks:
+            if args.compare_gguf_dir:
+                candidate_path = Path.cwd() / "benchmarks" / "gemma_gguf_candidates.json"
+                candidates = json.loads(candidate_path.read_text())
+                root = Path(args.compare_gguf_dir)
+                ggufs = [root / str(item["filename"]) for item in candidates if (root / str(item["filename"])).is_file()]
+                missing = [str(item["filename"]) for item in candidates if not (root / str(item["filename"])).is_file()]
+                if missing:
+                    console.print("Missing GGUF candidates: " + ", ".join(missing))
+                if not ggufs:
+                    console.print("No candidate GGUF files found in that directory.")
+                    raise SystemExit(1)
+                rows = compare_gguf_models(
+                    config,
+                    Path.cwd(),
+                    Path(args.tasks),
+                    ggufs,
+                    mode=args.mode or "balanced",
+                    repeats=max(1, args.repeats),
+                )
+                table = Table("model", "provider", "profile", "task", "repeat", "seconds", "first_token_s", "verify", "heuristic", "quality")
+                for row in rows:
+                    table.add_row(
+                        str(row["model"]),
+                        str(row["provider"]),
+                        str(row["profile"]),
+                        str(row["name"]),
+                        str(row["repeat"]),
+                        str(row["seconds"]),
+                        str(row["first_token_s"]),
+                        str(row["verify_code"]),
+                        str(row["heuristic_score"]),
+                        str(row["quality_score"]),
+                    )
+                console.print(table)
+                return
+            if args.compare_26b_quants:
+                provider = args.provider or "ollama"
+                bench_gateway = GemRuntimeGateway(config.runtime)
+                bench_gateway.config.provider = provider
+                installed = bench_gateway.list_models()
+                candidate_path = Path.cwd() / "benchmarks" / "gemma26b_quant_candidates.json"
+                candidates = json.loads(candidate_path.read_text())
+                installed_lower = {m.lower(): m for m in installed}
+                selected: list[str] = []
+                missing: list[str] = []
+                for item in candidates:
+                    tag = str(item["tag"])
+                    exact = installed_lower.get(tag.lower())
+                    if exact:
+                        selected.append(exact)
+                    else:
+                        missing.append(tag)
+                if missing and args.install_missing:
+                    if provider != "ollama":
+                        console.print("--install-missing is currently supported only with --provider ollama.")
+                        raise SystemExit(1)
+                    for tag in missing:
+                        console.print(f"Installing {tag} ...")
+                        ok, detail = pull_model(tag)
+                        console.print(detail)
+                        if not ok:
+                            console.print(f"Failed to install {tag}")
+                            raise SystemExit(1)
+                    installed = GemRuntimeGateway(config.runtime).list_models()
+                    installed_lower = {m.lower(): m for m in installed}
+                    selected = []
+                    missing = []
+                    for item in candidates:
+                        tag = str(item["tag"])
+                        exact = installed_lower.get(tag.lower())
+                        if exact:
+                            selected.append(exact)
+                        else:
+                            missing.append(tag)
+                if missing:
+                    console.print("Missing 26B quant candidates: " + ", ".join(missing))
+                if not selected:
+                    console.print("No candidate 26B quant models are installed for comparison.")
+                    raise SystemExit(1)
+                rows = compare_explicit_models(
+                    config,
+                    Path.cwd(),
+                    Path(args.tasks),
+                    selected,
+                    mode=args.mode or "balanced",
+                    provider=provider,
+                    repeats=max(1, args.repeats),
+                )
+                table = Table("model", "provider", "profile", "task", "repeat", "seconds", "first_token_s", "verify", "heuristic", "quality")
+                for row in rows:
+                    table.add_row(
+                        str(row["model"]),
+                        str(row["provider"]),
+                        str(row["profile"]),
+                        str(row["name"]),
+                        str(row["repeat"]),
+                        str(row["seconds"]),
+                        str(row["first_token_s"]),
+                        str(row["verify_code"]),
+                        str(row["heuristic_score"]),
+                        str(row["quality_score"]),
+                    )
+                console.print(table)
+                return
+            if args.compare_models:
+                rows = compare_explicit_models(
+                    config,
+                    Path.cwd(),
+                    Path(args.tasks),
+                    args.compare_models,
+                    mode=args.mode or "balanced",
+                    provider=args.provider,
+                    repeats=max(1, args.repeats),
+                )
+                table = Table("model", "provider", "profile", "task", "repeat", "seconds", "first_token_s", "verify", "heuristic", "quality")
+                for row in rows:
+                    table.add_row(
+                        str(row["model"]),
+                        str(row["provider"]),
+                        str(row["profile"]),
+                        str(row["name"]),
+                        str(row["repeat"]),
+                        str(row["seconds"]),
+                        str(row["first_token_s"]),
+                        str(row["verify_code"]),
+                        str(row["heuristic_score"]),
+                        str(row["quality_score"]),
+                    )
+                console.print(table)
+                return
+            if args.compare_26b_laptop:
+                rows = compare_laptop_runtime_modes(
+                    config,
+                    Path.cwd(),
+                    Path(args.tasks),
+                    mode=args.mode or "balanced",
+                    repeats=max(1, args.repeats),
+                )
+                table = Table("runtime_mode", "provider", "task", "repeat", "seconds", "first_token_s", "verify", "heuristic", "quality")
+                for row in rows:
+                    table.add_row(
+                        str(row["runtime_mode"]),
+                        str(row["provider"]),
+                        str(row["name"]),
+                        str(row["repeat"]),
+                        str(row["seconds"]),
+                        str(row["first_token_s"]),
+                        str(row["verify_code"]),
+                        str(row["heuristic_score"]),
+                        str(row["quality_score"]),
+                    )
+                console.print(table)
+                return
             rows = run_task_benchmarks(config, Path.cwd(), Path(args.tasks), args.profile, args.model)
             table = Table("task", "seconds", "chars", "keyword_hits", "verify_code")
             for row in rows:
@@ -297,7 +462,6 @@ def main(argv: list[str] | None = None) -> None:
         console.print(Panel("\n".join(voice_status(config)), title="Voice"))
         return
     if args.command == "speed":
-        from .runtime import GemRuntimeGateway
         if args.speed_command == "launch":
             gw = GemRuntimeGateway(config.runtime)
             cmd = gw.llama_server_command(args.model_path)
@@ -331,7 +495,8 @@ def main(argv: list[str] | None = None) -> None:
         # Default: show status
         console.print("[bold]Speed Optimizations[/bold]\n")
         table = Table("Setting", "Value", "Effect")
-        table.add_row("KV cache type", config.runtime.kv_cache_type, "q4_0 = 2x less cache memory")
+        table.add_row("KV cache K", config.runtime.kv_cache_type_k, "q8_0 = preserve key quality")
+        table.add_row("KV cache V", config.runtime.kv_cache_type_v, "turbo4 = 3.8x compression, +0.23% PPL")
         table.add_row("Expert offload", str(config.runtime.llama_cpp_expert_offload), "MoE experts on CPU, attention on GPU")
         table.add_row("Spec type", config.runtime.llama_cpp_spec_type or "(none)", "ngram-mod = 1.5-2x speedup")
         table.add_row("Draft max", str(config.runtime.llama_cpp_draft_max), "Max speculative tokens")
@@ -646,6 +811,11 @@ def _auto_select_model(config) -> str:
     handle multi-step tasks, and produce quality code. e4b/e2b are fallbacks
     only if 26B isn't installed yet.
     """
+    # For llama_cpp, the model is whatever the server is running — no selection needed.
+    # The server is already loaded with the right GGUF.
+    if config.runtime.provider == "llama_cpp":
+        return config.runtime.model or ""
+
     try:
         from .runtime import GemRuntimeGateway
         gw = GemRuntimeGateway(config.runtime)

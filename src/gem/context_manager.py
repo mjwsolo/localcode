@@ -419,7 +419,10 @@ class SyntaxChecker:
         self._enhanced_failed = False
         self._project_root = project_root
 
-    def check(self, file_path: str, cwd: str = ".") -> dict:
+    def check(self, file_path: str, cwd: str = ".", prefer_basic: bool = False) -> dict:
+        if prefer_basic:
+            return self._basic_check(file_path, cwd)
+
         # Try EnhancedChecker (LSP) first
         if not self._enhanced_failed and not self._enhanced:
             try:
@@ -512,11 +515,12 @@ class UndoStack:
 class ProgressTracker:
     """Show user what's happening during multi-step tasks."""
 
-    def __init__(self, callback=None):
+    def __init__(self, callback=None, stage_callback=None):
         self._cb = callback or (lambda x: None)
+        self._stage_cb = stage_callback or (lambda x: None)
 
     def start(self, step: str):
-        self._cb(f"▶ {step}")
+        self._stage_cb(step)
 
     def done(self, step: str, result: str = "ok"):
         self._cb(f"  ✓ {step} — {result}")

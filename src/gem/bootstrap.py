@@ -20,7 +20,7 @@ from .browser import browser_status, ensure_browser_mcp
 from .config import AppConfig, get_config_path, init_config_file, save_config
 from .model_recommend import recommend_for_model_tag
 from .models import ALIASES, GEMMA_PROFILES, MLX_MODEL_IDS, get_runtime_model, resolve_profile
-from .performance import MachineProfile, PerformancePreset, apply_preset, benchmark_report
+from .performance import MachineProfile, PerformancePreset, apply_preset, benchmark_report, should_promote_legacy_default_to_laptop_26b
 from .provider_checks import browser_voice_readiness, provider_readiness
 from .runtime import GemRuntimeGateway
 from .runtime_launch import runtime_command
@@ -46,6 +46,7 @@ class SetupStep:
 PROFILE_HINTS = {
     "gemma4-e2b": "faster for small machines",
     "gemma4-e4b": "balanced default for most laptops",
+    "gemma4-26b-laptop": "best local quality/speed tradeoff on Apple Silicon laptops",
     "gemma4-26b-moe": "stronger coding on bigger local rigs",
     "gemma4-31b": "best quality for large local workstations",
 }
@@ -291,7 +292,7 @@ def validate_provider(console: Console, config: AppConfig) -> bool:
 
 def choose_profile(console: Console, current_profile: str) -> str:
     console.print("Choose a Gemma profile:")
-    ordered_keys = ["gemma4-e2b", "gemma4-e4b", "gemma4-26b-moe", "gemma4-31b"]
+    ordered_keys = ["gemma4-e2b", "gemma4-e4b", "gemma4-26b-laptop", "gemma4-26b-moe", "gemma4-31b"]
     for index, key in enumerate(ordered_keys, start=1):
         profile = GEMMA_PROFILES[key]
         hint = PROFILE_HINTS[key]
@@ -379,10 +380,14 @@ def run_runtime_wizard(
     assume_defaults: bool = False,
 ) -> tuple[str, str | None]:
     machine, preset = benchmark_report(config)
+    if should_promote_legacy_default_to_laptop_26b(config, machine):
+        apply_preset(config, preset, model=model_name or config.runtime.model)
     if benchmark:
         apply_preset(config, preset, model=model_name or config.runtime.model)
         console.print(f"Detected machine tier: {machine.tier}")
         console.print(f"Recommended mode: {preset.mode}")
+        if preset.profile == "gemma4-26b-laptop":
+            console.print("26B laptop mode: automatic Apple Silicon runtime selection enabled.")
         for note in preset.notes:
             console.print(f"- {note}")
     if assume_defaults:

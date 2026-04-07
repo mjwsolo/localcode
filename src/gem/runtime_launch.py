@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .config import RuntimeConfig
 from .jobs import launch_background_job
+from .runtime import GemRuntimeGateway
 
 
 def runtime_command(config: RuntimeConfig) -> str | None:
@@ -14,23 +15,20 @@ def runtime_command(config: RuntimeConfig) -> str | None:
             return None
         return "ollama serve"
     if config.provider == "llama_cpp":
-        server = shutil.which("llama-server") or shutil.which("llama_cpp.server")
-        if server is None or not config.model:
+        # Use the full llama_server_command() which includes TurboQuant,
+        # flash attention, mmap, and all speed optimization flags.
+        gateway = GemRuntimeGateway(config)
+        model_path = config.model
+        if not model_path:
             return None
-        base = [
-            shlex.quote(server),
-            "-m",
-            shlex.quote(config.model),
-            "--port",
-            _port_from_base_url(config.base_url),
-        ]
-        if config.llama_cpp_gpu_layers:
-            base.extend(["-ngl", str(config.llama_cpp_gpu_layers)])
-        if config.llama_cpp_threads:
-            base.extend(["-t", str(config.llama_cpp_threads)])
-        if config.llama_cpp_batch_size:
-            base.extend(["-b", str(config.llama_cpp_batch_size)])
-        return " ".join(base)
+        # Resolve Ollama blob path if needed
+        if not model_path.startswith("/") and "sha256" not in model_path:
+            model_path = gateway._find_ollama_blob(model_path)
+        port = int(_port_from_base_url(config.base_url))
+        cmd = gateway.llama_server_command(model_path, port=port)
+        # Add single-slot for memory efficiency on 16GB
+        cmd.extend(["-np", "1"])
+        return " ".join(shlex.quote(c) for c in cmd)
     return None
 
 
