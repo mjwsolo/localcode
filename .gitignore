@@ -23,4 +23,7 @@ gem_traces_test.jsonl
 *.db-wal
 sonic.py
 sonic_clone.py
-llama-cpp-turboquant/
+llama-cpp-turboquant/build/
+llama-cpp-turboquant/build/
+llama-cpp-turboquant/build-*/
+llama-cpp-turboquant/.git/
