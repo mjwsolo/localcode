@@ -848,8 +848,8 @@ def _pick_runtime_mode(config, console) -> "AppConfig":
     gpu_ok = _gpu_memory_unlocked()
     if gpu_ok:
         import tty, termios
-        print("\n  1. Fast         27 tok/s  128K")
-        print("  2. Reasoning    26 tok/s  128K")
+        print("\n  1. Fast         27 tok/s  32K")
+        print("  2. Reasoning    26 tok/s  32K")
         sys.stdout.write("  > ")
         sys.stdout.flush()
         fd = sys.stdin.fileno()
