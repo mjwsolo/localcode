@@ -182,6 +182,12 @@ class GemRuntimeGateway:
                 content = (msg.get("thinking", "") or "").strip()
             # Strip Gemma 4 thinking channel tokens that leak through
             content = _strip_thinking_tokens(content)
+            # If thinking stripped everything, retry without thinking
+            if not content and use_think:
+                result = self.chat_once(messages, tools=None, think=False,
+                                         num_predict=max_tokens or 4096)
+                msg = result.get("message", {})
+                content = _strip_thinking_tokens((msg.get("content", "") or "").strip())
             return content
 
         if self.config.provider == "mlx-local":
