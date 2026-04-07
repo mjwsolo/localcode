@@ -105,7 +105,8 @@ class GemRuntimeGateway:
         if mode in ("turbo", "turbo-think"):
             # Full GPU: all layers on Metal via mmap shared buffers, 2 graph splits
             # Requires: sudo sysctl iogpu.wired_limit_mb=14336
-            cmd.extend(["--mmap", "-ngl", "999", "-fit", "off"])
+            # --cache-ram 0: disable server-side prompt cache (TurboQuant WHT corrupts it)
+            cmd.extend(["--mmap", "-ngl", "999", "-fit", "off", "--cache-ram", "0"])
         elif mode == "context":
             # GPU mode: attention on Metal, experts on CPU, mmap for SSD paging
             cmd.extend(["--mmap", "-ngl", "999", "-ot", "exps=CPU"])
@@ -505,10 +506,6 @@ class GemRuntimeGateway:
                 "messages": messages,
                 "temperature": opts["temperature"],
                 "chat_template_kwargs": {"enable_thinking": think},
-                # Disable prompt cache — TurboQuant WHT rotation causes cache
-                # corruption that produces <unused25> garbage on subsequent requests.
-                # TODO: fix TurboQuant cache compatibility, then re-enable.
-                "cache_prompt": False,
             }
             if "num_predict" in opts:
                 payload["max_tokens"] = opts["num_predict"]
