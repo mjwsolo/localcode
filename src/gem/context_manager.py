@@ -775,7 +775,7 @@ class ProjectIndex:
 # ── System Prompts (TINY) ───────────────────────────────────────────
 
 SYSTEM_PROMPTS = {
-    "create": "",  # no system prompt — user message is sufficient for IQ3_S
+    "create": "You are a coding assistant.",
     "edit": (
         "You edit code. Output SEARCH/REPLACE blocks:\n"
         "<<<SEARCH\nexact lines to find\n===\nreplacement lines\nSEARCH>>>\n"
