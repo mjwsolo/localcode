@@ -58,6 +58,8 @@ Rules:
 - Use dedicated tools (read_file, grep) instead of bash equivalents.
 - If an approach fails, diagnose why before switching tactics.
 - Be concise. Lead with the action, not the reasoning.
+- NEVER leave TODO comments, notes, or "I'll fix this later" in code. Write complete, working code every time.
+- NEVER write your thinking or planning as code comments. Comments are for explaining code logic only.
 
 Working directory: {cwd}
 """
@@ -400,7 +402,6 @@ def _render_markdown(text: str) -> None:
         _console.print(Markdown(text))
     else:
         _console.print(text)
-    _console.print()
 
 
 def _brief_result(tool_name: str, result: str) -> str:
@@ -498,14 +499,23 @@ def run_agent_loop(
     for round_num in range(MAX_ROUNDS):
         # Stream model response — text appears live, tool calls collected
         content_parts: list[str] = []
+        thinking_parts: list[str] = []
         tool_calls: list[dict] = []
-        streaming_started = False
+        thinking_shown = False
 
         try:
             for event in app.engine.stream_chat_events(
                 messages, tools=TOOL_SCHEMAS, think=use_thinking, num_predict=MAX_OUTPUT_TOKENS,
             ):
-                if event["type"] == "content":
+                if event["type"] == "thinking":
+                    chunk = _strip_thinking_tokens(event["content"])
+                    if chunk:
+                        if not thinking_shown:
+                            out._stop_indicator()
+                            sys.stdout.write("\033[2;3m  thinking...\033[0m\n")
+                            thinking_shown = True
+                        thinking_parts.append(chunk)
+                elif event["type"] == "content":
                     chunk = _strip_thinking_tokens(event["content"])
                     if chunk:
                         content_parts.append(chunk)
@@ -529,6 +539,17 @@ def run_agent_loop(
             except Exception:
                 out.set_error(f"Model error: {exc}")
                 break
+
+        # Show thinking summary if present (collapsed, dim)
+        if thinking_parts:
+            thinking_text = "".join(thinking_parts).strip()
+            if thinking_text:
+                # Show first 2 lines as a peek
+                lines = thinking_text.splitlines()
+                preview = lines[0][:80]
+                if len(lines) > 1:
+                    preview += f"  …({len(lines)} lines)"
+                sys.stdout.write(f"\033[2;3m  thought: {preview}\033[0m\n")
 
         content = "".join(content_parts)
 
