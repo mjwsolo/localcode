@@ -134,12 +134,14 @@ def _do_create(app, user_text, messages, out, progress, checker, context, releva
     aggressive_quality_task = _needs_aggressive_quality_pass(user_text)
     compact_task = _should_use_fast_create_lane(app, user_text, [], quality_task)
 
-    # GATHER
-    progress.start("gathering context")
+    # GATHER — skip heavy context scan for new file creation (pong, games, etc.)
     related: list[str] = []
-    if compact_task:
+    t = user_text.lower()
+    is_new_file = any(w in t for w in ("make", "create", "build", "write", "generate", "new"))
+    if compact_task or is_new_file:
         ctx = _build_compact_create_context(user_text)
     else:
+        progress.start("gathering context")
         related = relevance.find_related(user_text, repo, max_files=2)
         ctx = context.build_for_create(user_text, repo, related)
     if quality_task:
