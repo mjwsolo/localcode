@@ -474,17 +474,24 @@ def run_agent_loop(
     from .runtime import _strip_thinking_tokens
 
     # ── Build messages ──
-    system_prompt = SYSTEM_PROMPT.format(cwd=app.repo_root)
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": system_prompt},
-    ]
+    # composed_messages already has system prompt + context + full conversation + current user msg
+    # Inject our tool-loop system prompt at the front
+    agent_system = SYSTEM_PROMPT.format(cwd=app.repo_root)
+    messages: list[dict[str, Any]] = []
 
-    # Add bounded conversation history (skip huge messages)
-    for m in composed_messages[-4:]:
-        if len(str(m.get("content", ""))) < 2000:
+    for m in composed_messages:
+        if m.get("role") == "system":
+            # Merge our agent instructions with existing system prompt
+            existing = m.get("content", "")
+            messages.append({"role": "system", "content": f"{existing}\n\n{agent_system}" if existing else agent_system})
+        else:
             messages.append(m)
 
-    # Add current user message (if not already in composed)
+    # If no system message was in composed, add ours
+    if not any(m.get("role") == "system" for m in messages):
+        messages.insert(0, {"role": "system", "content": agent_system})
+
+    # Add current user message if not already there
     if not messages or messages[-1].get("content") != user_text:
         messages.append({"role": "user", "content": user_text})
 
