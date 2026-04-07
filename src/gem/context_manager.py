@@ -520,12 +520,19 @@ class ProgressTracker:
         self._stage_cb = stage_callback or (lambda x: None)
 
     def start(self, step: str):
+        import sys
+        sys.stdout.write(f"  \033[90m· {step}...\033[0m\r")
+        sys.stdout.flush()
         self._stage_cb(step)
 
     def done(self, step: str, result: str = "ok"):
+        import sys
+        sys.stdout.write(f"\033[2K")  # clear the "step..." line
         self._cb(f"  ✓ {step} — {result}")
 
     def fail(self, step: str, error: str):
+        import sys
+        sys.stdout.write(f"\033[2K")
         self._cb(f"  ✗ {step} — {error}")
 
 
