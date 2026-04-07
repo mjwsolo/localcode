@@ -776,9 +776,10 @@ class ProjectIndex:
 
 SYSTEM_PROMPTS = {
     "create": (
-        "You generate complete runnable code files. Output ONLY valid code in a code block. "
-        "For apps, games, and UIs, prefer a recognizable polished result over minimal scaffolding. "
-        "Do not return placeholders, TODOs, or truncated sections."
+        "You are a code generator. When asked to create something, respond with ONLY:\n"
+        "FILENAME: <filename>\n```<language>\n<complete code>\n```\n\n"
+        "Never explain. Never describe. Never analyze input. Just write the code.\n"
+        "For apps/games/UIs, write complete runnable code. No placeholders or TODOs."
     ),
     "edit": (
         "You edit code. Output SEARCH/REPLACE blocks:\n"
