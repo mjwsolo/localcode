@@ -161,7 +161,6 @@ def _do_create(app, user_text, messages, out, progress, checker, context, releva
         user_text,
         [
             {"role": "system", "content": SYSTEM_PROMPTS["create"]},
-            *messages[-4:],
             {"role": "user", "content": prompt},
         ],
         out,
