@@ -105,7 +105,6 @@ class GemRuntimeGateway:
         if mode in ("turbo", "turbo-think"):
             # Full GPU: all layers on Metal via mmap shared buffers, 2 graph splits
             # Requires: sudo sysctl iogpu.wired_limit_mb=14336
-            # --cache-ram 0: disable server-side prompt cache (TurboQuant WHT corrupts it)
             cmd.extend(["--mmap", "-ngl", "999", "-fit", "off", "--cache-ram", "0"])
         elif mode == "context":
             # GPU mode: attention on Metal, experts on CPU, mmap for SSD paging

@@ -775,12 +775,7 @@ class ProjectIndex:
 # ── System Prompts (TINY) ───────────────────────────────────────────
 
 SYSTEM_PROMPTS = {
-    "create": (
-        "You are a code generator. When asked to create something, respond with ONLY:\n"
-        "FILENAME: <filename>\n```<language>\n<complete code>\n```\n\n"
-        "Never explain. Never describe. Never analyze input. Just write the code.\n"
-        "For apps/games/UIs, write complete runnable code. No placeholders or TODOs."
-    ),
+    "create": "",  # no system prompt — user message is sufficient for IQ3_S
     "edit": (
         "You edit code. Output SEARCH/REPLACE blocks:\n"
         "<<<SEARCH\nexact lines to find\n===\nreplacement lines\nSEARCH>>>\n"
