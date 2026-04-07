@@ -600,9 +600,9 @@ def _do_run(app, user_text, out):
 # ── Feature: CHAT (no tools) ──────────────────────────────────────
 
 def _do_chat(app, user_text, messages, out):
-    use_think = app.config.runtime.laptop_26b_runtime_mode.endswith("-think")
+    recent = [m for m in messages[-4:] if len(m.get("content", "")) < 500]
     response = app.engine.generate_once(
-        [{"role": "user", "content": user_text}],
+        [{"role": "system", "content": SYSTEM_PROMPTS["chat"]}, *recent, {"role": "user", "content": user_text}],
         max_tokens=512,
     )
     out.stream(response)
