@@ -1466,7 +1466,14 @@ class GemApp:
         self.out.done()
 
         self.session.last_assistant_text = assistant_text
-        self.session.messages.append({"role": "assistant", "content": assistant_text})
+        # Don't pollute history with garbage — model will mirror it
+        is_garbage = (
+            not assistant_text.strip()
+            or "<unused" in assistant_text
+            or len(assistant_text) > 50 and " " not in assistant_text[:100]
+        )
+        if not is_garbage:
+            self.session.messages.append({"role": "assistant", "content": assistant_text})
         self.store.append_event(self.session, "assistant", assistant_text[:160])
         self.store.save(self.session)
         # Turn diff summary
