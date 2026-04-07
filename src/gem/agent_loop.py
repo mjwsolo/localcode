@@ -59,7 +59,7 @@ def classify_intent(text: str) -> str:
     if any(w in t for w in ("commit", "push", "git ", "branch", "diff", "status")):
         return "GIT"
     if any(w in t for w in ("run ", "run it", "execute", "launch", "start it", "try it", "open it")):
-        return "CREATE"  # route to CREATE which can run bash
+        return "RUN"
     if any(w in t for w in ("find", "search", "where", "grep", "locate")):
         return "SEARCH"
     if any(w in t for w in ("install", "add package", "dependency", "requirements")):
@@ -119,6 +119,8 @@ def run_agent_loop(
         return _do_git(app, user_text, composed_messages, out)
     elif intent == "SEARCH":
         return _do_search(app, user_text, out)
+    elif intent == "RUN":
+        return _do_run(app, user_text, out)
     else:
         # CHAT — just answer
         return _do_chat(app, user_text, composed_messages, out)
@@ -574,10 +576,30 @@ def _do_search(app, user_text, out):
     return output
 
 
+# ── Feature: RUN ──────────────────────────────────────────────────
+
+def _do_run(app, user_text, out):
+    """Run the most recently created file."""
+    import glob
+    repo = app.repo_root
+    # Find most recent .py file
+    py_files = sorted(repo.glob("*.py"), key=lambda f: f.stat().st_mtime, reverse=True)
+    if not py_files:
+        out.stream("No Python files found to run.")
+        return ""
+    target = py_files[0].name
+    out.log_tool("bash", f"python {target}")
+    r = subprocess.run(f"python {target}", shell=True, capture_output=True, text=True,
+                       timeout=30, cwd=str(repo))
+    output = (r.stdout + r.stderr).strip()[:2000]
+    out.stream(output or f"Ran {target} (no output)")
+    return output
+
+
 # ── Feature: CHAT (no tools) ──────────────────────────────────────
 
 def _do_chat(app, user_text, messages, out):
-    # Simple chat — no system prompt (IQ3_S hallucinates with complex system prompts)
+    use_think = app.config.runtime.laptop_26b_runtime_mode.endswith("-think")
     response = app.engine.generate_once(
         [{"role": "user", "content": user_text}],
         max_tokens=512,
@@ -798,8 +820,8 @@ def _generate_text(
     started_at = time.time()
     first_token_s: float | None = None
     out.set_thinking_peek("contacting model and waiting for first tokens")
-    use_thinking = app.config.runtime.laptop_26b_runtime_mode.endswith("-think")
-    for event in app.engine.stream_chat_events(messages, think=use_thinking, num_ctx=num_ctx_override, num_predict=max_tokens):
+    # Thinking only for CHAT — code generation degenerates with thinking at IQ3_S
+    for event in app.engine.stream_chat_events(messages, think=False, num_ctx=num_ctx_override, num_predict=max_tokens):
         if event["type"] == "thinking":
             chunk = str(event["content"])
             thinking.append(chunk)
