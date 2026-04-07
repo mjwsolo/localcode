@@ -803,19 +803,11 @@ def main(argv: list[str] | None = None) -> None:
         if best and best != config.runtime.model:
             config.runtime.model = best
 
-    # Only show mode picker if server isn't already running
+    # Always show mode picker for TurboQuant configs
     if (config.runtime.provider == "llama_cpp"
             and config.runtime.kv_cache_type_v.startswith("turbo")
             and not getattr(args, "prompt", None)):
-        import httpx
-        try:
-            r = httpx.get(f"{config.runtime.base_url.rstrip('/')}/health", timeout=2)
-            if r.status_code == 200:
-                pass  # server already running, skip picker
-            else:
-                config = _pick_runtime_mode(config, console)
-        except Exception:
-            config = _pick_runtime_mode(config, console)
+        config = _pick_runtime_mode(config, console)
 
     app = GemApp(config=config, cwd=Path.cwd(), profile_name=args.profile, model_name=args.model)
     try:
