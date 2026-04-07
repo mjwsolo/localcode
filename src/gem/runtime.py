@@ -7,6 +7,18 @@ from typing import Any, Iterator
 import httpx
 
 from .config import RuntimeConfig
+
+
+def _strip_thinking_tokens(text: str) -> str:
+    """Strip Gemma 4 thinking channel tokens that leak through at IQ3_S quant."""
+    if not text:
+        return text
+    # <unused25> is the raw decode of <|channel> / <channel|> tokens
+    text = text.replace("<unused25>", "")
+    # Strip actual channel tags if present
+    text = re.sub(r"<\|channel>thought\n?", "", text)
+    text = re.sub(r"<channel\|>\n?", "", text)
+    return text.strip()
 from .tool_parsing import (
     build_tool_result_message,
     build_tool_response,
@@ -157,13 +169,19 @@ class GemRuntimeGateway:
         - MLX/HF: in-process generation
         """
         if self.config.provider == "llama_cpp":
-            result = self.chat_once(messages, tools=None, think=False,
-                                     num_predict=max_tokens or 4096)
+            use_think = self.config.laptop_26b_runtime_mode.endswith("-think")
+            budget = max_tokens or 4096
+            if use_think:
+                budget = max(budget * 3, 4096)
+            result = self.chat_once(messages, tools=None, think=use_think,
+                                     num_predict=budget)
             msg = result.get("message", {})
             content = (msg.get("content", "") or "").strip()
             # Fallback: if content is empty, thinking may contain the real response
             if not content:
                 content = (msg.get("thinking", "") or "").strip()
+            # Strip Gemma 4 thinking channel tokens that leak through
+            content = _strip_thinking_tokens(content)
             return content
 
         if self.config.provider == "mlx-local":
@@ -509,7 +527,7 @@ class GemRuntimeGateway:
                 return {}
             delta = choices[0].get("delta") or choices[0].get("message") or {}
             result: dict[str, Any] = {
-                "content": delta.get("content", ""),
+                "content": _strip_thinking_tokens(delta.get("content", "")),
                 "tool_calls": delta.get("tool_calls") or [],
             }
             # Gemma 4 thinking: llama.cpp returns reasoning in reasoning_content
