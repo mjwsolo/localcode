@@ -415,7 +415,6 @@ class GemApp:
                 if changes:
                     self.tool_cache.invalidate_all()
                     self.console.print(f"  [dim yellow]files changed externally: {', '.join(changes[:5])}[/]")
-                self.console.rule(style="dim")
                 import sys
                 sys.stdout.write("\033[5 q")  # blinking bar cursor
                 sys.stdout.flush()
@@ -465,7 +464,7 @@ class GemApp:
         mode_label = "fast" if not mode.endswith("-think") else "reasoning"
         model_short = self.runtime_model.split("/")[-1] if "/" in self.runtime_model else self.runtime_model
         path = f"~/{self.repo_root.name}" if self.repo_root != Path.home() else "~"
-        return f" {model_short} {mode_label} · {pct_left}% left · {path}"
+        return f"\n {model_short} {mode_label} · {pct_left}% left · {path}"
 
     def _check_clipboard_image(self) -> None:
         """Silently check if clipboard has a new image."""
@@ -530,6 +529,7 @@ class GemApp:
                 subprocess.run(["sudo", "sysctl", "iogpu.wired_limit_mb=14336"])
                 gpu_ok = True
         if gpu_ok:
+            print()
             print("  1. \033[1mFast\033[0m         27 tok/s  32K context")
             print("  2. \033[1mReasoning\033[0m    26 tok/s  32K context")
             ch = ""

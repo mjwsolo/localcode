@@ -288,7 +288,6 @@ class OutputManager:
                 timer = f"{int(elapsed // 60)}m{int(elapsed % 60):02d}s"
 
             with self._lock:
-                tokens = self.state.tokens
                 peek = self.state.thinking_peek
                 custom = getattr(self, '_custom_stage', '')
 
@@ -297,10 +296,14 @@ class OutputManager:
 
             line1 = f"\033[32m {icon} {gem_label}... ({timer})\033[0m"
 
-            if peek:
-                line2 = peek[:max(20, cols - 6)]
-                sys.stderr.write(f"\r{line1}\033[K\n\033[2m   {line2}\033[0m\033[K\033[A")
-            else:
-                sys.stderr.write(f"\r{line1}\033[K")
-            sys.stderr.flush()
-            time.sleep(0.12)
+            try:
+                if peek:
+                    line2 = peek[:max(20, cols - 6)]
+                    sys.stderr.write(f"\r{line1}\033[K\n\033[2m   {line2}\033[0m\033[K\033[A")
+                else:
+                    sys.stderr.write(f"\r{line1}\033[K")
+                sys.stderr.flush()
+            except (BrokenPipeError, OSError, ValueError):
+                self._indicator_running = False
+                break
+            time.sleep(0.5)
