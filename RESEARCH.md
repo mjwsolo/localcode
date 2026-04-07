@@ -115,3 +115,29 @@ Response: {"tool": "read_file", "parameters": {"path": "pyproject.toml"}}
 2. Parse model output for JSON tool calls
 3. Have Python fallbacks for when tool calling doesn't fire
 4. Use `/completion` endpoint with manual Gemma 4 turn tags
+
+### THE EXACT BUG: TurboQuant Fork Broke Tool Calling (2026-04-07)
+
+**Proven:**
+- Stock homebrew llama-server (build 8660): **tool calls WORK** ✅
+- Our TurboQuant fork (same model, same prompt): **tool calls BROKEN** ❌
+- Not GPU-specific: broken on CPU too
+- Not TurboQuant KV-specific: broken with q8_0 KV too
+- The fork's modifications to `common/chat*.cpp` files broke Gemma 4 tool parsing
+
+**The fix:**
+Build from latest stock llama.cpp source and cherry-pick ONLY the TurboQuant
+ggml/ files (KV cache types + Metal kernels). The chat/tool parsing code
+should come from stock llama.cpp, not the TurboQuant fork.
+
+**TurboQuant-specific files to port:**
+- `ggml/src/ggml-turbo-quant.c` — core TQ quantization
+- `ggml/src/ggml-metal/ggml-metal.metal` — Metal kernel additions for turbo types
+- `ggml/src/ggml-metal/ggml-metal-ops.cpp` — Metal dispatch for turbo types
+- Various header changes in `ggml/include/ggml.h` for type enums
+- CMakeLists changes to compile TQ files
+
+**NOT needed from fork:**
+- `common/chat*.cpp` — use stock versions (they work for tools)
+- `common/jinja/` — use stock
+- Our custom patches (mmap bloat detection etc.) — re-apply on stock base
