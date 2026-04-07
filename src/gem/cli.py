@@ -847,10 +847,24 @@ def _pick_runtime_mode(config, console) -> "AppConfig":
 
     gpu_ok = _gpu_memory_unlocked()
     if gpu_ok:
-        print("\n  1. Fast         27 tok/s  32K")
-        print("  2. Reasoning    26 tok/s  32K")
-        c = input("  [1]: ").strip()
-        config.runtime.laptop_26b_runtime_mode = "turbo-think" if c == "2" else "turbo"
+        import tty, termios
+        print("\n  1. Fast         27 tok/s  128K")
+        print("  2. Reasoning    26 tok/s  128K")
+        sys.stdout.write("  > ")
+        sys.stdout.flush()
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            ch = sys.stdin.read(1)
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        if ch == "2":
+            config.runtime.laptop_26b_runtime_mode = "turbo-think"
+            print("Reasoning\n")
+        else:
+            config.runtime.laptop_26b_runtime_mode = "turbo"
+            print("Fast\n")
     else:
         print("\n  Running in CPU mode (18 tok/s, 10K ctx)")
         config.runtime.laptop_26b_runtime_mode = "speed"
