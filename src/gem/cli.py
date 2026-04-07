@@ -817,35 +817,53 @@ def main(argv: list[str] | None = None) -> None:
 
 
 def _pick_runtime_mode(config, console) -> "AppConfig":
-    """Mode picker — press 1-4 or enter for default."""
-    current = config.runtime.laptop_26b_runtime_mode
+    """Arrow key mode picker."""
     modes = [
-        ("turbo",       "1", "27 tok/s  32K  fast"),
-        ("turbo-think", "2", "26 tok/s  32K  reasoning"),
-        ("speed",       "3", "18 tok/s  10K  no GPU setup"),
-        ("speed-think", "4", "17 tok/s  10K  reasoning"),
+        ("turbo",       "Fast         27 tok/s  32K"),
+        ("turbo-think", "Reasoning    26 tok/s  32K"),
+        ("speed",       "Fast (CPU)   18 tok/s  10K"),
+        ("speed-think", "Reason (CPU) 17 tok/s  10K"),
     ]
-    default_idx = next((i for i, (k, _, _) in enumerate(modes) if k == current), 0)
+    current = config.runtime.laptop_26b_runtime_mode
+    sel = next((i for i, (k, _) in enumerate(modes) if k == current), 0)
 
-    print("\n  GPU modes (requires sysctl):")
-    for i in range(2):
-        k, n, desc = modes[i]
-        marker = "*" if i == default_idx else " "
-        print(f"   {marker}{n}. {desc}")
-    print("  CPU modes:")
-    for i in range(2, 4):
-        k, n, desc = modes[i]
-        marker = "*" if i == default_idx else " "
-        print(f"   {marker}{n}. {desc}")
+    import sys, tty, termios
 
-    choice = input(f"  [{default_idx+1}]: ").strip()
+    def draw():
+        for i, (_, desc) in enumerate(modes):
+            if i == sel:
+                sys.stdout.write(f"\033[2K  \033[32m> {desc}\033[0m\n")
+            else:
+                sys.stdout.write(f"\033[2K    {desc}\n")
+        sys.stdout.flush()
 
-    if choice in "1234" and choice:
-        selected = int(choice) - 1
-    else:
-        selected = default_idx
+    sys.stdout.write("\n")
+    draw()
 
-    config.runtime.laptop_26b_runtime_mode = modes[selected][0]
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        while True:
+            ch = sys.stdin.read(1)
+            if ch in ("\r", "\n"):
+                break
+            if ch == "\x03":  # ctrl-c
+                break
+            if ch == "\x1b":
+                sys.stdin.read(1)  # [
+                arrow = sys.stdin.read(1)
+                if arrow == "A" and sel > 0:
+                    sel -= 1
+                elif arrow == "B" and sel < len(modes) - 1:
+                    sel += 1
+                sys.stdout.write(f"\033[{len(modes)}A")
+                draw()
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+    config.runtime.laptop_26b_runtime_mode = modes[sel][0]
+    sys.stdout.write("\n")
     return config
 
 
