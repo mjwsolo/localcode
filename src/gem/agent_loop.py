@@ -601,8 +601,9 @@ def _do_run(app, user_text, out):
 
 def _do_chat(app, user_text, messages, out):
     # messages already contains user_text from compose_messages — don't duplicate
+    final_msgs = [{"role": "system", "content": SYSTEM_PROMPTS["chat"]}, *messages[-4:]]
     response = app.engine.generate_once(
-        [{"role": "system", "content": SYSTEM_PROMPTS["chat"]}, *messages[-4:]],
+        final_msgs,
         max_tokens=512,
     )
     out.stream(response)
