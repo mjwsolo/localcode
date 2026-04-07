@@ -25,12 +25,12 @@ def compose_messages(
     user_msg = _build_user_message(user_text, images, profile, provider)
 
     if profile.supports_native_system:
-        # System prompt is STABLE across turns (enables KV cache reuse)
-        # Context goes in a user message so it doesn't invalidate the cache
         messages = [{"role": "system", "content": system_prompt}]
-        if context_block.strip():
+        # Only inject repo context for substantive tasks, not simple chat
+        # Short messages like "hi" don't need project file listings
+        if context_block.strip() and len(user_text) > 20:
             messages.append({"role": "user", "content": f"[Context]\n{context_block}"})
-            messages.append({"role": "assistant", "content": "Understood. I have the repo context."})
+            messages.append({"role": "assistant", "content": "Got it."})
         messages.extend(conversation)
         messages.append(user_msg)
         return messages
