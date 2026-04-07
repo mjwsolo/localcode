@@ -492,7 +492,6 @@ def _do_test(app, user_text, messages, out, progress, checker):
         content = (repo / target).read_text(errors="replace")
         progress.start("generating tests")
         response = app.engine.generate_once([
-            {"role": "system", "content": SYSTEM_PROMPTS["create"]},
             {"role": "user", "content": f"Write pytest tests for:\n```\n{content[:4000]}\n```\nOutput ONLY test code."},
         ])
         _, test_code = _parse_code_response(response, "")
@@ -682,21 +681,7 @@ def _should_run_quality_gate(user_text: str, filename: str) -> bool:
 
 
 def _build_create_prompt(ctx: str, user_text: str, quality_task: bool) -> str:
-    quality = ""
-    if quality_task:
-        quality = (
-            "\nQuality bar:\n"
-            "- Make the result recognizably match the requested product or vibe.\n"
-            "- Avoid placeholder mechanics and bland scaffolding.\n"
-            "- Include concrete details that make the experience feel intentional.\n"
-            "- Return a complete runnable file, not a minimal stub.\n"
-        )
-    return (
-        f"{ctx}\n\nTask request:\n{user_text}\n"
-        f"{quality}\n"
-        "Write the COMPLETE code in a code block:\n"
-        "FILENAME: <filename>\n```python\ncomplete code\n```"
-    )
+    return user_text
 
 
 def _build_compact_create_context(user_text: str) -> str:

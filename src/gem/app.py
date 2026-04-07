@@ -359,12 +359,32 @@ class GemApp:
         anim = threading.Thread(target=_animate, daemon=True)
         anim.start()
         try:
-            # Quick healthcheck instead of full warmup request
+            # Auto-start server if not running
             import httpx as _httpx
+            server_ok = False
             try:
-                _httpx.get(f"{self.config.runtime.base_url.rstrip('/')}/health", timeout=10)
+                r = _httpx.get(f"{self.config.runtime.base_url.rstrip('/')}/health", timeout=3)
+                server_ok = r.status_code == 200
             except Exception:
                 pass
+            if not server_ok and self.config.runtime.provider == "llama_cpp":
+                from .runtime_launch import launch_runtime
+                _sys.stderr.write(f"\r\033[33m  starting server...{' ' * 20}\033[0m")
+                _sys.stderr.flush()
+                launch_runtime(self.config.runtime, self.repo_root)
+                # Wait for server to be ready
+                for _ in range(60):
+                    _time.sleep(1)
+                    try:
+                        r = _httpx.get(f"{self.config.runtime.base_url.rstrip('/')}/health", timeout=2)
+                        if r.status_code == 200:
+                            server_ok = True
+                            break
+                    except Exception:
+                        pass
+                if not server_ok:
+                    _sys.stderr.write(f"\r\033[31m  server failed to start{' ' * 20}\033[0m\n")
+
             _loading = False
             anim.join(timeout=1)
             _sys.stderr.write(f"\r\033[32m  model ready ✓       \033[0m\n\n")
