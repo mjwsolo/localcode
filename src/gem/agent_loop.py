@@ -313,7 +313,7 @@ def _do_create(app, user_text, messages, out, progress, checker, context, releva
             out.print_info(note)
 
     out.start_streaming()
-    summary = f"\n  {lines} file(s) changed. Use /verify to run tests, /undo to revert.\n\n  Created {filename} ({lines} lines)\n  Run: python {filename}"
+    summary = f"\n  1 file(s) changed. Use /verify to run tests, /undo to revert.\n\n  Created {filename} ({lines} lines)\n  Run: python {filename}"
     out.stream(summary)
     return summary
 
@@ -745,16 +745,9 @@ def _build_quality_refine_prompt(filename: str, user_text: str, code: str, issue
 
 
 def _create_output_budget(user_text: str, quality_task: bool, compact_task: bool) -> int:
-    text = user_text.lower()
-    if compact_task:
-        return 900
-    if quality_task:
-        if any(token in text for token in ("game", "app", "website", "dashboard", "clone", "landing page")):
-            return 2600
-        return 1800
-    if any(token in text for token in ("single-file", "single file", "cli", "script", ".py", ".html", ".css", ".js")):
-        return 1400
-    return 1800
+    # Don't artificially cap output — let the model decide when it's done.
+    # With 32K context there's plenty of room. The model will stop at EOS.
+    return 8192
 
 
 def _should_use_planner_hints(user_text: str, quality_task: bool, compact_task: bool) -> bool:
