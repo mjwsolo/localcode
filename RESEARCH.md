@@ -89,3 +89,29 @@ Response: {"tool": "read_file", "parameters": {"path": "pyproject.toml"}}
 3. Rebuild app message pipeline (ONE path, not three)
 4. Raise temperature to 0.7+ (Google recommends 1.0)
 5. Let model pick tools (85.5% accuracy — don't pre-route with regex)
+
+### Tool Calling at IQ3_S — Detailed Findings (2026-04-07)
+
+**Native tool calling via Ollama: WORKS but inconsistent at IQ3_S**
+
+| Prompt | Tool Call? | Notes |
+|--------|-----------|-------|
+| "Read the file pyproject.toml" | ✅ YES | Direct, specific request |
+| "List python files" | ❌ NO | Vague request — model thinks but doesn't call |
+| "What files are in this directory?" | ❌ NO | Too vague for IQ3_S |
+
+**The model's tool calling accuracy at IQ3_S is prompt-sensitive.**
+- Direct requests ("Read X", "Run Y") → tool calls fire
+- Vague requests ("List files", "What's in here?") → model thinks but doesn't call
+- The 85.5% tau2 benchmark was at full precision, not IQ3_S
+
+**Our llama-server doesn't support Gemma 4 tool calling at all.**
+- The `/v1/chat/completions` `tools` parameter is ignored
+- The chat template doesn't inject tool declarations correctly
+- Ollama has custom `RENDERER gemma4` / `PARSER gemma4` that handles it
+
+**Best approach for IQ3_S: Hybrid**
+1. Format requests as direct tool calls in the prompt (not vague)
+2. Parse model output for JSON tool calls
+3. Have Python fallbacks for when tool calling doesn't fire
+4. Use `/completion` endpoint with manual Gemma 4 turn tags
