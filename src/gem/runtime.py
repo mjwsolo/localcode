@@ -505,6 +505,10 @@ class GemRuntimeGateway:
                 "messages": messages,
                 "temperature": opts["temperature"],
                 "chat_template_kwargs": {"enable_thinking": think},
+                # Disable prompt cache — TurboQuant WHT rotation causes cache
+                # corruption that produces <unused25> garbage on subsequent requests.
+                # TODO: fix TurboQuant cache compatibility, then re-enable.
+                "cache_prompt": False,
             }
             if "num_predict" in opts:
                 payload["max_tokens"] = opts["num_predict"]
