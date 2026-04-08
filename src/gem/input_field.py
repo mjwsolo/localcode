@@ -179,7 +179,20 @@ class InputField:
         # After submit: restore to line start, clear, show final state
         sys.stdout.write(f"\033[u\033[J")
         display = text if len(text) <= 200 else text[:200] + "..."
-        sys.stdout.write(f"  › {display}\n")
+        # Soft-wrap long input within the rules
+        cols = _get_cols()
+        prefix = "  › "
+        max_first = cols - len(prefix) - 1
+        if len(display) <= max_first:
+            sys.stdout.write(f"{prefix}{display}\n")
+        else:
+            sys.stdout.write(f"{prefix}{display[:max_first]}\n")
+            remaining = display[max_first:]
+            indent = "    "
+            line_width = cols - len(indent) - 1
+            while remaining:
+                sys.stdout.write(f"{indent}{remaining[:line_width]}\n")
+                remaining = remaining[line_width:]
         sys.stdout.write(f"\033[2m{rule}\033[0m\n")
         sys.stdout.flush()
 
