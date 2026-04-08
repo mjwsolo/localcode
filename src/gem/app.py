@@ -388,6 +388,13 @@ class GemApp:
         except Exception:
             fd = None
             old_settings = None
+        # Kill any Ollama runners to free GPU memory for TurboQuant
+        if self.config.runtime.provider == "llama_cpp":
+            try:
+                subprocess.run(["pkill", "-f", "ollama runner"], capture_output=True, timeout=3)
+            except Exception:
+                pass
+
         # Pulsating dots animation
         _loading = True
         def _animate():

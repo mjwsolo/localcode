@@ -76,13 +76,15 @@ class InputField:
 
         rule = _rule()
 
-        # Draw: top rule, input line (save cursor), bottom rule, status
+        # Draw: top rule, save pos at start of input line, draw input + bottom
         sys.stdout.write(f"\n\033[2m{rule}\033[0m\n")
-        sys.stdout.write(f"  › \033[s")  # save cursor at input position
+        sys.stdout.write(f"\033[s")  # save at START of input line
+        sys.stdout.write(f"  › ")
         sys.stdout.write(f"\n\033[2m{rule}\033[0m")
         if status_line:
             sys.stdout.write(f"\n\033[2m  {status_line}\033[0m")
-        sys.stdout.write(f"\033[u")  # restore to input position
+        # Move cursor back to input position (after "  › ")
+        sys.stdout.write(f"\033[u\033[4C")
         sys.stdout.flush()
 
         buf = []
@@ -174,10 +176,10 @@ class InputField:
         text = "".join(buf).strip()
         self._save_history(text)
 
-        # After submit: clear the field area below input, redraw with final text
-        sys.stdout.write(f"\033[u\033[J")  # restore to input pos, clear below
+        # After submit: restore to line start, clear, show final state
+        sys.stdout.write(f"\033[u\033[J")
         display = text if len(text) <= 200 else text[:200] + "..."
-        sys.stdout.write(f"{display}\n")
+        sys.stdout.write(f"  › {display}\n")
         sys.stdout.write(f"\033[2m{rule}\033[0m\n")
         sys.stdout.flush()
 
@@ -238,28 +240,15 @@ class InputField:
                     pass
 
     def _redraw(self, buf: list[str], cursor: int, rule: str, status: str) -> None:
-        """Redraw input text + bottom area."""
+        """Redraw entire input area from saved line start position."""
         text = "".join(buf)
-        cols = _get_cols()
-        # Move to start of input line (saved position), clear to end of screen
+        # Restore to start of input line, clear everything below
         sys.stdout.write(f"\033[u\033[J")
-        sys.stdout.write(text)
-        # Calculate how many display rows the text occupies
-        text_display_len = len(text) + 4  # 4 = len("  › ")
-        text_rows = max(1, (text_display_len + cols - 1) // cols)
-        # Draw bottom rule + status
+        # Redraw: prefix + text + bottom
+        sys.stdout.write(f"  › {text}")
         sys.stdout.write(f"\n\033[2m{rule}\033[0m")
         if status:
             sys.stdout.write(f"\n\033[2m  {status}\033[0m")
-        # Move cursor back: go up text_rows - 1 + bottom lines, then right to cursor pos
-        bottom_lines = 2 if status else 1
-        up = (text_rows - 1) + bottom_lines
-        # Calculate cursor row/col within wrapped text
-        cursor_abs = cursor + 4  # offset by "  › "
-        cursor_row = cursor_abs // cols
-        cursor_col = cursor_abs % cols
-        total_up = up - cursor_row
-        if total_up > 0:
-            sys.stdout.write(f"\033[{total_up}A")
-        sys.stdout.write(f"\r\033[{cursor_col}C")
+        # Move cursor to correct position: restore to line start, move right
+        sys.stdout.write(f"\033[u\033[{4 + cursor}C")
         sys.stdout.flush()
