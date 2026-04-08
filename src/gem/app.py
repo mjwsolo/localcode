@@ -617,23 +617,11 @@ class GemApp:
         elif not needs_sysctl:
             gpu_ok = True  # 24GB+ Macs don't need the unlock
         if gpu_ok:
-            import os as _os
-            try:
-                cols = _os.get_terminal_size().columns
-            except OSError:
-                cols = 80
             print()
             print("  \033[1mSelect a mode:\033[0m")
             print()
-            if cols >= 60:
-                print("  1. \033[1mFast\033[0m         Quicker answers for routine work")
-                print("  2. \033[1mReasoning\033[0m    Deeper thinking for harder tasks")
-            elif cols >= 40:
-                print("  1. \033[1mFast\033[0m        quick answers")
-                print("  2. \033[1mReasoning\033[0m   deep thinking")
-            else:
-                print("  1. \033[1mFast\033[0m")
-                print("  2. \033[1mReasoning\033[0m")
+            print("  1. \033[1mFast\033[0m - quicker answers for routine work")
+            print("  2. \033[1mReasoning\033[0m - deeper thinking for harder tasks")
             print()
             rule = self._composer_rule()
             model_short = self.runtime_model.split("/")[-1] if "/" in self.runtime_model else self.runtime_model
