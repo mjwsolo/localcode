@@ -15,7 +15,8 @@
 </p>
 
 <p align="center">
-  <strong>HIGH-PERFORMANCE, LOCAL-FIRST, AGENTIC CODING ON CONSUMER HARDWARE.</strong> No cloud, no API keys, no data leaving your machine.
+  <strong>High-performance, local-first, agentic coding on consumer hardware.</strong><br>
+  No cloud, no API keys, no data leaving your machine.
 </p>
 
 ## Install
