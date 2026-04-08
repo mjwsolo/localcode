@@ -620,8 +620,8 @@ class GemApp:
             print()
             print("  \033[1mSelect a mode:\033[0m")
             print()
-            print("  1. \033[1mFast\033[0m         Quicker answers for routine work")
-            print("  2. \033[1mReasoning\033[0m    Deeper thinking for harder tasks")
+            print("  1. \033[1mFast\033[0m        quick answers")
+            print("  2. \033[1mReasoning\033[0m   deep thinking")
             print()
             rule = self._composer_rule()
             model_short = self.runtime_model.split("/")[-1] if "/" in self.runtime_model else self.runtime_model
