@@ -79,7 +79,7 @@ The model (**Gemma 4 26B-A4B**) is a Mixture-of-Experts architecture - 25.2B tot
 
 ## Sponsors
 
-If you'd like to sponsor localcode, reach out at **marc@localcode.ai**
+If you'd like to sponsor localcode, [reach out on GitHub](https://github.com/mjwsolo).
 
 <a href="https://buymeacoffee.com/thcchef"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?style=flat-square&logo=buy-me-a-coffee&logoColor=black" alt="Buy Me a Coffee"></a>
 
