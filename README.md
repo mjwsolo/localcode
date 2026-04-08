@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <strong>The local AI coding agent.</strong> High-performance, local-first, agentic coding on consumer hardware. No cloud, no API keys, no data leaving your machine.
+  <strong>HIGH-PERFORMANCE, LOCAL-FIRST, AGENTIC CODING ON CONSUMER HARDWARE.</strong> No cloud, no API keys, no data leaving your machine.
 </p>
 
 ## Install
