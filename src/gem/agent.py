@@ -236,6 +236,7 @@ def _tool_bash(repo: Path, args: dict, out: "OutputManager") -> str:
         r = subprocess.run(
             cmd, shell=True, capture_output=True, text=True,
             timeout=120, cwd=str(repo),
+            stdin=subprocess.DEVNULL,
             env={**__import__("os").environ, "MallocStackLogging": "0"},
         )
         output = (r.stdout + r.stderr).strip()
