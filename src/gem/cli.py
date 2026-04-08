@@ -56,6 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="localcode", description="LocalCode — AI coding assistant running entirely on your machine")
     parser.add_argument("--profile", help="Gemma 4 profile: e2b, e4b, 26b-laptop, 26b-moe, 31b")
     parser.add_argument("--model", help="Explicit local runtime model tag")
+    parser.add_argument("--tui", action="store_true", help="Use the new Textual TUI")
     subparsers = parser.add_subparsers(dest="command")
 
     subparsers.add_parser("config-init", help="create a default config file")
@@ -252,6 +253,12 @@ def main(argv: list[str] | None = None) -> None:
     os.environ["OLLAMA_KV_CACHE_TYPE"] = config.runtime.kv_cache_type_k
     configure_logging(config.ui.show_debug)
     console = Console()
+
+    if getattr(args, 'tui', False) or os.environ.get("LOCALCODE_TUI"):
+        from .tui.app import LocalCodeTUI
+        app = LocalCodeTUI(show_mode_picker=True)
+        app.run()
+        return
 
     if args.command == "config-init":
         path = init_config_file()
