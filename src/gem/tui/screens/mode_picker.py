@@ -33,7 +33,7 @@ class ModePickerScreen(Screen):
         height: auto;
         padding: 1 2;
         border: solid $primary;
-        margin: 0 auto;
+        margin: 0 4;
     }
     """
 
