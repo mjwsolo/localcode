@@ -1,7 +1,7 @@
-"""Jem keybindings — VIM mode + user-customizable shortcuts.
+"""LocalCode keybindings — VIM mode + user-customizable shortcuts.
 
 VIM mode: toggle with /vim command. Provides h/j/k/l, i/a/ESC.
-Custom keybindings: ~/.gem/keybindings.json overrides defaults.
+Custom keybindings: ~/.localcode/keybindings.json overrides defaults.
 """
 from __future__ import annotations
 

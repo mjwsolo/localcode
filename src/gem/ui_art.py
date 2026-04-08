@@ -4,7 +4,7 @@ import time
 from typing import Iterator
 
 
-# ── Gem logo: simple, clean, no Rich markup breakage ─────────────────────────
+# ── LocalCode logo: simple, clean, no Rich markup breakage ───────────────────
 # Plain text only — color is applied by the caller via Panel border/title style
 
 GEM_LOGO_PLAIN = "◆  L O C A L  code"

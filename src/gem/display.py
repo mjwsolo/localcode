@@ -1,4 +1,4 @@
-"""Jem display — clean terminal output.
+"""LocalCode display — clean terminal output.
 
 Thinking: collapsed by default (like Codex), just shows pulsating indicator.
 Tool calls: clean one-line summaries.

@@ -272,6 +272,7 @@ class GemApp:
                 "prompt": "bg:#2d2d2d #ffffff",
             }),
             prompt_continuation="  ",
+            reserve_space_for_menu=4,
         )
         self.approvals = ApprovalQueue(self.console, self.prompt)
         self.session_allows: set[str] = set()
@@ -535,8 +536,8 @@ class GemApp:
             total_sec = sum(a.duration_seconds for a in self._pending_audio)
             parts.append(f"{count} audio {total_sec:.0f}s")
         if parts:
-            return f"> ({', '.join(parts)}) "
-        return "> "
+            return f"\n> ({', '.join(parts)}) \n"
+        return "\n> \n"
 
     def _bottom_toolbar(self) -> str:
         """Status bar: model · context left · path."""
@@ -640,6 +641,7 @@ class GemApp:
             print()
             print(f"  1. \033[1mFast\033[0m         27 tok/s  {ctx_label} context{speed_note}")
             print(f"  2. \033[1mReasoning\033[0m    26 tok/s  {ctx_label} context{speed_note}")
+            print()
             ch = ""
             # Try single-keypress read, fall back to input()
             try:
@@ -953,7 +955,7 @@ class GemApp:
                     return True
                 tool_name = find_browser_tool(self.toolkit.tools, "open")
                 if not tool_name:
-                    self.console.print("No browser navigation tool is loaded. Run `/browser setup` and restart Gem.")
+                    self.console.print("No browser navigation tool is loaded. Run `/browser setup` and restart LocalCode.")
                     return True
                 if not self._approve_action("browser", f"Open browser page?\n{url}"):
                     self.console.print("Cancelled.")
@@ -966,7 +968,7 @@ class GemApp:
                 self.toolkit.ensure_mcp_tools()
                 tool_name = find_browser_tool(self.toolkit.tools, "snapshot")
                 if not tool_name:
-                    self.console.print("No browser snapshot tool is loaded. Run `/browser setup` and restart Gem.")
+                    self.console.print("No browser snapshot tool is loaded. Run `/browser setup` and restart LocalCode.")
                     return True
                 if not self._approve_action("browser", "Capture a browser accessibility snapshot?"):
                     self.console.print("Cancelled.")
@@ -1281,7 +1283,7 @@ class GemApp:
             # Export conversation as markdown
             import time as _t
             filename = arg or f"jem-export-{_t.strftime('%Y%m%d-%H%M%S')}.md"
-            lines = [f"# Jem Session Export\n", f"Session: {self.session.session_id}\n\n"]
+            lines = [f"# LocalCode Session Export\n", f"Session: {self.session.session_id}\n\n"]
             for msg in self.session.messages:
                 role = msg.get("role", "unknown")
                 content = msg.get("content", "")

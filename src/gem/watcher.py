@@ -1,7 +1,7 @@
 """File watcher — detect external changes to tracked files.
 
 Monitors pinned files and recently-read files for modifications
-made outside of Jem (e.g., user editing in their IDE).
+made outside of LocalCode (e.g., user editing in their IDE).
 Notifies the user and invalidates cache.
 """
 from __future__ import annotations
