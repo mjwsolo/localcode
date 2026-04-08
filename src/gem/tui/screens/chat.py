@@ -49,7 +49,7 @@ class ChatScreen(Screen):
     def __init__(self) -> None:
         super().__init__()
         self._agent_busy = False
-        self._message_queue: list[str] = []
+        self._pending_messages: list[str] = []
         self._stream_buf: list[str] = []
         self._turn_start: float = 0
         self._tools_used: list[str] = []
@@ -89,8 +89,8 @@ class ChatScreen(Screen):
 
     def _update_queue(self) -> None:
         q = self.query_one("#queue-line", Static)
-        if self._message_queue:
-            q.update(f" ↻ {len(self._message_queue)} message(s) queued")
+        if self._pending_messages:
+            q.update(f" ↻ {len(self._pending_messages)} message(s) queued")
             q.add_class("active")
         else:
             q.remove_class("active")
@@ -113,7 +113,7 @@ class ChatScreen(Screen):
         log.append_user(text)
 
         if self._agent_busy:
-            self._message_queue.append(text)
+            self._pending_messages.append(text)
             self._update_queue()
         else:
             self._start_turn(text)
@@ -210,8 +210,8 @@ class ChatScreen(Screen):
         log.append_info(f"Done in {' — '.join(parts)}")
 
         # Auto-submit queued messages
-        if self._message_queue:
-            next_msg = self._message_queue.pop(0)
+        if self._pending_messages:
+            next_msg = self._pending_messages.pop(0)
             self._update_queue()
             log.append_user(next_msg)
             self._start_turn(next_msg)
