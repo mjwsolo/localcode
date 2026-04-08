@@ -94,18 +94,7 @@ import time
 
 
 _SLASH_COMMANDS = [
-    "/help", "/status", "/model", "/files", "/find", "/index",
-    "/read", "/add", "/drop", "/context", "/diff", "/apply",
-    "/shell", "/bg", "/jobs", "/log", "/verify",
-    "/agentbg",
-    "/switch",
-    "/tools", "/skills", "/mcp", "/permissions",
-    "/search", "/history", "/browser", "/voice",
-    "/thinking", "/timeline",
-    "/audio", "/image", "/paste", "/screenshot",
-    "/undo", "/changes",
-    "/autonomy", "/snapshot",
-    "/clear", "/quit",
+    "/switch", "/undo", "/clear", "/quit",
 ]
 
 # Commands that take a file path as argument
@@ -718,15 +707,11 @@ class GemApp:
         if name == "/help":
             self.console.print(
                 Panel.fit(
-                    "[bold]Mode[/]\n"
-                    "  /switch — toggle between fast and reasoning mode\n\n"
-                    "[bold]Navigation[/]\n"
-                    "  /help /status /model /files /find /read /add /drop /context /diff\n\n"
-                    "[bold]Editing[/]\n"
-                    "  /apply /undo [all] /changes /shell <cmd> /bg <cmd> /verify [cmd]\n\n"
-                    "[bold]Session[/]\n"
-                    "  /thinking [hidden|summary|full] /clear /quit",
-                    title="[bold bright_cyan]localcode commands[/]",
+                    "  /switch  toggle between fast and reasoning mode\n"
+                    "  /undo    revert last file change\n"
+                    "  /clear   clear conversation history\n"
+                    "  /quit    exit",
+                    title="[bold bright_cyan]localcode[/]",
                     border_style="bright_cyan",
                 )
             )
@@ -754,10 +739,10 @@ class GemApp:
             mode = self.config.runtime.laptop_26b_runtime_mode
             if mode.endswith("-think"):
                 self.config.runtime.laptop_26b_runtime_mode = "turbo"
-                self.console.print("  Switched to [green]fast[/green] mode (27 tok/s, thinking off)")
+                self.console.print("  Switched to [green]fast[/green] mode")
             else:
                 self.config.runtime.laptop_26b_runtime_mode = "turbo-think"
-                self.console.print("  Switched to [green]reasoning[/green] mode (26 tok/s, thinking on)")
+                self.console.print("  Switched to [green]reasoning[/green] mode")
             save_config(self.config)
             self.store.append_event(self.session, "mode_switch", self.config.runtime.laptop_26b_runtime_mode)
             return True
@@ -2649,7 +2634,7 @@ class GemApp:
                     {
                         "role": "system",
                         "content": (
-                            "You are Gem's checkpoint planner.\n"
+                            "You are LocalCode's checkpoint planner.\n"
                             "Produce tiny structured execution hints.\n"
                             "No prose. JSON only."
                         ),
