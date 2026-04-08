@@ -107,9 +107,6 @@ class OutputManager:
         self._emit_event("thinking_start", reset=str(reset).lower())
         self._start_indicator()
 
-    # Left indent for model output
-    _STREAM_INDENT = "  "
-
     def start_streaming(self) -> None:
         """Transition to content streaming — stops indicator."""
         self._stop_indicator()
@@ -118,8 +115,7 @@ class OutputManager:
             self._custom_stage = ""
         self._emit_event("stream_start")
         # Clear indicator and add breathing room before response
-        sys.stdout.write("\r\033[K\n")
-        sys.stdout.write(self._STREAM_INDENT)
+        sys.stdout.write("\r\033[K\n  ")
         sys.stdout.flush()
         self._stream_started = False
 
@@ -233,15 +229,15 @@ class OutputManager:
     # ── Content streaming ────────────────────────────────────────────
 
     def stream(self, chunk: str) -> None:
-        """Stream content to terminal with left indent."""
+        """Stream content to terminal."""
         if self.state.phase != Phase.STREAMING:
             self.start_streaming()
         with self._lock:
             self.state.content_chunks.append(chunk)
             self.state.tokens += max(1, len(chunk) // 4)
         self._emit_event("content", chunk=chunk[:240], chars=str(len(chunk)))
-        # Indent after every newline so model output is visually narrower
-        indented = chunk.replace("\n", "\n" + self._STREAM_INDENT)
+        # Indent continuation lines
+        indented = chunk.replace("\n", "\n  ")
         sys.stdout.write(indented)
         sys.stdout.flush()
 
