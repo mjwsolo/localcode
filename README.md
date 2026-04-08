@@ -79,7 +79,7 @@ The model (**Gemma 4 26B-A4B**) is a Mixture-of-Experts architecture - 25.2B tot
 
 ## Sponsors
 
-If you'd like to sponsor localcode, [reach out on GitHub](https://github.com/mjwsolo).
+If you'd like to sponsor localcode, reach out.
 
 ## Contributing
 
