@@ -171,26 +171,20 @@ class ChatScreen(Screen):
         app = self.tui.gem_app
         bridge = self.tui.bridge
         try:
-            # Stream directly from the runtime — bypass OutputManager's stdout
-            from ..bridge import AgentEvent
-
-            # Add user message to session
-            app.session.messages.append({"role": "user", "content": user_text})
-
-            # Build messages for the model
-            from ...composer import compose_messages
-            from ...context_manager import build_context
-            context = build_context(app.repo_root, app.session, app.config, app.toolkit)
+            # Build simple messages — system prompt + conversation + user input
             from ...prompts import build_system_prompt
-            system = build_system_prompt(app.profile, context)
-            composed = compose_messages(
-                app.profile, system, context,
-                app.session.messages, user_text,
-            )
+            system = build_system_prompt(app.profile)
+            use_think = app.config.runtime.laptop_26b_runtime_mode.endswith("-think")
 
-            # Stream from engine
+            messages = [{"role": "system", "content": system}]
+            # Add recent conversation history
+            for msg in app.session.messages[-10:]:
+                messages.append(msg)
+            messages.append({"role": "user", "content": user_text})
+
+            # Stream from engine directly
             full_response = []
-            for event in app.engine.stream_chat_events(composed):
+            for event in app.engine.stream_chat_events(messages, think=use_think):
                 if event["type"] == "content":
                     chunk = str(event["content"])
                     full_response.append(chunk)
@@ -199,8 +193,9 @@ class ChatScreen(Screen):
                     chunk = str(event["content"])
                     bridge.on_event("thinking_peek", text=chunk[:120])
 
-            # Save response to session
+            # Save to session
             text = "".join(full_response).strip()
+            app.session.messages.append({"role": "user", "content": user_text})
             if text:
                 app.session.messages.append({"role": "assistant", "content": text})
                 bridge.on_event("response_done", text=text)
