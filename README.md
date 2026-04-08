@@ -8,7 +8,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/build-passing-4caf50?style=flat-square" alt="Build">
-  <img src="https://img.shields.io/badge/release-v0.1.0-7c4dff?style=flat-square" alt="Release">
+  <img src="https://img.shields.io/badge/release-v0.0.1-7c4dff?style=flat-square" alt="Release">
   <img src="https://img.shields.io/badge/license-Apache--2.0-4caf50?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/python-3.11+-3776ab?style=flat-square" alt="Python">
   <img src="https://img.shields.io/badge/platform-Apple%20Silicon-999999?style=flat-square" alt="Platform">
@@ -22,12 +22,6 @@
 
 ```bash
 pip install localcode
-```
-
-Or from source:
-
-```bash
-pip install git+https://github.com/mjwsolo/localcode.git
 ```
 
 ## Run
