@@ -1,9 +1,20 @@
 """LocalCode Textual TUI — main application."""
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 from pathlib import Path
+
+# Monkey-patch Textual's message_pump for Python 3.13 compatibility
+# The _message_queue sometimes becomes a list instead of asyncio.Queue
+import textual.message_pump as _mp
+_orig_close = _mp.MessagePump._close_messages
+async def _safe_close_messages(self):
+    if isinstance(self._message_queue, list):
+        self._message_queue = asyncio.Queue()
+    return await _orig_close(self)
+_mp.MessagePump._close_messages = _safe_close_messages
 
 from textual.app import App
 
