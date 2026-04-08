@@ -66,7 +66,6 @@ We are building for a world of truly democratized AI, where everyone has access 
 | **Privacy** | Code never leaves your machine | Code sent to Anthropic | Code sent to provider | Code sent to OpenAI |
 | **Cost** | Free forever | $100+/mo (Max) or API credits | API credits (varies) | Free (included with ChatGPT) |
 | **Internet required** | No | Yes | Yes | Yes |
-| **Data collection** | None | Anthropic policy | Provider policy | OpenAI policy |
 
 
 ## Requirements
