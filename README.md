@@ -42,21 +42,22 @@ That's it. First launch builds the inference server and downloads the model (~5 
 
 ## What it does
 
-- **Reads and edits files** — understands your codebase, makes surgical edits
-- **Runs commands** — tests, builds, git, shell
-- **Searches code** — by pattern, content, or semantic meaning
-- **Thinks through hard problems** — reasoning mode for complex multi-step tasks
-- **Uses tools automatically** — the model picks its own tools
+- **Reads and edits files** - understands your codebase, makes surgical edits
+- **Runs commands** - tests, builds, git, shell
+- **Searches code** - by pattern, content, or semantic meaning
+- **Fast mode** - 27 tok/s for routine coding tasks
+- **Reasoning mode** - deep thinking for complex multi-step problems
+- **Uses tools automatically** - the model picks its own tools
 
 ```
 > refactor the auth module to use JWT and make sure the tests pass
 ```
 
-LOCALcode reads the files, plans the refactor, edits the code, runs the tests, and fixes failures — all locally.
+LOCALcode reads the files, plans the refactor, edits the code, runs the tests, and fixes failures - all locally.
 
 ## Why local?
 
-We are building for a world of truly democratized AI, where everyone has access to powerful, personalized, prompt AI anywhere, on any device, and in any location. True empowered local-first AI. LOCALcode is the first step toward that vision.
+We are building for a world of truly democratized AI - where everyone has access to powerful, personalized, prompt AI anywhere, on any device, and in any location. True empowered local-first AI. LOCALcode is the first step toward that vision.
 
 ### How LOCALcode compares
 
@@ -81,11 +82,11 @@ We are building for a world of truly democratized AI, where everyone has access 
 |---------|-------------|
 | `/switch` | Toggle between fast (27 tok/s) and reasoning (26 tok/s) mode |
 
-## How it works
+## How LOCALcode works
 
-LOCALcode runs a custom [llama.cpp](https://github.com/ggerganov/llama.cpp) fork with **TurboQuant KV cache compression** — a technique from Google's ICLR 2026 paper that we patched into llama.cpp for Apple Silicon. This compresses the KV cache 3.8x, fitting 32K context in 355 MiB on a 16GB MacBook.
+LOCALcode runs a custom [llama.cpp](https://github.com/ggerganov/llama.cpp) fork with **TurboQuant KV cache compression** - a technique from Google's ICLR 2026 paper that we patched into llama.cpp for Apple Silicon. This compresses the KV cache 3.8x, fitting 32K context in 355 MiB on a 16GB MacBook.
 
-The model (**Gemma 4 26B-A4B**) is a Mixture-of-Experts architecture — 25.2B total parameters but only 3.8B active per token. That's what makes 27 tok/s possible on a laptop.
+The model (**Gemma 4 26B-A4B**) is a Mixture-of-Experts architecture - 25.2B total parameters but only 3.8B active per token. That's what makes 27 tok/s possible on a laptop.
 
 ## Contributing
 
