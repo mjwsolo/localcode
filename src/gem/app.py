@@ -496,6 +496,8 @@ class GemApp:
                 continue
             # Auto-detect image file paths in the message
             self._detect_inline_images(raw)
+            # Pass status line to output manager so indicator shows input field
+            self.out._status_line = self._bottom_toolbar()
             self._chat_turn(raw)
 
     def _prompt_label(self) -> str:
