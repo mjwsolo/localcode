@@ -78,6 +78,7 @@ class OutputManager:
         self._stream_started = False
         self._custom_stage = ""
         self._status_line = ""
+        self._input_field = None  # set by app.py to enable typeahead
 
     def set_event_callback(self, callback) -> None:
         self._event_callback = callback
@@ -315,6 +316,16 @@ class OutputManager:
             line = f"\033[32m {icon} {label}... ({timer})\033[0m{hint}"
 
             try:
+                # Collect typeahead keystrokes (non-blocking)
+                input_field = self._input_field
+                if input_field:
+                    input_field.collect_typeahead()
+                    typeahead = input_field.get_typeahead_text()
+                    queued_count = len(input_field._queue)
+                else:
+                    typeahead = ""
+                    queued_count = 0
+
                 # Draw spinner + input field below it
                 cols = _cols()
                 rule = "  " + ("─" * max(24, min(96, cols - 4)))
@@ -322,13 +333,17 @@ class OutputManager:
                 sys.stdout.write(f"\r{line}\033[K")
                 # Input field below spinner
                 sys.stdout.write(f"\n\033[2m{rule}\033[0m\033[K")
-                sys.stdout.write(f"\n\033[2m  › \033[0m\033[K")
+                # Show typeahead text or queued indicator
+                if queued_count:
+                    sys.stdout.write(f"\n  › \033[2m({queued_count} queued)\033[0m\033[K")
+                elif typeahead:
+                    sys.stdout.write(f"\n  › {typeahead}\033[K")
+                else:
+                    sys.stdout.write(f"\n\033[2m  › \033[0m\033[K")
                 sys.stdout.write(f"\n\033[2m{rule}\033[0m\033[K")
                 if status:
                     sys.stdout.write(f"\n\033[2m  {status}\033[0m\033[K")
-                # Hide cursor on spinner, it's just a status display
                 sys.stdout.write(f"\033[?25l")  # hide cursor
-                # Move back to spinner line for next redraw
                 lines_back = 4 if status else 3
                 sys.stdout.write(f"\033[{lines_back}A\r")
                 sys.stdout.flush()
