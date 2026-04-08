@@ -1,0 +1,110 @@
+/* LocalCode Textual TUI styles */
+
+Screen {
+    layout: vertical;
+    background: $surface;
+}
+
+/* ── Chat screen layout ── */
+
+#chat-log {
+    height: 1fr;
+    overflow-y: scroll;
+    padding: 0 1;
+    scrollbar-size: 1 1;
+}
+
+#input-area {
+    dock: bottom;
+    height: auto;
+    max-height: 5;
+    padding: 0 1;
+}
+
+#chat-input {
+    border: tall $primary-background;
+    padding: 0 1;
+}
+
+#chat-input:focus {
+    border: tall $accent;
+}
+
+#status-bar {
+    dock: bottom;
+    height: 1;
+    padding: 0 1;
+    color: $text-muted;
+    background: $surface-darken-1;
+}
+
+#spinner {
+    height: auto;
+    max-height: 1;
+    padding: 0 1;
+    color: $success;
+    display: none;
+}
+
+#spinner.active {
+    display: block;
+}
+
+/* ── Mode picker ── */
+
+#mode-picker {
+    align: center middle;
+    padding: 2 4;
+}
+
+#mode-picker Static {
+    text-align: center;
+    margin-bottom: 1;
+}
+
+#mode-picker RadioSet {
+    margin: 1 0;
+}
+
+#start-btn {
+    margin-top: 1;
+    align: center middle;
+}
+
+/* ── Approval modal ── */
+
+ApprovalModal {
+    align: center middle;
+    width: 70;
+    height: auto;
+    max-height: 20;
+    background: $surface;
+    border: thick $warning;
+    padding: 1 2;
+}
+
+ApprovalModal #approval-cmd {
+    margin: 1 0;
+    padding: 1;
+    background: $surface-darken-1;
+}
+
+ApprovalModal .approval-buttons {
+    margin-top: 1;
+    align: center middle;
+    height: 3;
+}
+
+/* ── Queue indicator ── */
+
+#queue-indicator {
+    dock: bottom;
+    height: 1;
+    padding: 0 1;
+    color: $warning;
+    display: none;
+}
+
+#queue-indicator.active {
+    display: block;
+}
