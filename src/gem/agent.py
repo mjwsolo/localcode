@@ -680,6 +680,7 @@ def run_agent_loop(
             # Safety: confirm destructive commands
             if _needs_confirmation(tool_name, args):
                 import tty, termios
+                out._stop_indicator()  # STOP spinner before showing approval UI
                 cmd = args.get("command", "")
                 rule = app._composer_rule() if hasattr(app, "_composer_rule") else "  " + ("─" * 60)
                 # Question text (no rules around it)
