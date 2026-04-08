@@ -496,9 +496,12 @@ class GemApp:
                 continue
             # Auto-detect image file paths in the message
             self._detect_inline_images(raw)
-            # Pass status line to output manager so indicator shows input field
+            # Pass status line and input field to output manager for typeahead
             self.out._status_line = self._bottom_toolbar()
+            self.out._input_field = self._input_field
+            self._input_field.set_busy(True)
             self._chat_turn(raw)
+            self._input_field.set_busy(False)
 
     def _prompt_label(self) -> str:
         parts = []

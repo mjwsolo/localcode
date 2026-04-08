@@ -1,7 +1,8 @@
-"""Custom terminal input field with full layout control.
+"""Custom terminal input field with type-ahead queuing.
 
-Simple approach: draws input field with rules when needed.
-No scroll regions — just redraws the field after model output.
+Input is always active. If user submits while model is busy,
+the message is queued and auto-submitted when model finishes.
+Based on Claude Code's input architecture.
 """
 from __future__ import annotations
 
@@ -9,6 +10,8 @@ import os
 import sys
 import tty
 import termios
+import threading
+import select
 from pathlib import Path
 
 
@@ -25,7 +28,7 @@ def _rule() -> str:
 
 
 class InputField:
-    """Terminal input with rules above/below and history."""
+    """Terminal input with type-ahead queuing during model work."""
 
     def __init__(self, history_file: Path | None = None):
         self._history: list[str] = []
@@ -37,19 +40,40 @@ class InputField:
             except Exception:
                 pass
         self._history_file = history_file
+        # Queue for type-ahead
+        self._queue: list[str] = []
+        self._lock = threading.Lock()
+        self._busy = False
 
-    def draw_busy(self, status: str = "") -> None:
-        """Draw a dim input field showing model is working."""
-        rule = _rule()
-        sys.stdout.write(f"\n\033[2m{rule}\033[0m\n")
-        sys.stdout.write(f"\033[2m  ›  \033[0m\n")
-        sys.stdout.write(f"\033[2m{rule}\033[0m\n")
-        if status:
-            sys.stdout.write(f"\033[2m  {status}\033[0m\n")
-        sys.stdout.flush()
+    @property
+    def has_queued(self) -> bool:
+        with self._lock:
+            return len(self._queue) > 0
+
+    def dequeue(self) -> str | None:
+        """Pop the next queued message, or None."""
+        with self._lock:
+            if self._queue:
+                return self._queue.pop(0)
+            return None
+
+    def set_busy(self, busy: bool) -> None:
+        with self._lock:
+            self._busy = busy
 
     def read(self, status_line: str = "") -> str:
-        """Show input field with rules, return user input."""
+        """Show input field, return user input. Checks queue first."""
+        # If there's a queued message from type-ahead, return it immediately
+        queued = self.dequeue()
+        if queued:
+            rule = _rule()
+            # Show the queued message as if user just typed it
+            sys.stdout.write(f"\n\033[2m{rule}\033[0m\n")
+            sys.stdout.write(f"  › {queued}\n")
+            sys.stdout.write(f"\033[2m{rule}\033[0m\n")
+            sys.stdout.flush()
+            return queued
+
         rule = _rule()
 
         # Draw: top rule, input line (save cursor), bottom rule, status
@@ -148,16 +172,7 @@ class InputField:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
         text = "".join(buf).strip()
-
-        # Save to history
-        if text and (not self._history or self._history[-1] != text):
-            self._history.append(text)
-            if self._history_file:
-                try:
-                    with open(self._history_file, "a") as f:
-                        f.write(f"+{text}\n")
-                except Exception:
-                    pass
+        self._save_history(text)
 
         # After submit: clear the field area below input, redraw with final text
         sys.stdout.write(f"\033[u\033[J")  # restore to input pos, clear below
@@ -168,6 +183,59 @@ class InputField:
 
         return text
 
+    def collect_typeahead(self) -> None:
+        """Non-blocking: collect any keystrokes from stdin into the queue.
+
+        Called by the output manager's indicator thread to let users
+        type while the model is working. Collects into a line buffer
+        and enqueues on Enter.
+        """
+        buf = getattr(self, '_typeahead_buf', [])
+        try:
+            fd = sys.stdin.fileno()
+            while select.select([sys.stdin], [], [], 0)[0]:
+                old = termios.tcgetattr(fd)
+                try:
+                    tty.setraw(fd)
+                    ch = sys.stdin.read(1)
+                finally:
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+                if ch in ("\r", "\n"):
+                    text = "".join(buf).strip()
+                    if text:
+                        with self._lock:
+                            self._queue.append(text)
+                        self._save_history(text)
+                    buf.clear()
+                elif ch == "\x7f" or ch == "\x08":
+                    if buf:
+                        buf.pop()
+                elif ch == "\x03":
+                    buf.clear()
+                elif ch == "\x15":  # Ctrl+U
+                    buf.clear()
+                elif ord(ch) >= 32:
+                    buf.insert(len(buf), ch)
+        except Exception:
+            pass
+        self._typeahead_buf = buf
+
+    def get_typeahead_text(self) -> str:
+        """Return current typeahead buffer text (for display in indicator)."""
+        buf = getattr(self, '_typeahead_buf', [])
+        return "".join(buf)
+
+    def _save_history(self, text: str) -> None:
+        if text and (not self._history or self._history[-1] != text):
+            self._history.append(text)
+            if self._history_file:
+                try:
+                    with open(self._history_file, "a") as f:
+                        f.write(f"+{text}\n")
+                except Exception:
+                    pass
+
     def _redraw(self, buf: list[str], cursor: int, rule: str, status: str) -> None:
         """Redraw input text + bottom area from saved cursor position."""
         text = "".join(buf)
@@ -176,7 +244,6 @@ class InputField:
         sys.stdout.write(f"\n\033[2m{rule}\033[0m")
         if status:
             sys.stdout.write(f"\n\033[2m  {status}\033[0m")
-        # Move cursor back to correct position
         sys.stdout.write(f"\033[u")
         if cursor > 0:
             sys.stdout.write(f"\033[{cursor}C")
