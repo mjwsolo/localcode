@@ -27,6 +27,7 @@ class ChatScreen(Screen):
         layout: vertical;
     }
     #spinner-line {
+        dock: bottom;
         height: 1;
         padding: 0 1;
         color: $success;
@@ -164,20 +165,48 @@ class ChatScreen(Screen):
 
     @work(exclusive=True, thread=True)
     def run_agent_turn(self, user_text: str) -> None:
-        """Run model inference on background thread."""
+        """Run model inference on background thread. Streams directly to TUI."""
         if not self.tui.gem_app:
             return
+        app = self.tui.gem_app
+        bridge = self.tui.bridge
         try:
-            # Suppress stdout writes from the agent
-            import io, sys
-            old_stdout = sys.stdout
-            sys.stdout = io.StringIO()
-            try:
-                self.tui.gem_app._chat_turn(user_text)
-            finally:
-                sys.stdout = old_stdout
+            # Stream directly from the runtime — bypass OutputManager's stdout
+            from ..bridge import AgentEvent
+
+            # Add user message to session
+            app.session.messages.append({"role": "user", "content": user_text})
+
+            # Build messages for the model
+            from ...composer import compose_messages
+            from ...context_manager import build_context
+            context = build_context(app.repo_root, app.session, app.config, app.toolkit)
+            from ...prompts import build_system_prompt
+            system = build_system_prompt(app.profile, context)
+            composed = compose_messages(
+                app.profile, system, context,
+                app.session.messages, user_text,
+            )
+
+            # Stream from engine
+            full_response = []
+            for event in app.engine.stream_chat_events(composed):
+                if event["type"] == "content":
+                    chunk = str(event["content"])
+                    full_response.append(chunk)
+                    bridge.on_event("content", chunk=chunk)
+                elif event["type"] == "thinking":
+                    chunk = str(event["content"])
+                    bridge.on_event("thinking_peek", text=chunk[:120])
+
+            # Save response to session
+            text = "".join(full_response).strip()
+            if text:
+                app.session.messages.append({"role": "assistant", "content": text})
+                bridge.on_event("response_done", text=text)
+
         except Exception as e:
-            self.tui.bridge.on_event("error", message=str(e))
+            bridge.on_event("error", message=str(e))
 
     def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
         if event.worker.name == "run_agent_turn" and event.state == WorkerState.SUCCESS:
@@ -226,6 +255,13 @@ class ChatScreen(Screen):
         if t == "content":
             chunk = p.get("chunk", "")
             self._stream_buf.append(chunk)
+            # Show streaming text immediately
+            self._update_spinner(f"generating... ({len(self._stream_buf)} chunks)")
+        elif t == "response_done":
+            text = p.get("text", "")
+            if text:
+                log.append_assistant(text)
+                self._stream_buf.clear()
         elif t == "tool_start":
             name = p.get("name", "")
             args = p.get("args", "")
