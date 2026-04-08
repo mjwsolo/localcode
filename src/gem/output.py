@@ -275,6 +275,8 @@ class OutputManager:
             except (KeyboardInterrupt, RuntimeError):
                 pass
         try:
+            # Show cursor again
+            sys.stdout.write("\033[?25h")
             # Erase spinner line + input field lines below it
             lines_to_clear = 4 if self._status_line else 3
             sys.stdout.write("\r\033[K")  # clear spinner line
@@ -319,14 +321,16 @@ class OutputManager:
                 status = getattr(self, '_status_line', '')
                 sys.stdout.write(f"\r{line}\033[K")
                 # Input field below spinner
-                sys.stdout.write(f"\n\033[2m{rule}\033[0m")
-                sys.stdout.write(f"\n\033[2m  › \033[0m")
-                sys.stdout.write(f"\n\033[2m{rule}\033[0m")
+                sys.stdout.write(f"\n\033[2m{rule}\033[0m\033[K")
+                sys.stdout.write(f"\n\033[2m  › \033[0m\033[K")
+                sys.stdout.write(f"\n\033[2m{rule}\033[0m\033[K")
                 if status:
-                    sys.stdout.write(f"\n\033[2m  {status}\033[0m")
-                    sys.stdout.write(f"\033[4A\r")  # move back up 4 lines
-                else:
-                    sys.stdout.write(f"\033[3A\r")  # move back up 3 lines
+                    sys.stdout.write(f"\n\033[2m  {status}\033[0m\033[K")
+                # Hide cursor on spinner, it's just a status display
+                sys.stdout.write(f"\033[?25l")  # hide cursor
+                # Move back to spinner line for next redraw
+                lines_back = 4 if status else 3
+                sys.stdout.write(f"\033[{lines_back}A\r")
                 sys.stdout.flush()
             except (BrokenPipeError, OSError, ValueError):
                 self._indicator_running = False
