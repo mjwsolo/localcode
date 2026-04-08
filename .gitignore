@@ -35,3 +35,5 @@ llama-cpp-turboquant/build/
 llama-cpp-turboquant/build-*/
 llama-cpp-turboquant/.git/
 site/
+docs/
+mkdocs.yml
