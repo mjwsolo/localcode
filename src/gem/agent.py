@@ -418,8 +418,7 @@ def _render_markdown(text: str, console: Console | None = None) -> None:
     if not text:
         return
     cols = __import__("shutil").get_terminal_size().columns
-    # Model output with small indent
-    width = max(44, cols - 6)
+    width = cols - 2
     left_pad = 2
     if console is not None:
         c = Console(
