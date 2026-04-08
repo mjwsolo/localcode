@@ -1,5 +1,18 @@
 <p align="center">
-  <img src="logo.png" alt="LOCALcode" width="500">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="logo.png">
+    <source media="(prefers-color-scheme: light)" srcset="logo-light.png">
+    <img src="logo.png" alt="LOCALcode" width="500">
+  </picture>
+</p>
+
+<p align="center">
+  <a href="https://github.com/mjwsolo/localcode/actions"><img src="https://img.shields.io/github/actions/workflow/status/mjwsolo/localcode/ci.yml?label=build&style=flat-square" alt="Build"></a>
+  <a href="https://github.com/mjwsolo/localcode/releases"><img src="https://img.shields.io/github/v/release/mjwsolo/localcode?style=flat-square&color=7c4dff&label=release" alt="Release"></a>
+  <a href="https://github.com/mjwsolo/localcode/blob/main/LICENSE"><img src="https://img.shields.io/github/license/mjwsolo/localcode?style=flat-square&color=4caf50&label=license" alt="License"></a>
+  <a href="https://github.com/mjwsolo/localcode"><img src="https://img.shields.io/github/stars/mjwsolo/localcode?style=flat-square&color=f5c542&label=stars" alt="Stars"></a>
+  <img src="https://img.shields.io/badge/python-3.11+-3776ab?style=flat-square" alt="Python">
+  <img src="https://img.shields.io/badge/platform-Apple%20Silicon-999999?style=flat-square" alt="Platform">
 </p>
 
 <p align="center">
