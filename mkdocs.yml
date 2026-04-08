@@ -1,0 +1,89 @@
+site_name: "🏠 LOCALcode"
+site_description: Local-first AI coding assistant — runs Gemma 4 26B entirely on your Mac
+site_url: https://mjwsolo.github.io/localcode
+repo_url: https://github.com/mjwsolo/localcode
+repo_name: mjwsolo/localcode
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  font:
+    text: Inter
+    code: IBM Plex Mono
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - navigation.instant
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - navigation.indexes
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+
+nav:
+  - Home: index.md
+  - Docs:
+    - Overview: docs-overview.md
+    - Core:
+      - Overview: core-overview.md
+      - Introduction: intro.md
+      - Getting Started: getting-started.md
+      - First Run: first-run.md
+      - Providers: providers.md
+      - Troubleshooting: troubleshooting.md
+    - Usage:
+      - Overview: usage-overview.md
+      - Tools: tools.md
+      - Commands: commands.md
+      - Permissions: permissions.md
+    - Configure:
+      - Overview: configure-overview.md
+      - Configuration: configuration.md
+    - Under the Hood:
+      - Overview: architecture-overview.md
+      - Architecture: architecture.md
+      - Innovations: innovations.md
+  - Enterprise: enterprise.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - tables
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/mjwsolo/localcode
+
+extra_css:
+  - stylesheets/extra.css
+
+extra_javascript:
+  - javascripts/download-modal.js

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 import platform
 import shutil
 import subprocess
@@ -161,9 +162,8 @@ def detect_llama_cpp_install_plan() -> InstallPlan | None:
     return None
 
 
-def _find_turboquant_source() -> "Path | None":
+def _find_turboquant_source() -> Path | None:
     """Locate the TurboQuant llama.cpp fork source directory."""
-    from pathlib import Path
     # Check relative to this package (repo checkout)
     pkg_dir = Path(__file__).resolve().parent.parent.parent  # src/gem -> src -> repo root
     candidate = pkg_dir / "llama-cpp-turboquant"
@@ -176,9 +176,8 @@ def _find_turboquant_source() -> "Path | None":
     return None
 
 
-def _turboquant_binary_path() -> "Path | None":
+def _turboquant_binary_path() -> Path | None:
     """Return path to the built TurboQuant llama-server binary, or None if not built."""
-    from pathlib import Path
     source = _find_turboquant_source()
     if source is None:
         return None
@@ -595,6 +594,23 @@ def run_setup(
             ok, details = run_with_runner(console, install_step, setup_steps, lambda: install_llama_cpp(console))
             console.print(details)
 
+    # For llama_cpp provider, we still need Ollama to download the model GGUF
+    if auto_install and config.runtime.provider == "llama_cpp":
+        if not is_ollama_installed():
+            install_step = SetupStep("runtime-install", "installing Ollama", "Installing Ollama for model download.")
+            ok, details = run_with_runner(console, install_step, setup_steps, lambda: install_ollama(console))
+            if not ok:
+                console.print(details)
+                console.print("Install Ollama manually: https://ollama.com/download")
+        if is_ollama_installed():
+            # Start Ollama service if not running
+            import time as _time
+            subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            _time.sleep(2)
+            model_step = SetupStep("model-prepare", "downloading model", f"Pulling {resolved_model} via Ollama.")
+            pulled, pull_details = run_with_runner(console, model_step, setup_steps, lambda: pull_model(resolved_model, on_progress=_set_progress))
+            console.print(pull_details)
+
     engine = GemRuntimeGateway(config.runtime)
     runtime_step = SetupStep("runtime-check", "checking runtime", f"Checking {config.runtime.provider} readiness.")
     runtime_ok, runtime_details = run_with_runner(console, runtime_step, setup_steps, engine.healthcheck)
@@ -603,7 +619,7 @@ def run_setup(
     table.add_column("setting", style="bold", no_wrap=True)
     table.add_column("value", overflow="fold")
     table.add_column("why", overflow="fold", max_width=42)
-    table.add_row("config", str(get_config_path()), _reason("Gem stores the local-first runtime and UX defaults here."))
+    table.add_row("config", str(get_config_path()), _reason("LocalCode stores the local-first runtime and UX defaults here."))
     table.add_row("profile", profile.key, _reason(PROFILE_HINTS.get(profile.key, profile.summary)))
     table.add_row("model", resolved_model, _reason("This is the concrete local model tag LocalCode will try to use."))
     provider_reason = {
@@ -619,7 +635,7 @@ def run_setup(
     table.add_row("browser", config.browser.mcp_server_name if config.browser.enabled else "disabled", _reason("Browser automation is configured but now loads only when you actually use it."))
     table.add_row("voice", f"{config.voice.stt_provider} + {config.voice.tts_provider}", _reason("Local voice defaults favor offline use and small-machine friendliness."))
     if config.runtime.provider == "ollama":
-        table.add_row("ollama_cli", "present" if is_ollama_installed() else "missing", _reason("Gem can launch fastest when the local runtime binary is already installed."))
+        table.add_row("ollama_cli", "present" if is_ollama_installed() else "missing", _reason("LocalCode can launch fastest when the local runtime binary is already installed."))
     table.add_row("daemon", "ready" if runtime_ok else "unreachable", _reason("This confirms whether the selected local runtime answered a health check."))
     table.add_row("details", runtime_details, _reason("Concrete backend detail from the runtime check."))
     console.print(table)

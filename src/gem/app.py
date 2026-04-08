@@ -98,6 +98,7 @@ _SLASH_COMMANDS = [
     "/read", "/add", "/drop", "/context", "/diff", "/apply",
     "/shell", "/bg", "/jobs", "/log", "/verify",
     "/agentbg",
+    "/switch",
     "/tools", "/skills", "/mcp", "/permissions",
     "/search", "/history", "/browser", "/voice",
     "/thinking", "/timeline",
@@ -260,21 +261,13 @@ class GemApp:
 
         self.prompt = PromptSession(
             history=FileHistory(str(history_path)),
-            auto_suggest=AutoSuggestFromHistory(),
-            completer=GemCompleter(self.repo_root),
-            complete_while_typing=False,
-            complete_in_thread=True,
-            multiline=True,
-            key_bindings=kb,
             style=Style.from_dict({
-                "bottom-toolbar": "noreverse #888888 bg:default",
-                "": "bg:#2d2d2d",
-                "prompt": "bg:#2d2d2d #ffffff",
+                "": "#d4d4d4 bg:default",
             }),
-            prompt_continuation="  ",
-            reserve_space_for_menu=4,
         )
         self.approvals = ApprovalQueue(self.console, self.prompt)
+        from .input_field import InputField
+        self._input_field = InputField(history_file=history_path)
         self.session_allows: set[str] = set()
         self._thinking_tick = 0
         self._pending_images: list[ImageData] = []
@@ -471,7 +464,7 @@ class GemApp:
 
             _loading = False
             anim.join(timeout=1)
-            _sys.stderr.write(f"\r\033[32m  model ready ✓       \033[0m\n\n")
+            _sys.stderr.write(f"\r\033[32m  model ready ✓       \033[0m\n")
         except Exception as exc:
             _loading = False
             anim.join(timeout=1)
@@ -490,19 +483,9 @@ class GemApp:
                 if changes:
                     self.tool_cache.invalidate_all()
                     self.console.print(f"  [dim yellow]files changed externally: {', '.join(changes[:5])}[/]")
-                import sys
-                # Breathing room before input prompt
-                sys.stdout.write("\n")
-                sys.stdout.write("\033[5 q")  # blinking bar cursor
-                sys.stdout.flush()
-                raw = self.prompt.prompt(
-                    self._prompt_label(),
-                    bottom_toolbar=self._bottom_toolbar,
-                ).strip()
-                sys.stdout.write("\033[0 q")  # restore default cursor
-                # Space after user hits enter, before response
-                sys.stdout.write("\n")
-                sys.stdout.flush()
+                raw = self._input_field.read(
+                    status_line=self._bottom_toolbar(),
+                )
             except (EOFError, KeyboardInterrupt):
                 self.out.done()
                 self.console.print("\nExiting.")
@@ -536,8 +519,18 @@ class GemApp:
             total_sec = sum(a.duration_seconds for a in self._pending_audio)
             parts.append(f"{count} audio {total_sec:.0f}s")
         if parts:
-            return f"\n> ({', '.join(parts)}) \n"
-        return "\n> \n"
+            return f"› ({', '.join(parts)}) "
+        return "› "
+
+    def _composer_rule(self) -> str:
+        import os
+
+        try:
+            cols = os.get_terminal_size().columns
+        except OSError:
+            cols = 80
+        width = max(24, min(96, cols - 4))
+        return "  " + ("─" * width)
 
     def _bottom_toolbar(self) -> str:
         """Status bar: model · context left · path."""
@@ -548,7 +541,7 @@ class GemApp:
         mode_label = "fast" if not mode.endswith("-think") else "reasoning"
         model_short = self.runtime_model.split("/")[-1] if "/" in self.runtime_model else self.runtime_model
         path = f"~/{self.repo_root.name}" if self.repo_root != Path.home() else "~"
-        return f"\n {model_short} {mode_label} · {pct_left}% left · {path}"
+        return f"{model_short} {mode_label} · {pct_left}% left · {path}"
 
     def _check_clipboard_image(self) -> None:
         """Silently check if clipboard has a new image."""
@@ -587,15 +580,10 @@ class GemApp:
         )
 
     def _welcome_view(self):
-        from rich.align import Align
-        banner_text = self._banner()
-        return Panel(
-            Align.center(banner_text),
-            title="[bold]◆ LOCALcode[/]",
-            border_style="green",
-            style="green",
-            expand=True,
-        )
+        from rich.rule import Rule
+        from rich.console import Group
+        from rich.text import Text
+        return Group(Text(""), Rule("🏠 [bold]LOCALcode[/]", style="green"))
 
     def _pick_mode(self) -> None:
         """Mode picker shown after banner."""
@@ -627,46 +615,76 @@ class GemApp:
         elif not needs_sysctl:
             gpu_ok = True  # 24GB+ Macs don't need the unlock
         if gpu_ok:
-            # Scale context based on available RAM
-            if system_ram_gb >= 64:
-                ctx_label, speed_note = "128K", " (speed est.)"
-            elif system_ram_gb >= 32:
-                ctx_label, speed_note = "64K", " (speed est.)"
-            elif system_ram_gb >= 24:
-                ctx_label, speed_note = "48K", " (speed est.)"
-            else:
-                ctx_label, speed_note = "32K", ""
             print()
             print("  \033[1mSelect a mode:\033[0m")
             print()
-            print(f"  1. \033[1mFast\033[0m         27 tok/s  {ctx_label} context{speed_note}")
-            print(f"  2. \033[1mReasoning\033[0m    26 tok/s  {ctx_label} context{speed_note}")
+            print("  1. \033[1mFast\033[0m         Quicker answers for routine work")
+            print("  2. \033[1mReasoning\033[0m    Deeper thinking for harder tasks")
             print()
-            ch = ""
-            # Try single-keypress read, fall back to input()
-            try:
-                fd = sys.stdin.fileno()
-                old = termios.tcgetattr(fd)
-                try:
-                    sys.stdout.write("  > ")
-                    sys.stdout.flush()
-                    tty.setraw(fd)
-                    ch = sys.stdin.read(1)
-                finally:
-                    termios.tcsetattr(fd, termios.TCSADRAIN, old)
-            except Exception:
-                try:
-                    ch = input("  > ").strip()
-                except EOFError:
-                    ch = "1"
-            sys.stdout.write(f"\r                    \n")
-            if ch == "2":
-                self.config.runtime.laptop_26b_runtime_mode = "turbo-think"
-                sys.stdout.write(f"\033[32m  reasoning ✓\033[0m\n")
-            else:
-                self.config.runtime.laptop_26b_runtime_mode = "turbo"
-                sys.stdout.write(f"\033[32m  fast ✓\033[0m\n")
+            rule = self._composer_rule()
+            model_short = self.runtime_model.split("/")[-1] if "/" in self.runtime_model else self.runtime_model
+            path = f"~/{self.repo_root.name}" if self.repo_root != Path.home() else "~"
+            status = f"{model_short} · {path}"
+            hint = ""
+            # Save position before the input block so we can redraw in place
+            sys.stdout.write("\033[s")  # save anchor
             sys.stdout.flush()
+            while True:
+                # Restore to anchor, clear everything below, redraw
+                sys.stdout.write("\033[u\033[J")
+                if hint:
+                    sys.stdout.write(f"\033[2m  {hint}\033[0m\n")
+                sys.stdout.write(f"\033[2m{rule}\033[0m\n")
+                sys.stdout.write("  › ")
+                sys.stdout.write(f"\n\033[2m{rule}\033[0m")
+                sys.stdout.write(f"\n\033[2m  {status}\033[0m")
+                # Move cursor back to input line (3 lines up: bottom rule + status + 1)
+                sys.stdout.write(f"\033[2A\r    ")  # go up 2, move to col 5
+                sys.stdout.flush()
+
+                ch = ""
+                try:
+                    fd = sys.stdin.fileno()
+                    old = termios.tcgetattr(fd)
+                    try:
+                        tty.setraw(fd)
+                        ch = sys.stdin.read(1)
+                    finally:
+                        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+                except Exception:
+                    try:
+                        ch = input().strip()
+                    except EOFError:
+                        ch = "1"
+
+                ch = (ch or "").strip().lower()[:1]
+
+                if ch in {"\x03", "\x1b", "q"}:
+                    sys.stdout.write("\033[u\033[J\n")
+                    sys.stdout.flush()
+                    raise KeyboardInterrupt
+
+                if ch == "1":
+                    sys.stdout.write("\033[u\033[J")
+                    sys.stdout.write(f"\n\033[32m  fast ✓\033[0m\n")
+                    sys.stdout.flush()
+                    self.config.runtime.laptop_26b_runtime_mode = "turbo"
+                    break
+                elif ch == "2":
+                    sys.stdout.write("\033[u\033[J")
+                    sys.stdout.write(f"\n\033[32m  reasoning ✓\033[0m\n")
+                    sys.stdout.flush()
+                    self.config.runtime.laptop_26b_runtime_mode = "turbo-think"
+                    break
+                else:
+                    # Wrong key — flush paste buffer, set hint, loop redraws in place
+                    import select
+                    try:
+                        while select.select([sys.stdin], [], [], 0.0)[0]:
+                            sys.stdin.read(1)
+                    except Exception:
+                        pass
+                    hint = "press 1 or 2"
         else:
             self.config.runtime.laptop_26b_runtime_mode = "speed"
 
@@ -699,59 +717,48 @@ class GemApp:
         if name == "/help":
             self.console.print(
                 Panel.fit(
+                    "[bold]Mode[/]\n"
+                    "  /switch — toggle between fast and reasoning mode\n\n"
                     "[bold]Navigation[/]\n"
-                    "  /help /status /model /files /find /index /read /add /drop /context /diff\n\n"
+                    "  /help /status /model /files /find /read /add /drop /context /diff\n\n"
                     "[bold]Editing[/]\n"
                     "  /apply /undo [all] /changes /shell <cmd> /bg <cmd> /verify [cmd]\n\n"
-                    "[bold]Agent[/]\n"
-                    "  /agent <task> /agentbg <task>\n\n"
-                    "[bold]Tools[/]\n"
-                    "  /tools /skills /mcp /permissions /search <query> /browser /voice\n\n"
                     "[bold]Session[/]\n"
-                    "  /thinking [hidden|summary|full] /timeline /jobs /log <id> /clear /quit",
-                    title="[bold bright_cyan]gem commands[/]",
+                    "  /thinking [hidden|summary|full] /clear /quit",
+                    title="[bold bright_cyan]localcode commands[/]",
                     border_style="bright_cyan",
                 )
             )
             return True
         if name == "/status":
-            table = Table(show_header=False)
-            table.add_row("repo", str(self.repo_root))
-            table.add_row("session", self.session.session_id)
-            table.add_row("profile", self.profile.display_name)
-            table.add_row("variant", self.profile.feature_variant)
-            table.add_row("family", self.profile.family)
+            table = Table(show_header=False, title="LocalCode", title_style="bold green")
             table.add_row("model", self.runtime_model)
+            table.add_row("profile", self.profile.display_name)
             table.add_row("mode", self.config.runtime.mode)
-            table.add_row("planner_enabled", str(self.config.runtime.planner_enabled))
-            table.add_row("planner_model", self.config.runtime.planner_model)
-            table.add_row("adaptive_execution", str(self.config.runtime.adaptive_execution))
             table.add_row("thinking", self.config.ui.thinking_mode)
-            table.add_row("agent_steps", str(self.profile.agent_steps))
-            table.add_row("retrieval_budget", str(self.profile.retrieval_budget))
-            table.add_row("verification_bias", self.profile.verification_bias)
+            table.add_row("network", "[green]online[/green]" if is_online() else "[yellow]offline[/yellow]")
+            table.add_row("repo", str(self.repo_root))
+            table.add_row("git", git_status(self.repo_root))
             provider, search_status = self.toolkit.search_status()
             table.add_row("search", f"{provider} ({search_status})")
-            table.add_row("browser", self.config.browser.mcp_server_name if self.config.browser.enabled else "disabled")
-            table.add_row("voice", f"{self.config.voice.stt_provider} + {self.config.voice.tts_provider}")
-            table.add_row("git", git_status(self.repo_root))
-            table.add_row("pinned", ", ".join(self.session.pinned_files) or "(none)")
+            mcp_count = len(self.toolkit.mcp_tools()) if hasattr(self.toolkit, 'mcp_tools') else 0
+            if mcp_count:
+                table.add_row("mcp_servers", str(mcp_count))
             self.console.print(table)
             diagnostics = self.toolkit.diagnostics()
             if diagnostics:
-                self.console.print(Panel("\n".join(diagnostics), title="Diagnostics"))
-            self.console.print(
-                Panel.fit(
-                    "\n".join(
-                        [
-                            "Shell, patch apply, background jobs, and model-driven tool calls require explicit approval.",
-                            "Use /tools to inspect available tools and /mcp to inspect connected MCP servers.",
-                            "Use /permissions to persist repo-scoped allow or deny rules.",
-                        ]
-                    ),
-                    title="Safety",
-                )
-            )
+                self.console.print(Panel("\n".join(diagnostics), title="Issues", border_style="yellow"))
+            return True
+        if name == "/switch":
+            mode = self.config.runtime.laptop_26b_runtime_mode
+            if mode.endswith("-think"):
+                self.config.runtime.laptop_26b_runtime_mode = "turbo"
+                self.console.print("  Switched to [green]fast[/green] mode (27 tok/s, thinking off)")
+            else:
+                self.config.runtime.laptop_26b_runtime_mode = "turbo-think"
+                self.console.print("  Switched to [green]reasoning[/green] mode (26 tok/s, thinking on)")
+            save_config(self.config)
+            self.store.append_event(self.session, "mode_switch", self.config.runtime.laptop_26b_runtime_mode)
             return True
         if name == "/model":
             if not arg:
@@ -1867,13 +1874,11 @@ class GemApp:
                 round_started = time.time()
                 first_token_s: float | None = None
 
-                # ── Speed optimization: disable thinking for tool dispatch rounds ──
-                # Round 0: think only for complex tasks (file edits, multi-step)
-                # Round 1+: NEVER think — model is just reacting to tool results
-                if _round == 0:
-                    use_think = len(user_text) > 30 or bool({"file_edit", "file_write"} & set(routing.intents))
-                else:
-                    use_think = False  # continuation rounds don't need reasoning
+                # ── Thinking mode ──
+                # Reasoning mode (/switch): think on every round
+                # Fast mode: never think
+                reasoning_mode = self.config.runtime.laptop_26b_runtime_mode.endswith("-think")
+                use_think = reasoning_mode
                 round_budget = output_budget if _round == 0 else min(800, output_budget)
                 for event in self.engine.stream_chat_events(
                     working_messages,
@@ -2414,7 +2419,7 @@ class GemApp:
         out = self.out
         started_at = time.time()
         first_token_s: float | None = None
-        max_tokens = 1200
+        max_tokens = 2048
         if stream:
             out.set_thinking_peek("contacting model and waiting for first tokens")
 
@@ -2475,7 +2480,7 @@ class GemApp:
             return 1200
         if set(intents) & {"search_code", "git"}:
             return 700
-        return 900
+        return 1200
 
     def _maybe_auto_verify(self) -> None:
         """Auto-suggest running tests after file changes in interactive mode."""
@@ -2901,7 +2906,7 @@ class GemApp:
                     {
                         "role": "system",
                         "content": (
-                            "You are Gem's draft lane. "
+                            "You are LocalCode's draft lane."
                             "Return a short draft of the likely answer shape, files, tools, or checks needed. "
                             "Keep it under 120 words."
                         ),

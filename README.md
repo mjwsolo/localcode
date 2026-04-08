@@ -1,77 +1,89 @@
-# Gem
+<p align="center">
+  <img src="logo.png" alt="LocalCode" width="500">
+</p>
 
-Gem is a local-first AI coding assistant for developers who want an open-source, terminal-native workflow with Gemma 4 running on their own machine.
+<p align="center">
+  <strong>The local AI coding agent.</strong> Runs Gemma 4 26B entirely on your Mac. No cloud, no API keys, no data leaving your laptop.
+</p>
 
-This repo currently contains two things:
+LocalCode is an open-source terminal coding assistant that reads your codebase, edits files, runs commands, and searches your code — powered by a 26B parameter model running locally at 27 tokens/second.
 
-- `src/gem/`: the new Python implementation for a pragmatic v1.
-- `gem_code/`: the legacy TypeScript/Ink codebase snapshot that was inspected during the migration.
+## Install
 
-## Why The Refactor
+```bash
+pip install git+https://github.com/mjwsolo/localcode.git
+```
 
-The legacy app is a large TypeScript terminal product with deep coupling to hosted APIs, remote control, analytics, MCP plumbing, and product-specific services. The parts worth preserving conceptually are:
+## Run
 
-- interactive terminal workflow
-- streaming assistant output
-- background-safe shell/task execution
-- session persistence
-- repo-aware context gathering
-- diff-oriented coding flow
+```bash
+cd your-project
+localcode
+```
 
-The new Python version keeps those ideas and drops the product-specific sprawl.
+That's it. First launch builds the inference server and downloads the model (~5 min, one time). After that, startup is ~15 seconds.
 
-## Interface Choice
+## What it does
 
-A TUI is the right v1 interface for Gem because the target user is already living in a terminal while coding. It keeps file paths, git, diffs, shell output, and model interaction in one place without introducing browser or hosted-service requirements.
+- **Reads and edits files** — understands your codebase, makes surgical edits
+- **Runs commands** — tests, builds, git, shell
+- **Searches code** — by pattern, content, or semantic meaning
+- **Thinks through hard problems** — reasoning mode for complex multi-step tasks
+- **Uses tools automatically** — the model picks the right tool for the job
 
-Practical implication: this version is intentionally terminal-first, keyboard-driven, and local. It does not attempt to recreate every feature from the legacy app.
+```
+> refactor the auth module to use JWT and make sure the tests pass
+```
 
-## Runtime Choice
+LocalCode reads the files, plans the refactor, edits the code, runs the tests, and fixes failures — all locally.
 
-Gem targets **Ollama** first for local Gemma 4 because it is the simplest practical setup:
+## Why local?
 
-- one local HTTP endpoint
-- streaming responses
-- simple install story
-- no hosted dependency
+| | LocalCode | Cloud AI |
+|--|-----------|----------|
+| Privacy | 100% local | Code sent to servers |
+| Cost | Free forever | $20+/month |
+| Offline | Works anywhere | Needs internet |
+| Speed | 27 tok/s | ~50 tok/s |
+| Context | 32K tokens | 128K+ |
 
-Gem now also has:
+Your code stays on your machine. No telemetry, no data collection, no API keys.
 
-- an experimental `llama_cpp` provider path for local server setups that expose an OpenAI-style `/v1/chat/completions` endpoint. This is the preferred direction for aggressive low-latency tuning on constrained hardware.
-- an `mlx-local` provider path for Apple Silicon users running MLX quantized Gemma models locally.
-- an advanced `huggingface-local` provider path for users who want to run Gemma checkpoints directly through local `transformers` + `torch`.
-- a local browser preset through Playwright MCP.
-- a local voice stack with `whisper.cpp` or `faster-whisper` for STT and `kokoro` or `piper` for TTS.
+## Requirements
 
-Recommended stack:
+- **Mac with Apple Silicon** (M1/M2/M3/M4)
+- **16GB RAM** minimum
+- **Python 3.11+**
+- **~12GB free disk**
 
-- default onboarding: `ollama`
-- Mac performance path: `mlx-local`
-- cross-platform performance path: `llama_cpp`
-- advanced custom local backend: `huggingface-local`
+## Key commands
 
-## Gemma 4 Design
+| Command | What it does |
+|---------|-------------|
+| `/switch` | Toggle between fast (27 tok/s) and reasoning (26 tok/s) mode |
+| `/help` | Show all commands |
+| `/status` | Runtime info |
+| `/undo` | Revert last change |
 
-Gem is now explicitly centered on Gemma 4.
+## How it works
 
-Official Gemma docs currently state:
+LocalCode runs a custom [llama.cpp](https://github.com/ggerganov/llama.cpp) fork with **TurboQuant KV cache compression** — a technique from Google's ICLR 2026 paper that we patched into llama.cpp for Apple Silicon. This compresses the KV cache 3.8x, fitting 32K context in 355 MiB on a 16GB MacBook.
 
-- Gemma 4 released on **March 31, 2026**
-- Gemma 4 ships in **E2B, E4B, 31B, and 26B A4B / MoE-style** variants
-- Gemma 4 supports **text, image, and audio input**
-- Gemma 4 supports context windows up to **256K**
+The model (**Gemma 4 26B-A4B**) is a Mixture-of-Experts architecture — 25.2B total parameters but only 3.8B active per token. That's what makes 27 tok/s possible on a laptop.
 
-Practical implications for Gem:
+## Documentation
 
-- setup starts with Gemma 4 profile selection
-- prompts and context budgets vary by selected Gemma 4 tier
-- tool use is exposed as a local-first coding workflow, not as cloud orchestration
-- the assistant stays useful on both small and large local hardware
+Full docs at [mjwsolo.github.io/localcode](https://mjwsolo.github.io/localcode)
 
-## Installation and Running
+- [Getting Started](https://mjwsolo.github.io/localcode/getting-started/)
+- [Tools](https://mjwsolo.github.io/localcode/tools/)
+- [Architecture](https://mjwsolo.github.io/localcode/architecture/)
+- [Innovations](https://mjwsolo.github.io/localcode/innovations/)
 
-To install dependencies and run the example script, follow these steps:
+## Contributing
 
-### 1. Install Dependencies
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Navigate to the root directory of the project and install the required Python packages using `pip`:
+## License
+
+Apache-2.0. See [LICENSE](LICENSE).

@@ -1,68 +1,96 @@
 # Getting Started
 
+Let's get LocalCode running on your machine.
+
 ## Requirements
 
-- macOS with Apple Silicon (M1/M2/M3/M4)
-- 16GB RAM minimum
-- Python 3.10+
-- ~12GB free disk space
+- **Mac with Apple Silicon** (M1, M2, M3, or M4)
+- **16GB RAM** minimum (24GB+ recommended for bigger context)
+- **Python 3.11+**
+- **~12GB free disk** for the model and server binary
 
-## Installation
+!!! note
+    cmake and Xcode Command Line Tools are installed automatically if missing. Ollama is detected and used as a fallback if available.
 
-```bash
-# Clone the repo
-git clone https://github.com/mjwsolo/localcode.git
-cd localcode
+## Install
 
-# Set up Python environment
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .
+=== "pip (recommended)"
 
-# Build the inference server
-cd llama-cpp-turboquant
-./BUILD.sh
-cd ..
+    ```bash
+    git clone https://github.com/mjwsolo/localcode.git
+    cd localcode
+    python3 -m venv .venv
+    source .venv/bin/activate
+    pip install -e .
+    ```
 
-# Download the model via Ollama
-brew install ollama
-ollama pull gemma4:26b-a4b
-```
+=== "pipx"
 
-## First Run
+    ```bash
+    pipx install git+https://github.com/mjwsolo/localcode.git
+    ```
+
+## Run
 
 ```bash
 localcode
 ```
 
-On first launch:
-1. You'll be asked to allow GPU memory unlock (one-time per boot, resets on reboot)
-2. Select your mode (Fast or Reasoning)
-3. The server starts automatically
-4. Start coding!
+That's it. First launch handles everything:
 
-## Quick Test
+1. **Builds** the TurboQuant inference server from source (~3 min)
+2. **Downloads** Gemma 4 26B IQ3_S (~10GB, one time)
+3. **Unlocks** GPU memory on 16GB Macs (asks for sudo, resets on reboot)
+
+After the first run, startup takes ~15 seconds.
+
+## Pick a mode
 
 ```
-> hi
-Hello! How can I help you today?
+  Select a mode:
 
-> make a pong game using pygame
-  create: full generation path
-  · generating code...
-  ✓ write — pong.py (150 lines)
-  ✓ verify — syntax OK
-  ✓ deps — all imports OK
-
-> run it for me
-  ● bash python pong.py
+  1. Fast         27 tok/s  32K context
+  2. Reasoning    26 tok/s  32K context
 ```
 
-## Commands
+**Fast** — best for straightforward coding tasks. No thinking overhead.
 
-| Command | Description |
-|---------|-------------|
-| `/clear` | Clear conversation history |
-| `/undo` | Revert last file change |
-| `/verify` | Run syntax check on last file |
-| `/quit` | Exit |
+**Reasoning** — enables thinking mode. The model reasons through problems before responding. Great for complex multi-step tasks.
+
+!!! tip
+    Start with Fast. Type `/switch` anytime to toggle to Reasoning when you hit something that needs deeper thought.
+
+## Try it out
+
+Good first things to try:
+
+```
+read pyproject.toml and summarize what this project does
+```
+
+```
+find all Python files that import os
+```
+
+```
+write a hello world script and run it
+```
+
+The model will pick the right tools on its own — reading files, running commands, searching code.
+
+## Performance
+
+| Metric | 16GB Mac | 24GB+ Mac |
+|--------|----------|-----------|
+| Decode speed | 27 tok/s | 27+ tok/s |
+| Time to first token | 270ms | 270ms |
+| Prompt eval | 87 tok/s | 87+ tok/s |
+| Context window | 32K | 48K–128K |
+| KV cache | 355 MiB | scales up |
+
+## What's next
+
+- [First Run](first-run.md) — detailed walkthrough of the first launch
+- [Tools](tools.md) — what the model can do
+- [Configuration](configuration.md) — tune settings
+- [Troubleshooting](troubleshooting.md) — if something goes wrong

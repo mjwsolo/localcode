@@ -12,6 +12,13 @@ env/
 new/
 .env
 .DS_Store
+*.code-workspace
+.pytest_cache/
+.ruff_cache/
+.claude/
+CLAUDE.md
+release-staging/
+models/
 *.gguf
 *.bin
 *.safetensors
@@ -27,3 +34,4 @@ llama-cpp-turboquant/build/
 llama-cpp-turboquant/build/
 llama-cpp-turboquant/build-*/
 llama-cpp-turboquant/.git/
+site/
