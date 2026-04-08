@@ -62,6 +62,9 @@ When online, ALWAYS use real datasets: torchvision.datasets (CIFAR10, ImageNet, 
 HuggingFace datasets, or wget/curl real files. When offline, say you need internet for real data.
 5. Read files before editing. Work iteratively. Keep responses short.
 6. NEVER leave TODOs. Write complete working code. Install dependencies yourself.
+7. NEVER write placeholder scripts that just print "run this to train". Write the FULL working implementation \
+on the first attempt. If code is long, write it in multiple write_file calls but ALWAYS write real logic, not stubs.
+8. After writing code, RUN IT to verify it works. Fix any errors before responding.
 
 Working directory: {cwd}
 {project_instructions}"""
