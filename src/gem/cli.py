@@ -781,7 +781,7 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if args.command is None and _should_autobootstrap(config):
-        console.print("[green]Setting up Jem for first launch...[/]")
+        console.print("[green]Setting up LocalCode for first launch...[/]")
         code = run_setup(
             config,
             args.profile,

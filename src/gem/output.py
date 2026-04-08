@@ -124,9 +124,8 @@ class OutputManager:
         with self._lock:
             self.state.phase = Phase.DONE
         self._emit_event("done")
-        # Summary line + breathing room
-        if elapsed > 2:
-            parts = [f"{elapsed:.0f}s"]
+        # Summary line + breathing room (guard against stale start_time)
+        if 2 < elapsed < 3600:
             if tools_used:
                 tool_names = {}
                 for t in self.state.tool_actions:
@@ -270,10 +269,19 @@ class OutputManager:
         except (BrokenPipeError, OSError):
             pass
 
+    # Gem-themed labels and icons
+    _LABELS = [
+        "mining", "cutting facets", "polishing",
+        "examining", "shaping", "refining",
+        "digging deeper", "crystallizing", "forging",
+    ]
+    _ICONS = ["·", "▲", "◆"]
+
     def _run_indicator(self) -> None:
         tick = 0
         while self._indicator_running:
             tick += 1
+            icon = self._ICONS[tick % len(self._ICONS)]
             elapsed = time.time() - self.state.start_time
             if elapsed < 60:
                 timer = f"{elapsed:.0f}s"
@@ -283,9 +291,9 @@ class OutputManager:
             with self._lock:
                 custom = getattr(self, '_custom_stage', '')
 
-            label = custom if custom else "Working"
-            hint = " · esc to interrupt" if elapsed > 5 else ""
-            line = f"\033[1m▪ {label}\033[0m ({timer}{hint})"
+            label = custom or self._LABELS[int(elapsed) // 6 % len(self._LABELS)]
+            hint = " · ctrl+c to stop" if elapsed > 10 else ""
+            line = f"\033[32m {icon} {label}... ({timer})\033[0m{hint}"
 
             try:
                 sys.stdout.write(f"\r{line}\033[K")

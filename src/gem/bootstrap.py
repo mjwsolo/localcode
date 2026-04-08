@@ -96,7 +96,7 @@ def _runner_panel(label: str, detail: str, tick: int, steps: list[SetupStep], cu
         f"[bold]step[/bold]:  {current_index + 1}/{len(steps)}\n"
         f"[bold]now[/bold]:   {detail}\n\n"
         f"{_progress_lines(steps, current_key)}\n\n"
-        f"[dim]Gem is active. Press Ctrl-C to cancel.[/dim]",
+        f"[dim]LocalCode is active. Press Ctrl-C to cancel.[/dim]",
         title="[green]Status[/green]",
         border_style="bright_green",
     )
@@ -605,7 +605,7 @@ def run_setup(
     table.add_column("why", overflow="fold", max_width=42)
     table.add_row("config", str(get_config_path()), _reason("Gem stores the local-first runtime and UX defaults here."))
     table.add_row("profile", profile.key, _reason(PROFILE_HINTS.get(profile.key, profile.summary)))
-    table.add_row("model", resolved_model, _reason("This is the concrete local model tag Gem will try to use."))
+    table.add_row("model", resolved_model, _reason("This is the concrete local model tag LocalCode will try to use."))
     provider_reason = {
         "ollama": "Chosen for the easiest out-of-box local startup path.",
         "mlx-local": "Chosen because Apple Silicon + quantized Gemma is fastest here.",

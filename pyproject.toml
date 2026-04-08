@@ -3,14 +3,14 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "gem-tui"
+name = "localcode"
 version = "0.1.0"
-description = "Gem is a local-first AI coding assistant TUI for Gemma 4."
+description = "LocalCode is a local-first AI coding assistant TUI for Gemma 4."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [
-  { name = "Gem Contributors" }
+  { name = "LocalCode Contributors" }
 ]
 dependencies = [
   "duckduckgo-search>=6.2.0",
