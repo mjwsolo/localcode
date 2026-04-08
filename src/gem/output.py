@@ -125,8 +125,6 @@ class OutputManager:
         with self._lock:
             self.state.phase = Phase.DONE
         self._emit_event("done")
-        sys.stdout.write("\n")
-        sys.stdout.flush()
 
     def set_error(self, msg: str) -> None:
         self._stop_indicator()
@@ -263,8 +261,8 @@ class OutputManager:
             except (KeyboardInterrupt, RuntimeError):
                 pass
         try:
-            sys.stderr.write("\r\033[K")
-            sys.stderr.flush()
+            sys.stdout.write("\r\033[K")
+            sys.stdout.flush()
         except (BrokenPipeError, OSError):
             pass
 
@@ -294,15 +292,16 @@ class OutputManager:
             # Line 1: stage label + timer
             gem_label = custom or LABELS[int(elapsed) // 6 % len(LABELS)]
 
-            line1 = f"\033[32m {icon} {gem_label}... ({timer})\033[0m"
+            hint = " \033[2m· ctrl+c to stop\033[0m" if elapsed > 10 else ""
+            line1 = f"\033[32m {icon} {gem_label}... ({timer})\033[0m{hint}"
 
             try:
                 if peek:
                     line2 = peek[:max(20, cols - 6)]
-                    sys.stderr.write(f"\r{line1}\033[K\n\033[2m   {line2}\033[0m\033[K\033[A")
+                    sys.stdout.write(f"\r{line1}\033[K\n\033[2m   {line2}\033[0m\033[K\033[A")
                 else:
-                    sys.stderr.write(f"\r{line1}\033[K")
-                sys.stderr.flush()
+                    sys.stdout.write(f"\r{line1}\033[K")
+                sys.stdout.flush()
             except (BrokenPipeError, OSError, ValueError):
                 self._indicator_running = False
                 break

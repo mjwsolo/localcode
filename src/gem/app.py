@@ -213,24 +213,45 @@ class GemApp:
         history_path = ensure_home_dirs() / "prompt_history.txt"
         from prompt_toolkit.styles import Style
         from prompt_toolkit.key_binding import KeyBindings
+        from prompt_toolkit.keys import Keys
         kb = KeyBindings()
 
         @kb.add("c-v")
-        def _paste_handler(event):
-            """Handle Cmd+V / Ctrl+V — check clipboard for image."""
-            # Let prompt_toolkit do the normal text paste first
-            data = event.app.clipboard.get_data()
-            if data.text:
-                event.current_buffer.insert_text(data.text)
-            # Check if clipboard has an image (empty paste = image)
-            if not data.text or not data.text.strip():
+        def _paste_image(event):
+            """Ctrl+V — paste image from system clipboard."""
+            if clipboard_has_image():
+                img = read_clipboard_image()
+                if img and not any(e.base64_data == img.base64_data for e in self._pending_images):
+                    self._pending_images.append(img)
+                    import sys as _s
+                    _s.stdout.write(f"\n\033[2m  image attached ({img.size_kb}KB)\033[0m\n")
+                    _s.stdout.flush()
+            else:
+                # No image — do normal text paste from system clipboard
+                import subprocess as _sp
+                try:
+                    text = _sp.run(["pbpaste"], capture_output=True, text=True, timeout=2).stdout
+                    if text:
+                        event.current_buffer.insert_text(text)
+                except Exception:
+                    pass
+
+        @kb.add(Keys.BracketedPaste)
+        def _bracketed_paste(event):
+            """Handle Cmd+V — terminal sends bracketed paste. Empty = image in clipboard."""
+            pasted = event.data
+            if pasted and pasted.strip():
+                # Normal text paste
+                event.current_buffer.insert_text(pasted)
+            else:
+                # Empty paste — check for image
                 if clipboard_has_image():
                     img = read_clipboard_image()
                     if img and not any(e.base64_data == img.base64_data for e in self._pending_images):
                         self._pending_images.append(img)
-                        import sys
-                        sys.stdout.write(f"\033[2m  image attached ({img.size_kb}KB)\033[0m\n")
-                        sys.stdout.flush()
+                        import sys as _s
+                        _s.stdout.write(f"\n\033[2m  image attached ({img.size_kb}KB)\033[0m\n")
+                        _s.stdout.flush()
 
         self.prompt = PromptSession(
             history=FileHistory(str(history_path)),

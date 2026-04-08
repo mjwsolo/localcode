@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 # ── Constants ────────────────────────────────────────────────────────────
 
 MAX_ROUNDS = 20
-MAX_OUTPUT_TOKENS = 8192  # generous — we have 32K context
+MAX_OUTPUT_TOKENS = -1  # no limit — model generates until EOS (server has its own safety net)
 
 # Per-tool result size limits (chars)
 RESULT_LIMITS = {
@@ -47,22 +47,36 @@ DESTRUCTIVE_PATTERNS = [
 ]
 
 SYSTEM_PROMPT = """\
-You are LocalCode, a coding assistant running entirely on the user's machine. \
-You help with software engineering: writing code, fixing bugs, refactoring, explaining code, and more. \
-You are highly capable and help complete ambitious tasks.
+You are LocalCode, a coding assistant that runs on the user's machine. You have FULL access to their filesystem via tools.
+
+CRITICAL: You CAN and MUST create, read, and edit files using your tools. You are NOT a plain chatbot. \
+You have tools: write_file, edit_file, read_file, bash, grep, glob, list_files, web_search. USE THEM.
 
 Rules:
+- ALWAYS use write_file to create files and edit_file to modify them. NEVER tell the user to copy-paste code.
+- NEVER paste code in your response text. Use tools to write it directly to disk.
+- Keep text responses short — just summarize what you did.
+- Work iteratively: write a small working version first, then add features with edit_file.
 - Read files before editing. Understand existing code first.
-- Don't add features or improvements beyond what was asked.
 - Prefer editing existing files over creating new ones.
-- Use dedicated tools (read_file, grep) instead of bash equivalents.
-- If an approach fails, diagnose why before switching tactics.
-- Be concise. Lead with the action, not the reasoning.
-- NEVER leave TODO comments, notes, or "I'll fix this later" in code. Write complete, working code every time.
-- NEVER write your thinking or planning as code comments. Comments are for explaining code logic only.
+- NEVER leave TODO comments or "I'll fix this later" in code. Write complete, working code.
 
 Working directory: {cwd}
-"""
+{project_instructions}"""
+
+# Files checked for project-specific instructions (first found wins)
+_PROJECT_FILES = ["LOCALCODE.md", "localcode.md", ".localcode.md", ".localcode"]
+
+
+def _load_project_instructions(repo_root: Path) -> str:
+    """Load project-specific instructions from LOCALCODE.md if it exists."""
+    for name in _PROJECT_FILES:
+        path = repo_root / name
+        if path.exists():
+            content = path.read_text(errors="replace").strip()
+            if content:
+                return f"\nProject instructions (from {name}):\n{content}"
+    return ""
 
 
 # ── Tool Schemas ─────────────────────────────────────────────────────────
@@ -164,6 +178,8 @@ def _execute_tool(app: "GemApp", name: str, args: dict, out: "OutputManager") ->
 
 
 def _tool_read_file(repo: Path, args: dict) -> str:
+    if "path" not in args:
+        return "Error: 'path' argument is required for read_file."
     path = repo / args["path"]
     if not path.exists():
         return f"File not found: {args['path']}"
@@ -180,6 +196,8 @@ def _tool_read_file(repo: Path, args: dict) -> str:
 
 
 def _tool_write_file(repo: Path, args: dict, out: "OutputManager") -> str:
+    if "path" not in args:
+        return "Error: 'path' argument is required for write_file."
     path = repo / args["path"]
     path.parent.mkdir(parents=True, exist_ok=True)
     content = args.get("content", "")
@@ -189,6 +207,8 @@ def _tool_write_file(repo: Path, args: dict, out: "OutputManager") -> str:
 
 
 def _tool_edit_file(repo: Path, args: dict, out: "OutputManager") -> str:
+    if "path" not in args:
+        return "Error: 'path' argument is required for edit_file."
     path = repo / args["path"]
     if not path.exists():
         return f"File not found: {args['path']}"
@@ -390,18 +410,17 @@ def _summarize_args(args: dict) -> str:
     return str(args)[:60]
 
 
-_console = Console()
-
-def _render_markdown(text: str) -> None:
+def _render_markdown(text: str, console: Console | None = None) -> None:
     """Render text as markdown if it has markdown markers, plain otherwise."""
     text = text.strip()
     if not text:
         return
+    c = console or Console(width=min(100, __import__("shutil").get_terminal_size().columns))
     has_md = any(m in text for m in ("```", "###", "**", "- ", "1. ", "`"))
     if has_md:
-        _console.print(Markdown(text))
+        c.print(Markdown(text))
     else:
-        _console.print(text)
+        c.print(text)
 
 
 def _brief_result(tool_name: str, result: str) -> str:
@@ -476,20 +495,17 @@ def run_agent_loop(
     # ── Build messages ──
     # composed_messages already has system prompt + context + full conversation + current user msg
     # Inject our tool-loop system prompt at the front
-    agent_system = SYSTEM_PROMPT.format(cwd=app.repo_root)
+    project_instructions = _load_project_instructions(app.repo_root)
+    agent_system = SYSTEM_PROMPT.format(cwd=app.repo_root, project_instructions=project_instructions)
     messages: list[dict[str, Any]] = []
+
+    # Our agent prompt goes first — it's the most important
+    messages.append({"role": "system", "content": agent_system})
 
     for m in composed_messages:
         if m.get("role") == "system":
-            # Merge our agent instructions with existing system prompt
-            existing = m.get("content", "")
-            messages.append({"role": "system", "content": f"{existing}\n\n{agent_system}" if existing else agent_system})
-        else:
-            messages.append(m)
-
-    # If no system message was in composed, add ours
-    if not any(m.get("role") == "system" for m in messages):
-        messages.insert(0, {"role": "system", "content": agent_system})
+            continue  # skip old system prompt — ours is authoritative
+        messages.append(m)
 
     # Add current user message if not already there
     if not messages or messages[-1].get("content") != user_text:
@@ -551,19 +567,21 @@ def run_agent_loop(
         if thinking_parts:
             thinking_text = "".join(thinking_parts).strip()
             if thinking_text:
-                # Show first 2 lines as a peek
+                # Show first line as a peek, truncated to terminal width
                 lines = thinking_text.splitlines()
-                preview = lines[0][:80]
-                if len(lines) > 1:
-                    preview += f"  …({len(lines)} lines)"
+                cols = __import__("shutil").get_terminal_size().columns
+                max_len = cols - 16  # account for "  thought: " + margin
+                preview = lines[0][:max_len]
+                if len(lines) > 1 or len(lines[0]) > max_len:
+                    preview = preview[:max_len - 3] + "…"
                 sys.stdout.write(f"\033[2;3m  thought: {preview}\033[0m\n")
 
         content = "".join(content_parts)
 
         # Clear the indicator before rendering output
         out._stop_indicator()
-        sys.stderr.write("\r\033[K")  # clear indicator line
-        sys.stderr.flush()
+        sys.stdout.write("\r\033[K")  # clear indicator line
+        sys.stdout.flush()
 
         # Build assistant message for history
         assistant_msg: dict[str, Any] = {"role": "assistant", "content": content}
@@ -574,7 +592,7 @@ def run_agent_loop(
         # ── No tool calls = model is done ──
         if not tool_calls:
             if content:
-                _render_markdown(content)
+                _render_markdown(content, app.console if hasattr(app, 'console') else None)
                 full_response.append(content)
             break
 
