@@ -184,6 +184,64 @@ void quantize(uint dst_idx, uint src_idx)
 }
 #endif
 
+#if defined(DATA_A_TURBO3_0)
+void quantize(uint dst_idx, uint src_idx)
+{
+    const float centroids[8] = float[8](
+        -0.190685, -0.117832, -0.065717, -0.021460,
+         0.021460,  0.065717,  0.117832,  0.190685
+    );
+    const float midpoints[7] = float[7](
+        -0.154259, -0.091775, -0.043589, 0.0, 0.043589, 0.091775, 0.154259
+    );
+
+    // Compute L2 norm
+    float norm_sq = 0.0;
+    [[unroll]] for (int j = 0; j < 32; ++j) {
+        float v = data_s[src_idx + j];
+        norm_sq += v * v;
+    }
+    float norm = sqrt(norm_sq);
+    float inv_norm = (norm > 1e-10) ? (1.0 / norm) : 0.0;
+
+    // Clear output
+    [[unroll]] for (int j = 0; j < 8; ++j) data_q[dst_idx].qs[j] = uint8_t(0);
+    [[unroll]] for (int j = 0; j < 4; ++j) data_q[dst_idx].signs[j] = uint8_t(0);
+
+    // Accumulate centroid reconstruction norm for correction
+    float recon_norm_sq = 0.0;
+
+    // Quantize each element
+    [[unroll]] for (int j = 0; j < 32; ++j) {
+        float val = data_s[src_idx + j] * inv_norm;
+
+        // Find nearest centroid via midpoint comparison
+        uint idx = 0;
+        if      (val < midpoints[0]) idx = 0;
+        else if (val < midpoints[1]) idx = 1;
+        else if (val < midpoints[2]) idx = 2;
+        else if (val < midpoints[3]) idx = 3;
+        else if (val < midpoints[4]) idx = 4;
+        else if (val < midpoints[5]) idx = 5;
+        else if (val < midpoints[6]) idx = 6;
+        else                         idx = 7;
+
+        recon_norm_sq += centroids[idx] * centroids[idx];
+
+        // Pack: low 2 bits to qs, high 1 bit to signs
+        uint low2 = idx & 0x3;
+        uint hi1 = (idx >> 2) & 0x1;
+        data_q[dst_idx].qs[j / 4] |= uint8_t(low2 << ((j % 4) * 2));
+        data_q[dst_idx].signs[j / 8] |= uint8_t(hi1 << (j % 8));
+    }
+
+    // Norm correction: scale so reconstruction matches original norm
+    float recon_norm = sqrt(recon_norm_sq);
+    float corrected_norm = (recon_norm > 1e-10) ? (norm / recon_norm) : norm;
+    data_q[dst_idx].norm = float16_t(corrected_norm);
+}
+#endif
+
 #if defined(DATA_A_IQ4_NL)
 uint best_index(float x) {
     if (x <= kvalues_iq4nl[0]) return 0;

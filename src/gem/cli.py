@@ -829,8 +829,21 @@ def main(argv: list[str] | None = None) -> None:
 
 
 def _gpu_memory_unlocked() -> bool:
-    """Check if iogpu.wired_limit_mb has been raised for GPU turbo mode."""
+    """Check if GPU memory is sufficient for turbo mode.
+
+    On 24GB+ Macs, Metal's default working set is large enough — no sysctl needed.
+    On 16GB Macs, iogpu.wired_limit_mb must be raised to 14336.
+    """
     import subprocess
+    try:
+        mem_bytes = int(subprocess.run(
+            ["sysctl", "-n", "hw.memsize"],
+            capture_output=True, text=True, timeout=2
+        ).stdout.strip())
+        if mem_bytes // (1024 ** 3) > 16:
+            return True  # 24GB+ Macs don't need the unlock
+    except Exception:
+        pass
     try:
         r = subprocess.run(["sysctl", "-n", "iogpu.wired_limit_mb"],
                           capture_output=True, text=True, timeout=2)

@@ -1696,6 +1696,23 @@ struct block_mxfp4
 #define A_TYPE block_mxfp4
 #endif
 
+#define QUANT_K_TURBO3_0 32
+#define QUANT_R_TURBO3_0 1
+
+struct block_turbo3_0
+{
+    float16_t norm;
+    uint8_t qs[8];      // 2-bit centroid indices (4 per byte)
+    uint8_t signs[4];   // 1-bit high bit of 3-bit index (8 per byte)
+};
+
+#if defined(DATA_A_TURBO3_0)
+#define QUANT_K QUANT_K_TURBO3_0
+#define QUANT_R QUANT_R_TURBO3_0
+#define QUANT_AUXF 1
+#define A_TYPE block_turbo3_0
+#endif
+
 #if defined(DATA_A_IQ4_NL) || defined(DATA_A_IQ4_XS)
 const int8_t kvalues_iq4nl_const[16] = {
     int8_t(-127), int8_t(-104), int8_t(-83), int8_t(-65), int8_t(-49), int8_t(-35), int8_t(-22), int8_t(-10),
