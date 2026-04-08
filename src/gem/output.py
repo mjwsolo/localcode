@@ -227,17 +227,31 @@ class OutputManager:
 
     # ── Content streaming ────────────────────────────────────────────
 
+    _col_pos = 0  # track column position for soft wrapping
+
     def stream(self, chunk: str) -> None:
-        """Stream content to terminal."""
+        """Stream content to terminal with soft wrapping."""
         if self.state.phase != Phase.STREAMING:
             self.start_streaming()
+            self._col_pos = 2  # we start with 2-char indent
         with self._lock:
             self.state.content_chunks.append(chunk)
             self.state.tokens += max(1, len(chunk) // 4)
         self._emit_event("content", chunk=chunk[:240], chars=str(len(chunk)))
-        # Indent continuation lines
-        indented = chunk.replace("\n", "\n  ")
-        sys.stdout.write(indented)
+        cols = _cols()
+        wrap_at = cols - 1  # leave 1 char margin
+        out = []
+        for ch in chunk:
+            if ch == "\n":
+                out.append("\n  ")
+                self._col_pos = 2
+            else:
+                if self._col_pos >= wrap_at:
+                    out.append("\n  ")
+                    self._col_pos = 2
+                out.append(ch)
+                self._col_pos += 1
+        sys.stdout.write("".join(out))
         sys.stdout.flush()
 
     def print_info(self, text: str) -> None:
