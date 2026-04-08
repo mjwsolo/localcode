@@ -70,7 +70,6 @@ We are building for a world of truly democratized AI, where everyone has access 
 | **Speed** | 27 tok/s | ~80 tok/s | Depends on provider | ~60 tok/s |
 | **Context** | 32K tokens | 200K+ | Depends on model | 128K+ |
 | **Tool calling** | Native (Gemma 4) | Native (Claude) | Native (varies) | Native (GPT) |
-| **Setup** | `pip install` + auto-build | `npm install` + API key | `npm install` + API key | `npm install` + API key |
 | **Open source** | Yes (Apache-2.0) | No (proprietary) | Yes (MIT) | Yes (Apache-2.0) |
 | **Internet required** | No | Yes | Yes | Yes |
 | **Data collection** | None | Anthropic policy | Provider policy | OpenAI policy |
