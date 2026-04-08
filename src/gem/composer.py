@@ -74,5 +74,16 @@ def _build_user_message(
         content_parts.append({"type": "text", "text": text})
         return {"role": "user", "content": content_parts}
 
+    if provider == "llama_cpp":
+        # llama-server: OpenAI-compatible multipart content
+        content_parts: list[dict] = []
+        for img_b64 in images:
+            content_parts.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{img_b64}"},
+            })
+        content_parts.append({"type": "text", "text": text})
+        return {"role": "user", "content": content_parts}
+
     # Ollama: "images" field at message level
     return {"role": "user", "content": text, "images": images}

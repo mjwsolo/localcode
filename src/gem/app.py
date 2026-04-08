@@ -223,9 +223,7 @@ class GemApp:
                 img = read_clipboard_image()
                 if img and not any(e.base64_data == img.base64_data for e in self._pending_images):
                     self._pending_images.append(img)
-                    import sys as _s
-                    _s.stdout.write(f"\n\033[2m  image attached ({img.size_kb}KB)\033[0m\n")
-                    _s.stdout.flush()
+                    event.current_buffer.insert_text(f"[image {img.size_kb}KB] ")
             else:
                 # No image — do normal text paste from system clipboard
                 import subprocess as _sp
@@ -249,9 +247,7 @@ class GemApp:
                     img = read_clipboard_image()
                     if img and not any(e.base64_data == img.base64_data for e in self._pending_images):
                         self._pending_images.append(img)
-                        import sys as _s
-                        _s.stdout.write(f"\n\033[2m  image attached ({img.size_kb}KB)\033[0m\n")
-                        _s.stdout.flush()
+                        event.current_buffer.insert_text(f"[image {img.size_kb}KB] ")
 
         self.prompt = PromptSession(
             history=FileHistory(str(history_path)),
@@ -470,6 +466,9 @@ class GemApp:
                 self.out.done()
                 self.console.print("\nExiting.")
                 return
+            # Strip image markers from input
+            import re
+            raw = re.sub(r'\[image \d+KB\]\s*', '', raw).strip()
             if not raw:
                 # Empty input after paste = image-only message
                 if self._pending_images:
