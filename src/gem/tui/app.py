@@ -6,15 +6,16 @@ import os
 import sys
 from pathlib import Path
 
-# Monkey-patch Textual's message_pump for Python 3.13 compatibility
-# The _message_queue sometimes becomes a list instead of asyncio.Queue
+# Monkey-patch Textual's MessagePump for Python 3.13 compatibility.
+# In 3.13, the `Queue()` default in the dataclass-style __init__ sometimes
+# resolves to a list. We patch __init__ to force asyncio.Queue.
 import textual.message_pump as _mp
-_orig_close = _mp.MessagePump._close_messages
-async def _safe_close_messages(self):
-    if isinstance(self._message_queue, list):
+_orig_init = _mp.MessagePump.__init__
+def _patched_init(self, *args, **kwargs):
+    _orig_init(self, *args, **kwargs)
+    if not hasattr(self._message_queue, 'put_nowait'):
         self._message_queue = asyncio.Queue()
-    return await _orig_close(self)
-_mp.MessagePump._close_messages = _safe_close_messages
+_mp.MessagePump.__init__ = _patched_init
 
 from textual.app import App
 
