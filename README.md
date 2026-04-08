@@ -65,10 +65,6 @@ We are building for a world of truly democratized AI, where everyone has access 
 | **Runtime** | 100% on-device | Cloud (Anthropic API) | Cloud (any provider) | Cloud (OpenAI API) |
 | **Privacy** | Code never leaves your machine | Code sent to Anthropic | Code sent to provider | Code sent to OpenAI |
 | **Cost** | Free forever | $100+/mo (Max) or API credits | API credits (varies) | Free (included with ChatGPT) |
-| **Speed** | 27 tok/s | ~80 tok/s | Depends on provider | ~60 tok/s |
-| **Context** | 32K tokens | 200K+ | Depends on model | 128K+ |
-| **Tool calling** | Native (Gemma 4) | Native (Claude) | Native (varies) | Native (GPT) |
-| **Open source** | Yes (Apache-2.0) | No (proprietary) | Yes (MIT) | Yes (Apache-2.0) |
 | **Internet required** | No | Yes | Yes | Yes |
 | **Data collection** | None | Anthropic policy | Provider policy | OpenAI policy |
 
