@@ -23,7 +23,7 @@ Recommended extra tools:
 pip install pytest ruff build
 ```
 
-## Before Opening A PR
+## Before Opening a PR
 
 Run:
 
