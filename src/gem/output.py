@@ -77,6 +77,7 @@ class OutputManager:
         self._event_callback = None
         self._stream_started = False
         self._custom_stage = ""
+        self._status_line = ""
 
     def set_event_callback(self, callback) -> None:
         self._event_callback = callback
@@ -274,7 +275,13 @@ class OutputManager:
             except (KeyboardInterrupt, RuntimeError):
                 pass
         try:
-            sys.stdout.write("\r\033[K")
+            # Erase spinner line + input field lines below it
+            lines_to_clear = 4 if self._status_line else 3
+            sys.stdout.write("\r\033[K")  # clear spinner line
+            for _ in range(lines_to_clear):
+                sys.stdout.write("\n\033[K")  # clear each line below
+            # Move back up
+            sys.stdout.write(f"\033[{lines_to_clear}A\r")
             sys.stdout.flush()
         except (BrokenPipeError, OSError):
             pass
@@ -306,7 +313,20 @@ class OutputManager:
             line = f"\033[32m {icon} {label}... ({timer})\033[0m{hint}"
 
             try:
+                # Draw spinner + input field below it
+                cols = _cols()
+                rule = "  " + ("─" * max(24, min(96, cols - 4)))
+                status = getattr(self, '_status_line', '')
                 sys.stdout.write(f"\r{line}\033[K")
+                # Input field below spinner
+                sys.stdout.write(f"\n\033[2m{rule}\033[0m")
+                sys.stdout.write(f"\n\033[2m  › \033[0m")
+                sys.stdout.write(f"\n\033[2m{rule}\033[0m")
+                if status:
+                    sys.stdout.write(f"\n\033[2m  {status}\033[0m")
+                    sys.stdout.write(f"\033[4A\r")  # move back up 4 lines
+                else:
+                    sys.stdout.write(f"\033[3A\r")  # move back up 3 lines
                 sys.stdout.flush()
             except (BrokenPipeError, OSError, ValueError):
                 self._indicator_running = False
