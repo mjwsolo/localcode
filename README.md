@@ -6,8 +6,6 @@
   <strong>The local AI coding agent.</strong> Runs Gemma 4 26B entirely on your Mac. No cloud, no API keys, no data leaving your laptop.
 </p>
 
-We are building for a world of truly democratized AI, where everyone has access to powerful, personalized, prompt AI anywhere, on any device, and in any location. True empowered local-first AI. LOCALcode is the first step toward that vision.
-
 LOCALcode is an open-source terminal coding assistant that reads your codebase, edits files, runs commands, and searches your code — powered by a 26B parameter model running locally at 27 tokens/second.
 
 ## Install
@@ -37,7 +35,7 @@ That's it. First launch builds the inference server and downloads the model (~5 
 - **Runs commands** — tests, builds, git, shell
 - **Searches code** — by pattern, content, or semantic meaning
 - **Thinks through hard problems** — reasoning mode for complex multi-step tasks
-- **Uses tools automatically** — the model picks the right tool for the job
+- **Uses tools automatically** — the model picks its own tools
 
 ```
 > refactor the auth module to use JWT and make sure the tests pass
@@ -47,15 +45,26 @@ LOCALcode reads the files, plans the refactor, edits the code, runs the tests, a
 
 ## Why local?
 
-| | LOCALcode | Cloud AI |
-|--|-----------|----------|
-| Privacy | 100% local | Code sent to servers |
-| Cost | Free forever | $20+/month |
-| Offline | Works anywhere | Needs internet |
-| Speed | 27 tok/s | ~50 tok/s |
-| Context | 32K tokens | 128K+ |
+We are building for a world of truly democratized AI, where everyone has access to powerful, personalized, prompt AI anywhere, on any device, and in any location. True empowered local-first AI. LOCALcode is the first step toward that vision.
 
-Your code stays on your machine. No telemetry, no data collection, no API keys.
+### How LOCALcode compares
+
+| | LOCALcode | Claude Code | OpenCode | Codex CLI |
+|--|-----------|-------------|----------|-----------|
+| **Runtime** | 100% on-device | Cloud (Anthropic API) | Cloud (any provider) | Cloud (OpenAI API) |
+| **Privacy** | Code never leaves your machine | Code sent to Anthropic | Code sent to provider | Code sent to OpenAI |
+| **Cost** | Free forever | $20+/mo (Pro) or API credits | API credits (varies) | API credits (OpenAI) |
+| **Offline** | Full functionality | No | No | No |
+| **Model** | Gemma 4 26B (local) | Claude Sonnet/Opus (cloud) | Any LLM via API | GPT-4.1/o3 (cloud) |
+| **Speed** | 27 tok/s | ~80 tok/s | Depends on provider | ~60 tok/s |
+| **Context** | 32K tokens | 200K+ | Depends on model | 128K+ |
+| **Tool calling** | Native (Gemma 4) | Native (Claude) | Native (varies) | Native (GPT) |
+| **Setup** | `pip install` + auto-build | `npm install` + API key | `npm install` + API key | `npm install` + API key |
+| **Open source** | Yes (Apache-2.0) | No (proprietary) | Yes (MIT) | Yes (Apache-2.0) |
+| **Internet required** | No | Yes | Yes | Yes |
+| **Data collection** | None | Anthropic policy | Provider policy | OpenAI policy |
+
+**The tradeoff is honest:** cloud tools are faster and have more context. LOCALcode is slower and has less context — but your code never leaves your machine, it works offline, it costs nothing, and nobody else sees your data. For many tasks, 27 tok/s with 32K context is more than enough.
 
 ## Requirements
 
@@ -69,9 +78,6 @@ Your code stays on your machine. No telemetry, no data collection, no API keys.
 | Command | What it does |
 |---------|-------------|
 | `/switch` | Toggle between fast (27 tok/s) and reasoning (26 tok/s) mode |
-| `/help` | Show all commands |
-| `/status` | Runtime info |
-| `/undo` | Revert last change |
 
 ## How it works
 
