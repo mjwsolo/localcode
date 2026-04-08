@@ -107,8 +107,8 @@ class OutputManager:
         self._emit_event("thinking_start", reset=str(reset).lower())
         self._start_indicator()
 
-    # Left indent for model output (narrower than user input)
-    _STREAM_INDENT = "    "
+    # Left indent for model output
+    _STREAM_INDENT = "  "
 
     def start_streaming(self) -> None:
         """Transition to content streaming — stops indicator."""

@@ -502,10 +502,13 @@ class GemApp:
             if raw.startswith("/"):
                 should_continue = self._handle_command(raw)
                 if not should_continue:
+                    self._input_field.reset_scroll_region()
                     return
                 continue
             # Auto-detect image file paths in the message
             self._detect_inline_images(raw)
+            # Show dim input field while model works
+            self._input_field.draw_busy(status=self._bottom_toolbar())
             self._chat_turn(raw)
 
     def _prompt_label(self) -> str:
