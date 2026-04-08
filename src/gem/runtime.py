@@ -277,7 +277,23 @@ class GemRuntimeGateway:
         if self.config.quant_preset == "fastest":
             turbo = self.config.kv_cache_type_v.startswith("turbo")
             if self.config.laptop_26b_runtime_mode in ("context", "turbo", "turbo-think") and turbo:
-                return 32768  # GPU + TurboQuant: 32K context, KV cache 355 MiB
+                # Scale context based on system RAM
+                import subprocess
+                try:
+                    mem_bytes = int(subprocess.run(
+                        ["sysctl", "-n", "hw.memsize"],
+                        capture_output=True, text=True, timeout=2
+                    ).stdout.strip())
+                    ram_gb = mem_bytes // (1024 ** 3)
+                except Exception:
+                    ram_gb = 16
+                if ram_gb >= 64:
+                    return 131072  # 128K context
+                elif ram_gb >= 32:
+                    return 65536   # 64K context
+                elif ram_gb >= 24:
+                    return 49152   # 48K context
+                return 32768       # 16GB: 32K context
             return min(num_ctx, 16384 if turbo else 3072)
         return num_ctx
 

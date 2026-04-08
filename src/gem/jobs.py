@@ -62,7 +62,8 @@ def launch_background_job(command: str, cwd: Path) -> JobRecord:
         created_at=utc_now(),
         log_path=str(log_path),
     )
-    _job_path(job_id).write_text(json.dumps(record.__dict__, indent=2))
+    from dataclasses import asdict
+    _job_path(job_id).write_text(json.dumps(asdict(record), indent=2))
     return record
 
 

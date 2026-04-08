@@ -1,13 +1,11 @@
 """Centralized output manager — ALL terminal output goes through here.
 
-Inspired by OpenCode's DisplayState pattern:
-- Single source of truth for what's on screen
-- Explicit phase transitions (idle → thinking → tool_call → streaming → done)
-- No race conditions — one thread owns the display
-- Tool results appear inline under their tool call
-- Thinking indicator updates in-place
-
-This replaces the scattered stdout/stderr/Rich console calls throughout the app.
+Codex-inspired design:
+- ▪ bullet prefix on each section (tool groups, text responses, status)
+- Bold action headers: "Ran", "Read", "Wrote", "Searched"
+- └ tree connectors for tool results
+- Clear spacing between sections
+- "Working (Xs · esc to interrupt)" status line
 """
 from __future__ import annotations
 
@@ -47,13 +45,18 @@ class OutputState:
     error: str = ""
 
 
-# Gem-themed labels
-LABELS = [
-    "mining", "cutting facets", "polishing",
-    "examining", "shaping", "refining",
-    "digging deeper", "crystallizing", "forging",
-]
-ICONS = ["·", "▲", "◆"]
+# Tool name → human-readable action header
+TOOL_HEADERS = {
+    "bash":         "Ran",
+    "read_file":    "Read",
+    "write_file":   "Wrote",
+    "edit_file":    "Edited",
+    "grep":         "Searched",
+    "glob":         "Found",
+    "list_files":   "Listed",
+    "web_search":   "Searched web",
+    "web_fetch":    "Fetched",
+}
 
 
 def _cols() -> int:
@@ -64,18 +67,7 @@ def _cols() -> int:
 
 
 class OutputManager:
-    """Single output controller for the entire app.
-
-    Usage:
-        out = OutputManager()
-        out.start_thinking()          # shows pulsating indicator
-        out.set_thinking_peek("analyzing code...")  # shows under indicator
-        out.log_tool("read_file", "path=hello.py")  # shows ● read_file
-        out.tool_result("hello.py (10 lines)")       # shows ⎿ result
-        out.start_streaming()         # stops indicator
-        out.stream("Hello world")     # prints content
-        out.done()                    # cleanup
-    """
+    """Single output controller for the entire app."""
 
     def __init__(self) -> None:
         self.state = OutputState()
@@ -83,6 +75,7 @@ class OutputManager:
         self._indicator_thread: threading.Thread | None = None
         self._indicator_running = False
         self._event_callback = None
+        self._stream_started = False
 
     def set_event_callback(self, callback) -> None:
         self._event_callback = callback
@@ -97,7 +90,7 @@ class OutputManager:
     # ── Phase transitions ────────────────────────────────────────────
 
     def start_thinking(self, reset: bool = True) -> None:
-        """Begin thinking phase — shows pulsating indicator."""
+        """Begin thinking phase — shows working indicator."""
         with self._lock:
             self.state.phase = Phase.THINKING
             if reset:
@@ -106,8 +99,8 @@ class OutputManager:
                 self.state.thinking_peek = ""
                 self.state.tool_actions.clear()
                 self.state.content_chunks.clear()
+                self._stream_started = False
             else:
-                # Keep accumulated state (tokens, peek) between tool rounds
                 self.state.thinking_peek = ""
         self._emit_event("thinking_start", reset=str(reset).lower())
         self._start_indicator()
@@ -118,13 +111,32 @@ class OutputManager:
         with self._lock:
             self.state.phase = Phase.STREAMING
         self._emit_event("stream_start")
+        # Clear indicator and add breathing room before response
+        sys.stdout.write("\r\033[K\n")
+        sys.stdout.flush()
+        self._stream_started = False
 
     def done(self) -> None:
         """Finished — cleanup."""
         self._stop_indicator()
+        elapsed = time.time() - self.state.start_time
+        tools_used = len(self.state.tool_actions)
         with self._lock:
             self.state.phase = Phase.DONE
         self._emit_event("done")
+        # Summary line + breathing room
+        if elapsed > 2:
+            parts = [f"{elapsed:.0f}s"]
+            if tools_used:
+                tool_names = {}
+                for t in self.state.tool_actions:
+                    tool_names[t.name] = tool_names.get(t.name, 0) + 1
+                tool_summary = ", ".join(f"{n}×{c}" if c > 1 else n for n, c in tool_names.items())
+                parts.append(f"tools: {tool_summary}")
+            sys.stdout.write(f"\n\033[2m  Done in {' — '.join(parts)}\033[0m\n\n")
+        else:
+            sys.stdout.write("\n\n")
+        sys.stdout.flush()
 
     def set_error(self, msg: str) -> None:
         self._stop_indicator()
@@ -132,18 +144,16 @@ class OutputManager:
             self.state.phase = Phase.ERROR
             self.state.error = msg
         self._emit_event("error", message=msg[:240])
-        sys.stdout.write(f"\033[31m  error: {msg}\033[0m\n")
+        sys.stdout.write(f"\n\033[31m▪ Error: {msg}\033[0m\n\n")
         sys.stdout.flush()
 
     # ── Thinking ─────────────────────────────────────────────────────
 
     def feed_thinking(self, chunk: str) -> None:
-        """Feed tokens — updates token count for $ savings. Peek set via set_stage."""
         with self._lock:
             self.state.tokens += max(1, len(chunk) // 4)
 
     def set_stage(self, stage: str) -> None:
-        """Override the indicator label (e.g. 'editing hello.py')."""
         with self._lock:
             self._custom_stage = stage
         self._emit_event("stage", stage=stage[:120])
@@ -157,43 +167,34 @@ class OutputManager:
     # ── Tool calls ───────────────────────────────────────────────────
 
     def log_tool(self, name: str, args: str = "") -> int:
-        """Log a tool call. Returns index for updating result."""
-        self._stop_indicator()  # pause indicator to print cleanly
+        """Log a tool call with Codex-style formatting."""
+        self._stop_indicator()
         idx = len(self.state.tool_actions)
         self.state.tool_actions.append(ToolAction(name=name, args=args))
         self._emit_event("tool_start", name=name, args=args[:200], index=str(idx))
-        # Human-readable tool display
+
+        header = TOOL_HEADERS.get(name, name)
+        # Bold header + cyan args
         if name == "bash":
-            sys.stdout.write(f"\033[2m  $\033[0m \033[2m{args[:70]}\033[0m\n")
-        elif name == "read_file":
-            sys.stdout.write(f"\033[2m  reading\033[0m {args[:60]}\n")
-        elif name == "write_file":
-            sys.stdout.write(f"\033[32m  writing\033[0m {args[:60]}\n")
-        elif name == "edit_file":
-            sys.stdout.write(f"\033[33m  editing\033[0m {args[:60]}\n")
-        elif name == "grep":
-            sys.stdout.write(f"\033[2m  searching\033[0m \033[3m{args[:60]}\033[0m\n")
-        elif name == "list_files":
-            sys.stdout.write(f"\033[2m  listing\033[0m {args[:60]}\n")
-        elif name == "glob":
-            sys.stdout.write(f"\033[2m  finding\033[0m \033[3m{args[:60]}\033[0m\n")
-        elif name == "web_search":
-            sys.stdout.write(f"\033[2m  searching web\033[0m \033[3m{args[:60]}\033[0m\n")
+            sys.stdout.write(f"\n\033[1m▪ {header}\033[0m \033[36m{args[:80]}\033[0m\n")
+        elif name in ("read_file", "write_file", "edit_file"):
+            sys.stdout.write(f"\n\033[1m▪ {header}\033[0m \033[36m{args[:80]}\033[0m\n")
+        elif name in ("grep", "glob"):
+            sys.stdout.write(f"\n\033[1m▪ {header}\033[0m \033[36m{args[:80]}\033[0m\n")
         else:
-            sys.stdout.write(f"\033[2m  {name}\033[0m \033[2m{args[:60]}\033[0m\n")
+            sys.stdout.write(f"\n\033[1m▪ {header}\033[0m \033[36m{args[:80]}\033[0m\n")
         sys.stdout.flush()
-        self._start_indicator()  # resume indicator
+        self._start_indicator()
         return idx
 
     @staticmethod
     def _filter_noise(text: str) -> str:
-        """Filter noisy system messages from output."""
         lines = text.splitlines()
         filtered = [l for l in lines if "MallocStackLogging" not in l and "can't turn off" not in l]
         return "\n".join(filtered)
 
     def tool_result(self, result: str, error: bool = False, idx: int = -1) -> None:
-        """Show tool result inline."""
+        """Show tool result with tree-style indentation."""
         result = self._filter_noise(result)
         if idx >= 0 and idx < len(self.state.tool_actions):
             self.state.tool_actions[idx].status = "error" if error else "done"
@@ -205,12 +206,16 @@ class OutputManager:
             result=result[:240],
         )
         self._stop_indicator()
+        lines = result.strip().splitlines()
         if error:
-            sys.stdout.write(f"\033[31m    → {result[:80]}\033[0m\n")
-        else:
-            lines = result.strip().splitlines()
-            if lines:
-                sys.stdout.write(f"\033[2m    → {lines[0][:80]}\033[0m\n")
+            for line in lines[:5]:
+                sys.stdout.write(f"\033[31m  └ {line[:90]}\033[0m\n")
+        elif lines:
+            max_lines = 8
+            for i, line in enumerate(lines[:max_lines]):
+                sys.stdout.write(f"\033[2m  └ {line[:90]}\033[0m\n")
+            if len(lines) > max_lines:
+                sys.stdout.write(f"\033[2m    … +{len(lines) - max_lines} lines\033[0m\n")
         sys.stdout.flush()
         self._start_indicator()
 
@@ -228,7 +233,7 @@ class OutputManager:
         sys.stdout.flush()
 
     def print_info(self, text: str) -> None:
-        """Print dim info text. Pauses indicator to prevent interleaving."""
+        """Print dim info text."""
         was_running = self._indicator_running
         if was_running:
             self._stop_indicator()
@@ -247,7 +252,6 @@ class OutputManager:
         try:
             self._indicator_thread.start()
         except RuntimeError:
-            # Thread already started/dead — create new one
             self._indicator_thread = threading.Thread(target=self._run_indicator, daemon=True)
             self._indicator_thread.start()
 
@@ -266,19 +270,10 @@ class OutputManager:
         except (BrokenPipeError, OSError):
             pass
 
-    @staticmethod
-    def _flip_text(text: str, tick: int) -> str:
-        """Subtle cursor — a dot moves after the text to show activity."""
-        # No per-character animation (causes flicker). Just rotate the icon.
-        return text
-
     def _run_indicator(self) -> None:
         tick = 0
-        cols = _cols()
         while self._indicator_running:
             tick += 1
-            icon = ICONS[tick % len(ICONS)]
-
             elapsed = time.time() - self.state.start_time
             if elapsed < 60:
                 timer = f"{elapsed:.0f}s"
@@ -286,21 +281,14 @@ class OutputManager:
                 timer = f"{int(elapsed // 60)}m{int(elapsed % 60):02d}s"
 
             with self._lock:
-                peek = self.state.thinking_peek
                 custom = getattr(self, '_custom_stage', '')
 
-            # Line 1: stage label + timer
-            gem_label = custom or LABELS[int(elapsed) // 6 % len(LABELS)]
-
-            hint = " \033[2m· ctrl+c to stop\033[0m" if elapsed > 10 else ""
-            line1 = f"\033[32m {icon} {gem_label}... ({timer})\033[0m{hint}"
+            label = custom if custom else "Working"
+            hint = " · esc to interrupt" if elapsed > 5 else ""
+            line = f"\033[1m▪ {label}\033[0m ({timer}{hint})"
 
             try:
-                if peek:
-                    line2 = peek[:max(20, cols - 6)]
-                    sys.stdout.write(f"\r{line1}\033[K\n\033[2m   {line2}\033[0m\033[K\033[A")
-                else:
-                    sys.stdout.write(f"\r{line1}\033[K")
+                sys.stdout.write(f"\r{line}\033[K")
                 sys.stdout.flush()
             except (BrokenPipeError, OSError, ValueError):
                 self._indicator_running = False

@@ -1,0 +1,16 @@
+recursive-include llama-cpp-turboquant/cmake *
+recursive-include llama-cpp-turboquant/common *.cpp *.h *.hpp
+recursive-include llama-cpp-turboquant/ggml *.cpp *.h *.hpp *.c *.m *.metal
+recursive-include llama-cpp-turboquant/src *.cpp *.h *.hpp
+recursive-include llama-cpp-turboquant/tools *.cpp *.h *.hpp
+recursive-include llama-cpp-turboquant/include *.h *.hpp
+recursive-include llama-cpp-turboquant/vendor *.h *.hpp *.cpp
+include llama-cpp-turboquant/CMakeLists.txt
+include llama-cpp-turboquant/CMakePresets.json
+include llama-cpp-turboquant/LICENSE
+recursive-include llama-cpp-turboquant/licenses *
+recursive-include llama-cpp-turboquant/ggml/src *.cmake CMakeLists.txt
+recursive-include llama-cpp-turboquant/common CMakeLists.txt
+recursive-include llama-cpp-turboquant/src CMakeLists.txt
+recursive-include llama-cpp-turboquant/tools CMakeLists.txt
+recursive-include llama-cpp-turboquant/vendor CMakeLists.txt

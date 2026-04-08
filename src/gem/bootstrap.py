@@ -161,6 +161,113 @@ def detect_llama_cpp_install_plan() -> InstallPlan | None:
     return None
 
 
+def _find_turboquant_source() -> "Path | None":
+    """Locate the TurboQuant llama.cpp fork source directory."""
+    from pathlib import Path
+    # Check relative to this package (repo checkout)
+    pkg_dir = Path(__file__).resolve().parent.parent.parent  # src/gem -> src -> repo root
+    candidate = pkg_dir / "llama-cpp-turboquant"
+    if (candidate / "CMakeLists.txt").exists():
+        return candidate
+    # Check home directory
+    home_candidate = Path.home() / "llama-cpp-turboquant"
+    if (home_candidate / "CMakeLists.txt").exists():
+        return home_candidate
+    return None
+
+
+def _turboquant_binary_path() -> "Path | None":
+    """Return path to the built TurboQuant llama-server binary, or None if not built."""
+    from pathlib import Path
+    source = _find_turboquant_source()
+    if source is None:
+        return None
+    binary = source / "build" / "bin" / "llama-server"
+    if binary.exists():
+        return binary
+    return None
+
+
+def _ensure_cmake() -> bool:
+    """Install cmake if not present. Returns True if cmake is available."""
+    if shutil.which("cmake"):
+        return True
+    system = platform.system().lower()
+    if system == "darwin" and shutil.which("brew"):
+        result = subprocess.run(["brew", "install", "cmake"], capture_output=True, text=True, check=False)
+        return result.returncode == 0
+    if system == "linux":
+        for mgr, cmd in [("apt-get", ["sudo", "apt-get", "install", "-y", "cmake"]),
+                         ("dnf", ["sudo", "dnf", "install", "-y", "cmake"])]:
+            if shutil.which(mgr):
+                result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                return result.returncode == 0
+    return False
+
+
+def _ensure_ollama() -> bool:
+    """Install Ollama if not present. Returns True if Ollama is available."""
+    if is_ollama_installed():
+        return True
+    plan = detect_install_plan()
+    if plan is None:
+        return False
+    result = subprocess.run(plan.command, capture_output=True, text=True, check=False)
+    return result.returncode == 0
+
+
+def ensure_model_downloaded(model_tag: str, on_progress: Callable[[str], None] | None = None) -> tuple[bool, str]:
+    """Ensure the model is downloaded via Ollama. Installs Ollama if needed."""
+    if not _ensure_ollama():
+        return False, "Could not install Ollama. Install manually: https://ollama.com/download"
+    # Start Ollama service if not running
+    if platform.system().lower() == "darwin":
+        subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                        start_new_session=True)
+        import time; time.sleep(2)
+    return pull_model(model_tag, on_progress=on_progress)
+
+
+def build_turboquant(on_progress: Callable[[str], None] | None = None) -> tuple[bool, str]:
+    """Build the TurboQuant llama.cpp fork from source with Metal support."""
+    from pathlib import Path
+    source = _find_turboquant_source()
+    if source is None:
+        return False, "TurboQuant source not found. Expected at llama-cpp-turboquant/ in repo root."
+    if on_progress:
+        on_progress("checking cmake...")
+    if not _ensure_cmake():
+        return False, "cmake is required and could not be auto-installed. Install with: brew install cmake"
+    build_dir = source / "build"
+    build_dir.mkdir(exist_ok=True)
+    # Configure
+    if on_progress:
+        on_progress("configuring cmake...")
+    result = subprocess.run(
+        ["cmake", "..", "-DGGML_METAL=ON", "-DCMAKE_BUILD_TYPE=Release",
+         "-DLLAMA_BUILD_TESTS=OFF", "-DLLAMA_BUILD_EXAMPLES=OFF"],
+        cwd=str(build_dir), capture_output=True, text=True, check=False,
+    )
+    if result.returncode != 0:
+        return False, f"cmake configure failed:\n{result.stderr[-500:]}"
+    # Build
+    import os
+    jobs = str(min(os.cpu_count() or 4, 10))
+    if on_progress:
+        on_progress(f"compiling with {jobs} threads...")
+    result = subprocess.run(
+        ["cmake", "--build", ".", "--config", "Release", "-j", jobs],
+        cwd=str(build_dir), capture_output=True, text=True, check=False,
+        timeout=600,  # 10 min max
+    )
+    if result.returncode != 0:
+        return False, f"build failed:\n{result.stderr[-500:]}"
+    binary = build_dir / "bin" / "llama-server"
+    if not binary.exists():
+        return False, f"Build completed but llama-server binary not found at {binary}"
+    return True, str(binary)
+
+
 def is_ollama_installed() -> bool:
     return shutil.which("ollama") is not None
 
@@ -462,9 +569,31 @@ def run_setup(
         validate_provider(console, config)
 
     if auto_install and config.runtime.provider == "llama_cpp":
-        install_step = SetupStep("runtime-install", "installing runtime", "Installing llama.cpp where supported.")
-        ok, details = run_with_runner(console, install_step, setup_steps, lambda: install_llama_cpp(console))
-        console.print(details)
+        # Prefer building TurboQuant fork (has turbo4 KV cache) over stock llama.cpp
+        if _find_turboquant_source() and not _turboquant_binary_path():
+            install_step = SetupStep("runtime-install", "building TurboQuant", "Building TurboQuant llama.cpp fork with Metal support.")
+            ok, binary_path = run_with_runner(console, install_step, setup_steps, lambda: build_turboquant(on_progress=_set_progress))
+            if ok:
+                config.runtime.llama_cpp_binary = binary_path
+                save_config(config)
+                console.print(f"TurboQuant built: {binary_path}")
+            else:
+                console.print(f"TurboQuant build failed: {binary_path}")
+                console.print("Falling back to stock llama.cpp...")
+                install_step = SetupStep("runtime-install", "installing runtime", "Installing llama.cpp where supported.")
+                ok, details = run_with_runner(console, install_step, setup_steps, lambda: install_llama_cpp(console))
+                console.print(details)
+        elif _turboquant_binary_path():
+            # Already built — make sure config points to it
+            binary_path = str(_turboquant_binary_path())
+            if config.runtime.llama_cpp_binary != binary_path:
+                config.runtime.llama_cpp_binary = binary_path
+                save_config(config)
+            console.print(f"TurboQuant already built: {binary_path}")
+        else:
+            install_step = SetupStep("runtime-install", "installing runtime", "Installing llama.cpp where supported.")
+            ok, details = run_with_runner(console, install_step, setup_steps, lambda: install_llama_cpp(console))
+            console.print(details)
 
     engine = GemRuntimeGateway(config.runtime)
     runtime_step = SetupStep("runtime-check", "checking runtime", f"Checking {config.runtime.provider} readiness.")

@@ -249,18 +249,29 @@ class GemApp:
                         self._pending_images.append(img)
                         event.current_buffer.insert_text(f"[image {img.size_kb}KB] ")
 
+        # Enter submits, Shift+Enter / Alt+Enter adds a newline
+        @kb.add("enter")
+        def _submit(event):
+            event.current_buffer.validate_and_handle()
+
+        @kb.add("escape", "enter")
+        def _newline(event):
+            event.current_buffer.insert_text("\n")
+
         self.prompt = PromptSession(
             history=FileHistory(str(history_path)),
             auto_suggest=AutoSuggestFromHistory(),
             completer=GemCompleter(self.repo_root),
             complete_while_typing=False,
             complete_in_thread=True,
+            multiline=True,
             key_bindings=kb,
             style=Style.from_dict({
                 "bottom-toolbar": "noreverse #888888 bg:default",
                 "": "bg:#2d2d2d",
                 "prompt": "bg:#2d2d2d #ffffff",
             }),
+            prompt_continuation="  ",
         )
         self.approvals = ApprovalQueue(self.console, self.prompt)
         self.session_allows: set[str] = set()
@@ -416,6 +427,27 @@ class GemApp:
                 pass
             if not server_ok and self.config.runtime.provider == "llama_cpp":
                 from .runtime_launch import launch_runtime
+                from .bootstrap import _turboquant_binary_path, _find_turboquant_source, build_turboquant
+                # Auto-build TurboQuant if source exists but binary doesn't
+                if _find_turboquant_source() and not _turboquant_binary_path():
+                    _sys.stderr.write(f"\r\033[33m  building TurboQuant (first run)...{' ' * 10}\033[0m")
+                    _sys.stderr.flush()
+                    ok, result = build_turboquant()
+                    if ok:
+                        self.config.runtime.llama_cpp_binary = result
+                        from .config import save_config
+                        save_config(self.config)
+                    else:
+                        _loading = False
+                        anim.join(timeout=1)
+                        _sys.stderr.write(f"\r\033[31m  TurboQuant build failed{' ' * 20}\033[0m\n")
+                        _sys.stderr.write(f"  {result[:100]}\n\n")
+                        _sys.stderr.flush()
+                        return
+                elif _turboquant_binary_path() and not self.config.runtime.llama_cpp_binary:
+                    self.config.runtime.llama_cpp_binary = str(_turboquant_binary_path())
+                    from .config import save_config
+                    save_config(self.config)
                 _sys.stderr.write(f"\r\033[33m  starting server...{' ' * 20}\033[0m")
                 _sys.stderr.flush()
                 launch_runtime(self.config.runtime, self.repo_root)
@@ -430,7 +462,11 @@ class GemApp:
                     except Exception:
                         pass
                 if not server_ok:
-                    _sys.stderr.write(f"\r\033[31m  server failed to start{' ' * 20}\033[0m\n")
+                    _loading = False
+                    anim.join(timeout=1)
+                    _sys.stderr.write(f"\r\033[31m  server failed to start{' ' * 20}\033[0m\n\n")
+                    _sys.stderr.flush()
+                    return
 
             _loading = False
             anim.join(timeout=1)
@@ -454,6 +490,8 @@ class GemApp:
                     self.tool_cache.invalidate_all()
                     self.console.print(f"  [dim yellow]files changed externally: {', '.join(changes[:5])}[/]")
                 import sys
+                # Breathing room before input prompt
+                sys.stdout.write("\n")
                 sys.stdout.write("\033[5 q")  # blinking bar cursor
                 sys.stdout.flush()
                 raw = self.prompt.prompt(
@@ -461,6 +499,8 @@ class GemApp:
                     bottom_toolbar=self._bottom_toolbar,
                 ).strip()
                 sys.stdout.write("\033[0 q")  # restore default cursor
+                # Space after user hits enter, before response
+                sys.stdout.write("\n")
                 sys.stdout.flush()
             except (EOFError, KeyboardInterrupt):
                 self.out.done()
@@ -559,22 +599,47 @@ class GemApp:
     def _pick_mode(self) -> None:
         """Mode picker shown after banner."""
         import subprocess, sys, tty, termios
-        # Auto-unlock GPU if needed
+        # Detect system RAM to decide if sysctl GPU unlock is needed.
+        # On 16GB Macs, Metal's default working set (~11GB) can't fit the
+        # 10.4GB model + KV cache. On 24GB+, there's plenty of headroom.
+        try:
+            mem_bytes = int(subprocess.run(
+                ["sysctl", "-n", "hw.memsize"],
+                capture_output=True, text=True, timeout=2
+            ).stdout.strip())
+            system_ram_gb = mem_bytes // (1024 ** 3)
+        except Exception:
+            system_ram_gb = 16  # conservative fallback
+        needs_sysctl = system_ram_gb <= 16
+        # Check if GPU memory is already unlocked
         try:
             r = subprocess.run(["sysctl", "-n", "iogpu.wired_limit_mb"],
                                capture_output=True, text=True, timeout=2)
             gpu_ok = int(r.stdout.strip()) >= 14000
         except Exception:
             gpu_ok = False
-        if not gpu_ok:
+        if needs_sysctl and not gpu_ok:
             print("  GPU needs a one-time unlock (resets on reboot).")
             if input("  Allow? [Y/n]: ").strip().lower() in ("", "y", "yes"):
                 subprocess.run(["sudo", "sysctl", "iogpu.wired_limit_mb=14336"])
                 gpu_ok = True
+        elif not needs_sysctl:
+            gpu_ok = True  # 24GB+ Macs don't need the unlock
         if gpu_ok:
+            # Scale context based on available RAM
+            if system_ram_gb >= 64:
+                ctx_label, speed_note = "128K", " (speed est.)"
+            elif system_ram_gb >= 32:
+                ctx_label, speed_note = "64K", " (speed est.)"
+            elif system_ram_gb >= 24:
+                ctx_label, speed_note = "48K", " (speed est.)"
+            else:
+                ctx_label, speed_note = "32K", ""
             print()
-            print("  1. \033[1mFast\033[0m         27 tok/s  32K context")
-            print("  2. \033[1mReasoning\033[0m    26 tok/s  32K context")
+            print("  \033[1mSelect a mode:\033[0m")
+            print()
+            print(f"  1. \033[1mFast\033[0m         27 tok/s  {ctx_label} context{speed_note}")
+            print(f"  2. \033[1mReasoning\033[0m    26 tok/s  {ctx_label} context{speed_note}")
             ch = ""
             # Try single-keypress read, fall back to input()
             try:
