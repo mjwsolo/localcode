@@ -305,7 +305,6 @@ class GemRuntimeGateway:
             "top_k": 64,
         }
         if self.config.mode == "fast":
-            opts["temperature"] = min(opts["temperature"], 0.15)
             opts["num_predict"] = 4096  # cap generation for speed
         if num_predict_override is not None:
             if num_predict_override == -1:
