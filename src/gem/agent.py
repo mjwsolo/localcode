@@ -241,7 +241,7 @@ def _tool_bash(repo: Path, args: dict, out: "OutputManager") -> str:
     try:
         r = subprocess.run(
             cmd, shell=True, capture_output=True, text=True,
-            timeout=120, cwd=str(repo),
+            timeout=240, cwd=str(repo),
             stdin=subprocess.DEVNULL,
             env={**__import__("os").environ, "MallocStackLogging": "0"},
         )
@@ -250,7 +250,7 @@ def _tool_bash(repo: Path, args: dict, out: "OutputManager") -> str:
             output = f"[exit code {r.returncode}]\n{output}"
         return output or "all good!"
     except subprocess.TimeoutExpired:
-        return "Error: command timed out (120s). This is a long-running task. Do NOT retry. Instead, tell the user to run it separately in their terminal."
+        return "Error: command timed out (4 min). This is a long-running task. Do NOT retry. Instead, tell the user to run it separately in their terminal."
 
 
 def _tool_grep(repo: Path, args: dict) -> str:
