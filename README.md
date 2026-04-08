@@ -1,3 +1,5 @@
+# 🏠 localcode — local AI coding, consumer hardware
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="logo.png">
@@ -62,19 +64,12 @@ We are building for a world of truly democratized AI - where everyone has access
 | **Cost** | Free forever | $100+/mo (Max) or API credits | API credits (varies) | Free (included with ChatGPT) |
 | **Internet required** | No | Yes | Yes | Yes |
 
-
 ## Requirements
 
 - **Mac with Apple Silicon** (M1/M2/M3/M4)
 - **16GB RAM** minimum
 - **Python 3.11+**
 - **~12GB free disk**
-
-## Key commands
-
-| Command | What it does |
-|---------|-------------|
-| `/switch` | Toggle between fast (27 tok/s) and reasoning (26 tok/s) mode |
 
 ## How localcode works
 

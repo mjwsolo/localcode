@@ -59,7 +59,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
 
     subparsers.add_parser("config-init", help="create a default config file")
-    setup = subparsers.add_parser("setup", help="prepare local Gem runtime and Ollama")
+    setup = subparsers.add_parser("setup", help="prepare local runtime and Ollama")
     setup.add_argument("--install", action="store_true", help="attempt to install Ollama and pull the selected model")
     setup.add_argument("--benchmark", action="store_true", help="benchmark the local machine and apply a recommended preset")
     benchmark = subparsers.add_parser("benchmark", help="inspect the local machine and recommend a Gem performance preset")
@@ -103,7 +103,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("sessions", help="list saved sessions")
     verify_parser = subparsers.add_parser("verify", help="run the repo verification command")
     verify_parser.add_argument("verify_command", nargs="?")
-    export = subparsers.add_parser("export-traces", help="export local Gem sessions as jsonl traces for drafter training")
+    export = subparsers.add_parser("export-traces", help="export local sessions as jsonl traces")
     export.add_argument("output", nargs="?", default="gem_traces.jsonl")
     settings = subparsers.add_parser("settings", help="show or update Gem settings")
     settings_sub = settings.add_subparsers(dest="settings_command")
