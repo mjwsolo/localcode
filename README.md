@@ -2,7 +2,7 @@
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="logo.png">
     <source media="(prefers-color-scheme: light)" srcset="logo-light.png">
-    <img src="logo.png" alt="LOCALcode" width="400">
+    <img src="logo.png" alt="LOCALcode" width="500">
   </picture>
 </p>
 
@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <strong>The local AI coding agent.</strong> High-performance agentic coding on consumer hardware. No cloud, no API keys, no data leaving your laptop.
+  <strong>The local AI coding agent.</strong> High-performance agentic coding on consumer hardware. No cloud, no API keys, no data leaving your machine.
 </p>
 
 ## Install
@@ -65,8 +65,6 @@ We are building for a world of truly democratized AI, where everyone has access 
 | **Runtime** | 100% on-device | Cloud (Anthropic API) | Cloud (any provider) | Cloud (OpenAI API) |
 | **Privacy** | Code never leaves your machine | Code sent to Anthropic | Code sent to provider | Code sent to OpenAI |
 | **Cost** | Free forever | $100+/mo (Max) or API credits | API credits (varies) | Free (included with ChatGPT) |
-| **Offline** | Full functionality | No | No | No |
-| **Model** | Gemma 4 26B (local) | Claude Sonnet/Opus (cloud) | Any LLM via API | GPT-4.1/o3 (cloud) |
 | **Speed** | 27 tok/s | ~80 tok/s | Depends on provider | ~60 tok/s |
 | **Context** | 32K tokens | 200K+ | Depends on model | 128K+ |
 | **Tool calling** | Native (Gemma 4) | Native (Claude) | Native (varies) | Native (GPT) |
