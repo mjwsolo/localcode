@@ -77,6 +77,12 @@ localcode runs a custom [llama.cpp](https://github.com/ggerganov/llama.cpp) fork
 
 The model (**Gemma 4 26B-A4B**) is a Mixture-of-Experts architecture - 25.2B total parameters but only 3.8B active per token. That's what makes 27 tok/s possible on a laptop.
 
+## Sponsors
+
+If you'd like to sponsor localcode, reach out at **marc@localcode.ai**
+
+<a href="https://buymeacoffee.com/mjwsolo"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?style=flat-square&logo=buy-me-a-coffee&logoColor=black" alt="Buy Me a Coffee"></a>
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
