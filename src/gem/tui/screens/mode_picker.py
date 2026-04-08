@@ -1,14 +1,20 @@
-"""Mode picker screen — Fast vs Reasoning."""
+"""Mode picker screen — press 1 for Fast, 2 for Reasoning."""
 from __future__ import annotations
 
 from textual.app import ComposeResult
-from textual.containers import Center, Vertical
 from textual.screen import Screen
-from textual.widgets import Button, RadioButton, RadioSet, Rule, Static
+from textual.widgets import Static
+from textual.binding import Binding
 
 
 class ModePickerScreen(Screen):
-    """Initial screen for selecting Fast or Reasoning mode."""
+    """Press 1 or 2 to select mode. No mouse needed."""
+
+    BINDINGS = [
+        Binding("1", "select_fast", "Fast", show=False),
+        Binding("2", "select_reasoning", "Reasoning", show=False),
+        Binding("q", "quit", "Quit", show=False),
+    ]
 
     DEFAULT_CSS = """
     ModePickerScreen {
@@ -18,40 +24,40 @@ class ModePickerScreen(Screen):
         width: 50;
         height: auto;
         padding: 1 2;
+        border: solid $primary;
     }
-    #picker-title {
+    .picker-header {
         text-align: center;
         text-style: bold;
         margin-bottom: 1;
     }
-    #picker-radio {
-        margin: 1 2;
+    .picker-option {
+        margin: 0 2;
     }
-    #start-btn {
+    .picker-hint {
+        text-align: center;
         margin-top: 1;
-        width: 100%;
+        color: $text-muted;
     }
     """
 
     def compose(self) -> ComposeResult:
-        with Center():
-            with Vertical(id="picker-box"):
-                yield Static("🏠 [bold]localcode[/]", id="picker-title")
-                yield Rule()
-                yield Static("Select a mode:")
-                yield RadioSet(
-                    RadioButton("Fast - quicker answers for routine work", id="fast", value=True),
-                    RadioButton("Reasoning - deeper thinking for harder tasks", id="reasoning"),
-                    id="picker-radio",
-                )
-                yield Button("Start", variant="primary", id="start-btn")
+        yield Static(
+            "🏠 [bold]localcode[/]\n\n"
+            "Select a mode:\n\n"
+            "  [bold]1.[/] Fast - quicker answers for routine work\n"
+            "  [bold]2.[/] Reasoning - deeper thinking for harder tasks\n\n"
+            "[dim]Press 1 or 2[/]",
+            id="picker-box",
+        )
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "start-btn":
-            radio = self.query_one(RadioSet)
-            idx = radio.pressed_index
-            if idx == 1:  # Reasoning
-                self.app.gem_config.runtime.laptop_26b_runtime_mode = "turbo-think"
-            else:  # Fast (default)
-                self.app.gem_config.runtime.laptop_26b_runtime_mode = "turbo"
-            self.app.switch_screen("chat")
+    def action_select_fast(self) -> None:
+        self.app.gem_config.runtime.laptop_26b_runtime_mode = "turbo"
+        self.app.switch_screen("chat")
+
+    def action_select_reasoning(self) -> None:
+        self.app.gem_config.runtime.laptop_26b_runtime_mode = "turbo-think"
+        self.app.switch_screen("chat")
+
+    def action_quit(self) -> None:
+        self.app.exit()
