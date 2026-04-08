@@ -45,8 +45,8 @@ class ModePickerScreen(Screen):
         yield Static(
             "🏠 [bold]localcode[/]\n\n"
             "Select a mode:\n\n"
-            "  [bold]1.[/] Fast - quicker answers for routine work\n"
-            "  [bold]2.[/] Reasoning - deeper thinking for harder tasks\n\n"
+            "  [bold]1.[/] Fast - quick answers\n"
+            "  [bold]2.[/] Reasoning - deep thinking\n\n"
             "[dim]Press 1 or 2[/]",
             id="picker-box",
         )
