@@ -6,9 +6,17 @@
   <strong>The local AI coding agent.</strong> Runs Gemma 4 26B entirely on your Mac. No cloud, no API keys, no data leaving your laptop.
 </p>
 
+We are building for a world of truly democratized AI, where everyone has access to powerful, personalized, prompt AI anywhere, on any device, and in any location. True empowered local-first AI. LOCALcode is the first step toward that vision.
+
 LocalCode is an open-source terminal coding assistant that reads your codebase, edits files, runs commands, and searches your code — powered by a 26B parameter model running locally at 27 tokens/second.
 
 ## Install
+
+```bash
+pip install localcode
+```
+
+Or from source:
 
 ```bash
 pip install git+https://github.com/mjwsolo/localcode.git
@@ -70,15 +78,6 @@ Your code stays on your machine. No telemetry, no data collection, no API keys.
 LocalCode runs a custom [llama.cpp](https://github.com/ggerganov/llama.cpp) fork with **TurboQuant KV cache compression** — a technique from Google's ICLR 2026 paper that we patched into llama.cpp for Apple Silicon. This compresses the KV cache 3.8x, fitting 32K context in 355 MiB on a 16GB MacBook.
 
 The model (**Gemma 4 26B-A4B**) is a Mixture-of-Experts architecture — 25.2B total parameters but only 3.8B active per token. That's what makes 27 tok/s possible on a laptop.
-
-## Documentation
-
-Full docs at [mjwsolo.github.io/localcode](https://mjwsolo.github.io/localcode)
-
-- [Getting Started](https://mjwsolo.github.io/localcode/getting-started/)
-- [Tools](https://mjwsolo.github.io/localcode/tools/)
-- [Architecture](https://mjwsolo.github.io/localcode/architecture/)
-- [Innovations](https://mjwsolo.github.io/localcode/innovations/)
 
 ## Contributing
 
