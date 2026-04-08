@@ -36,8 +36,9 @@ class ModePickerScreen(Screen):
     def compose(self) -> ComposeResult:
         with Center():
             with Vertical(id="picker-box"):
-                yield Rule(title="🏠 localcode")
-                yield Static("Select a mode:", id="picker-title")
+                yield Static("🏠 [bold]localcode[/]", id="picker-title")
+                yield Rule()
+                yield Static("Select a mode:")
                 yield RadioSet(
                     RadioButton("Fast - quicker answers for routine work", id="fast", value=True),
                     RadioButton("Reasoning - deeper thinking for harder tasks", id="reasoning"),
