@@ -235,7 +235,7 @@ def _tool_bash(repo: Path, args: dict, out: "OutputManager") -> str:
     try:
         r = subprocess.run(
             cmd, shell=True, capture_output=True, text=True,
-            timeout=30, cwd=str(repo),
+            timeout=120, cwd=str(repo),
             env={**__import__("os").environ, "MallocStackLogging": "0"},
         )
         output = (r.stdout + r.stderr).strip()
@@ -243,7 +243,7 @@ def _tool_bash(repo: Path, args: dict, out: "OutputManager") -> str:
             output = f"[exit code {r.returncode}]\n{output}"
         return output or "all good!"
     except subprocess.TimeoutExpired:
-        return "Error: command timed out (30s). If running a GUI app, use 'nohup python app.py &' instead."
+        return "Error: command timed out (120s)."
 
 
 def _tool_grep(repo: Path, args: dict) -> str:
