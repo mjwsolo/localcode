@@ -414,29 +414,24 @@ def _summarize_args(args: dict) -> str:
 
 
 def _render_markdown(text: str, console: Console | None = None) -> None:
-    """Render text as markdown if it has markdown markers, plain otherwise."""
+    """Render text as markdown, or plain text for narrow terminals."""
     text = text.strip()
     if not text:
         return
     cols = __import__("shutil").get_terminal_size().columns
-    width = cols - 2
-    left_pad = 2
-    if console is not None:
-        c = Console(
-            file=console.file,
-            width=width,
-            color_system=console.color_system,
-            force_terminal=console.is_terminal,
-            legacy_windows=console.legacy_windows,
-            soft_wrap=True,
-        )
-    else:
-        c = Console(width=width, soft_wrap=True)
+    width = cols - 4
+    if width < 60:
+        # Narrow terminal: just print with indent, no Rich formatting
+        for line in text.splitlines():
+            sys.stdout.write(f"  {line}\n")
+        sys.stdout.flush()
+        return
+    c = Console(width=width, soft_wrap=True)
     has_md = any(m in text for m in ("```", "###", "**", "- ", "1. ", "`"))
     if has_md:
-        c.print(Padding(Markdown(text), (0, 2, 0, left_pad)))
+        c.print(Padding(Markdown(text), (0, 2, 0, 2)))
     else:
-        c.print(Padding(text, (0, 2, 0, left_pad)))
+        c.print(Padding(text, (0, 2, 0, 2)))
 
 
 def _brief_result(tool_name: str, result: str) -> str:
