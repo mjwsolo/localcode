@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.padding import Padding
 
 if TYPE_CHECKING:
     from .app import GemApp
@@ -47,19 +48,20 @@ DESTRUCTIVE_PATTERNS = [
 ]
 
 SYSTEM_PROMPT = """\
-You are LocalCode, a coding assistant that runs on the user's machine. You have FULL access to their filesystem via tools.
+You are LocalCode, a coding agent on the user's machine with FULL filesystem access.
+Tools: write_file, edit_file, read_file, bash, grep, glob, list_files, web_search. USE THEM.
 
-CRITICAL: You CAN and MUST create, read, and edit files using your tools. You are NOT a plain chatbot. \
-You have tools: write_file, edit_file, read_file, bash, grep, glob, list_files, web_search. USE THEM.
+{network_status}
 
-Rules:
-- ALWAYS use write_file to create files and edit_file to modify them. NEVER tell the user to copy-paste code.
-- NEVER paste code in your response text. Use tools to write it directly to disk.
-- Keep text responses short — just summarize what you did.
-- Work iteratively: write a small working version first, then add features with edit_file.
-- Read files before editing. Understand existing code first.
-- Prefer editing existing files over creating new ones.
-- NEVER leave TODO comments or "I'll fix this later" in code. Write complete, working code.
+RULES:
+1. Use write_file/edit_file for ALL code. NEVER paste code in text. NEVER tell user to copy-paste.
+2. You are an AGENT: DO things, don't explain. Never say "you can run X" — run it yourself.
+3. NEVER use placeholder paths. Every path must be real. Every file must exist.
+4. NEVER generate synthetic/dummy/fake data (colored squares, random noise, lorem ipsum). \
+When online, ALWAYS use real datasets: torchvision.datasets (CIFAR10, ImageNet, OxfordIIITPet), \
+HuggingFace datasets, or wget/curl real files. When offline, say you need internet for real data.
+5. Read files before editing. Work iteratively. Keep responses short.
+6. NEVER leave TODOs. Write complete working code. Install dependencies yourself.
 
 Working directory: {cwd}
 {project_instructions}"""
@@ -415,12 +417,26 @@ def _render_markdown(text: str, console: Console | None = None) -> None:
     text = text.strip()
     if not text:
         return
-    c = console or Console(width=min(100, __import__("shutil").get_terminal_size().columns))
+    cols = __import__("shutil").get_terminal_size().columns
+    # Model output narrower than user input for visual contrast
+    width = max(44, min(72, cols - 20))
+    left_pad = 4
+    if console is not None:
+        c = Console(
+            file=console.file,
+            width=width,
+            color_system=console.color_system,
+            force_terminal=console.is_terminal,
+            legacy_windows=console.legacy_windows,
+            soft_wrap=True,
+        )
+    else:
+        c = Console(width=width, soft_wrap=True)
     has_md = any(m in text for m in ("```", "###", "**", "- ", "1. ", "`"))
     if has_md:
-        c.print(Markdown(text))
+        c.print(Padding(Markdown(text), (0, 2, 0, left_pad)))
     else:
-        c.print(text)
+        c.print(Padding(text, (0, 2, 0, left_pad)))
 
 
 def _brief_result(tool_name: str, result: str) -> str:
@@ -445,6 +461,27 @@ def _brief_result(tool_name: str, result: str) -> str:
     if tool_name == "web_search":
         return f"{len(lines) // 3} results" if lines else "no results"
     return result[:80] if result else "done"
+
+
+def _grounded_file_summary(repo: Path, changed_files: list[str]) -> str:
+    """Build a deterministic summary from files that actually exist on disk."""
+    existing: list[str] = []
+    for rel in changed_files:
+        path = repo / rel
+        if path.exists() and path.is_file():
+            existing.append(rel)
+
+    if not existing:
+        return ""
+
+    lines = ["Updated files:"]
+    for rel in existing:
+        try:
+            line_count = len((repo / rel).read_text(errors="replace").splitlines())
+            lines.append(f"- `{rel}` ({line_count} lines)")
+        except Exception:
+            lines.append(f"- `{rel}`")
+    return "\n".join(lines)
 
 
 def _tool_stage_label(tool_name: str, args: dict) -> str:
@@ -495,8 +532,17 @@ def run_agent_loop(
     # ── Build messages ──
     # composed_messages already has system prompt + context + full conversation + current user msg
     # Inject our tool-loop system prompt at the front
+    from .network import is_online
     project_instructions = _load_project_instructions(app.repo_root)
-    agent_system = SYSTEM_PROMPT.format(cwd=app.repo_root, project_instructions=project_instructions)
+    online = is_online()
+    if online:
+        network_status = "Network: ONLINE — you can download files, install packages, fetch URLs."
+    else:
+        network_status = (
+            "Network: OFFLINE — NO internet. Do NOT attempt downloads, pip install, curl, wget, or any network requests. "
+            "Use only local files and already-installed packages. Generate sample/mock data locally instead of downloading."
+        )
+    agent_system = SYSTEM_PROMPT.format(cwd=app.repo_root, project_instructions=project_instructions, network_status=network_status)
     messages: list[dict[str, Any]] = []
 
     # Our agent prompt goes first — it's the most important
@@ -515,6 +561,7 @@ def run_agent_loop(
     full_response: list[str] = []
     start_time = time.time()
     tools_called: list[str] = []
+    changed_files: list[str] = []
     recent_tool_sigs: list[str] = []  # for loop detection
     loop_detected = False
 
@@ -606,6 +653,12 @@ def run_agent_loop(
             if content:
                 _render_markdown(content, app.console if hasattr(app, 'console') else None)
                 full_response.append(content)
+            # Always show grounded file summary after model response
+            if changed_files:
+                grounded = _grounded_file_summary(app.repo_root, changed_files)
+                if grounded:
+                    _render_markdown(grounded, app.console if hasattr(app, 'console') else None)
+                    full_response.append(grounded)
             break
 
         # ── Execute tools ──
@@ -629,12 +682,18 @@ def run_agent_loop(
             if _needs_confirmation(tool_name, args):
                 import tty, termios
                 cmd = args.get("command", "")
-                sys.stdout.write(f"\n\033[33m    ┌ Allow this command?\033[0m\n")
-                sys.stdout.write(f"\033[2m    │ {cmd[:70]}\033[0m\n")
-                sys.stdout.write(f"    │\n")
-                sys.stdout.write(f"    │  \033[1m1\033[0m  yes, run it\n")
-                sys.stdout.write(f"    │  \033[1m2\033[0m  no, skip\n")
-                sys.stdout.write(f"\033[33m    └\033[0m ")
+                rule = app._composer_rule() if hasattr(app, "_composer_rule") else "  " + ("─" * 60)
+                # Question text (no rules around it)
+                sys.stdout.write(f"\n\033[33m  Allow this command?\033[0m\n")
+                sys.stdout.write(f"\033[2m  {cmd[:80]}\033[0m\n")
+                sys.stdout.write(f"  \033[1m1\033[0m  yes, run it\n")
+                sys.stdout.write(f"  \033[1m2\033[0m  no, skip\n")
+                # Input field with rules
+                sys.stdout.write(f"\033[s")  # save anchor
+                sys.stdout.write(f"\033[2m{rule}\033[0m\n")
+                sys.stdout.write("  › ")
+                sys.stdout.write(f"\n\033[2m{rule}\033[0m")
+                sys.stdout.write(f"\033[1A\r    ")  # back to input line
                 sys.stdout.flush()
                 try:
                     fd = sys.stdin.fileno()
@@ -649,11 +708,13 @@ def run_agent_loop(
                         ch = input().strip()
                     except EOFError:
                         ch = "2"
-                if ch == "2" or ch == "n":
-                    sys.stdout.write(f"\033[2mskipped\033[0m\n")
+                # Erase the approval UI and collapse to one line
+                sys.stdout.write(f"\033[u\033[J")  # restore anchor, clear below
+                if ch == "2" or ch == "n" or ch == "\x03":
+                    sys.stdout.write(f"\033[2m  └ skipped command\033[0m\n")
                     messages.append({"role": "tool", "content": "Denied by user.", "tool_call_id": tc.get("id", "")})
                     continue
-                sys.stdout.write(f"\033[32mrunning\033[0m\n")
+                sys.stdout.write(f"\033[2m  └ approved command\033[0m\n")
 
             # Loop detection — break if same tool+args repeats 3x
             sig = f"{tool_name}:{_summarize_args(args)}"
@@ -667,6 +728,10 @@ def run_agent_loop(
             # Execute
             tool_result = _execute_tool(app, tool_name, args, out)
             tools_called.append(tool_name)
+            if tool_name in {"write_file", "edit_file"} and not tool_result.lower().startswith("error"):
+                changed_path = args.get("path")
+                if isinstance(changed_path, str) and changed_path and changed_path not in changed_files:
+                    changed_files.append(changed_path)
 
             # Show result to user
             is_error = tool_result.startswith("Error:") or tool_result.startswith("error:")
@@ -702,11 +767,5 @@ def run_agent_loop(
 
     else:
         out.print_info(f"Reached max rounds ({MAX_ROUNDS})")
-
-    # ── Summary ──
-    elapsed = time.time() - start_time
-    if tools_called and elapsed > 3:
-        tool_summary = ", ".join(f"{t}×{tools_called.count(t)}" for t in dict.fromkeys(tools_called))
-        out.print_info(f"Done in {elapsed:.0f}s — tools: {tool_summary}")
 
     return "".join(full_response).strip()

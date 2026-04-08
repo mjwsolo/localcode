@@ -5,19 +5,45 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "localcode"
 version = "0.1.0"
-description = "LocalCode is a local-first AI coding assistant TUI for Gemma 4."
+description = "The local-first AI coding agent. High-performance agentic coding on consumer hardware."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "Apache-2.0"
 authors = [
   { name = "LocalCode Contributors" }
+]
+license-files = ["LICENSE", "NOTICE"]
+keywords = ["ai", "cli", "coding-assistant", "gemma", "local-first", "tui"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development",
 ]
 dependencies = [
   "duckduckgo-search>=6.2.0",
   "httpx>=0.27.0",
   "prompt_toolkit>=3.0.43",
   "rich>=13.7.1",
+  "tomli>=2.0.0;python_version<'3.11'",
 ]
+
+[project.optional-dependencies]
+voice = ["faster-whisper", "numpy"]
+embeddings = ["sentence-transformers", "scikit-learn", "numpy"]
+all = ["faster-whisper", "numpy", "sentence-transformers", "scikit-learn"]
+
+[project.urls]
+Homepage = "https://github.com/mjwsolo/localcode"
+Documentation = "https://github.com/mjwsolo/localcode/tree/main/docs"
+Repository = "https://github.com/mjwsolo/localcode"
+Issues = "https://github.com/mjwsolo/localcode/issues"
 
 [project.scripts]
 localcode = "gem.cli:main"
@@ -29,3 +55,11 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

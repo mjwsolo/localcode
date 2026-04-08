@@ -72,8 +72,9 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--install-missing", action="store_true", help="When comparing 26B quants, install any missing candidate tags before running")
     benchmark.add_argument("--provider", choices=["ollama", "llama_cpp", "mlx-local", "huggingface-local"], help="Provider to use for explicit model comparison")
     benchmark.add_argument("--repeats", type=int, default=1, help="Repeat each benchmark task this many times")
-    subparsers.add_parser("doctor", help="check local runtime connectivity")
-    subparsers.add_parser("browser-setup", help="install the Playwright MCP browser preset into Gem config")
+    subparsers.add_parser("status", help="show runtime status and configuration")
+    subparsers.add_parser("doctor", help="(alias for status)")
+    subparsers.add_parser("browser-setup", help="install the Playwright MCP browser preset into LocalCode config")
     subparsers.add_parser("voice-status", help="show local voice subsystem readiness")
     subparsers.add_parser("runtime-cmd", help="print the local runtime launch command for the selected provider")
     subparsers.add_parser("runtime-up", help="start the selected local runtime in the background when supported")
@@ -131,7 +132,7 @@ def build_parser() -> argparse.ArgumentParser:
     speed_sub.add_parser("benchmark", help="benchmark current model speed")
 
     # -- Daemon --
-    daemon = subparsers.add_parser("daemon", help="manage the Gem background daemon")
+    daemon = subparsers.add_parser("daemon", help="manage the LocalCode background daemon")
     daemon_sub = daemon.add_subparsers(dest="daemon_command")
     daemon_sub.add_parser("start", help="start the daemon (keeps model hot)")
     daemon_sub.add_parser("stop", help="stop the daemon")
@@ -175,63 +176,62 @@ def _should_autobootstrap(config) -> bool:
     return (not provider_ok) or (not runtime_ok)
 
 
-def run_doctor() -> int:
+def run_status() -> int:
     config = load_config()
     profile = resolve_profile(config.runtime.profile, config.runtime.model)
     config.runtime.model = get_runtime_model(profile, config.runtime.model)
     gateway = GemRuntimeGateway(config.runtime)
     toolkit = GemToolkit(Path.cwd(), config)
     ok, details = gateway.healthcheck()
-    search_provider, search_status = toolkit.search_status()
     console = Console()
-    table = Table(show_header=False)
-    table.add_row("config", str(get_config_path()))
-    table.add_row("provider", config.runtime.provider)
-    table.add_row("profile", profile.key)
-    table.add_row("model", config.runtime.model)
-    if config.runtime.provider == "mlx-local":
-        table.add_row("mlx_model_id", config.runtime.mlx_model_id or "(unset)")
-    if config.runtime.provider == "huggingface-local":
-        table.add_row("hf_model_id", config.runtime.huggingface_model_id or "(unset)")
-        table.add_row("hf_device", config.runtime.huggingface_device)
-        table.add_row("hf_dtype", config.runtime.huggingface_dtype)
-    table.add_row("mode", config.runtime.mode)
-    table.add_row("execution_engine", config.runtime.execution_engine)
-    table.add_row("low_overhead_mode", str(config.runtime.low_overhead_mode))
-    if config.runtime.profile == "gemma4-26b-laptop":
-        table.add_row("26b_laptop_runtime", "automatic")
-    table.add_row("quant_preset", config.runtime.quant_preset)
-    table.add_row("cache_policy", config.runtime.cache_policy)
-    table.add_row("rolling_window_messages", str(config.runtime.rolling_window_messages))
-    table.add_row("planner_enabled", str(config.runtime.planner_enabled))
-    table.add_row("planner_model", config.runtime.planner_model)
-    table.add_row("adaptive_execution", str(config.runtime.adaptive_execution))
-    table.add_row("base_url", config.runtime.base_url)
+
+    # ── Runtime ──
+    runtime_table = Table(show_header=False, title="Runtime", title_style="bold green")
+    from .network import is_online
+    online = is_online()
+    runtime_table.add_row("status", "[green]ok[/green]" if ok else "[red]unreachable[/red]")
+    runtime_table.add_row("network", "[green]online[/green]" if online else "[yellow]offline[/yellow]")
+    runtime_table.add_row("provider", config.runtime.provider)
+    runtime_table.add_row("model", config.runtime.model)
+    runtime_table.add_row("profile", profile.key)
+    runtime_table.add_row("mode", config.runtime.mode)
+    runtime_table.add_row("thinking", config.ui.thinking_mode)
+    runtime_table.add_row("server", config.runtime.base_url)
+    if not ok:
+        runtime_table.add_row("error", details)
+    console.print(runtime_table)
+
+    # ── Performance ──
+    perf_table = Table(show_header=False, title="Performance", title_style="bold green")
     if config.runtime.provider == "llama_cpp":
-        table.add_row("llama_cpp_gpu_layers", str(config.runtime.llama_cpp_gpu_layers))
-        table.add_row("llama_cpp_threads", str(config.runtime.llama_cpp_threads))
-        table.add_row("llama_cpp_batch_size", str(config.runtime.llama_cpp_batch_size))
-    table.add_row("timeout_seconds", str(config.runtime.request_timeout_seconds))
-    table.add_row("max_retries", str(config.runtime.max_retries))
-    table.add_row("thinking_mode", config.ui.thinking_mode)
-    table.add_row("search", f"{search_provider} ({search_status})")
-    table.add_row("browser", config.browser.mcp_server_name if config.browser.enabled else "disabled")
-    table.add_row("voice", f"{config.voice.stt_provider} + {config.voice.tts_provider}")
-    table.add_row("mcp_servers", str(len(load_mcp_configs())))
-    table.add_row("runtime", "ok" if ok else "unreachable")
-    table.add_row("details", details)
-    console.print(table)
+        perf_table.add_row("gpu_layers", str(config.runtime.llama_cpp_gpu_layers))
+        perf_table.add_row("threads", str(config.runtime.llama_cpp_threads))
+        perf_table.add_row("batch_size", str(config.runtime.llama_cpp_batch_size))
+    perf_table.add_row("kv_cache", f"{config.runtime.kv_cache_type_k} / {config.runtime.kv_cache_type_v}")
+    perf_table.add_row("context", config.runtime.cache_policy)
+    perf_table.add_row("timeout", f"{config.runtime.request_timeout_seconds}s")
+    console.print(perf_table)
+
+    # ── Config ──
+    config_table = Table(show_header=False, title="Config", title_style="bold green")
+    config_table.add_row("file", str(get_config_path()))
+    search_provider, search_status = toolkit.search_status()
+    config_table.add_row("search", f"{search_provider} ({search_status})")
+    mcp_count = len(load_mcp_configs())
+    if mcp_count:
+        config_table.add_row("mcp_servers", str(mcp_count))
+    console.print(config_table)
+
+    # ── Diagnostics (only if problems) ──
     provider_ok, provider_messages = provider_readiness(config.runtime)
     if provider_messages:
-        console.print(Panel("\n".join(provider_messages), title="Provider Checks"))
-    browser_voice_ok, browser_voice_messages = browser_voice_readiness(config)
-    if browser_voice_messages:
-        console.print(Panel("\n".join(browser_voice_messages), title="Browser + Voice"))
+        console.print(Panel("\n".join(provider_messages), title="Issues", border_style="yellow"))
     diagnostics = toolkit.diagnostics()
     if diagnostics:
-        console.print(Panel("\n".join(diagnostics), title="Diagnostics"))
+        console.print(Panel("\n".join(diagnostics), title="Diagnostics", border_style="yellow"))
+
     toolkit.close()
-    return 0 if ok and provider_ok and browser_voice_ok else 1
+    return 0 if ok and provider_ok else 1
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -451,8 +451,8 @@ def main(argv: list[str] | None = None) -> None:
         table.add_row("note", rec.note)
         console.print(table)
         return
-    if args.command == "doctor":
-        raise SystemExit(run_doctor())
+    if args.command in ("status", "doctor"):
+        raise SystemExit(run_status())
     if args.command == "browser-setup":
         path = ensure_browser_mcp(config)
         console.print(f"Browser MCP preset saved at {path}")
@@ -586,7 +586,7 @@ def main(argv: list[str] | None = None) -> None:
                 table.add_row(item["path"], item["chunk_id"], item["preview"])
             console.print(table)
             return
-        console.print("Use `gem index build` or `gem index search <query>`.")
+        console.print("Use `localcode index build` or `localcode index search <query>`.")
         return
     if args.command == "mcp-add":
         path = add_mcp_config(args.name, args.server_command, args.args)
@@ -621,7 +621,7 @@ def main(argv: list[str] | None = None) -> None:
         if args.daemon_command == "log":
             console.print(Panel(read_daemon_log(50), title="Daemon Log"))
             return
-        console.print("Usage: gem daemon [start|stop|status|log]")
+        console.print("Usage: localcode daemon [start|stop|status|log]")
         return
 
     # -- Claw commands --
@@ -652,7 +652,7 @@ def main(argv: list[str] | None = None) -> None:
         if args.prompt:
             running, pid = is_running()
             if not running:
-                console.print("[yellow]Daemon not running.[/] Start it with: gem daemon start")
+                console.print("[yellow]Daemon not running.[/] Start it with: localcode daemon start")
                 console.print("Running task directly instead...")
                 # Fall through to run as a regular agent task
                 app = GemApp(config=config, cwd=Path.cwd(), profile_name=args.profile, model_name=args.model)
@@ -666,10 +666,10 @@ def main(argv: list[str] | None = None) -> None:
                 return
             task_id = submit_task(args.prompt, str(Path.cwd()))
             console.print(f"[bold bright_cyan]Submitted claw task:[/] {task_id}")
-            console.print(f"  Check status: gem claw --status")
-            console.print(f"  Get result:   gem claw --result {task_id}")
+            console.print(f"  Check status: localcode claw --status")
+            console.print(f"  Get result:   localcode claw --result {task_id}")
             return
-        console.print("Usage: gem claw \"task description\" | gem claw --status | gem claw --result <id>")
+        console.print('Usage: localcode claw "task description" | localcode claw --status | localcode claw --result <id>')
         return
 
     # -- Skill commands --
@@ -677,7 +677,7 @@ def main(argv: list[str] | None = None) -> None:
         if args.skill_command in {None, "list"}:
             names = list_skills(Path.cwd())
             if not names:
-                console.print("No skills installed. Run `gem skill init` for starter skills.")
+                console.print("No skills installed. Run `localcode skill init` for starter skills.")
             else:
                 for name in names:
                     console.print(f"  {name}")
@@ -714,7 +714,7 @@ def main(argv: list[str] | None = None) -> None:
             count = ensure_builtin_skills()
             console.print(f"Installed {count} built-in starter skills." if count else "Built-in skills already installed.")
             return
-        console.print("Usage: gem skill [list|install|remove|search|info|init]")
+        console.print("Usage: localcode skill [list|install|remove|search|info|init]")
         return
 
     if args.command == "verify":
@@ -794,7 +794,6 @@ def main(argv: list[str] | None = None) -> None:
             raise SystemExit(code)
         config = load_config()
         # Install built-in skills on first run
-        from .skills import ensure_builtin_skills
         count = ensure_builtin_skills()
         if count:
             console.print(f"  Installed {count} built-in skills (review, test, explain, refactor, debug)")

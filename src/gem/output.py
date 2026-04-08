@@ -76,6 +76,7 @@ class OutputManager:
         self._indicator_running = False
         self._event_callback = None
         self._stream_started = False
+        self._custom_stage = ""
 
     def set_event_callback(self, callback) -> None:
         self._event_callback = callback
@@ -93,6 +94,7 @@ class OutputManager:
         """Begin thinking phase — shows working indicator."""
         with self._lock:
             self.state.phase = Phase.THINKING
+            self._custom_stage = ""
             if reset:
                 self.state.start_time = time.time()
                 self.state.tokens = 0
@@ -105,14 +107,19 @@ class OutputManager:
         self._emit_event("thinking_start", reset=str(reset).lower())
         self._start_indicator()
 
+    # Left indent for model output (narrower than user input)
+    _STREAM_INDENT = "    "
+
     def start_streaming(self) -> None:
         """Transition to content streaming — stops indicator."""
         self._stop_indicator()
         with self._lock:
             self.state.phase = Phase.STREAMING
+            self._custom_stage = ""
         self._emit_event("stream_start")
         # Clear indicator and add breathing room before response
         sys.stdout.write("\r\033[K\n")
+        sys.stdout.write(self._STREAM_INDENT)
         sys.stdout.flush()
         self._stream_started = False
 
@@ -123,18 +130,20 @@ class OutputManager:
         tools_used = len(self.state.tool_actions)
         with self._lock:
             self.state.phase = Phase.DONE
+            self._custom_stage = ""
         self._emit_event("done")
         # Summary line + breathing room (guard against stale start_time)
         if 2 < elapsed < 3600:
+            parts = [f"{elapsed:.1f}s"]
             if tools_used:
                 tool_names = {}
                 for t in self.state.tool_actions:
                     tool_names[t.name] = tool_names.get(t.name, 0) + 1
                 tool_summary = ", ".join(f"{n}×{c}" if c > 1 else n for n, c in tool_names.items())
                 parts.append(f"tools: {tool_summary}")
-            sys.stdout.write(f"\n\033[2m  Done in {' — '.join(parts)}\033[0m\n\n")
+            sys.stdout.write(f"\n\033[2m  Done in {' — '.join(parts)}\033[0m\n")
         else:
-            sys.stdout.write("\n\n")
+            sys.stdout.write("\n")
         sys.stdout.flush()
 
     def set_error(self, msg: str) -> None:
@@ -142,6 +151,7 @@ class OutputManager:
         with self._lock:
             self.state.phase = Phase.ERROR
             self.state.error = msg
+            self._custom_stage = ""
         self._emit_event("error", message=msg[:240])
         sys.stdout.write(f"\n\033[31m▪ Error: {msg}\033[0m\n\n")
         sys.stdout.flush()
@@ -198,6 +208,8 @@ class OutputManager:
         if idx >= 0 and idx < len(self.state.tool_actions):
             self.state.tool_actions[idx].status = "error" if error else "done"
             self.state.tool_actions[idx].result = result
+        with self._lock:
+            self._custom_stage = ""
         self._emit_event(
             "tool_result",
             error=str(error).lower(),
@@ -221,14 +233,16 @@ class OutputManager:
     # ── Content streaming ────────────────────────────────────────────
 
     def stream(self, chunk: str) -> None:
-        """Stream content to terminal."""
+        """Stream content to terminal with left indent."""
         if self.state.phase != Phase.STREAMING:
             self.start_streaming()
         with self._lock:
             self.state.content_chunks.append(chunk)
             self.state.tokens += max(1, len(chunk) // 4)
         self._emit_event("content", chunk=chunk[:240], chars=str(len(chunk)))
-        sys.stdout.write(chunk)
+        # Indent after every newline so model output is visually narrower
+        indented = chunk.replace("\n", "\n" + self._STREAM_INDENT)
+        sys.stdout.write(indented)
         sys.stdout.flush()
 
     def print_info(self, text: str) -> None:

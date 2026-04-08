@@ -38,7 +38,7 @@ def compose_messages(
 
     # No native system role — inject instructions into first user message
     injected_user_prefix = (
-        "Gem operating instructions:\n"
+        "LocalCode operating instructions:\n"
         f"{system_prompt}\n\n"
         "Repository context:\n"
         f"{context_block}\n\n"
@@ -46,7 +46,7 @@ def compose_messages(
     )
     if conversation:
         first = conversation[0]
-        if first.get("role") == "user" and str(first.get("content", "")).startswith("Gem operating instructions:\n"):
+        if first.get("role") == "user" and str(first.get("content", "")).startswith("LocalCode operating instructions:\n"):
             adjusted = conversation.copy()
         else:
             adjusted = [{"role": "user", "content": injected_user_prefix}, *conversation]
