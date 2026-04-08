@@ -39,7 +39,7 @@ That's it. First launch builds the inference server and downloads the model (~5 
 - **Reads and edits files** - understands your codebase, makes surgical edits
 - **Runs commands** - tests, builds, git, shell
 - **Searches code** - by pattern, content, or semantic meaning
-- **Fast mode** - 27 tok/s for routine coding tasks
+- **Fast mode** - for routine coding tasks
 - **Reasoning mode** - deep thinking for complex multi-step problems
 - **Uses tools automatically** - the model picks its own tools
 
