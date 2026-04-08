@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <strong>High-performance, local-first, agentic coding on consumer hardware.</strong><br>
+  <strong>High-performance, local-first, agentic coding on resource-constrained hardware.</strong><br>
   No cloud, no API keys, no data leaving your machine.
 </p>
 
