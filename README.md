@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <strong>The local AI coding agent.</strong> No cloud, no API keys, no data leaving your laptop.
+  <strong>The local AI coding agent.</strong> High-performance agentic coding on consumer hardware. No cloud, no API keys, no data leaving your laptop.
 </p>
 
 ## Install
@@ -64,7 +64,7 @@ We are building for a world of truly democratized AI, where everyone has access 
 |--|-----------|-------------|----------|-----------|
 | **Runtime** | 100% on-device | Cloud (Anthropic API) | Cloud (any provider) | Cloud (OpenAI API) |
 | **Privacy** | Code never leaves your machine | Code sent to Anthropic | Code sent to provider | Code sent to OpenAI |
-| **Cost** | Free forever | $20+/mo (Pro) or API credits | API credits (varies) | API credits (OpenAI) |
+| **Cost** | Free forever | $100+/mo (Max) or API credits | API credits (varies) | Free (included with ChatGPT) |
 | **Offline** | Full functionality | No | No | No |
 | **Model** | Gemma 4 26B (local) | Claude Sonnet/Opus (cloud) | Any LLM via API | GPT-4.1/o3 (cloud) |
 | **Speed** | 27 tok/s | ~80 tok/s | Depends on provider | ~60 tok/s |
@@ -74,7 +74,6 @@ We are building for a world of truly democratized AI, where everyone has access 
 | **Internet required** | No | Yes | Yes | Yes |
 | **Data collection** | None | Anthropic policy | Provider policy | OpenAI policy |
 
-**The tradeoff is honest:** cloud tools are faster and have more context. LOCALcode is slower and has less context — but your code never leaves your machine, it works offline, it costs nothing, and nobody else sees your data. For many tasks, 27 tok/s with 32K context is more than enough.
 
 ## Requirements
 
