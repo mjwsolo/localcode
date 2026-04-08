@@ -24,7 +24,7 @@ class ModePickerScreen(Screen):
     }
     #header-rule {
         text-align: center;
-        color: $success;
+        color: $primary;
         margin-bottom: 1;
         width: 100%;
     }
@@ -33,19 +33,19 @@ class ModePickerScreen(Screen):
         height: auto;
         padding: 1 2;
         border: solid $primary;
-        margin: 0 4;
     }
     """
 
     def compose(self) -> ComposeResult:
         yield Static("──────────── 🏠 [bold]localcode[/] ────────────", id="header-rule")
-        yield Static(
-            "Select a mode:\n\n"
-            "  [bold]1.[/] Fast - quicker answers for routine work\n"
-            "  [bold]2.[/] Reasoning - deeper thinking for harder tasks\n\n"
-            "[dim]Press 1 or 2[/]",
-            id="picker-box",
-        )
+        with Center():
+            yield Static(
+                "Select a mode:\n\n"
+                "  [bold]1.[/] Fast - quick answers\n"
+                "  [bold]2.[/] Reasoning - deep thinking\n\n"
+                "[dim]Press 1 or 2[/]",
+                id="picker-box",
+            )
 
     def action_select_fast(self) -> None:
         self.app.gem_config.runtime.laptop_26b_runtime_mode = "turbo"
