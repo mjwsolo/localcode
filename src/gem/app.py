@@ -358,6 +358,13 @@ class GemApp:
                     pass
 
     def run(self) -> None:
+        import os as _os
+        try:
+            cols = _os.get_terminal_size().columns
+            if cols < 40:
+                self.console.print(f"\n  [yellow]Terminal too narrow ({cols} cols). Resize to 40+ for best experience.[/]\n")
+        except OSError:
+            pass
         self.console.print(self._welcome_view())
         # Mode picker right after banner
         if getattr(self, "_show_mode_picker", False):
