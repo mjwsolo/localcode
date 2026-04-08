@@ -548,10 +548,20 @@ def run_agent_loop(
             out.print_info("Interrupted.")
             break
         except Exception as exc:
-            # Retry once without thinking
+            # Retry without thinking and without images (server may not support vision)
+            retry_msgs = []
+            for m in messages:
+                if isinstance(m.get("content"), list):
+                    # Multipart content with images — extract text only
+                    text_parts = [p.get("text", "") for p in m["content"] if p.get("type") == "text"]
+                    retry_msgs.append({"role": m["role"], "content": " ".join(text_parts)})
+                elif "images" in m:
+                    retry_msgs.append({"role": m["role"], "content": m.get("content", "")})
+                else:
+                    retry_msgs.append(m)
             try:
                 for event in app.engine.stream_chat_events(
-                    messages, tools=TOOL_SCHEMAS, think=False, num_predict=MAX_OUTPUT_TOKENS,
+                    retry_msgs, tools=TOOL_SCHEMAS, think=False, num_predict=MAX_OUTPUT_TOKENS,
                 ):
                     if event["type"] == "content":
                         chunk = _strip_thinking_tokens(event["content"])
@@ -559,6 +569,8 @@ def run_agent_loop(
                             content_parts.append(chunk)
                     elif event["type"] == "tool_calls":
                         tool_calls = event["tool_calls"]
+                if not content_parts and not tool_calls:
+                    out.print_info("Note: image support requires a vision-enabled model.")
             except Exception:
                 out.set_error(f"Model error: {exc}")
                 break
