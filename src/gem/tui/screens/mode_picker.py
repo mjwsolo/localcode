@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from textual.app import ComposeResult
+from textual.containers import Center, Vertical
 from textual.screen import Screen
 from textual.widgets import Static
 from textual.binding import Binding
@@ -19,34 +20,29 @@ class ModePickerScreen(Screen):
     DEFAULT_CSS = """
     ModePickerScreen {
         align: center middle;
+        layout: vertical;
+    }
+    #header-rule {
+        text-align: center;
+        color: $success;
+        margin-bottom: 1;
+        width: 100%;
     }
     #picker-box {
         width: 50;
         height: auto;
         padding: 1 2;
         border: solid $primary;
-    }
-    .picker-header {
-        text-align: center;
-        text-style: bold;
-        margin-bottom: 1;
-    }
-    .picker-option {
-        margin: 0 2;
-    }
-    .picker-hint {
-        text-align: center;
-        margin-top: 1;
-        color: $text-muted;
+        margin: 0 auto;
     }
     """
 
     def compose(self) -> ComposeResult:
+        yield Static("──────────── 🏠 [bold]localcode[/] ────────────", id="header-rule")
         yield Static(
-            "🏠 [bold]localcode[/]\n\n"
             "Select a mode:\n\n"
-            "  [bold]1.[/] Fast - quick answers\n"
-            "  [bold]2.[/] Reasoning - deep thinking\n\n"
+            "  [bold]1.[/] Fast - quicker answers for routine work\n"
+            "  [bold]2.[/] Reasoning - deeper thinking for harder tasks\n\n"
             "[dim]Press 1 or 2[/]",
             id="picker-box",
         )
