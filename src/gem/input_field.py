@@ -238,14 +238,28 @@ class InputField:
                     pass
 
     def _redraw(self, buf: list[str], cursor: int, rule: str, status: str) -> None:
-        """Redraw input text + bottom area from saved cursor position."""
+        """Redraw input text + bottom area."""
         text = "".join(buf)
-        sys.stdout.write(f"\033[u\033[J")  # restore pos, clear below
+        cols = _get_cols()
+        # Move to start of input line (saved position), clear to end of screen
+        sys.stdout.write(f"\033[u\033[J")
         sys.stdout.write(text)
+        # Calculate how many display rows the text occupies
+        text_display_len = len(text) + 4  # 4 = len("  › ")
+        text_rows = max(1, (text_display_len + cols - 1) // cols)
+        # Draw bottom rule + status
         sys.stdout.write(f"\n\033[2m{rule}\033[0m")
         if status:
             sys.stdout.write(f"\n\033[2m  {status}\033[0m")
-        sys.stdout.write(f"\033[u")
-        if cursor > 0:
-            sys.stdout.write(f"\033[{cursor}C")
+        # Move cursor back: go up text_rows - 1 + bottom lines, then right to cursor pos
+        bottom_lines = 2 if status else 1
+        up = (text_rows - 1) + bottom_lines
+        # Calculate cursor row/col within wrapped text
+        cursor_abs = cursor + 4  # offset by "  › "
+        cursor_row = cursor_abs // cols
+        cursor_col = cursor_abs % cols
+        total_up = up - cursor_row
+        if total_up > 0:
+            sys.stdout.write(f"\033[{total_up}A")
+        sys.stdout.write(f"\r\033[{cursor_col}C")
         sys.stdout.flush()
