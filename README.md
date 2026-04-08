@@ -16,10 +16,8 @@
 </p>
 
 <p align="center">
-  <strong>The local AI coding agent.</strong> Runs Gemma 4 26B entirely on your Mac. No cloud, no API keys, no data leaving your laptop.
+  <strong>The local AI coding agent.</strong> No cloud, no API keys, no data leaving your laptop.
 </p>
-
-LOCALcode is an open-source terminal coding assistant that reads your codebase, edits files, runs commands, and searches your code — powered by a 26B parameter model running locally at 27 tokens/second.
 
 ## Install
 
