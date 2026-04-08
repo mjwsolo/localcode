@@ -65,6 +65,9 @@ HuggingFace datasets, or wget/curl real files. When offline, say you need intern
 7. NEVER write placeholder scripts that just print "run this to train". Write the FULL working implementation \
 on the first attempt. If code is long, write it in multiple write_file calls but ALWAYS write real logic, not stubs.
 8. After writing code, RUN IT to verify it works. Fix any errors before responding.
+9. For long-running tasks (ML training, large builds, data processing): write the code, run a QUICK smoke test \
+(1 epoch, small subset, --dry-run), verify it starts correctly, then tell the user to run it separately. \
+NEVER block on a command that takes more than 2 minutes. If a command times out, do NOT retry — tell the user to run it.
 
 Working directory: {cwd}
 {project_instructions}"""
@@ -247,7 +250,7 @@ def _tool_bash(repo: Path, args: dict, out: "OutputManager") -> str:
             output = f"[exit code {r.returncode}]\n{output}"
         return output or "all good!"
     except subprocess.TimeoutExpired:
-        return "Error: command timed out (120s)."
+        return "Error: command timed out (120s). This is a long-running task. Do NOT retry. Instead, tell the user to run it separately in their terminal."
 
 
 def _tool_grep(repo: Path, args: dict) -> str:
