@@ -139,9 +139,9 @@ class OutputManager:
                     tool_names[t.name] = tool_names.get(t.name, 0) + 1
                 tool_summary = ", ".join(f"{n}×{c}" if c > 1 else n for n, c in tool_names.items())
                 parts.append(f"tools: {tool_summary}")
-            sys.stdout.write(f"\n\033[2m  Done in {' — '.join(parts)}\033[0m\n")
+            sys.stdout.write(f"\n\033[2m  Done in {' — '.join(parts)}\033[0m")
         else:
-            sys.stdout.write("\n")
+            sys.stdout.write("")
         sys.stdout.flush()
 
     def set_error(self, msg: str) -> None:
@@ -276,15 +276,8 @@ class OutputManager:
             except (KeyboardInterrupt, RuntimeError):
                 pass
         try:
-            # Show cursor again
-            sys.stdout.write("\033[?25h")
-            # Erase spinner line + input field lines below it
-            lines_to_clear = 4 if self._status_line else 3
-            sys.stdout.write("\r\033[K")  # clear spinner line
-            for _ in range(lines_to_clear):
-                sys.stdout.write("\n\033[K")  # clear each line below
-            # Move back up
-            sys.stdout.write(f"\033[{lines_to_clear}A\r")
+            sys.stdout.write("\033[?25h")  # show cursor
+            sys.stdout.write("\r\033[J")   # clear from cursor to end of screen
             sys.stdout.flush()
         except (BrokenPipeError, OSError):
             pass
