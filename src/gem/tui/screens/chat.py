@@ -151,6 +151,10 @@ class ChatScreen(Screen):
     # ── Agent turn ──
 
     def _start_turn(self, text: str) -> None:
+        if not self.tui.ensure_backend():
+            log = self.query_one("#chat-log", ChatLog)
+            log.append_error("Backend not ready. Is the server running?")
+            return
         self._agent_busy = True
         self._stream_buf.clear()
         self._tools_used.clear()
