@@ -7,6 +7,7 @@ Based on Claude Code's input architecture.
 from __future__ import annotations
 
 import os
+import signal
 import sys
 import tty
 import termios
@@ -91,12 +92,25 @@ class InputField:
         cursor = 0
         saved_for_history = ""
         hist_idx = len(self._history)
+        _needs_redraw = [False]
+
+        # Handle terminal resize — redraw input field at new width
+        _old_sigwinch = signal.getsignal(signal.SIGWINCH)
+        def _on_resize(sig, frame):
+            _needs_redraw[0] = True
+        signal.signal(signal.SIGWINCH, _on_resize)
 
         fd = sys.stdin.fileno()
         old_settings = termios.tcgetattr(fd)
         try:
             tty.setraw(fd)
             while True:
+                # Check for terminal resize
+                if _needs_redraw[0]:
+                    _needs_redraw[0] = False
+                    rule = _rule()  # recalculate at new width
+                    self._redraw(buf, cursor, rule, status_line)
+
                 ch = sys.stdin.read(1)
 
                 if ch == "\r" or ch == "\n":
@@ -172,8 +186,10 @@ class InputField:
                         self._redraw(buf, cursor, rule, status_line)
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+            signal.signal(signal.SIGWINCH, _old_sigwinch or signal.SIG_DFL)
 
         text = "".join(buf).strip()
+        rule = _rule()  # fresh width for final redraw
         self._save_history(text)
 
         # After submit: restore to line start, clear, show final state
