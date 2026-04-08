@@ -184,39 +184,40 @@ class InputField:
         return text
 
     def collect_typeahead(self) -> None:
-        """Non-blocking: collect any keystrokes from stdin into the queue.
+        """Non-blocking: collect keystrokes into queue while model works.
 
-        Called by the output manager's indicator thread to let users
-        type while the model is working. Collects into a line buffer
-        and enqueues on Enter.
+        Called by indicator thread. Sets raw mode once, reads all available
+        chars, then restores. The indicator thread redraws the input field
+        showing the buffer text.
         """
         buf = getattr(self, '_typeahead_buf', [])
+        fd = sys.stdin.fileno()
         try:
-            fd = sys.stdin.fileno()
-            while select.select([sys.stdin], [], [], 0)[0]:
-                old = termios.tcgetattr(fd)
-                try:
-                    tty.setraw(fd)
-                    ch = sys.stdin.read(1)
-                finally:
-                    termios.tcsetattr(fd, termios.TCSADRAIN, old)
-
-                if ch in ("\r", "\n"):
-                    text = "".join(buf).strip()
-                    if text:
-                        with self._lock:
-                            self._queue.append(text)
-                        self._save_history(text)
-                    buf.clear()
-                elif ch == "\x7f" or ch == "\x08":
-                    if buf:
-                        buf.pop()
-                elif ch == "\x03":
-                    buf.clear()
-                elif ch == "\x15":  # Ctrl+U
-                    buf.clear()
-                elif ord(ch) >= 32:
-                    buf.insert(len(buf), ch)
+            if not select.select([sys.stdin], [], [], 0)[0]:
+                return  # nothing to read
+            old = termios.tcgetattr(fd)
+            try:
+                tty.setcbreak(fd)  # cbreak: chars available immediately, no echo
+                while select.select([sys.stdin], [], [], 0)[0]:
+                    ch = os.read(fd, 1).decode("utf-8", errors="replace")
+                    if ch in ("\r", "\n"):
+                        text = "".join(buf).strip()
+                        if text:
+                            with self._lock:
+                                self._queue.append(text)
+                            self._save_history(text)
+                        buf.clear()
+                    elif ch == "\x7f" or ch == "\x08":
+                        if buf:
+                            buf.pop()
+                    elif ch == "\x03":
+                        buf.clear()
+                    elif ch == "\x15":  # Ctrl+U
+                        buf.clear()
+                    elif len(ch) == 1 and ord(ch) >= 32:
+                        buf.append(ch)
+            finally:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old)
         except Exception:
             pass
         self._typeahead_buf = buf

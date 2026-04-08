@@ -117,7 +117,7 @@ class OutputManager:
             self._custom_stage = ""
         self._emit_event("stream_start")
         # Clear indicator and add breathing room before response
-        sys.stdout.write("\r\033[K\n  ")
+        sys.stdout.write("\r\033[K\n\n  ")
         sys.stdout.flush()
         self._stream_started = False
 
@@ -131,17 +131,14 @@ class OutputManager:
             self._custom_stage = ""
         self._emit_event("done")
         # Summary line + breathing room (guard against stale start_time)
-        if 2 < elapsed < 3600:
-            parts = [f"{elapsed:.1f}s"]
-            if tools_used:
-                tool_names = {}
-                for t in self.state.tool_actions:
-                    tool_names[t.name] = tool_names.get(t.name, 0) + 1
-                tool_summary = ", ".join(f"{n}×{c}" if c > 1 else n for n, c in tool_names.items())
-                parts.append(f"tools: {tool_summary}")
-            sys.stdout.write(f"\n\033[2m  Done in {' — '.join(parts)}\033[0m")
-        else:
-            sys.stdout.write("")
+        parts = [f"{elapsed:.1f}s"]
+        if tools_used:
+            tool_names = {}
+            for t in self.state.tool_actions:
+                tool_names[t.name] = tool_names.get(t.name, 0) + 1
+            tool_summary = ", ".join(f"{n}×{c}" if c > 1 else n for n, c in tool_names.items())
+            parts.append(f"tools: {tool_summary}")
+        sys.stdout.write(f"\n\033[2m  Done in {' — '.join(parts)}\033[0m\n")
         sys.stdout.flush()
 
     def set_error(self, msg: str) -> None:
