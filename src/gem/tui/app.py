@@ -31,29 +31,32 @@ class LocalCodeTUI(App):
         self.bridge = None
 
     def on_mount(self) -> None:
-        """Initialize the backend GemApp and bridge."""
-        # Import here to avoid circular imports and heavy startup cost
+        """Initialize config and show first screen. GemApp loaded lazily."""
         from ..config import load_config
 
         self.gem_config = load_config()
-
-        # Create bridge
         self.bridge = TUIBridge(self)
 
-        # Initialize GemApp headless (don't call .run())
-        try:
-            from ..app import GemApp
-            self.gem_app = GemApp(self.gem_config)
-            # Replace stdout-based output with our bridge
-            self.gem_app.out.set_event_callback(self.bridge.on_event)
-        except Exception as e:
-            # GemApp init might fail if server isn't running
-            self.notify(f"Backend init: {e}", severity="warning")
+        # Don't init GemApp here — it's heavy and may crash.
+        # ChatScreen will init it on first message.
 
         if self.show_mode_picker:
             self.push_screen("mode_picker")
         else:
             self.push_screen("chat")
+
+    def ensure_backend(self) -> bool:
+        """Lazily initialize GemApp backend. Returns True if ready."""
+        if self.gem_app is not None:
+            return True
+        try:
+            from ..app import GemApp
+            self.gem_app = GemApp(self.gem_config)
+            self.gem_app.out.set_event_callback(self.bridge.on_event)
+            return True
+        except Exception as e:
+            self.notify(f"Backend error: {e}", severity="error")
+            return False
 
     # Route bridge messages to the active screen
     def on_agent_event(self, event: AgentEvent) -> None:
