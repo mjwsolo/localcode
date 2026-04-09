@@ -75,6 +75,7 @@ class OutputManager:
         self._indicator_thread: threading.Thread | None = None
         self._indicator_running = False
         self._event_callback = None
+        self._approval_callback = None  # TUI: blocks worker thread until approved/denied
         self._stream_started = False
         self._custom_stage = ""
         self._status_line = ""
@@ -82,6 +83,10 @@ class OutputManager:
 
     def set_event_callback(self, callback) -> None:
         self._event_callback = callback
+
+    def set_approval_callback(self, callback) -> None:
+        """Set callback for TUI approval: callback(tool_name, command) -> bool."""
+        self._approval_callback = callback
 
     def _emit_event(self, event_type: str, **payload) -> None:
         if self._event_callback is not None:
@@ -156,6 +161,12 @@ class OutputManager:
     def feed_thinking(self, chunk: str) -> None:
         with self._lock:
             self.state.tokens += max(1, len(chunk) // 4)
+        self._emit_event("thinking_chunk", chunk=chunk[:2000])
+
+    def thinking_done(self, full_text: str) -> None:
+        """Emit the complete thinking text for display in TUI."""
+        self._last_thinking_text = full_text  # Store for direct access
+        self._emit_event("thinking_done", text=full_text[:8000])
 
     def set_stage(self, stage: str) -> None:
         with self._lock:
@@ -209,7 +220,7 @@ class OutputManager:
             "tool_result",
             error=str(error).lower(),
             index=str(idx),
-            result=result[:240],
+            result=result[:4000],
         )
         self._stop_indicator()
         lines = result.strip().splitlines()
@@ -237,7 +248,7 @@ class OutputManager:
         with self._lock:
             self.state.content_chunks.append(chunk)
             self.state.tokens += max(1, len(chunk) // 4)
-        self._emit_event("content", chunk=chunk[:240], chars=str(len(chunk)))
+        self._emit_event("content", chunk=chunk[:2000], chars=str(len(chunk)))
         cols = _cols()
         wrap_at = cols - 1  # leave 1 char margin
         out = []

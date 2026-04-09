@@ -446,6 +446,9 @@ class GemRuntimeGateway:
             try:
                 # Accumulate tool call deltas (OpenAI streams them incrementally)
                 pending_tools: dict[int, dict] = {}  # index -> {id, name, arguments}
+                # Stateful thinking detection for llama.cpp
+                # Gemma 4 thinking tokens decode as <unused25> through llama.cpp
+                in_thinking = False  # True while inside thinking block
                 with self.client.stream("POST", self.endpoint, json=payload) as response:
                     response.raise_for_status()
                     for line in response.iter_lines():
@@ -474,12 +477,48 @@ class GemRuntimeGateway:
                                 pending_tools[idx]["function"]["name"] = fn["name"]
                             if fn.get("arguments"):
                                 pending_tools[idx]["function"]["arguments"] += fn["arguments"]
+                        # Check for explicit reasoning_content first
                         thinking = message.get("thinking")
                         if thinking:
                             yield {"type": "thinking", "content": thinking}
-                        content = message.get("content")
-                        if content:
-                            yield {"type": "content", "content": content}
+                            continue
+                        content = message.get("content", "")
+                        if not content:
+                            continue
+                        # Stateful detection of <unused25> thinking tags in content
+                        # Gemma 4: <unused25> = opening thinking tag, second <unused25> = closing
+                        if self.config.provider == "llama_cpp" and think:
+                            if not in_thinking and "<unused25>" in content:
+                                # Thinking block starts
+                                in_thinking = True
+                                after = content.split("<unused25>", 1)[1]
+                                cleaned = _strip_thinking_tokens(after)
+                                if cleaned.strip():
+                                    yield {"type": "thinking", "content": cleaned}
+                                continue
+                            if in_thinking:
+                                if "<unused25>" in content:
+                                    # Thinking block ends
+                                    before = content.split("<unused25>", 1)[0]
+                                    cleaned = _strip_thinking_tokens(before)
+                                    if cleaned.strip():
+                                        yield {"type": "thinking", "content": cleaned}
+                                    in_thinking = False
+                                    after = content.split("<unused25>", 1)[1]
+                                    cleaned_after = _strip_thinking_tokens(after)
+                                    if cleaned_after.strip():
+                                        yield {"type": "content", "content": cleaned_after}
+                                else:
+                                    # Still inside thinking block
+                                    cleaned = _strip_thinking_tokens(content)
+                                    if cleaned.strip():
+                                        yield {"type": "thinking", "content": cleaned}
+                                continue
+                        cleaned = _strip_thinking_tokens(content)
+                        if cleaned:
+                            yield {"type": "content", "content": cleaned}
+                    # If stream ends while still in thinking, that's fine —
+                    # thinking_done will be emitted by the agent loop
                         # Ollama signals done
                         if data.get("done"):
                             final_msg = data.get("message", {})
@@ -566,7 +605,7 @@ class GemRuntimeGateway:
                 return {}
             delta = choices[0].get("delta") or choices[0].get("message") or {}
             result: dict[str, Any] = {
-                "content": _strip_thinking_tokens(delta.get("content", "")),
+                "content": delta.get("content", ""),
                 "tool_calls": delta.get("tool_calls") or [],
             }
             # Gemma 4 thinking: llama.cpp returns reasoning in reasoning_content

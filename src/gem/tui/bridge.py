@@ -43,8 +43,16 @@ class TUIBridge:
         self._approval_event = threading.Event()
         self._approval_result: bool = False
 
-    def on_event(self, event_type: str, **payload: Any) -> None:
-        """Called by OutputManager.set_event_callback from worker thread."""
+    def on_event(self, event_type: str, payload: dict[str, Any] | None = None, **kwargs: Any) -> None:
+        """Called by OutputManager._emit_event from worker thread.
+
+        OutputManager calls: callback(event_type, payload_dict)
+        Direct calls use: on_event(event_type, key=val, ...)
+        """
+        if payload is None:
+            payload = kwargs
+        elif isinstance(payload, dict):
+            payload.update(kwargs)
         try:
             self.tui_app.post_message(AgentEvent(event_type, payload))
         except Exception:

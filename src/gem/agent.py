@@ -45,6 +45,7 @@ DESTRUCTIVE_PATTERNS = [
     "rm -rf", "rm -r", "rmdir", "git push", "git reset --hard",
     "sudo ", "pip install", "npm install", "brew install",
     "docker rm", "kubectl delete", "DROP TABLE", "DELETE FROM",
+    "python ", "python3 ", "node ", "npm run", "npm start",
 ]
 
 SYSTEM_PROMPT = """\
@@ -55,7 +56,8 @@ Tools: write_file, edit_file, read_file, bash, grep, glob, list_files, web_searc
 
 RULES:
 1. Use write_file/edit_file for ALL code. NEVER paste code in text. NEVER tell user to copy-paste.
-2. You are an AGENT: DO things, don't explain. Never say "you can run X" — run it yourself.
+2. You are an AGENT: DO things, don't explain. Never announce steps before doing them. \
+Never say "I will add" or "Step 1: Configure" — just call the tools. Summarize ONLY after all work is done, briefly.
 3. NEVER use placeholder paths. Every path must be real. Every file must exist.
 4. NEVER generate synthetic/dummy/fake data (colored squares, random noise, lorem ipsum). \
 When online, ALWAYS use real datasets: torchvision.datasets (CIFAR10, ImageNet, OxfordIIITPet), \
@@ -70,6 +72,14 @@ on the first attempt. If code is long, write it in multiple write_file calls but
 NEVER block on a command that takes more than 2 minutes. If a command times out, do NOT retry — tell the user to run it.
 
 Working directory: {cwd}
+{project_instructions}"""
+
+# Shorter prompt for reasoning mode — long prompts suppress Gemma 4's thinking channel at IQ3_S
+SYSTEM_PROMPT_THINK = """\
+You are LocalCode, a coding agent with filesystem access. Use tools to act, not explain.
+Tools: write_file, edit_file, read_file, bash, grep, glob, list_files, web_search.
+{network_status}
+Write real code, no stubs. Read before editing. Run code to verify. Working directory: {cwd}
 {project_instructions}"""
 
 # Files checked for project-specific instructions (first found wins)
@@ -203,14 +213,80 @@ def _tool_read_file(repo: Path, args: dict) -> str:
     return result
 
 
+def _detect_stub_code(content: str, path: str) -> str | None:
+    """Detect if written code is a stub/mock/placeholder instead of a real implementation.
+
+    Returns a rejection message if stub detected, None if code looks real.
+    """
+    # Only check Python/JS/TS source files
+    if not any(path.endswith(ext) for ext in (".py", ".js", ".ts", ".jsx", ".tsx")):
+        return None
+    lines = content.splitlines()
+    code_lines = [l for l in lines if l.strip() and not l.strip().startswith("#") and not l.strip().startswith("//")]
+    if len(code_lines) < 3:
+        return None  # too small to judge (config files, __init__.py, etc.)
+
+    # Pattern 1: Explicit stub markers in comments or strings
+    stub_phrases = [
+        "in a real implementation", "in production", "in a real scenario",
+        "this is a mock", "this is a placeholder", "this is a stub",
+        "simulates ", "simulated ", "dummy ", "fake ",
+        "# todo", "# fixme", "# hack", "# placeholder",
+        "not implemented", "raise notimplementederror",
+        "would call ", "would use ", "you would ",
+    ]
+    content_lower = content.lower()
+    found_stubs = [p for p in stub_phrases if p in content_lower]
+    if found_stubs:
+        return (
+            f"REJECTED: This file contains stub/mock code ({', '.join(found_stubs[:3])}). "
+            f"Rewrite {path} with a REAL, COMPLETE implementation. No mocks, no simulations, "
+            f"no 'in a real implementation' comments. Use real libraries and write working logic."
+        )
+
+    # Pattern 2: Functions that are mostly pass/return None/return empty
+    import re
+    func_count = len(re.findall(r"^\s*def ", content, re.MULTILINE))
+    trivial_bodies = len(re.findall(
+        r"def \w+[^:]*:\s*\n\s*(pass|return None|return \[\]|return \{\}|return \"\"|\.\.\.|return 0)\s*$",
+        content, re.MULTILINE
+    ))
+    if func_count >= 3 and trivial_bodies / func_count > 0.5:
+        return (
+            f"REJECTED: {trivial_bodies}/{func_count} functions in {path} have trivial bodies (pass/return None). "
+            f"Write REAL implementations for every function."
+        )
+
+    return None
+
+
 def _tool_write_file(repo: Path, args: dict, out: "OutputManager") -> str:
     if "path" not in args:
         return "Error: 'path' argument is required for write_file."
     path = repo / args["path"]
     path.parent.mkdir(parents=True, exist_ok=True)
     content = args.get("content", "")
+    # Capture old content for diff if file exists
+    old_content = path.read_text(errors="replace") if path.exists() else None
     path.write_text(content)
     lines = content.count("\n") + 1
+
+    # Stub detection gate — catch mock/placeholder code and force rewrite
+    stub_warning = _detect_stub_code(content, args["path"])
+    if stub_warning:
+        return stub_warning
+
+    if old_content is not None and old_content != content:
+        # Generate unified diff for existing file overwrites
+        import difflib
+        old_lines = old_content.splitlines(keepends=True)
+        new_lines = content.splitlines(keepends=True)
+        diff = list(difflib.unified_diff(old_lines, new_lines,
+                    fromfile=args["path"], tofile=args["path"], lineterm=""))
+        if diff:
+            # Limit diff size for display
+            diff_text = "\n".join(diff[:80])
+            return diff_text
     return f"Written {args['path']} ({lines} lines)"
 
 
@@ -231,17 +307,47 @@ def _tool_edit_file(repo: Path, args: dict, out: "OutputManager") -> str:
                 context = "\n".join(lines[max(0, i-2):i+3])
                 return f"old_string not found. Similar content near line {i+1}:\n{context}"
         return f"old_string not found in {args['path']}"
+    import difflib
+    old_content = content  # before edit
     content = content.replace(old, new, 1)
     path.write_text(content)
+    # Generate unified diff
+    old_lines = old_content.splitlines(keepends=True)
+    new_lines = content.splitlines(keepends=True)
+    diff = list(difflib.unified_diff(old_lines, new_lines,
+                fromfile=args["path"], tofile=args["path"], lineterm=""))
+    if diff:
+        return "\n".join(diff[:60])
     return f"Edited {args['path']}: replaced {len(old)} → {len(new)} chars"
 
 
+_GUI_PATTERNS = ["pygame", "tkinter", "kivy", "PyQt", "PySide", "wx.", "pong", "game",
+                  "flask run", "uvicorn", "streamlit", "gradio", "serve"]
+
 def _tool_bash(repo: Path, args: dict, out: "OutputManager") -> str:
     cmd = args["command"]
+    # Detect GUI/server apps — launch detached, don't block
+    is_gui = any(p in cmd for p in _GUI_PATTERNS)
+    if is_gui and "&" not in cmd:
+        try:
+            subprocess.Popen(
+                cmd, shell=True, cwd=str(repo),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+                env={**__import__("os").environ, "MallocStackLogging": "0"},
+            )
+            return f"Launched in background: {cmd}\nThe app is running. Tell the user to interact with it directly."
+        except Exception as e:
+            return f"Error launching: {e}"
+
+    # Short timeout for test commands, longer for builds
+    timeout = 30 if cmd.strip().startswith(("python", "python3", "node")) else 120
     try:
         r = subprocess.run(
             cmd, shell=True, capture_output=True, text=True,
-            timeout=240, cwd=str(repo),
+            timeout=timeout, cwd=str(repo),
             stdin=subprocess.DEVNULL,
             env={**__import__("os").environ, "MallocStackLogging": "0"},
         )
@@ -250,7 +356,7 @@ def _tool_bash(repo: Path, args: dict, out: "OutputManager") -> str:
             output = f"[exit code {r.returncode}]\n{output}"
         return output or "all good!"
     except subprocess.TimeoutExpired:
-        return "Error: command timed out (4 min). This is a long-running task. Do NOT retry. Instead, tell the user to run it separately in their terminal."
+        return f"Command timed out ({timeout}s). This might be a long-running or interactive process. Tell the user to run it themselves: {cmd}"
 
 
 def _tool_grep(repo: Path, args: dict) -> str:
@@ -543,22 +649,36 @@ def run_agent_loop(
             "Network: OFFLINE — NO internet. Do NOT attempt downloads, pip install, curl, wget, or any network requests. "
             "Use only local files and already-installed packages. Generate sample/mock data locally instead of downloading."
         )
-    agent_system = SYSTEM_PROMPT.format(cwd=app.repo_root, project_instructions=project_instructions, network_status=network_status)
+    use_thinking = app.config.runtime.laptop_26b_runtime_mode.endswith("-think")
+    # Thinking mode needs shorter total context — Gemma 4 IQ3_S suppresses thinking above ~2K chars total
+    prompt_template = SYSTEM_PROMPT_THINK if use_thinking else SYSTEM_PROMPT
+    agent_system = prompt_template.format(cwd=app.repo_root, project_instructions=project_instructions, network_status=network_status)
     messages: list[dict[str, Any]] = []
 
     # Our agent prompt goes first — it's the most important
     messages.append({"role": "system", "content": agent_system})
 
-    for m in composed_messages:
-        if m.get("role") == "system":
-            continue  # skip old system prompt — ours is authoritative
-        messages.append(m)
+    if use_thinking:
+        # Thinking mode: keep context minimal (~500 chars max) to stay under threshold
+        # Only include recent conversation, skip heavy context blocks
+        for m in composed_messages:
+            if m.get("role") == "system":
+                continue
+            content = str(m.get("content", ""))
+            # Skip large context blocks (repo structure, retrieval results)
+            if len(content) > 400 and m.get("role") != "user":
+                continue
+            messages.append(m)
+    else:
+        for m in composed_messages:
+            if m.get("role") == "system":
+                continue  # skip old system prompt — ours is authoritative
+            messages.append(m)
 
     # Add current user message if not already there
     if not messages or messages[-1].get("content") != user_text:
         messages.append({"role": "user", "content": user_text})
 
-    use_thinking = app.config.runtime.laptop_26b_runtime_mode.endswith("-think")
     full_response: list[str] = []
     start_time = time.time()
     tools_called: list[str] = []
@@ -586,6 +706,7 @@ def run_agent_loop(
                             sys.stdout.write("\033[2;3m  thinking...\033[0m\n")
                             thinking_shown = True
                         thinking_parts.append(chunk)
+                        out.feed_thinking(chunk)
                 elif event["type"] == "content":
                     chunk = _strip_thinking_tokens(event["content"])
                     if chunk:
@@ -596,11 +717,18 @@ def run_agent_loop(
             out.print_info("Interrupted.")
             break
         except Exception as exc:
-            # Retry without thinking and without images (server may not support vision)
+            # Only retry without images if the messages contain image content
+            has_images = any(
+                isinstance(m.get("content"), list) or "images" in m
+                for m in messages
+            )
+            if not has_images:
+                out.set_error(f"Model error: {exc}")
+                break
+            # Retry without images (server may not support vision)
             retry_msgs = []
             for m in messages:
                 if isinstance(m.get("content"), list):
-                    # Multipart content with images — extract text only
                     text_parts = [p.get("text", "") for p in m["content"] if p.get("type") == "text"]
                     retry_msgs.append({"role": m["role"], "content": " ".join(text_parts)})
                 elif "images" in m:
@@ -609,9 +737,14 @@ def run_agent_loop(
                     retry_msgs.append(m)
             try:
                 for event in app.engine.stream_chat_events(
-                    retry_msgs, tools=TOOL_SCHEMAS, think=False, num_predict=MAX_OUTPUT_TOKENS,
+                    retry_msgs, tools=TOOL_SCHEMAS, think=use_thinking, num_predict=MAX_OUTPUT_TOKENS,
                 ):
-                    if event["type"] == "content":
+                    if event["type"] == "thinking":
+                        chunk = _strip_thinking_tokens(event["content"])
+                        if chunk:
+                            thinking_parts.append(chunk)
+                            out.feed_thinking(chunk)
+                    elif event["type"] == "content":
                         chunk = _strip_thinking_tokens(event["content"])
                         if chunk:
                             content_parts.append(chunk)
@@ -627,7 +760,8 @@ def run_agent_loop(
         if thinking_parts:
             thinking_text = "".join(thinking_parts).strip()
             if thinking_text:
-                # Show first line as a peek, truncated to terminal width
+                out.thinking_done(thinking_text)
+                # CLI: show first line as a peek
                 lines = thinking_text.splitlines()
                 cols = __import__("shutil").get_terminal_size().columns
                 max_len = cols - 16  # account for "  thought: " + margin
@@ -681,42 +815,47 @@ def run_agent_loop(
 
             # Safety: confirm destructive commands
             if _needs_confirmation(tool_name, args):
-                import tty, termios
-                out._stop_indicator()  # STOP spinner before showing approval UI
                 cmd = args.get("command", "")
-                rule = app._composer_rule() if hasattr(app, "_composer_rule") else "  " + ("─" * 60)
-                # Question text (no rules around it)
-                sys.stdout.write(f"\n\033[33m  Allow this command?\033[0m\n")
-                sys.stdout.write(f"\033[2m  {cmd[:80]}\033[0m\n")
-                sys.stdout.write(f"  \033[1m1\033[0m  yes, run it\n")
-                sys.stdout.write(f"  \033[1m2\033[0m  no, skip\n")
-                # Input field with rules
-                sys.stdout.write(f"\033[s")  # save anchor
-                sys.stdout.write(f"\033[2m{rule}\033[0m\n")
-                sys.stdout.write("  › ")
-                sys.stdout.write(f"\n\033[2m{rule}\033[0m")
-                sys.stdout.write(f"\033[1A\r    ")  # back to input line
-                sys.stdout.flush()
-                try:
-                    fd = sys.stdin.fileno()
-                    old = termios.tcgetattr(fd)
+                # TUI mode: use approval callback (blocks worker thread, shows modal)
+                if out._approval_callback is not None:
+                    approved = out._approval_callback(tool_name, cmd)
+                    if not approved:
+                        messages.append({"role": "tool", "content": "Denied by user.", "tool_call_id": tc.get("id", "")})
+                        continue
+                else:
+                    # CLI mode: terminal-based approval
+                    import tty, termios
+                    out._stop_indicator()
+                    rule = app._composer_rule() if hasattr(app, "_composer_rule") else "  " + ("─" * 60)
+                    sys.stdout.write(f"\n\033[33m  Allow this command?\033[0m\n")
+                    sys.stdout.write(f"\033[2m  {cmd[:80]}\033[0m\n")
+                    sys.stdout.write(f"  \033[1m1\033[0m  yes, run it\n")
+                    sys.stdout.write(f"  \033[1m2\033[0m  no, skip\n")
+                    sys.stdout.write(f"\033[s")
+                    sys.stdout.write(f"\033[2m{rule}\033[0m\n")
+                    sys.stdout.write("  › ")
+                    sys.stdout.write(f"\n\033[2m{rule}\033[0m")
+                    sys.stdout.write(f"\033[1A\r    ")
+                    sys.stdout.flush()
                     try:
-                        tty.setraw(fd)
-                        ch = sys.stdin.read(1)
-                    finally:
-                        termios.tcsetattr(fd, termios.TCSADRAIN, old)
-                except Exception:
-                    try:
-                        ch = input().strip()
-                    except EOFError:
-                        ch = "2"
-                # Erase the approval UI and collapse to one line
-                sys.stdout.write(f"\033[u\033[J")  # restore anchor, clear below
-                if ch == "2" or ch == "n" or ch == "\x03":
-                    sys.stdout.write(f"\033[2m  └ skipped command\033[0m\n")
-                    messages.append({"role": "tool", "content": "Denied by user.", "tool_call_id": tc.get("id", "")})
-                    continue
-                sys.stdout.write(f"\033[2m  └ approved command\033[0m\n")
+                        fd = sys.stdin.fileno()
+                        old = termios.tcgetattr(fd)
+                        try:
+                            tty.setraw(fd)
+                            ch = sys.stdin.read(1)
+                        finally:
+                            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+                    except Exception:
+                        try:
+                            ch = input().strip()
+                        except EOFError:
+                            ch = "2"
+                    sys.stdout.write(f"\033[u\033[J")
+                    if ch == "2" or ch == "n" or ch == "\x03":
+                        sys.stdout.write(f"\033[2m  └ skipped command\033[0m\n")
+                        messages.append({"role": "tool", "content": "Denied by user.", "tool_call_id": tc.get("id", "")})
+                        continue
+                    sys.stdout.write(f"\033[2m  └ approved command\033[0m\n")
 
             # Loop detection — break if same tool+args repeats 3x
             sig = f"{tool_name}:{_summarize_args(args)}"
@@ -730,14 +869,20 @@ def run_agent_loop(
             # Execute
             tool_result = _execute_tool(app, tool_name, args, out)
             tools_called.append(tool_name)
-            if tool_name in {"write_file", "edit_file"} and not tool_result.lower().startswith("error"):
+            if tool_name in {"write_file", "edit_file"} and not tool_result.lower().startswith("error") and not tool_result.startswith("REJECTED:"):
                 changed_path = args.get("path")
                 if isinstance(changed_path, str) and changed_path and changed_path not in changed_files:
                     changed_files.append(changed_path)
 
-            # Show result to user
+            # Show result to user — send full result for write/edit so TUI can render diff
             is_error = tool_result.startswith("Error:") or tool_result.startswith("error:")
-            out.tool_result(_brief_result(tool_name, tool_result), error=is_error, idx=idx)
+            is_rejected = tool_result.startswith("REJECTED:")
+            if is_rejected:
+                out.tool_result(tool_result, error=True, idx=idx)
+            elif tool_name in ("write_file", "edit_file") and not is_error:
+                out.tool_result(tool_result, error=False, idx=idx)
+            else:
+                out.tool_result(_brief_result(tool_name, tool_result), error=is_error, idx=idx)
 
             # Truncate per-tool
             tool_result = _truncate_result(tool_result, tool_name)
