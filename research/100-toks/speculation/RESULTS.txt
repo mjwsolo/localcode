@@ -1,0 +1,105 @@
+SPECULATIVE TOKEN PREDICTION RESEARCH RESULTS
+==============================================
+Date: 2026-04-09
+Branch: experiment/better-speculation (from experiment/gpu-autonomous-decode)
+
+PROBLEM
+-------
+- Gemma 4 26B MoE decodes at 28 tok/s on M4 16GB
+- Batched decode (K=4) achieves 146 tok/s throughput
+- Need >50% acceptance rate for K=4 speculation to beat single-token decode
+- Existing n-gram speculation: ~45% on code (too low)
+- Copy-last-token: ~10-20% (way too low)
+
+STRATEGIES TESTED
+-----------------
+All tested against 4 languages: Python, C++, TypeScript, Rust
+
+1. bigram_ctx          - Bigrams from current conversation
+2. trigram_ctx         - Trigrams from current conversation
+3. syntactic           - Code syntax rules (brackets, keywords)
+4. repeat_line         - Detect repeating line patterns
+5. top1_greedy_80      - Simulated top-1 from logits (80% accuracy)
+6. top1_greedy_65      - Simulated top-1 from logits (65% accuracy)
+7. top1_greedy_50      - Simulated top-1 from logits (50% accuracy)
+8. ensemble            - Combined bigram + trigram + syntactic + repeat_line
+9. adaptive_2_to_8     - Multi-level n-gram (levels 2-8) with frequency tracking
+10. windowed_200       - Windowed n-gram (200 token window, levels 2-8)
+11. windowed_500       - Windowed n-gram (500 token window, levels 2-8)
+
+AGGREGATE RESULTS (K=4)
+-----------------------
+Strategy                Accept%  Speedup  Projected tok/s  Verdict
+bigram_ctx               38.6%   2.10x          59        FAIL
+trigram_ctx               44.5%   2.30x          64        FAIL
+syntactic                 28.5%   1.81x          51        FAIL
+repeat_line               46.0%   2.35x          66        FAIL
+top1_greedy_80            79.3%   4.31x         121        PASS
+top1_greedy_65            65.0%   3.28x          92        PASS
+top1_greedy_50            49.6%   2.50x          70        FAIL
+ensemble                  41.6%   2.20x          61        FAIL
+adaptive_2_to_8           38.8%   2.10x          59        FAIL
+windowed_200              50.1%   2.52x          71        PASS (marginal)
+windowed_500              54.9%   2.74x          77        PASS
+
+KEY FINDINGS
+------------
+
+1. TOP-1 FROM LOGITS is the clear winner at 79% acceptance -> 121 tok/s
+   BUT: requires the model's logit output. After sampling token[i],
+   we have logits that predicted token[i], NOT logits for token[i+1].
+   This means we can't use logits to predict draft tokens "for free."
+   A separate forward pass is needed for each draft token position.
+
+2. WINDOWED N-GRAM achieves 55% acceptance -> 77 tok/s
+   This IS model-free and runs in <1ms CPU time.
+   Key insight: using only the LAST 500 tokens (not the full history)
+   dramatically improves prediction by avoiding stale pattern pollution.
+
+3. Per-position acceptance for windowed_500:
+   pos0=50%, pos1=55%, pos2=62%, pos3=71%
+   Positions 1-3 have HIGHER acceptance than position 0 because
+   once the first token is predicted correctly, the chain is
+   highly likely to continue matching.
+
+4. Pure n-gram strategies cap at ~45% on code without windowing.
+   The windowed approach adds ~10 percentage points.
+
+IMPLEMENTATION
+--------------
+New speculative type: COMMON_SPECULATIVE_TYPE_NGRAM_WIN
+
+Files added/modified:
+  common/ngram-win.h          - Header for windowed multi-level n-gram
+  common/ngram-win.cpp        - Implementation
+  common/speculative.cpp      - Added ngram_win state and init
+  common/common.h             - Added enum value and params
+  common/arg.cpp              - Added --spec-type ngram-win
+  common/CMakeLists.txt       - Added ngram-win.cpp/h
+
+Usage:
+  llama-server ... --spec-type ngram-win --spec-max 4 --spec-min 0
+
+Design:
+  - Ring buffer of last 512 tokens (configurable)
+  - 6 n-gram levels: {8, 6, 5, 4, 3, 2} tried longest-first
+  - 16K hash slots per level (~768KB total)
+  - Auto-rebuild every 64 new tokens
+  - Frequency-weighted collision resolution
+  - Chain prediction for K=4 draft tokens
+
+SPEEDUP PROJECTION
+------------------
+With 55% acceptance at K=4:
+  E[tokens/round] = 1 + 0.55 + 0.55^2 + 0.55^3 + 0.55^4 = 2.11
+  Batch cost ratio = 0.77 (measured)
+  Effective speedup = 2.11 / 0.77 = 2.74x
+  Projected: 28 * 2.74 = 77 tok/s
+
+NEXT STEPS
+----------
+1. Build and test with actual model to verify acceptance rate
+2. Tune parameters (window size, table size, rebuild interval)
+3. Consider hybrid: ngram_win for draft + logit reuse for verification
+4. For temp=0 (greedy decode): investigate self-speculation where the
+   model's own logits from batch evaluation serve as draft predictions
