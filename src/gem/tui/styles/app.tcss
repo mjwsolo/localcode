@@ -1,52 +1,64 @@
-/* LocalCode Textual TUI styles */
+/* LocalCode Textual TUI — Claude Code inspired styling */
 
 Screen {
     layout: vertical;
     background: $surface;
 }
 
-/* ── Chat screen layout ── */
+/* ── Header bar (top) ── */
+
+#header-bar {
+    dock: top;
+    height: 3;
+    padding: 1 1 1 1;
+    color: #5f87ff;
+    background: $surface;
+}
+
+/* ── Chat log (scrollable center) ── */
 
 #chat-log {
     height: 1fr;
     overflow-y: scroll;
     padding: 0 1;
     scrollbar-size: 1 1;
+    scrollbar-color: $surface-lighten-1;
+    scrollbar-background: $surface;
+    scrollbar-corner-color: $surface;
 }
 
-#input-area {
-    dock: bottom;
-    height: auto;
-    max-height: 5;
-    padding: 0 1;
-}
+/* ── Input area ── */
 
 #chat-input {
-    border: tall $primary-background;
+    border: tall $surface-lighten-1;
     padding: 0 1;
+    margin: 1 0 0 0;
 }
 
 #chat-input:focus {
-    border: tall $accent;
+    border: tall #5f87ff;
 }
+
+/* ── Status bar (bottom) ── */
 
 #status-bar {
     dock: bottom;
-    height: 1;
-    padding: 0 1;
+    height: 3;
+    padding: 1 1 1 1;
     color: $text-muted;
-    background: $surface-darken-1;
+    background: $surface;
 }
 
-#spinner {
-    height: auto;
-    max-height: 1;
+/* ── Queue indicator ── */
+
+#queue-line {
+    height: 1;
     padding: 0 1;
-    color: $success;
+    color: $warning;
     display: none;
 }
 
-#spinner.active {
+#queue-line.active {
     display: block;
 }
 
@@ -71,40 +83,4 @@ Screen {
     align: center middle;
 }
 
-/* ── Approval modal ── */
-
-ApprovalModal {
-    align: center middle;
-    width: 70;
-    height: auto;
-    max-height: 20;
-    background: $surface;
-    border: thick $warning;
-    padding: 1 2;
-}
-
-ApprovalModal #approval-cmd {
-    margin: 1 0;
-    padding: 1;
-    background: $surface-darken-1;
-}
-
-ApprovalModal .approval-buttons {
-    margin-top: 1;
-    align: center middle;
-    height: 3;
-}
-
-/* ── Queue indicator ── */
-
-#queue-indicator {
-    dock: bottom;
-    height: 1;
-    padding: 0 1;
-    color: $warning;
-    display: none;
-}
-
-#queue-indicator.active {
-    display: block;
-}
+/* ── Approval modal (compact, bottom-aligned) ── */

@@ -2778,14 +2778,8 @@ class GemApp:
         return text[:40] if len(text) > 5 else ""
 
     def _maybe_use_fast_model(self, user_text: str) -> None:
-        """Use e2b for trivial queries (time, hi, git status) — 3x faster.
-
-        26B stays loaded always. With OLLAMA_MAX_LOADED_MODELS=2, e2b loads
-        alongside it without evicting the 26B. After the simple query,
-        next complex query goes straight back to the already-loaded 26B.
-        """
-        if not self.config.runtime.escalation_enabled:
-            return
+        """Disabled — always use 26B. The 4B draft model can't do tools or thinking."""
+        return
 
         text = user_text.lower().strip()
         # Only use fast model for truly trivial stuff
@@ -2951,6 +2945,10 @@ class GemApp:
     def close(self) -> None:
         if hasattr(self, '_ask_indicator'):
             self._ask_out.done()
+        # Stop the output manager indicator thread
+        if hasattr(self, 'out'):
+            self.out._indicator_running = False
+            self.out._stop_indicator()
         self.toolkit.close()
         self.engine.close()
         if self.bg_indexer is not None:
@@ -2959,3 +2957,11 @@ class GemApp:
             self.file_watcher.stop()
         if self.project_watcher is not None:
             self.project_watcher.stop()
+        # Stop any background jobs (llama-server, etc.)
+        try:
+            from .jobs import list_jobs, stop_job
+            for job in list_jobs():
+                if job.get("status") == "running":
+                    stop_job(job["job_id"])
+        except Exception:
+            pass
