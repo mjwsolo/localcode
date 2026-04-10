@@ -1,19 +1,15 @@
-# 🏠 localcode — local AI coding, consumer hardware
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/mjwsolo/localcode/main/logo.png" alt="localcode" width="500">
-</p>
+# 🏠 LocalCode — high-performance AI coding on consumer hardware
 
 <p align="center">
   <img src="https://img.shields.io/badge/build-passing-4caf50?style=flat-square" alt="Build">
-  <img src="https://img.shields.io/badge/release-v0.0.1-7c4dff?style=flat-square" alt="Release">
+  <img src="https://img.shields.io/badge/release-v0.0.2-7c4dff?style=flat-square" alt="Release">
   <img src="https://img.shields.io/badge/license-Apache--2.0-4caf50?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/python-3.11+-3776ab?style=flat-square" alt="Python">
   <img src="https://img.shields.io/badge/platform-Apple%20Silicon-999999?style=flat-square" alt="Platform">
 </p>
 
 <p align="center">
-  <strong>High-performance, local-first, agentic coding on resource-constrained hardware.</strong><br>
+  <strong>High-performance AI coding on consumer hardware.</strong><br>
   No cloud, no API keys, no data leaving your machine.
 </p>
 
@@ -45,15 +41,15 @@ That's it. First launch builds the inference server and downloads the model (~5 
 > refactor the auth module to use JWT and make sure the tests pass
 ```
 
-localcode reads the files, plans the refactor, edits the code, runs the tests, and fixes failures - all locally.
+LocalCode reads the files, plans the refactor, edits the code, runs the tests, and fixes failures - all locally.
 
 ## Why local?
 
-We are building for a world of truly democratized AI - where everyone has access to powerful, personalized, prompt AI anywhere, on any device, and in any location. True empowered local-first AI. localcode is the first step toward that vision.
+We are building for a world of truly democratized AI - where everyone has access to powerful, personalized, prompt AI anywhere, on any device, and in any location. True empowered local-first AI. LocalCode is the first step toward that vision.
 
-### How localcode compares
+### How LocalCode compares
 
-| | localcode | Claude Code | OpenCode | Codex CLI |
+| | LocalCode | Claude Code | OpenCode | Codex CLI |
 |--|-----------|-------------|----------|-----------|
 | **Runtime** | 100% on-device | Cloud (Anthropic API) | Cloud (any provider) | Cloud (OpenAI API) |
 | **Privacy** | Code never leaves your machine | Code sent to Anthropic | Code sent to provider | Code sent to OpenAI |
@@ -67,15 +63,15 @@ We are building for a world of truly democratized AI - where everyone has access
 - **Python 3.11+**
 - **~12GB free disk**
 
-## How localcode works
+## How LocalCode works
 
-localcode runs a custom [llama.cpp](https://github.com/ggerganov/llama.cpp) fork with **TurboQuant KV cache compression** - a technique from Google's ICLR 2026 paper that we patched into llama.cpp for Apple Silicon. This compresses the KV cache 3.8x, fitting 32K context in 355 MiB on a 16GB MacBook.
+LocalCode runs a custom [llama.cpp](https://github.com/ggerganov/llama.cpp) fork with **TurboQuant KV cache compression** - a technique from Google's ICLR 2026 paper that we patched into llama.cpp for Apple Silicon. This compresses the KV cache 3.8x, fitting 32K context in 355 MiB on a 16GB MacBook.
 
 The model (**Gemma 4 26B-A4B**) is a Mixture-of-Experts architecture - 25.2B total parameters but only 3.8B active per token. That's what makes 27 tok/s possible on a laptop.
 
 ## Sponsors
 
-If you'd like to sponsor localcode, [reach out](https://github.com/mjwsolo/localcode).
+If you'd like to sponsor LocalCode, [reach out](https://github.com/mjwsolo/localcode).
 
 ## Contributing
 

@@ -117,7 +117,7 @@ class McpStdioClient:
             {
                 "protocolVersion": "2025-03-26",
                 "capabilities": {},
-                "clientInfo": {"name": "gem", "version": "0.0.1"},
+                "clientInfo": {"name": "gem", "version": "0.0.2"},
             },
         )
         assert self.proc.stdin is not None
