@@ -59,7 +59,7 @@ class ChatLog(RichLog):
     """
 
     def __init__(self, **kwargs) -> None:
-        super().__init__(**kwargs)
+        super().__init__(wrap=True, **kwargs)
         # History of all content for re-rendering on thinking toggle
         self._history: list[tuple[str, ...]] = []
         # Thinking block states: index in _history -> expanded bool
@@ -414,14 +414,23 @@ class ChatLog(RichLog):
     def _render_assistant(self, text: str) -> None:
         self.write(Text(""))
         self._track_lines()
+        try:
+            avail_w = self.app.size.width - 6  # padding + scrollbar
+        except Exception:
+            avail_w = 76
+        avail_w = max(avail_w, 40)
+
         has_md = any(m in text for m in ("```", "###", "**", "- ", "1. ", "`"))
         if has_md:
             self.write(Padding(Markdown(text, code_theme="monokai"), (0, 0, 0, 2)))
             self._track_lines(max(1, text.count("\n") + 1))
         else:
+            import textwrap
             for line in text.split("\n"):
-                self.write(Text(f"  {line}"))
-                self._track_lines()
+                wrapped = textwrap.fill(line, width=avail_w - 2) if line.strip() else ""
+                for wline in (wrapped.split("\n") if wrapped else [""]):
+                    self.write(Text(f"  {wline}"))
+                    self._track_lines()
 
     def _render_thinking(self, text: str, expanded: bool, hist_idx: int) -> None:
         lines = text.strip().splitlines()
