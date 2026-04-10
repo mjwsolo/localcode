@@ -249,6 +249,23 @@ def main(argv: list[str] | None = None) -> None:
 
     # TUI is the default UI. Use --cli for the classic terminal interface.
     if not getattr(args, 'cli', False) and args.command is None and not os.environ.get("LOCALCODE_CLI"):
+        # Auto-bootstrap on first launch (build server, download model)
+        if _should_autobootstrap(config):
+            console.print("[green]Setting up LocalCode for first launch...[/]")
+            code = run_setup(
+                config,
+                args.profile,
+                args.model,
+                auto_install=True,
+                benchmark=True,
+                assume_defaults=True,
+            )
+            if code != 0:
+                raise SystemExit(code)
+            config = load_config()
+            count = ensure_builtin_skills()
+            if count:
+                console.print(f"  Installed {count} built-in skills")
         from .tui.app import LocalCodeTUI
         app = LocalCodeTUI(show_mode_picker=True)
         app.run()
