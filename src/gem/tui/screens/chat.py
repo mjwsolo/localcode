@@ -202,19 +202,12 @@ class ChatScreen(Screen):
     }
 
     def _show_active_step(self, name: str, args: str) -> None:
-        """Show in-progress tool as a live verb status."""
-        verb = self._TOOL_VERBS.get(name, f"running {name}")
-        self._active_step_text = verb
+        """Tool calls don't show in the status bar — they appear in the chat log.
+        Just keep the thinking indicator running while tools execute."""
         self._active_tool_name = name
         self._active_tool_args = args
-        self._active_mode = "tool"
-        self._scan_pos = 0
-        w = self.query_one("#active-step", Static)
-        w.add_class("active")
-        if self._step_timer is not None:
-            self._step_timer.stop()
-        self._step_timer = self.set_interval(0.05, self._tick_active)
-        self._tick_active()
+        # Don't change the status bar — let "thinking..." keep showing
+        # The tool call is visible in the chat log with ● and ✓
 
     def _show_active_thinking(self, text: str = "thinking") -> None:
         """Show in-progress thinking status."""
