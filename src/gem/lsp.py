@@ -99,6 +99,38 @@ def find_available_server(language: str) -> list[str] | None:
     return None
 
 
+def jedi_goto(file_path: str, source: str, line: int, column: int) -> list[CodeLocation]:
+    """Go-to-definition using jedi (works out of the box for Python, no LSP needed)."""
+    try:
+        import jedi
+        script = jedi.Script(source, path=file_path)
+        defs = script.goto(line, column)
+        return [CodeLocation(file=str(d.module_path or file_path), line=d.line, column=d.column) for d in defs if d.line]
+    except Exception:
+        return []
+
+
+def jedi_references(file_path: str, source: str, line: int, column: int) -> list[CodeLocation]:
+    """Find references using jedi (works out of the box for Python)."""
+    try:
+        import jedi
+        script = jedi.Script(source, path=file_path)
+        refs = script.get_references(line, column)
+        return [CodeLocation(file=str(r.module_path or file_path), line=r.line, column=r.column) for r in refs if r.line]
+    except Exception:
+        return []
+
+
+def jedi_completions(file_path: str, source: str, line: int, column: int) -> list[str]:
+    """Get completions using jedi (works out of the box for Python)."""
+    try:
+        import jedi
+        script = jedi.Script(source, path=file_path)
+        return [c.name for c in script.complete(line, column)][:20]
+    except Exception:
+        return []
+
+
 # ── LSP Client ──────────────────────────────────────────────────────
 
 class LSPClient:
