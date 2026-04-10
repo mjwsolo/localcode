@@ -188,13 +188,23 @@ class ChatScreen(Screen):
 
     _active_mode: str = ""  # "tool" or "thinking"
 
+    # Map tool names to present-tense verbs for the live status
+    _TOOL_VERBS = {
+        "bash": "running",
+        "read_file": "reading",
+        "write_file": "writing",
+        "edit_file": "editing",
+        "grep": "searching",
+        "glob": "searching",
+        "list_files": "browsing files",
+        "web_search": "searching the web",
+        "code_search": "searching code",
+    }
+
     def _show_active_step(self, name: str, args: str) -> None:
-        """Show in-progress tool with scanning highlight."""
-        from ..widgets.chat_log import _TOOL_HEADERS
-        header_info = _TOOL_HEADERS.get(name, (name, name))
-        display_name = header_info[0]
-        args_short = args.strip().replace("\n", " ")[:60] if args else ""
-        self._active_step_text = f"● {display_name}({args_short})"
+        """Show in-progress tool as a live verb status."""
+        verb = self._TOOL_VERBS.get(name, f"running {name}")
+        self._active_step_text = verb
         self._active_tool_name = name
         self._active_tool_args = args
         self._active_mode = "tool"
@@ -206,9 +216,9 @@ class ChatScreen(Screen):
         self._step_timer = self.set_interval(0.05, self._tick_active)
         self._tick_active()
 
-    def _show_active_thinking(self, text: str = "mining...") -> None:
-        """Show in-progress thinking with gem-themed cycling labels."""
-        self._active_step_text = f"◇ {text}"
+    def _show_active_thinking(self, text: str = "thinking") -> None:
+        """Show in-progress thinking status."""
+        self._active_step_text = text
         self._active_tool_name = "thinking"
         self._active_tool_args = ""
         self._active_mode = "thinking"
@@ -247,39 +257,17 @@ class ChatScreen(Screen):
 
         timer = self._elapsed_str()
 
-        if self._active_mode == "tool":
-            # Tool: bold sweeps across tool name in blue
-            from ..widgets.chat_log import _TOOL_HEADERS
-            header_info = _TOOL_HEADERS.get(self._active_tool_name, (self._active_tool_name, ""))
-            tool_name = header_info[0]
-            prefix = f"● {tool_name}"
-            args_short = self._active_tool_args.strip().replace("\n", " ")[:60] if self._active_tool_args else ""
-            args_part = f"({args_short})" if args_short else ""
-            self._scan_pos = (self._scan_pos + 1) % max(len(prefix), 1)
-            rt = RichText()
-            rt.append("  ", style="")
-            for i, ch in enumerate(prefix):
-                if i <= self._scan_pos:
-                    rt.append(ch, style="bold #5f87ff")
-                else:
-                    rt.append(ch, style="#5f87ff")
-            rt.append(args_part, style="dim")
-            rt.append(f"  {timer}", style="dim")
-        else:
-            # Thinking: cycle gem-themed labels with cyan bold sweep
-            self._think_tick = getattr(self, '_think_tick', 0) + 1
-            # Change label every ~60 ticks (3 seconds at 0.05s interval)
-            label_idx = (self._think_tick // 60) % len(_THINK_LABELS)
-            label = f"◇ {_THINK_LABELS[label_idx]}..."
-            self._scan_pos = (self._scan_pos + 1) % max(len(label), 1)
-            rt = RichText()
-            rt.append("  ", style="")
-            for i, ch in enumerate(label):
-                if i <= self._scan_pos:
-                    rt.append(ch, style="bold cyan")
-                else:
-                    rt.append(ch, style="dim cyan italic")
-            rt.append(f"  {timer}", style="dim cyan")
+        # Unified live status: "◆ thinking... (3s)" or "◆ searching... (12s)"
+        label = f"◆ {text}..."
+        self._scan_pos = (self._scan_pos + 1) % max(len(label), 1)
+        rt = RichText()
+        rt.append("  ", style="")
+        for i, ch in enumerate(label):
+            if i <= self._scan_pos:
+                rt.append(ch, style="bold dim")
+            else:
+                rt.append(ch, style="dim italic")
+        rt.append(f"  {timer}", style="dim")
 
         w = self.query_one("#active-step", Static)
         w.update(rt)
@@ -557,11 +545,11 @@ class ChatScreen(Screen):
             self._thinking_phase = ""
             # Show thinking indicator immediately after tool completion
             # to cover the gap while the model processes the result
-            self._show_active_thinking("mining...")
+            self._show_active_thinking("thinking")
         elif t == "thinking_start":
             self._thinking_phase = "thinking"
             self._thinking_text = ""
-            self._show_active_thinking("thinking...")
+            self._show_active_thinking("thinking")
         elif t == "thinking_chunk":
             chunk = p.get("chunk", "")
             self._thinking_text += chunk
@@ -577,7 +565,7 @@ class ChatScreen(Screen):
         elif t == "stream_start":
             self._thinking_phase = "generating"
             # Show gem-themed animation while generating response
-            self._show_active_thinking("generating...")
+            self._show_active_thinking("generating")
         elif t == "error":
             msg = p.get("message", "Unknown error")
             log.append_error(msg)
