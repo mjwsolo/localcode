@@ -9,12 +9,11 @@ Three speed optimizations in one module:
 from __future__ import annotations
 
 import hashlib
-import os
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
 
 # ── Result Cache ─────────────────────────────────────────────────────────

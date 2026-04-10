@@ -7,7 +7,6 @@ Textual messages to update the UI (thread-safe).
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from textual.message import Message

@@ -16,12 +16,9 @@ from rich.console import Console, Group
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.spinner import Spinner
-from rich.table import Table
 from rich.text import Text
-from rich.columns import Columns
 
-from .ui_art import SPINNER_FRAMES, THINKING_LABELS, tool_icon
+from .ui_art import SPINNER_FRAMES, tool_icon
 
 
 # ── Data model ───────────────────────────────────────────────────────────

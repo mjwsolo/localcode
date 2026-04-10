@@ -17,9 +17,8 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-from .streaming import StreamingParser
 
 if TYPE_CHECKING:
     from .app import GemApp

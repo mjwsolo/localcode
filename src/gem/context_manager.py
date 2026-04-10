@@ -17,7 +17,6 @@ import os
 import re
 import subprocess
 import time
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -527,12 +526,12 @@ class ProgressTracker:
 
     def done(self, step: str, result: str = "ok"):
         import sys
-        sys.stdout.write(f"\033[2K")  # clear the "step..." line
+        sys.stdout.write("\033[2K")  # clear the "step..." line
         self._cb(f"  ✓ {step} — {result}")
 
     def fail(self, step: str, error: str):
         import sys
-        sys.stdout.write(f"\033[2K")
+        sys.stdout.write("\033[2K")
         self._cb(f"  ✗ {step} — {error}")
 
 

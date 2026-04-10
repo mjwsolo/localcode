@@ -17,7 +17,7 @@ from .config import AppConfig
 from .models import resolve_profile
 from .performance import benchmark_report
 from .runtime import GemRuntimeGateway
-from .verification import classify_artifact, run_outcome_verification, run_verification
+from .verification import run_outcome_verification, run_verification
 
 
 @dataclass(slots=True)

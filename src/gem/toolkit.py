@@ -3,7 +3,6 @@ from __future__ import annotations
 import difflib
 import fnmatch
 import json
-import os
 import re
 import subprocess
 from dataclasses import dataclass
@@ -17,7 +16,7 @@ except ImportError:
     from duckduckgo_search import DDGS
 
 from .config import AppConfig
-from .context import IGNORE_DIRS, git_diff, list_repo_files, read_file
+from .context import IGNORE_DIRS, list_repo_files
 from .indexer import build_index, search_index
 from .mcp import McpStdioClient, load_mcp_configs
 from .plugins import PluginRegistry, load_plugins
@@ -549,7 +548,6 @@ class GemToolkit:
 
         # Staleness check: file changed since last read?
         if path.is_file():
-            import time as _time
             current_mtime = path.stat().st_mtime
             read_time = self._read_state.get(relative_path, 0)
             if current_mtime > read_time + 1:  # 1s tolerance
@@ -949,7 +947,6 @@ class GemToolkit:
 
     def _current_datetime(self) -> str:
         import datetime
-        import locale
         now = datetime.datetime.now()
         utc = datetime.datetime.now(datetime.timezone.utc)
         try:

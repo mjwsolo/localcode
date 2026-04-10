@@ -14,13 +14,11 @@ One database, all data:
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, UTC
-from pathlib import Path
 from typing import Any
 
 from .config import ensure_home_dirs

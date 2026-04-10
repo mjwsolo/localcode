@@ -7,11 +7,9 @@ Responses: streamed with syntax highlighting on code blocks.
 from __future__ import annotations
 
 import os
-import re
 import sys
 import threading
 import time
-from typing import Any
 
 
 def _cols() -> int:
@@ -73,7 +71,7 @@ class ThinkingIndicator:
     def log_action(self, action: str) -> None:
         """Log an action below the indicator (tool call, file read, etc)."""
         # Clear indicator line, print action, re-print indicator
-        sys.stderr.write(f"\r\033[K")
+        sys.stderr.write("\r\033[K")
         sys.stdout.write(f"\033[32m  ● {action}\033[0m\n")
         sys.stdout.flush()
 

@@ -8,10 +8,8 @@ The coordinator agent can delegate work to sub-agents that:
 """
 from __future__ import annotations
 
-import threading
 from concurrent.futures import ThreadPoolExecutor, Future
-from dataclasses import dataclass, field
-from pathlib import Path
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
