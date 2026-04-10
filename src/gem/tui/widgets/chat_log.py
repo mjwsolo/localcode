@@ -422,8 +422,15 @@ class ChatLog(RichLog):
 
         has_md = any(m in text for m in ("```", "###", "**", "- ", "1. ", "`"))
         if has_md:
-            self.write(Padding(Markdown(text, code_theme="monokai"), (0, 0, 0, 2)))
-            self._track_lines(max(1, text.count("\n") + 1))
+            from rich.console import Console
+            from io import StringIO
+            buf = StringIO()
+            console = Console(file=buf, width=avail_w - 2, force_terminal=True, color_system="truecolor")
+            console.print(Markdown(text, code_theme="monokai"))
+            rendered = buf.getvalue()
+            for rline in rendered.split("\n"):
+                self.write(Text.from_ansi(f"  {rline}"))
+                self._track_lines()
         else:
             import textwrap
             for line in text.split("\n"):
