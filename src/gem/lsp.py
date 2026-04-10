@@ -20,6 +20,13 @@ from typing import Any
 # ── Data types ──────────────────────────────────────────────────────
 
 @dataclass
+class CodeLocation:
+    file: str
+    line: int
+    column: int = 0
+
+
+@dataclass
 class Diagnostic:
     file: str
     line: int

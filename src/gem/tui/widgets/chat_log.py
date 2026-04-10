@@ -661,8 +661,6 @@ class ChatLog(RichLog):
         self._track_lines()
 
     def _render_turn_summary(self, summary_text: str) -> None:
-        self.write(Text(""))
-        self._track_lines()
         line = Text()
         line.append("  ", style="")
         line.append(summary_text, style="dim")
