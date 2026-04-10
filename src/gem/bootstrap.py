@@ -236,7 +236,7 @@ def download_turboquant_binary(on_progress: Callable[[str], None] | None = None)
     else:
         return False, f"No pre-built binary for {system}-{machine}. Clone the repo and build from source."
 
-    version = "0.1.0"
+    version = "0.0.1"
     url = _BINARY_RELEASE_URL.format(version=version, platform=plat)
     data_dir = Path.home() / ".local" / "share" / "localcode"
     data_dir.mkdir(parents=True, exist_ok=True)
