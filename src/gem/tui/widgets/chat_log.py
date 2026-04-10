@@ -53,6 +53,7 @@ class ChatLog(RichLog):
     ChatLog {
         height: 1fr;
         overflow-y: scroll;
+        overflow-x: hidden;
         padding: 0 1;
         scrollbar-size: 1 1;
     }
@@ -490,14 +491,14 @@ class ChatLog(RichLog):
     def _render_tool_done(self, name: str, args: str, summary: str) -> None:
         header_info = _TOOL_HEADERS.get(name, (name, name))
         display_name = header_info[0]
-        line = Text()
+        line = Text(no_wrap=True, overflow="ellipsis")
         line.append(f"  ✓ ", style="bold #32cd32")
         line.append(f"{display_name}", style="bold #32cd32")
         if args:
             args_short = args.strip().replace("\n", " ")[:40]
             line.append(f"({args_short})", style="#32cd32")
         if summary:
-            line.append(f"  {summary}", style="dim #32cd32")
+            line.append(f"  {summary[:60]}", style="dim #32cd32")
         self.write(line)
         self._track_lines()
 
@@ -622,15 +623,19 @@ class ChatLog(RichLog):
     def _render_approval(self, tool_name: str, command: str) -> None:
         self.write(Text(""))
         self._track_lines()
-        line = Text()
+        # Collapse multi-line commands (heredocs etc) to single line
+        cmd_oneline = command.replace("\n", " ↵ ").strip()
+        try:
+            max_w = self.app.size.width - 12
+        except Exception:
+            max_w = 70
+        max_w = max(max_w, 40)
+        line = Text(no_wrap=True, overflow="ellipsis")
         line.append("  Allow ", style="bold yellow")
         line.append(f"{tool_name}", style="bold yellow")
-        line.append("?", style="bold yellow")
+        line.append("? ", style="bold yellow")
+        line.append(f"{cmd_oneline[:max_w]}", style="dim")
         self.write(line)
-        self._track_lines()
-        cmd = Text()
-        cmd.append(f"  {command[:100]}", style="dim")
-        self.write(cmd)
         self._track_lines()
         hint = Text()
         hint.append("  Press ", style="dim")

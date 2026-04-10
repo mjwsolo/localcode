@@ -824,10 +824,15 @@ class GemApp:
             self.console.print(table)
             return True
         if name == "/permissions":
-            table = Table("tool", "rule")
-            for tool_name, rule in self.permissions.status_rows():
-                table.add_row(tool_name, rule)
-            self.console.print(table)
+            # Toggle between asking for permission and full auto
+            if self._autonomy == AutonomyLevel.FULL_AUTO:
+                self._autonomy = AutonomyLevel.AUTO_EDIT
+                apply_autonomy_to_permissions(self.perms, get_policy(self._autonomy))
+                self.console.print("[yellow]⚠ Permissions ON[/] — will ask before running commands")
+            else:
+                self._autonomy = AutonomyLevel.FULL_AUTO
+                apply_autonomy_to_permissions(self.perms, get_policy(self._autonomy))
+                self.console.print("[green]⚡ Permissions OFF[/] — full auto, no questions asked")
             return True
         if name == "/timeline":
             table = Table("time", "type", "detail")
