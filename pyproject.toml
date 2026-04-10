@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "localcode"
-version = "0.1.1"
+version = "0.1.3"
 description = "High-performance AI coding on consumer hardware."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -54,6 +54,9 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"gem" = ["**/*.tcss"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
