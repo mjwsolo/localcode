@@ -47,3 +47,6 @@ site/
 tests/test_results.json
 docs/
 .gem/
+*.c
+*.so
+*.pyd
