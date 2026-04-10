@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "localcode"
-version = "0.0.1"
-description = "The local-first AI coding agent. High-performance agentic coding on consumer hardware."
+version = "0.0.3"
+description = "High-performance AI coding on consumer hardware."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
