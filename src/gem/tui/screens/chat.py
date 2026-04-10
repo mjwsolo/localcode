@@ -137,7 +137,7 @@ class ChatScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield Static("", id="header-bar")
-        yield ChatLog(id="chat-log", wrap=True, highlight=True, markup=True)
+        yield ChatLog(id="chat-log", highlight=True, markup=True)
         yield Static("", id="active-step")
         yield Static("", id="queue-line")
         yield Input(placeholder="Type a message...", id="chat-input")
