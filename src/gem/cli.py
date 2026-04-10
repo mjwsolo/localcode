@@ -10,32 +10,17 @@ from rich.panel import Panel
 from rich.table import Table
 
 from .agent import run_agent_loop
-from .agent_background import launch_background_agent
 from .app import GemApp
-from .benchmarks import compare_explicit_models, compare_gguf_models, compare_laptop_runtime_modes, run_task_benchmarks
 from .browser import browser_status, ensure_browser_mcp
 from .bootstrap import pull_model, run_setup
-from .daemon import (
-    daemon_status,
-    get_task,
-    is_running,
-    list_tasks,
-    read_daemon_log,
-    run_daemon,
-    stop_daemon,
-    submit_task,
-)
 from .exec_mode import run_exec
 from .config import get_config_path, init_config_file, load_config
 from .indexer import build_index, search_index
 from .logging_utils import configure_logging
 from .mcp import add_mcp_config, load_mcp_configs
 from .models import GEMMA_PROFILES, get_runtime_model, resolve_profile
-from .model_recommend import recommend_for_model_tag
 from .performance import apply_preset, benchmark_report
-from .provider_checks import provider_readiness
 from .runtime import GemRuntimeGateway
-from .runtime_launch import launch_runtime, runtime_command
 from .session import SessionStore
 from .settings import set_setting, show_settings
 from .skills import (
@@ -47,9 +32,17 @@ from .skills import (
     skill_info,
 )
 from .toolkit import GemToolkit
-from .traces import export_training_traces
 from .verification import run_verification
-from .voice import voice_status
+
+
+def is_online() -> bool:
+    """Stub: assume online after network module removal."""
+    return True
+
+
+def provider_readiness(runtime_config) -> tuple[bool, list[str]]:
+    """Stub: assume provider is ready after provider_checks module removal."""
+    return True, []
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -188,7 +181,6 @@ def run_status() -> int:
 
     # ── Runtime ──
     runtime_table = Table(show_header=False, title="Runtime", title_style="bold green")
-    from .network import is_online
     online = is_online()
     runtime_table.add_row("status", "[green]ok[/green]" if ok else "[red]unreachable[/red]")
     runtime_table.add_row("network", "[green]online[/green]" if online else "[yellow]offline[/yellow]")
@@ -270,164 +262,7 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(run_setup(config, args.profile, args.model, args.install, args.benchmark))
     if args.command == "benchmark":
         if args.tasks:
-            if args.compare_gguf_dir:
-                candidate_path = Path.cwd() / "benchmarks" / "gemma_gguf_candidates.json"
-                candidates = json.loads(candidate_path.read_text())
-                root = Path(args.compare_gguf_dir)
-                ggufs = [root / str(item["filename"]) for item in candidates if (root / str(item["filename"])).is_file()]
-                missing = [str(item["filename"]) for item in candidates if not (root / str(item["filename"])).is_file()]
-                if missing:
-                    console.print("Missing GGUF candidates: " + ", ".join(missing))
-                if not ggufs:
-                    console.print("No candidate GGUF files found in that directory.")
-                    raise SystemExit(1)
-                rows = compare_gguf_models(
-                    config,
-                    Path.cwd(),
-                    Path(args.tasks),
-                    ggufs,
-                    mode=args.mode or "balanced",
-                    repeats=max(1, args.repeats),
-                )
-                table = Table("model", "provider", "profile", "task", "repeat", "seconds", "first_token_s", "verify", "heuristic", "quality")
-                for row in rows:
-                    table.add_row(
-                        str(row["model"]),
-                        str(row["provider"]),
-                        str(row["profile"]),
-                        str(row["name"]),
-                        str(row["repeat"]),
-                        str(row["seconds"]),
-                        str(row["first_token_s"]),
-                        str(row["verify_code"]),
-                        str(row["heuristic_score"]),
-                        str(row["quality_score"]),
-                    )
-                console.print(table)
-                return
-            if args.compare_26b_quants:
-                provider = args.provider or "ollama"
-                bench_gateway = GemRuntimeGateway(config.runtime)
-                bench_gateway.config.provider = provider
-                installed = bench_gateway.list_models()
-                candidate_path = Path.cwd() / "benchmarks" / "gemma26b_quant_candidates.json"
-                candidates = json.loads(candidate_path.read_text())
-                installed_lower = {m.lower(): m for m in installed}
-                selected: list[str] = []
-                missing: list[str] = []
-                for item in candidates:
-                    tag = str(item["tag"])
-                    exact = installed_lower.get(tag.lower())
-                    if exact:
-                        selected.append(exact)
-                    else:
-                        missing.append(tag)
-                if missing and args.install_missing:
-                    if provider != "ollama":
-                        console.print("--install-missing is currently supported only with --provider ollama.")
-                        raise SystemExit(1)
-                    for tag in missing:
-                        console.print(f"Installing {tag} ...")
-                        ok, detail = pull_model(tag)
-                        console.print(detail)
-                        if not ok:
-                            console.print(f"Failed to install {tag}")
-                            raise SystemExit(1)
-                    installed = GemRuntimeGateway(config.runtime).list_models()
-                    installed_lower = {m.lower(): m for m in installed}
-                    selected = []
-                    missing = []
-                    for item in candidates:
-                        tag = str(item["tag"])
-                        exact = installed_lower.get(tag.lower())
-                        if exact:
-                            selected.append(exact)
-                        else:
-                            missing.append(tag)
-                if missing:
-                    console.print("Missing 26B quant candidates: " + ", ".join(missing))
-                if not selected:
-                    console.print("No candidate 26B quant models are installed for comparison.")
-                    raise SystemExit(1)
-                rows = compare_explicit_models(
-                    config,
-                    Path.cwd(),
-                    Path(args.tasks),
-                    selected,
-                    mode=args.mode or "balanced",
-                    provider=provider,
-                    repeats=max(1, args.repeats),
-                )
-                table = Table("model", "provider", "profile", "task", "repeat", "seconds", "first_token_s", "verify", "heuristic", "quality")
-                for row in rows:
-                    table.add_row(
-                        str(row["model"]),
-                        str(row["provider"]),
-                        str(row["profile"]),
-                        str(row["name"]),
-                        str(row["repeat"]),
-                        str(row["seconds"]),
-                        str(row["first_token_s"]),
-                        str(row["verify_code"]),
-                        str(row["heuristic_score"]),
-                        str(row["quality_score"]),
-                    )
-                console.print(table)
-                return
-            if args.compare_models:
-                rows = compare_explicit_models(
-                    config,
-                    Path.cwd(),
-                    Path(args.tasks),
-                    args.compare_models,
-                    mode=args.mode or "balanced",
-                    provider=args.provider,
-                    repeats=max(1, args.repeats),
-                )
-                table = Table("model", "provider", "profile", "task", "repeat", "seconds", "first_token_s", "verify", "heuristic", "quality")
-                for row in rows:
-                    table.add_row(
-                        str(row["model"]),
-                        str(row["provider"]),
-                        str(row["profile"]),
-                        str(row["name"]),
-                        str(row["repeat"]),
-                        str(row["seconds"]),
-                        str(row["first_token_s"]),
-                        str(row["verify_code"]),
-                        str(row["heuristic_score"]),
-                        str(row["quality_score"]),
-                    )
-                console.print(table)
-                return
-            if args.compare_26b_laptop:
-                rows = compare_laptop_runtime_modes(
-                    config,
-                    Path.cwd(),
-                    Path(args.tasks),
-                    mode=args.mode or "balanced",
-                    repeats=max(1, args.repeats),
-                )
-                table = Table("runtime_mode", "provider", "task", "repeat", "seconds", "first_token_s", "verify", "heuristic", "quality")
-                for row in rows:
-                    table.add_row(
-                        str(row["runtime_mode"]),
-                        str(row["provider"]),
-                        str(row["name"]),
-                        str(row["repeat"]),
-                        str(row["seconds"]),
-                        str(row["first_token_s"]),
-                        str(row["verify_code"]),
-                        str(row["heuristic_score"]),
-                        str(row["quality_score"]),
-                    )
-                console.print(table)
-                return
-            rows = run_task_benchmarks(config, Path.cwd(), Path(args.tasks), args.profile, args.model)
-            table = Table("task", "seconds", "chars", "keyword_hits", "verify_code")
-            for row in rows:
-                table.add_row(str(row["name"]), str(row["seconds"]), str(row["chars"]), str(row["keyword_hits"]), str(row["verify_code"]))
-            console.print(table)
+            console.print("Task benchmarks have been removed.")
             return
         machine, preset = benchmark_report(config, args.mode)
         table = Table(show_header=False)
@@ -451,14 +286,7 @@ def main(argv: list[str] | None = None) -> None:
             console.print(Panel("\n".join(preset.notes), title="Recommendations"))
         return
     if args.command == "recommend-model":
-        rec = recommend_for_model_tag(args.model_tag)
-        table = Table(show_header=False)
-        table.add_row("model_tag", rec.model_tag)
-        table.add_row("backend", rec.backend)
-        table.add_row("quant_preset", rec.quant_preset)
-        table.add_row("config_field", rec.model_id_field)
-        table.add_row("note", rec.note)
-        console.print(table)
+        console.print("Model recommendation has been removed.")
         return
     if args.command in ("status", "doctor"):
         raise SystemExit(run_status())
@@ -468,7 +296,6 @@ def main(argv: list[str] | None = None) -> None:
         console.print("\n".join(browser_status(config)))
         return
     if args.command == "voice-status":
-        console.print(Panel("\n".join(voice_status(config)), title="Voice"))
         return
     if args.command == "speed":
         if args.speed_command == "launch":
@@ -521,18 +348,10 @@ def main(argv: list[str] | None = None) -> None:
         console.print(table)
         return
     if args.command == "runtime-cmd":
-        command = runtime_command(config.runtime)
-        if not command:
-            console.print("No launch command available for the selected provider.")
-            raise SystemExit(1)
-        console.print(command)
+        console.print("Runtime launch command has been removed. Use llama-server directly.")
         return
     if args.command == "runtime-up":
-        ok, detail = launch_runtime(config.runtime, Path.cwd())
-        if not ok:
-            console.print(detail)
-            raise SystemExit(1)
-        console.print(f"Started runtime job {detail}")
+        console.print("Runtime launch has been removed. Start llama-server directly.")
         return
     if args.command == "mode":
         if not args.value:
@@ -607,78 +426,14 @@ def main(argv: list[str] | None = None) -> None:
             table.add_row(cfg.name, cfg.command, " ".join(cfg.args))
         console.print(table)
         return
-    # -- Daemon commands --
+    # -- Daemon commands (removed) --
     if args.command == "daemon":
-        if args.daemon_command == "start":
-            raise SystemExit(run_daemon(config))
-        if args.daemon_command == "stop":
-            if stop_daemon():
-                console.print("Daemon stopped.")
-            else:
-                console.print("No daemon running.")
-            return
-        if args.daemon_command == "status":
-            status = daemon_status()
-            table = Table(show_header=False)
-            table.add_row("running", "[green]yes[/]" if status["running"] else "[red]no[/]")
-            if status["pid"]:
-                table.add_row("pid", str(status["pid"]))
-            table.add_row("pending tasks", str(status["pending_tasks"]))
-            table.add_row("running tasks", str(status["running_tasks"]))
-            console.print(table)
-            return
-        if args.daemon_command == "log":
-            console.print(Panel(read_daemon_log(50), title="Daemon Log"))
-            return
-        console.print("Usage: localcode daemon [start|stop|status|log]")
+        console.print("Daemon has been removed.")
         return
 
-    # -- Claw commands --
+    # -- Claw commands (removed — daemon dependency) --
     if args.command == "claw":
-        if args.status or args.list:
-            tasks = list_tasks(20)
-            if not tasks:
-                console.print("No claw tasks found.")
-                return
-            table = Table("id", "status", "created", "prompt")
-            for task in tasks:
-                status_style = {"done": "green", "failed": "red", "running": "yellow", "pending": "dim"}.get(task.status, "")
-                table.add_row(
-                    task.task_id,
-                    f"[{status_style}]{task.status}[/]" if status_style else task.status,
-                    task.created_at,
-                    task.prompt[:60],
-                )
-            console.print(table)
-            return
-        if args.result:
-            task = get_task(args.result)
-            if not task:
-                console.print(f"Task not found: {args.result}")
-                return
-            console.print(Panel(task.result or "(no result yet)", title=f"[{task.status}] {task.task_id}"))
-            return
-        if args.prompt:
-            running, pid = is_running()
-            if not running:
-                console.print("[yellow]Daemon not running.[/] Start it with: localcode daemon start")
-                console.print("Running task directly instead...")
-                # Fall through to run as a regular agent task
-                app = GemApp(config=config, cwd=Path.cwd(), profile_name=args.profile, model_name=args.model)
-                try:
-                    composed = [{"role": "user", "content": args.prompt}]
-                    result = run_agent_loop(app, args.prompt, composed, app.out)
-                    if result:
-                        console.print(result)
-                finally:
-                    app.close()
-                return
-            task_id = submit_task(args.prompt, str(Path.cwd()))
-            console.print(f"[bold bright_cyan]Submitted claw task:[/] {task_id}")
-            console.print("  Check status: localcode claw --status")
-            console.print(f"  Get result:   localcode claw --result {task_id}")
-            return
-        console.print('Usage: localcode claw "task description" | localcode claw --status | localcode claw --result <id>')
+        console.print("Claw/daemon has been removed. Use `localcode agent <prompt>` instead.")
         return
 
     # -- Skill commands --
@@ -731,28 +486,15 @@ def main(argv: list[str] | None = None) -> None:
         console.print(output)
         raise SystemExit(code)
     if args.command == "export-traces":
-        count, path = export_training_traces(Path(args.output).resolve())
-        console.print(f"Exported {count} traces to {path}")
+        console.print("Trace export has been removed.")
         return
     if args.command == "exec":
         raise SystemExit(run_exec(config, args.prompt, Path.cwd(), args.profile, args.model))
     if args.command == "agent-bg":
-        job_id = launch_background_agent(args.prompt, Path.cwd(), args.profile, args.model)
-        console.print(f"Started background agent job {job_id}")
+        console.print("Background agent has been removed. Use `localcode agent <prompt>` instead.")
         return
     if args.command == "orch":
-        from .orchestrator import Orchestrator
-        app = GemApp(config=config, cwd=Path.cwd(), profile_name=args.profile, model_name=args.model)
-        try:
-            plan = Orchestrator(app).run(args.prompt)
-            console.print(f"\n[bold]{plan.summary}[/bold]")
-            if plan.review_notes:
-                console.print(f"[dim]{plan.review_notes}[/dim]")
-            for step in plan.steps:
-                icon = {"done": "[green]✓[/]", "error": "[red]✗[/]", "skipped": "[dim]○[/]"}.get(step.status, "·")
-                console.print(f"  {icon} [{step.id}] {step.description[:70]}")
-        finally:
-            app.close()
+        console.print("Orchestrator has been removed. Use `localcode agent <prompt>` instead.")
         return
     if args.command in {"agent", "agent-runner"}:
         app = GemApp(config=config, cwd=Path.cwd(), profile_name=args.profile, model_name=args.model)

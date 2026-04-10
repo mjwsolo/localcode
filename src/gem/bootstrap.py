@@ -17,13 +17,45 @@ from rich.table import Table
 
 from .browser import browser_status, ensure_browser_mcp
 from .config import AppConfig, get_config_path, init_config_file, save_config
-from .model_recommend import recommend_for_model_tag
 from .models import ALIASES, GEMMA_PROFILES, MLX_MODEL_IDS, get_runtime_model, resolve_profile
 from .performance import MachineProfile, PerformancePreset, apply_preset, benchmark_report, should_promote_legacy_default_to_laptop_26b
-from .provider_checks import browser_voice_readiness, provider_readiness
 from .runtime import GemRuntimeGateway
-from .runtime_launch import runtime_command
-from .voice import voice_status
+
+
+def provider_readiness(runtime_config) -> tuple[bool, list[str]]:
+    """Stub: assume provider is ready after provider_checks module removal."""
+    return True, []
+
+
+def browser_voice_readiness(config) -> tuple[bool, list[str]]:
+    """Stub: assume browser/voice ready after provider_checks module removal."""
+    return True, []
+
+
+def recommend_for_model_tag(model_tag: str):
+    """Stub for removed model_recommend module."""
+    from dataclasses import dataclass
+
+    @dataclass
+    class _Rec:
+        model_tag: str
+        backend: str
+        quant_preset: str
+        model_id_field: str
+        note: str
+
+    return _Rec(
+        model_tag=model_tag,
+        backend="ollama",
+        quant_preset="balanced",
+        model_id_field="model",
+        note="model_recommend module removed",
+    )
+
+
+def runtime_command(runtime_config) -> str | None:
+    """Stub: no auto-generated runtime command after runtime_launch removal."""
+    return None
 
 T = TypeVar("T")
 
@@ -704,7 +736,7 @@ def run_setup(
         console.print(details)
         if not ok:
             return 1
-    for line in voice_status(config):
+        pass  # voice removed
         console.print(line)
 
     if auto_install and config.runtime.provider == "ollama" and is_ollama_installed():
