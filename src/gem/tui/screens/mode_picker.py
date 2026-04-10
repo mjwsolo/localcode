@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from textual.app import ComposeResult
-from textual.containers import Center, Vertical
+from textual.containers import Center
 from textual.screen import Screen
 from textual.widgets import Static
 from textual.binding import Binding

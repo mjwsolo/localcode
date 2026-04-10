@@ -20,8 +20,6 @@ def _strip_thinking_tokens(text: str) -> str:
     text = re.sub(r"<channel\|>\n?", "", text)
     return text
 from .tool_parsing import (
-    build_tool_result_message,
-    build_tool_response,
     inject_tool_schemas_into_prompt,
     parse_tool_calls,
 )

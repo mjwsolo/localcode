@@ -10,8 +10,6 @@ Cache is built with: localcode cache-build
 from __future__ import annotations
 
 import subprocess
-import shutil
-from pathlib import Path
 from .config import ensure_home_dirs
 from .network import is_online
 

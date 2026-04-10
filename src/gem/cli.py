@@ -32,8 +32,8 @@ from .logging_utils import configure_logging
 from .mcp import add_mcp_config, load_mcp_configs
 from .models import GEMMA_PROFILES, get_runtime_model, resolve_profile
 from .model_recommend import recommend_for_model_tag
-from .performance import apply_preset, benchmark_report, detect_machine_profile, resolve_laptop_26b_runtime_mode
-from .provider_checks import browser_voice_readiness, provider_readiness
+from .performance import apply_preset, benchmark_report
+from .provider_checks import provider_readiness
 from .runtime import GemRuntimeGateway
 from .runtime_launch import launch_runtime, runtime_command
 from .session import SessionStore
@@ -56,7 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="localcode", description="LocalCode — AI coding assistant running entirely on your machine")
     parser.add_argument("--profile", help="Gemma 4 profile: e2b, e4b, 26b-laptop, 26b-moe, 31b")
     parser.add_argument("--model", help="Explicit local runtime model tag")
-    parser.add_argument("--tui", action="store_true", help="Use the new Textual TUI")
+    parser.add_argument("--cli", action="store_true", help="Use the classic CLI instead of the TUI")
     subparsers = parser.add_subparsers(dest="command")
 
     subparsers.add_parser("config-init", help="create a default config file")
@@ -236,7 +236,8 @@ def run_status() -> int:
 
 
 def main(argv: list[str] | None = None) -> None:
-    import os, warnings
+    import os
+    import warnings
     os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
     os.environ["MallocStackLogging"] = "0"
@@ -254,7 +255,8 @@ def main(argv: list[str] | None = None) -> None:
     configure_logging(config.ui.show_debug)
     console = Console()
 
-    if getattr(args, 'tui', False) or os.environ.get("LOCALCODE_TUI"):
+    # TUI is the default UI. Use --cli for the classic terminal interface.
+    if not getattr(args, 'cli', False) and args.command is None and not os.environ.get("LOCALCODE_CLI"):
         from .tui.app import LocalCodeTUI
         app = LocalCodeTUI(show_mode_picker=True)
         app.run()
@@ -480,7 +482,7 @@ def main(argv: list[str] | None = None) -> None:
             console.print(" ".join(cmd))
             return
         if args.speed_command == "benchmark":
-            import subprocess, time
+            import time
             console.print("[bold]Speed Benchmark[/bold]\n")
             # Test Ollama
             try:
@@ -673,7 +675,7 @@ def main(argv: list[str] | None = None) -> None:
                 return
             task_id = submit_task(args.prompt, str(Path.cwd()))
             console.print(f"[bold bright_cyan]Submitted claw task:[/] {task_id}")
-            console.print(f"  Check status: localcode claw --status")
+            console.print("  Check status: localcode claw --status")
             console.print(f"  Get result:   localcode claw --result {task_id}")
             return
         console.print('Usage: localcode claw "task description" | localcode claw --status | localcode claw --result <id>')

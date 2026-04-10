@@ -15,7 +15,6 @@ so we fall back to local transcription then send as text.
 """
 from __future__ import annotations
 
-import io
 import struct
 import subprocess
 import tempfile

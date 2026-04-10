@@ -1,10 +1,8 @@
 """LocalCode Textual TUI — main application."""
 from __future__ import annotations
 
-import asyncio
 import os
 import sys
-from pathlib import Path
 
 # Monkey-patch Textual for Python 3.13: _message_queue sometimes becomes
 # a plain list during widget composition. Patch _close_messages and
@@ -136,7 +134,6 @@ class LocalCodeTUI(App):
 
     def action_quit(self) -> None:
         """Clean up ALL backend threads and processes before exiting."""
-        import os
         # Suppress stdout/stderr FIRST — before cancelling workers
         # so any output from dying worker threads goes to devnull
         devnull = open(os.devnull, "w")

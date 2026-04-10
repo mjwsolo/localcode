@@ -23,11 +23,9 @@ if TYPE_CHECKING:
 
 from .context_manager import (
     ContextAssembler,
-    ConversationManager,
     ProgressTracker,
     RelevanceFinder,
     SyntaxChecker,
-    UndoStack,
     SYSTEM_PROMPTS,
     _extract_keywords,
     _list_dir,
@@ -332,7 +330,7 @@ def _do_edit(app, user_text, messages, out, progress, checker, context, relevanc
         related = relevance.find_related(user_text, repo, max_files=1)
         target = related[0] if related else ""
     if not target or not (repo / target).is_file():
-        out.stream(f"Couldn't find a file to edit. Please specify the filename.")
+        out.stream("Couldn't find a file to edit. Please specify the filename.")
         return ""
 
     # READ
@@ -581,7 +579,6 @@ def _do_search(app, user_text, out):
 
 def _do_run(app, user_text, out):
     """Run the most recently created file."""
-    import glob
     repo = app.repo_root
     # Find most recent .py file
     py_files = sorted(repo.glob("*.py"), key=lambda f: f.stat().st_mtime, reverse=True)

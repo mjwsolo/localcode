@@ -8,7 +8,6 @@ Messages displayed with clear visual hierarchy:
 """
 from __future__ import annotations
 
-import re
 
 from rich.markdown import Markdown
 from rich.padding import Padding
@@ -119,7 +118,8 @@ class ChatLog(RichLog):
 
     def _set_clipboard_osc52(self, text: str) -> None:
         """Set clipboard via OSC 52 escape sequence — works with iTerm2, Terminal.app, etc."""
-        import base64, os
+        import base64
+        import os
         encoded = base64.b64encode(text.encode()).decode()
         # Write directly to terminal fd, bypassing Textual's stdout
         try:
@@ -480,7 +480,7 @@ class ChatLog(RichLog):
         header_info = _TOOL_HEADERS.get(name, (name, name))
         display_name = header_info[0]
         header = Text()
-        header.append(f"  ● ", style="bold #5f87ff")
+        header.append("  ● ", style="bold #5f87ff")
         header.append(f"{display_name}", style="bold #5f87ff")
         if args:
             args_short = args.strip().replace("\n", " ")[:60]
@@ -492,7 +492,7 @@ class ChatLog(RichLog):
         header_info = _TOOL_HEADERS.get(name, (name, name))
         display_name = header_info[0]
         line = Text(no_wrap=True, overflow="ellipsis")
-        line.append(f"  ✓ ", style="bold #32cd32")
+        line.append("  ✓ ", style="bold #32cd32")
         line.append(f"{display_name}", style="bold #32cd32")
         if args:
             args_short = args.strip().replace("\n", " ")[:40]

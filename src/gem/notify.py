@@ -5,7 +5,6 @@ Only notifies if task took longer than a threshold (default 10s).
 """
 from __future__ import annotations
 
-import os
 import subprocess
 import time
 

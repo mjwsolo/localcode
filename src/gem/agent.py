@@ -603,7 +603,7 @@ def _tool_stage_label(tool_name: str, args: dict) -> str:
             return "git operation"
         if "python " in cmd or "pytest" in cmd:
             return "running code"
-        return f"running command"
+        return "running command"
     if tool_name == "write_file":
         return f"writing {Path(args.get('path', 'file')).name}"
     if tool_name == "edit_file":
@@ -824,18 +824,19 @@ def run_agent_loop(
                         continue
                 else:
                     # CLI mode: terminal-based approval
-                    import tty, termios
+                    import tty
+                    import termios
                     out._stop_indicator()
                     rule = app._composer_rule() if hasattr(app, "_composer_rule") else "  " + ("─" * 60)
-                    sys.stdout.write(f"\n\033[33m  Allow this command?\033[0m\n")
+                    sys.stdout.write("\n\033[33m  Allow this command?\033[0m\n")
                     sys.stdout.write(f"\033[2m  {cmd[:80]}\033[0m\n")
-                    sys.stdout.write(f"  \033[1m1\033[0m  yes, run it\n")
-                    sys.stdout.write(f"  \033[1m2\033[0m  no, skip\n")
-                    sys.stdout.write(f"\033[s")
+                    sys.stdout.write("  \033[1m1\033[0m  yes, run it\n")
+                    sys.stdout.write("  \033[1m2\033[0m  no, skip\n")
+                    sys.stdout.write("\033[s")
                     sys.stdout.write(f"\033[2m{rule}\033[0m\n")
                     sys.stdout.write("  › ")
                     sys.stdout.write(f"\n\033[2m{rule}\033[0m")
-                    sys.stdout.write(f"\033[1A\r    ")
+                    sys.stdout.write("\033[1A\r    ")
                     sys.stdout.flush()
                     try:
                         fd = sys.stdin.fileno()
@@ -850,12 +851,12 @@ def run_agent_loop(
                             ch = input().strip()
                         except EOFError:
                             ch = "2"
-                    sys.stdout.write(f"\033[u\033[J")
+                    sys.stdout.write("\033[u\033[J")
                     if ch == "2" or ch == "n" or ch == "\x03":
-                        sys.stdout.write(f"\033[2m  └ skipped command\033[0m\n")
+                        sys.stdout.write("\033[2m  └ skipped command\033[0m\n")
                         messages.append({"role": "tool", "content": "Denied by user.", "tool_call_id": tc.get("id", "")})
                         continue
-                    sys.stdout.write(f"\033[2m  └ approved command\033[0m\n")
+                    sys.stdout.write("\033[2m  └ approved command\033[0m\n")
 
             # Loop detection — break if same tool+args repeats 3x
             sig = f"{tool_name}:{_summarize_args(args)}"

@@ -6,13 +6,11 @@ import logging
 from pathlib import Path
 
 from prompt_toolkit import PromptSession
-from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
-from prompt_toolkit.completion import Completer, Completion, WordCompleter
+from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.history import FileHistory
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-from rich.columns import Columns
 
 from .approvals import ApprovalItem, ApprovalQueue
 from .compact import compact_messages
@@ -26,65 +24,52 @@ from .indexer import build_index, load_index, search_index
 from .jobs import launch_background_job, list_jobs, read_job_log
 from .mcp import load_mcp_configs
 from .models import GEMMA_PROFILES, get_runtime_model, infer_profile_from_model, resolve_profile
-from .onboarding import onboarding_panel
 from .patching import apply_diff, build_diff, extract_last_diff_block, parse_diff
 from .planner import build_plan_note
 from .planner_hints import PlannerHint, PlannerHintState, parse_planner_hint
 from .permissions import PermissionStore
-from .prompts import build_system_prompt, build_task_appendix
 from .runtime import GemRuntimeGateway, RuntimeErrorWithContext
 from .session import SessionStore
 from .shell import run_shell
 from .audio_input import (
     AudioData as AudioInputData,
     audio_to_text_fallback,
-    build_audio_message_hf,
     detect_audio_paths_in_text,
-    is_audio_file,
     load_audio,
 )
 from .images import (
     ImageData,
-    build_image_message,
     clipboard_has_image,
     detect_image_paths_in_text,
     load_image_from_path,
     read_clipboard_image,
     take_screenshot,
 )
-from .live_display import GemLiveDisplay
-from .tool_router import route_tools, expand_tools_for_retry
+from .tool_router import route_tools
 from .cache import BackgroundIndexer, SpeculativeExecutor, ToolResultCache
 from .network import is_online
 from .watcher import FileWatcher, ProjectWatcher
-from .keybindings import get_editing_mode, load_keybindings
-from .plan_mode import Plan, PlanStep, parse_plan_from_response
+from .keybindings import get_editing_mode
+from .plan_mode import Plan, parse_plan_from_response
 from .permissions_v2 import PermissionManager
 from .tasks import TaskStore
-from .display import ThinkingIndicator, ToolCallDisplay, ResponseDisplay, SessionStats, DiffPreview, ContextBudgetDisplay
+from .display import ThinkingIndicator, ToolCallDisplay, ResponseDisplay, SessionStats
 from .output import OutputManager
-from .project_context import load_project_context, has_project_context
 from .skills import list_skills, resolve_referenced_skills
 from .toolkit import GemToolkit
 from .embeddings import EmbeddingSearch
 from .history import HistoryDB
 from .traces import SessionLogger
 from .ui_art import (
-    GEM_BANNER,
-    center_ascii_block,
     format_banner,
-    format_tool_call,
-    spinner_frame,
     thinking_frame,
-    tool_icon,
-    agent_progress_bar,
 )
 from .verification import build_verification_plan, guess_verify_command, run_verification
 from .voice import speak_text, transcribe_audio, voice_status
 from .auto_compact import compact_if_needed
 from .autonomy import AutonomyLevel, apply_autonomy_to_permissions, format_autonomy_status, get_policy
 from .hooks import HookRunner
-from .notify import TaskNotifier, notify_if_slow
+from .notify import notify_if_slow
 from .snapshots import SnapshotStore, create_snapshot, restore_snapshot
 from .turn_diff import TurnDiffTracker, print_turn_diff
 from .performance import detect_machine_profile, benchmark_report, apply_preset, should_promote_legacy_default_to_laptop_26b
@@ -384,7 +369,10 @@ class GemApp:
                     self.console.print(f"[dim]  {content}[/]")
             self.console.print("[dim]  --- end ---[/]\n")
         # Warm up model with pulsating dots
-        import sys as _sys, threading, termios, time as _time
+        import sys as _sys
+        import threading
+        import termios
+        import time as _time
         # Disable echo during loading
         try:
             fd = _sys.stdin.fileno()
@@ -398,6 +386,7 @@ class GemApp:
         # Kill any Ollama runners to free GPU memory for TurboQuant
         if self.config.runtime.provider == "llama_cpp":
             try:
+                import subprocess
                 subprocess.run(["pkill", "-f", "ollama runner"], capture_output=True, timeout=3)
             except Exception:
                 pass
@@ -467,7 +456,7 @@ class GemApp:
 
             _loading = False
             anim.join(timeout=1)
-            _sys.stderr.write(f"\r\033[32m  model ready ✓       \033[0m\n")
+            _sys.stderr.write("\r\033[32m  model ready ✓       \033[0m\n")
         except Exception as exc:
             _loading = False
             anim.join(timeout=1)
@@ -596,7 +585,10 @@ class GemApp:
 
     def _pick_mode(self) -> None:
         """Mode picker shown after banner."""
-        import subprocess, sys, tty, termios
+        import subprocess
+        import sys
+        import tty
+        import termios
         # Detect system RAM to decide if sysctl GPU unlock is needed.
         # On 16GB Macs, Metal's default working set (~11GB) can't fit the
         # 10.4GB model + KV cache. On 24GB+, there's plenty of headroom.
@@ -648,7 +640,7 @@ class GemApp:
                 sys.stdout.write(f"\n\033[2m{rule}\033[0m")
                 sys.stdout.write(f"\n\033[2m  {status}\033[0m")
                 # Move cursor back to input line (3 lines up: bottom rule + status + 1)
-                sys.stdout.write(f"\033[2A\r    ")  # go up 2, move to col 5
+                sys.stdout.write("\033[2A\r    ")  # go up 2, move to col 5
                 sys.stdout.flush()
 
                 ch = ""
@@ -675,13 +667,13 @@ class GemApp:
 
                 if ch == "1":
                     sys.stdout.write("\033[u\033[J")
-                    sys.stdout.write(f"\n\033[32m  fast ✓\033[0m\n")
+                    sys.stdout.write("\n\033[32m  fast ✓\033[0m\n")
                     sys.stdout.flush()
                     self.config.runtime.laptop_26b_runtime_mode = "turbo"
                     break
                 elif ch == "2":
                     sys.stdout.write("\033[u\033[J")
-                    sys.stdout.write(f"\n\033[32m  reasoning ✓\033[0m\n")
+                    sys.stdout.write("\n\033[32m  reasoning ✓\033[0m\n")
                     sys.stdout.flush()
                     self.config.runtime.laptop_26b_runtime_mode = "turbo-think"
                     break
@@ -804,7 +796,7 @@ class GemApp:
                 except Exception:
                     pass
             threading.Thread(target=_warm, daemon=True).start()
-            self.console.print(f"  [dim]Warming up model...[/]")
+            self.console.print("  [dim]Warming up model...[/]")
             return True
         if name == "/skills":
             self.console.print("\n".join(list_skills(self.repo_root)) or "No skills found.")
@@ -1300,7 +1292,7 @@ class GemApp:
             # Export conversation as markdown
             import time as _t
             filename = arg or f"jem-export-{_t.strftime('%Y%m%d-%H%M%S')}.md"
-            lines = [f"# LocalCode Session Export\n", f"Session: {self.session.session_id}\n\n"]
+            lines = ["# LocalCode Session Export\n", f"Session: {self.session.session_id}\n\n"]
             for msg in self.session.messages:
                 role = msg.get("role", "unknown")
                 content = msg.get("content", "")
@@ -1327,7 +1319,8 @@ class GemApp:
             self.console.print(f"  Style set to: {arg}")
             return True
         if name == "/branch":
-            import copy, json as _json
+            import copy
+            import json as _json
             branch_dir = self.store.path.parent / "branches"
             branch_dir.mkdir(exist_ok=True)
             if not arg or arg == "save":
@@ -1417,7 +1410,7 @@ class GemApp:
             if steps:
                 self._active_plan = Plan(task=arg, steps=steps)
                 self.console.print(f"\n{self._active_plan.summary()}")
-                self.console.print(f"\n  [dim]Use /plan go to execute, /plan next for one step, /plan cancel to abort.[/]")
+                self.console.print("\n  [dim]Use /plan go to execute, /plan next for one step, /plan cancel to abort.[/]")
             else:
                 self.console.print("Could not parse steps from response.")
             return True
@@ -1706,7 +1699,10 @@ class GemApp:
 
     def _start_status(self) -> None:
         """Pulsating status with typewriter thinking — reveals text gradually."""
-        import threading, time as _time, sys as _sys, os as _os
+        import threading
+        import time as _time
+        import sys as _sys
+        import os as _os
         self._status_running = True
         self._status_start = _time.time()
         self._thinking_buffer = ""  # full thinking text received so far
@@ -2369,7 +2365,7 @@ class GemApp:
             changes_shown = 0
             for line in diff:
                 if changes_shown >= 8:
-                    self.console.print(f"  [dim]  ... and more[/]")
+                    self.console.print("  [dim]  ... and more[/]")
                     break
                 if line.startswith("+") and not line.startswith("+++"):
                     self.console.print(f"  [green]{line}[/]")
@@ -2383,7 +2379,7 @@ class GemApp:
             from .lsp import get_diagnostics
             diags = get_diagnostics(full_path)
             if not diags:
-                self.console.print(f"  [green]✓[/] No issues found")
+                self.console.print("  [green]✓[/] No issues found")
             else:
                 for d in diags[:5]:
                     color = "red" if d.severity == "error" else "yellow"

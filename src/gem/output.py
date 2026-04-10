@@ -354,11 +354,11 @@ class OutputManager:
                 elif typeahead:
                     sys.stdout.write(f"\n  › {typeahead}\033[K")
                 else:
-                    sys.stdout.write(f"\n\033[2m  › \033[0m\033[K")
+                    sys.stdout.write("\n\033[2m  › \033[0m\033[K")
                 sys.stdout.write(f"\n\033[2m{rule}\033[0m\033[K")
                 if status:
                     sys.stdout.write(f"\n\033[2m  {status}\033[0m\033[K")
-                sys.stdout.write(f"\033[?25l")  # hide cursor
+                sys.stdout.write("\033[?25l")  # hide cursor
                 lines_back = 4 if status else 3
                 sys.stdout.write(f"\033[{lines_back}A\r")
                 sys.stdout.flush()

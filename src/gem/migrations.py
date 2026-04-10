@@ -5,7 +5,6 @@ Migrations run in order on load if config version is behind.
 """
 from __future__ import annotations
 
-from pathlib import Path
 
 CURRENT_VERSION = 2
 

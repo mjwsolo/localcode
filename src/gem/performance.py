@@ -11,7 +11,6 @@ import subprocess
 import json
 
 from .config import AppConfig, ensure_home_dirs, save_config
-from .models import ModelProfile
 
 
 @dataclass(slots=True)

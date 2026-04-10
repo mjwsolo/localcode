@@ -11,9 +11,7 @@ import time
 from typing import Callable, TypeVar
 
 from rich.console import Console
-from rich.console import Group
 from rich.live import Live
-from rich.align import Align
 from rich.panel import Panel
 from rich.table import Table
 
@@ -25,7 +23,6 @@ from .performance import MachineProfile, PerformancePreset, apply_preset, benchm
 from .provider_checks import browser_voice_readiness, provider_readiness
 from .runtime import GemRuntimeGateway
 from .runtime_launch import runtime_command
-from .ui_art import GEM_BANNER, center_ascii_block, thinking_frame, snake_frame
 from .voice import voice_status
 
 T = TypeVar("T")
@@ -178,6 +175,12 @@ def _find_turboquant_source() -> Path | None:
 
 def _turboquant_binary_path() -> Path | None:
     """Return path to the built TurboQuant llama-server binary, or None if not built."""
+    # Check data dir first (pre-built binary downloaded by bootstrap)
+    data_dir = Path.home() / ".local" / "share" / "localcode"
+    data_binary = data_dir / "llama-server"
+    if data_binary.exists():
+        return data_binary
+    # Check source build
     source = _find_turboquant_source()
     if source is None:
         return None
@@ -185,6 +188,36 @@ def _turboquant_binary_path() -> Path | None:
     if binary.exists():
         return binary
     return None
+
+
+_BINARY_RELEASE_URL = "https://github.com/mjwsolo/localcode/releases/download/v{version}/llama-server-{platform}"
+
+def download_turboquant_binary(on_progress: Callable[[str], None] | None = None) -> tuple[bool, str]:
+    """Download pre-built llama-server binary from GitHub Releases."""
+    import urllib.request
+    system = platform.system().lower()
+    machine = platform.machine().lower()
+    if system == "darwin" and machine == "arm64":
+        plat = "macos-arm64"
+    elif system == "linux" and machine in ("x86_64", "amd64"):
+        plat = "linux-x86_64"
+    else:
+        return False, f"No pre-built binary for {system}-{machine}. Clone the repo and build from source."
+
+    version = "0.1.0"
+    url = _BINARY_RELEASE_URL.format(version=version, platform=plat)
+    data_dir = Path.home() / ".local" / "share" / "localcode"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    binary = data_dir / "llama-server"
+
+    if on_progress:
+        on_progress(f"downloading llama-server for {plat}...")
+    try:
+        urllib.request.urlretrieve(url, str(binary))
+        binary.chmod(0o755)
+        return True, str(binary)
+    except Exception as e:
+        return False, f"Download failed: {e}\nBuild from source instead: clone llama-cpp-turboquant and run cmake."
 
 
 def _ensure_cmake() -> bool:
@@ -229,7 +262,6 @@ def ensure_model_downloaded(model_tag: str, on_progress: Callable[[str], None] |
 
 def build_turboquant(on_progress: Callable[[str], None] | None = None) -> tuple[bool, str]:
     """Build the TurboQuant llama.cpp fork from source with Metal support."""
-    from pathlib import Path
     source = _find_turboquant_source()
     if source is None:
         return False, "TurboQuant source not found. Expected at llama-cpp-turboquant/ in repo root."
@@ -568,8 +600,14 @@ def run_setup(
         validate_provider(console, config)
 
     if auto_install and config.runtime.provider == "llama_cpp":
-        # Prefer building TurboQuant fork (has turbo4 KV cache) over stock llama.cpp
-        if _find_turboquant_source() and not _turboquant_binary_path():
+        # Check if TurboQuant binary already exists (built or downloaded)
+        if _turboquant_binary_path():
+            binary_path = str(_turboquant_binary_path())
+            if config.runtime.llama_cpp_binary != binary_path:
+                config.runtime.llama_cpp_binary = binary_path
+                save_config(config)
+        # Try building from source first (repo checkout), then download pre-built binary
+        elif _find_turboquant_source():
             install_step = SetupStep("runtime-install", "building TurboQuant", "Building TurboQuant llama.cpp fork with Metal support.")
             ok, binary_path = run_with_runner(console, install_step, setup_steps, lambda: build_turboquant(on_progress=_set_progress))
             if ok:
@@ -578,20 +616,28 @@ def run_setup(
                 console.print(f"TurboQuant built: {binary_path}")
             else:
                 console.print(f"TurboQuant build failed: {binary_path}")
+                console.print("Trying pre-built binary download...")
+                install_step = SetupStep("runtime-install", "downloading server", "Downloading pre-built llama-server binary.")
+                ok, binary_path = run_with_runner(console, install_step, setup_steps, lambda: download_turboquant_binary(on_progress=_set_progress))
+                if ok:
+                    config.runtime.llama_cpp_binary = binary_path
+                    save_config(config)
+                else:
+                    console.print(f"Download failed: {binary_path}")
+        else:
+            # No source available (pip install) — download pre-built binary
+            install_step = SetupStep("runtime-install", "downloading server", "Downloading pre-built llama-server binary.")
+            ok, binary_path = run_with_runner(console, install_step, setup_steps, lambda: download_turboquant_binary(on_progress=_set_progress))
+            if ok:
+                config.runtime.llama_cpp_binary = binary_path
+                save_config(config)
+                console.print(f"Server downloaded: {binary_path}")
+            else:
+                console.print(f"Download failed: {binary_path}")
                 console.print("Falling back to stock llama.cpp...")
                 install_step = SetupStep("runtime-install", "installing runtime", "Installing llama.cpp where supported.")
                 ok, details = run_with_runner(console, install_step, setup_steps, lambda: install_llama_cpp(console))
                 console.print(details)
-        elif _turboquant_binary_path():
-            # Already built — make sure config points to it
-            binary_path = str(_turboquant_binary_path())
-            if config.runtime.llama_cpp_binary != binary_path:
-                config.runtime.llama_cpp_binary = binary_path
-                save_config(config)
-            console.print(f"TurboQuant already built: {binary_path}")
-        else:
-            install_step = SetupStep("runtime-install", "installing runtime", "Installing llama.cpp where supported.")
-            ok, details = run_with_runner(console, install_step, setup_steps, lambda: install_llama_cpp(console))
             console.print(details)
 
     # For llama_cpp provider, we still need Ollama to download the model GGUF

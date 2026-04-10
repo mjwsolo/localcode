@@ -79,13 +79,13 @@ class InputField:
 
         # Draw: top rule, save pos at start of input line, draw input + bottom
         sys.stdout.write(f"\n\033[2m{rule}\033[0m\n")
-        sys.stdout.write(f"\033[s")  # save at START of input line
-        sys.stdout.write(f"  › ")
+        sys.stdout.write("\033[s")  # save at START of input line
+        sys.stdout.write("  › ")
         sys.stdout.write(f"\n\033[2m{rule}\033[0m")
         if status_line:
             sys.stdout.write(f"\n\033[2m  {status_line}\033[0m")
         # Move cursor back to input position (after "  › ")
-        sys.stdout.write(f"\033[u\033[4C")
+        sys.stdout.write("\033[u\033[4C")
         sys.stdout.flush()
 
         buf = []
@@ -193,7 +193,7 @@ class InputField:
         self._save_history(text)
 
         # After submit: restore to line start, clear, show final state
-        sys.stdout.write(f"\033[u\033[J")
+        sys.stdout.write("\033[u\033[J")
         display = text if len(text) <= 200 else text[:200] + "..."
         # Soft-wrap long input within the rules
         cols = _get_cols()
@@ -272,7 +272,7 @@ class InputField:
         """Redraw entire input area from saved line start position."""
         text = "".join(buf)
         # Restore to start of input line, clear everything below
-        sys.stdout.write(f"\033[u\033[J")
+        sys.stdout.write("\033[u\033[J")
         # Redraw: prefix + text + bottom
         sys.stdout.write(f"  › {text}")
         sys.stdout.write(f"\n\033[2m{rule}\033[0m")

@@ -49,7 +49,6 @@ Issues = "https://github.com/mjwsolo/localcode/issues"
 [project.scripts]
 localcode = "gem.cli:main"
 lc = "gem.cli:main"
-lc-tui = "gem.tui.app:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

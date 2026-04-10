@@ -74,7 +74,7 @@ class SafetyLayer:
         """
         for pattern in cls.BLOCKED_COMMANDS:
             if re.search(pattern, command, re.IGNORECASE):
-                return {"allowed": False, "reason": f"Blocked: dangerous command pattern"}
+                return {"allowed": False, "reason": "Blocked: dangerous command pattern"}
 
         for pattern in cls.CONFIRM_COMMANDS:
             if re.search(pattern, command, re.IGNORECASE):
@@ -249,7 +249,8 @@ class PermissionManager:
         sys.stdout.write(f"\033[2;33m  ? {tool_name}: {detail}  [y/n/a]\033[0m ")
         sys.stdout.flush()
         try:
-            import tty, termios
+            import tty
+            import termios
             fd = sys.stdin.fileno()
             old = termios.tcgetattr(fd)
             try:
