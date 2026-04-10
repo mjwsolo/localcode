@@ -1,3 +1,4 @@
+# Python
 __pycache__/
 *.pyc
 *.pyo
@@ -6,34 +7,41 @@ dist/
 build/
 .eggs/
 *.egg
+
+# Virtual environments
 .venv/
 venv/
 env/
-new/
+
+# Secrets & local config
 .env
-.DS_Store
 *.code-workspace
+
+# OS
+.DS_Store
+
+# Testing/dev
 .pytest_cache/
 .ruff_cache/
+new/
+
+# Claude Code (dev-only)
 .claude/
 CLAUDE.md
+
+# Research archives (not shipped)
+.research-archive/
+research/
+
+# Build artifacts
 release-staging/
-models/
-*.gguf
-*.bin
-*.safetensors
-tests/test_results.json
-gem_traces_test.jsonl
-.gem-test/
-*.db
-*.db-shm
-*.db-wal
-sonic.py
-sonic_clone.py
+
+# C++ build artifacts (llama-cpp-turboquant)
 llama-cpp-turboquant/build/
-llama-cpp-turboquant/build/
-llama-cpp-turboquant/build-*/
-llama-cpp-turboquant/.git/
+llama-cpp-turboquant/.cache/
+
+# MkDocs build output
 site/
-docs/
-mkdocs.yml
+
+# Test artifacts
+tests/test_results.json

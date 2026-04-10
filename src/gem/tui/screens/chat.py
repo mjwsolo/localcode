@@ -555,6 +555,9 @@ class ChatScreen(Screen):
                     summary = lines[0][:80] if lines else ""
                     log.append_tool_done(name, args, summary)
             self._thinking_phase = ""
+            # Show thinking indicator immediately after tool completion
+            # to cover the gap while the model processes the result
+            self._show_active_thinking("mining...")
         elif t == "thinking_start":
             self._thinking_phase = "thinking"
             self._thinking_text = ""
