@@ -1288,19 +1288,8 @@ class GemApp:
                 if plan.is_done:
                     self._active_plan = None
                 return True
-            # Create a new plan
-            self.console.print(f"  [dim]Planning: {arg}[/]")
-            response = self.ask(
-                f"Create a step-by-step plan for this task. List numbered steps. Do NOT execute yet, just plan.\n\nTask: {arg}",
-                stream=True,
-            )
-            steps = parse_plan_from_response(response)
-            if steps:
-                self._active_plan = Plan(task=arg, steps=steps)
-                self.console.print(f"\n{self._active_plan.summary()}")
-                self.console.print("\n  [dim]Use /plan go to execute, /plan next for one step, /plan cancel to abort.[/]")
-            else:
-                self.console.print("Could not parse steps from response.")
+            # Plan mode removed
+            self.console.print("Plan mode removed.")
             return True
         if name == "/commit":
             # Auto-commit: stage all, generate message from diff, commit
@@ -1409,11 +1398,8 @@ class GemApp:
                 # Native audio — will be part of multipart message
                 self.store.append_event(self.session, "audio", f"{len(audio)} clip(s)")
             else:
-                # Ollama doesn't support native audio — transcribe and prepend
-                for aud in audio:
-                    transcript = audio_to_text_fallback(aud, self.config)
-                    effective_text = f"[Audio transcription from {aud.source} ({aud.duration_str})]: {transcript}\n\n{effective_text}"
-                    self.store.append_event(self.session, "audio_transcribe", f"{aud.source} -> {len(transcript)} chars")
+                # Audio transcription removed
+                pass
 
         # Pass image base64 data if any
         image_b64_list = [img.base64_data for img in (images or [])] or None
