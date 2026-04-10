@@ -19,7 +19,6 @@ from .config import AppConfig
 from .context import IGNORE_DIRS, list_repo_files
 from .indexer import build_index, search_index
 from .mcp import McpStdioClient, load_mcp_configs
-from .plugins import PluginRegistry, load_plugins
 from .shell import run_shell
 from .undo import ChangeLog
 
@@ -721,13 +720,6 @@ class GemToolkit:
             if stripped.startswith(b):
                 return f"Blocked: dangerous command '{command}'"
 
-        # Intercept pip install — route through offline cache if needed
-        if stripped.startswith("pip install ") or stripped.startswith("pip3 install "):
-            from .offline_packages import install_package
-            pkg = stripped.split("install", 1)[1].strip().split()[0]
-            ok, output = install_package(pkg)
-            return f"$ {command}\n{output}\n[{'success' if ok else 'failed'}]"
-
         from .display import ToolProgressCallback
         def _on_line(line: str) -> None:
             ToolProgressCallback.update("bash", line)
@@ -864,17 +856,8 @@ class GemToolkit:
         return f"Found {len(findings)} potential issues in {files_scanned} files:\n" + "\n".join(findings)
 
     def _delegate(self, task: str) -> str:
-        """Delegate a task to a sub-agent."""
-        if not self.app:
-            return "Sub-agent delegation not available in this context."
-        from .subagent import SubAgentCoordinator
-        coordinator = SubAgentCoordinator(self.app)
-        result = coordinator.delegate([task], concurrent=False)
-        if result.tasks and result.tasks[0].status == "done":
-            return result.tasks[0].result
-        elif result.tasks and result.tasks[0].error:
-            return f"Sub-agent failed: {result.tasks[0].error}"
-        return "Sub-agent returned no result."
+        """Delegate a task to a sub-agent (removed)."""
+        return "Sub-agent delegation has been removed."
 
     def _codemod(self, pattern: str, replacement: str, include: str = "") -> str:
         """Regex find-and-replace across all matching files."""
@@ -1092,13 +1075,8 @@ class GemToolkit:
     # ── Plugin & MCP ─────────────────────────────────────────────────────
 
     def _register_plugin_tools(self) -> None:
-        registry = PluginRegistry()
-        load_plugins(self.repo_root, registry)
-        self.plugin_errors = list(getattr(registry, "plugin_errors", []))
-        for builder in registry.tool_builders:
-            for built in builder():
-                if isinstance(built, GemTool):
-                    self._register(built)
+        """Plugin system removed — no-op."""
+        pass
 
     def _register_mcp_tools(self) -> None:
         if self._mcp_loaded:

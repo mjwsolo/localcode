@@ -18,39 +18,17 @@ from .composer import compose_messages
 from .browser import browser_status, ensure_browser_mcp, find_browser_tool
 from .config import AppConfig, ensure_home_dirs, save_config
 from .context import build_context_block, find_repo_root, git_diff, git_status, list_repo_files, read_file
-from .agent_background import launch_background_agent
-from .cartridge import build_repo_cartridge
 from .indexer import build_index, load_index, search_index
-from .jobs import launch_background_job, list_jobs, read_job_log
 from .mcp import load_mcp_configs
 from .models import GEMMA_PROFILES, get_runtime_model, infer_profile_from_model, resolve_profile
 from .patching import apply_diff, build_diff, extract_last_diff_block, parse_diff
-from .planner import build_plan_note
-from .planner_hints import PlannerHint, PlannerHintState, parse_planner_hint
 from .permissions import PermissionStore
 from .runtime import GemRuntimeGateway, RuntimeErrorWithContext
 from .session import SessionStore
 from .shell import run_shell
-from .audio_input import (
-    AudioData as AudioInputData,
-    audio_to_text_fallback,
-    detect_audio_paths_in_text,
-    load_audio,
-)
-from .images import (
-    ImageData,
-    clipboard_has_image,
-    detect_image_paths_in_text,
-    load_image_from_path,
-    read_clipboard_image,
-    take_screenshot,
-)
 from .tool_router import route_tools
 from .cache import BackgroundIndexer, SpeculativeExecutor, ToolResultCache
-from .network import is_online
-from .watcher import FileWatcher, ProjectWatcher
 from .keybindings import get_editing_mode
-from .plan_mode import Plan, parse_plan_from_response
 from .permissions_v2 import PermissionManager
 from .tasks import TaskStore
 from .display import ThinkingIndicator, ToolCallDisplay, ResponseDisplay, SessionStats
@@ -59,20 +37,27 @@ from .skills import list_skills, resolve_referenced_skills
 from .toolkit import GemToolkit
 from .embeddings import EmbeddingSearch
 from .history import HistoryDB
-from .traces import SessionLogger
 from .ui_art import (
     format_banner,
     thinking_frame,
 )
 from .verification import build_verification_plan, guess_verify_command, run_verification
-from .voice import speak_text, transcribe_audio, voice_status
 from .auto_compact import compact_if_needed
 from .autonomy import AutonomyLevel, apply_autonomy_to_permissions, format_autonomy_status, get_policy
 from .hooks import HookRunner
-from .notify import notify_if_slow
 from .snapshots import SnapshotStore, create_snapshot, restore_snapshot
 from .turn_diff import TurnDiffTracker, print_turn_diff
 from .performance import detect_machine_profile, benchmark_report, apply_preset, should_promote_legacy_default_to_laptop_26b
+
+
+def is_online() -> bool:
+    """Stub: assume online after network module removal."""
+    return True
+
+
+def notify_if_slow(app_name: str, message: str, start_time: float) -> None:
+    """Stub: no-op after notify module removal."""
+    pass
 
 import os
 import time
@@ -249,26 +234,17 @@ class GemApp:
         self.stats = SessionStats()
         self.tool_cache = ToolResultCache(self.repo_root)
         self.bg_indexer = None
-        self.file_watcher = None
-        self.project_watcher = None
         if not self.config.runtime.low_overhead_mode:
             self.bg_indexer = BackgroundIndexer(self.repo_root)
             self.bg_indexer.start()
-            self.file_watcher = FileWatcher(self.repo_root)
-            self.file_watcher.start()
-            for f in self.session.pinned_files:
-                self.file_watcher.track(f)
-            self.project_watcher = ProjectWatcher(self.repo_root, poll_interval=3.0)
-            self.project_watcher.on_change(self._on_project_files_changed)
-            self.project_watcher.start()
         self._vim_mode = False
-        self._active_plan: Plan | None = None
+        self._active_plan = None
         self._output_style: str = ""
         self.task_store = TaskStore()
-        self.planner_hints = PlannerHintState()
+        self.planner_hints = None  # PlannerHintState removed
         self.out = OutputManager()  # centralized output
         self.out.set_event_callback(self._record_exec_event)
-        self.logger = SessionLogger()
+        self.logger = None  # SessionLogger removed
         self.history = HistoryDB()  # unified SQLite history
         self.embedding_search = EmbeddingSearch(str(self.repo_root))
         self.perms = PermissionManager()  # tool permissions
@@ -412,7 +388,6 @@ class GemApp:
             except Exception:
                 pass
             if not server_ok and self.config.runtime.provider == "llama_cpp":
-                from .runtime_launch import launch_runtime
                 from .bootstrap import _turboquant_binary_path, _find_turboquant_source, build_turboquant
                 # Auto-build TurboQuant if source exists but binary doesn't
                 if _find_turboquant_source() and not _turboquant_binary_path():
@@ -436,7 +411,16 @@ class GemApp:
                     save_config(self.config)
                 _sys.stderr.write(f"\r\033[33m  starting server...{' ' * 20}\033[0m")
                 _sys.stderr.flush()
-                launch_runtime(self.config.runtime, self.repo_root)
+                # Inline server launch (runtime_launch module removed)
+                import subprocess as _sp
+                _binary = self.config.runtime.llama_cpp_binary or "llama-server"
+                _model = self.config.runtime.model or ""
+                _port = self.config.runtime.base_url.split(":")[-1].rstrip("/") if ":" in self.config.runtime.base_url else "8081"
+                _cmd = [_binary, "-m", _model, "--port", _port, "-ngl", "999", "--mmap"]
+                try:
+                    _sp.Popen(_cmd, stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+                except Exception:
+                    pass
                 # Wait for server to be ready
                 for _ in range(60):
                     _time.sleep(1)
@@ -470,11 +454,6 @@ class GemApp:
                 pass
         while True:
             try:
-                # Check for external file changes
-                changes = self.file_watcher.get_changes() if self.file_watcher is not None else []
-                if changes:
-                    self.tool_cache.invalidate_all()
-                    self.console.print(f"  [dim yellow]files changed externally: {', '.join(changes[:5])}[/]")
                 raw = self._input_field.read(
                     status_line=self._bottom_toolbar(),
                 )
@@ -990,14 +969,14 @@ class GemApp:
             return True
         if name == "/voice":
             if not arg or arg == "status":
-                self.console.print(Panel("\n".join(voice_status(self.config)), title="Voice"))
+                self.console.print("Voice features removed.")
                 return True
             if arg.startswith("say "):
                 text = arg[4:].strip()
                 if not text:
                     self.console.print("Usage: /voice say <text>")
                     return True
-                result = speak_text(self.config, text)
+                self.console.print("Voice features removed.")
                 self.store.append_event(self.session, "voice_say", text[:120])
                 self.console.print(Panel(result, title="Voice"))
                 return True
@@ -1006,7 +985,7 @@ class GemApp:
                 if not file_arg:
                     self.console.print("Usage: /voice transcribe <file>")
                     return True
-                result = transcribe_audio(self.config, file_arg)
+                self.console.print("Voice features removed.")
                 self.store.append_event(self.session, "voice_transcribe", file_arg)
                 self.console.print(Panel(result[-4000:], title="Voice"))
                 return True
@@ -1099,24 +1078,13 @@ class GemApp:
             self.store.save(self.session)
             return True
         if name == "/bg":
-            if not arg:
-                self.console.print("Usage: /bg <command>")
-                return True
-            if not self._approve_action("background_job", f"Start background job in {self.repo_root}?\n{arg}"):
-                self.console.print("Cancelled.")
-                return True
-            job = launch_background_job(arg, self.repo_root)
-            self.store.append_event(self.session, "background_job", f"{job.job_id} {arg}")
-            self.console.print(f"Started background job {job.job_id}")
+            self.console.print("Background jobs have been removed.")
             return True
         if name == "/jobs":
-            table = Table("job_id", "status", "command", "created_at")
-            for row in list_jobs():
-                table.add_row(row["job_id"], row["status"], row["command"], row["created_at"])
-            self.console.print(table)
+            self.console.print("Background jobs have been removed.")
             return True
         if name == "/log":
-            self.console.print(Panel(read_job_log(arg), title=f"Job {arg}"))
+            self.console.print("Background jobs have been removed.")
             return True
         if name == "/diff":
             self.console.print(Panel(git_diff(self.repo_root), title="Git Diff"))
@@ -1354,19 +1322,7 @@ class GemApp:
             self.console.print(f"  Cache entries: {self.tool_cache.size}")
             return True
         if name == "/orch":
-            if not arg:
-                self.console.print("Usage: /orch <task>  — run multi-agent orchestrated execution")
-                return True
-            from .orchestrator import Orchestrator
-            self.out.start_thinking()
-            plan = Orchestrator(self).run(arg)
-            self.out.done()
-            self.console.print(f"\n  [bold]{plan.summary}[/bold]")
-            if plan.review_notes:
-                self.console.print(f"  [dim]{plan.review_notes}[/dim]")
-            for step in plan.steps:
-                icon = {"done": "✓", "error": "✗", "skipped": "○"}.get(step.status, "·")
-                self.console.print(f"    {icon} [{step.id}] {step.description[:70]}")
+            self.console.print("Orchestrator has been removed.")
             return True
         if name == "/plan":
             if not arg:
@@ -1475,18 +1431,16 @@ class GemApp:
         ctx_chars = self._effective_context_chars()
         context_result = ""
         retrieval_result = ""
-        cartridge_result = ""
         skill_result = ""
         plan_result = None
         draft_result = ""
 
         try:
             # Always gather context — model needs to know what files exist
-            with ThreadPoolExecutor(max_workers=5) as pool:
+            with ThreadPoolExecutor(max_workers=4) as pool:
                     futures = {
                         pool.submit(build_context_block, self.repo_root, self.session.pinned_files, ctx_chars): "context",
                         pool.submit(self._retrieval_context, user_text): "retrieval",
-                        pool.submit(build_repo_cartridge, self.repo_root, user_text, self.profile.retrieval_budget): "cartridge",
                         pool.submit(resolve_referenced_skills, self.repo_root, user_text): "skills",
                         pool.submit(self.plan_for_task, user_text): "plan",
                     }
@@ -1498,8 +1452,6 @@ class GemApp:
                                 context_result = result
                             elif key == "retrieval":
                                 retrieval_result = result
-                            elif key == "cartridge":
-                                cartridge_result = result
                             elif key == "skills":
                                 skill_result = "\n\n".join(f"Skill {name}:\n{content}" for name, content in result)
                             elif key == "plan":
@@ -1514,8 +1466,6 @@ class GemApp:
         context = context_result
         if retrieval_result:
             context = f"{context}\n\nIndexed code matches:\n{retrieval_result}"
-        if cartridge_result:
-            context = f"{context}\n\nRepo cartridge:\n{cartridge_result}"
 
         # No system prompt here — agent_loop sets task-specific ones
         system_prompt = ""
@@ -2600,91 +2550,18 @@ class GemApp:
         return "\n\n".join(lines)
 
     def plan_for_task(self, task: str):
-        note = build_plan_note(task)
-        if not self.config.runtime.planner_enabled:
-            return note
-        if not self.config.runtime.planner_model or self.config.runtime.planner_model == self.runtime_model:
-            return note
-        try:
-            planner_runtime = replace(
-                self.config.runtime,
-                model=self.config.runtime.planner_model,
-                temperature=0.0,
-                max_context_chars=min(8000, self.config.runtime.max_context_chars),
-            )
-            planner = GemRuntimeGateway(planner_runtime)
-            response = planner.chat_once(
-                [
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a tiny planning lane for Gem. "
-                            "Return one short action plan for the coding assistant. "
-                            "Keep it under 80 words and focus on the next efficient steps."
-                        ),
-                    },
-                    {"role": "user", "content": task},
-                ],
-            )
-            planner_text = response.get("message", {}).get("content", "").strip()
-            if planner_text:
-                note.summary = f"{note.summary} Planner: {planner_text[:220]}"
-        except Exception:
-            pass
-        return note
+        """Simplified plan — planner module removed."""
+        return None
 
-    def planner_checkpoint_hint(self, checkpoint: str, task: str, context_snippet: str = "") -> PlannerHint | None:
-        if not self.config.runtime.planner_hints_enabled:
-            return None
-        if self.profile.key == "gemma4-e2b":
-            return None
-        compact_context = context_snippet.strip()[:1200]
-        prompt = (
-            "Return strict JSON only with keys: next_action, likely_file, risk, quality_gap, stop.\n"
-            "Be terse. Think like a coding assistant control loop, not a chat assistant.\n"
-            "Only suggest the next high-value action.\n\n"
-            f"Checkpoint: {checkpoint}\n"
-            f"Task: {task}\n"
-        )
-        if compact_context:
-            prompt += f"Context:\n{compact_context}\n"
-        try:
-            response = self.engine.generate_once(
-                [
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are LocalCode's checkpoint planner.\n"
-                            "Produce tiny structured execution hints.\n"
-                            "No prose. JSON only."
-                        ),
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                max_tokens=220,
-            )
-            hint = parse_planner_hint(response, checkpoint)
-            if not hint:
-                return None
-            self.planner_hints.record(hint)
-            self.store.append_event(
-                self.session,
-                "planner_hint",
-                f"{checkpoint}: {hint.next_action or hint.risk or hint.quality_gap or 'hint'}",
-                likely_file=hint.likely_file,
-                risk=hint.risk,
-                quality_gap=hint.quality_gap,
-                stop=str(hint.stop).lower(),
-            )
-            return hint
-        except Exception:
-            return None
+    def planner_checkpoint_hint(self, checkpoint: str, task: str, context_snippet: str = ""):
+        """Planner hints removed — always returns None."""
+        return None
 
     def maybe_escalate_for_task(self, task: str) -> None:
         if not self.config.runtime.escalation_enabled:
             return
         note = self.plan_for_task(task)
-        if note.complexity != "high":
+        if note is None or getattr(note, 'complexity', None) != "high":
             return
         if self.profile.key == "gemma4-e2b":
             target = GEMMA_PROFILES["gemma4-e4b"]
@@ -2954,15 +2831,3 @@ class GemApp:
         self.engine.close()
         if self.bg_indexer is not None:
             self.bg_indexer.stop()
-        if self.file_watcher is not None:
-            self.file_watcher.stop()
-        if self.project_watcher is not None:
-            self.project_watcher.stop()
-        # Stop any background jobs (llama-server, etc.)
-        try:
-            from .jobs import list_jobs, stop_job
-            for job in list_jobs():
-                if job.get("status") == "running":
-                    stop_job(job["job_id"])
-        except Exception:
-            pass

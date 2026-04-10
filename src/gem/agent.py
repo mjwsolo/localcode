@@ -639,9 +639,8 @@ def run_agent_loop(
     # ── Build messages ──
     # composed_messages already has system prompt + context + full conversation + current user msg
     # Inject our tool-loop system prompt at the front
-    from .network import is_online
     project_instructions = _load_project_instructions(app.repo_root)
-    online = is_online()
+    online = True  # network module removed, assume online
     if online:
         network_status = "Network: ONLINE — you can download files, install packages, fetch URLs."
     else:
