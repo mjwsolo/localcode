@@ -178,21 +178,14 @@ class GemApp:
 
         @kb.add("c-v")
         def _paste_image(event):
-            """Ctrl+V — paste image from system clipboard."""
-            if clipboard_has_image():
-                img = read_clipboard_image()
-                if img and not any(e.base64_data == img.base64_data for e in self._pending_images):
-                    self._pending_images.append(img)
-                    event.current_buffer.insert_text(f"[image {img.size_kb}KB] ")
-            else:
-                # No image — do normal text paste from system clipboard
-                import subprocess as _sp
-                try:
-                    text = _sp.run(["pbpaste"], capture_output=True, text=True, timeout=2).stdout
-                    if text:
-                        event.current_buffer.insert_text(text)
-                except Exception:
-                    pass
+            """Ctrl+V — normal text paste from system clipboard."""
+            import subprocess as _sp
+            try:
+                text = _sp.run(["pbpaste"], capture_output=True, text=True, timeout=2).stdout
+                if text:
+                    event.current_buffer.insert_text(text)
+            except Exception:
+                pass
 
         @kb.add(Keys.BracketedPaste)
         def _bracketed_paste(event):
@@ -202,12 +195,8 @@ class GemApp:
                 # Normal text paste
                 event.current_buffer.insert_text(pasted)
             else:
-                # Empty paste — check for image
-                if clipboard_has_image():
-                    img = read_clipboard_image()
-                    if img and not any(e.base64_data == img.base64_data for e in self._pending_images):
-                        self._pending_images.append(img)
-                        event.current_buffer.insert_text(f"[image {img.size_kb}KB] ")
+                # Empty paste — no-op (image support removed)
+                pass
 
         # Enter submits, Shift+Enter / Alt+Enter adds a newline
         @kb.add("enter")
@@ -521,32 +510,12 @@ class GemApp:
         return f"{model_short} {mode_label} · {pct_left}% left · {path}"
 
     def _check_clipboard_image(self) -> None:
-        """Silently check if clipboard has a new image."""
-        if not self.profile.supports_vision:
-            return
-        if clipboard_has_image():
-            img = read_clipboard_image()
-            if img and not any(existing.base64_data == img.base64_data for existing in self._pending_images):
-                self._pending_images.append(img)
-                self.console.print(f"  [dim cyan]image detected in clipboard ({img.size_kb}KB) — will be sent with your next message[/]")
+        """Silently check if clipboard has a new image (disabled — images module removed)."""
+        return
 
     def _detect_inline_images(self, text: str) -> None:
-        """Detect image and audio file paths mentioned in the user's text."""
-        if self.profile.supports_vision:
-            paths = detect_image_paths_in_text(text)
-            for path in paths:
-                img = load_image_from_path(path)
-                if img:
-                    self._pending_images.append(img)
-                    self.console.print(f"  [dim cyan]attached image: {path} ({img.size_kb}KB)[/]")
-        # Auto-detect audio files
-        if self.profile.supports_audio:
-            audio_paths = detect_audio_paths_in_text(text)
-            for path in audio_paths:
-                aud = load_audio(path)
-                if aud:
-                    self._pending_audio.append(aud)
-                    self.console.print(f"  [dim cyan]attached audio: {path} ({aud.duration_str})[/]")
+        """Detect image and audio file paths mentioned in the user's text (disabled — modules removed)."""
+        return
 
     def _banner(self) -> str:
         return format_banner(
@@ -977,17 +946,9 @@ class GemApp:
                     self.console.print("Usage: /voice say <text>")
                     return True
                 self.console.print("Voice features removed.")
-                self.store.append_event(self.session, "voice_say", text[:120])
-                self.console.print(Panel(result, title="Voice"))
                 return True
             if arg.startswith("transcribe "):
-                file_arg = arg[11:].strip()
-                if not file_arg:
-                    self.console.print("Usage: /voice transcribe <file>")
-                    return True
                 self.console.print("Voice features removed.")
-                self.store.append_event(self.session, "voice_transcribe", file_arg)
-                self.console.print(Panel(result[-4000:], title="Voice"))
                 return True
             self.console.print("Usage: /voice [status|say <text>|transcribe <file>]")
             return True
@@ -1005,8 +966,7 @@ class GemApp:
             self.console.print(Panel(output[-6000:], title=f"Verification exit={code}"))
             return True
         if name == "/agentbg":
-            job_id = launch_background_agent(arg, self.repo_root, self.profile.key, self.runtime_model)
-            self.console.print(f"Started background agent job {job_id}")
+            self.console.print("Background agents removed.")
             return True
         if name == "/ignite":
             self.console.print("Use `gem setup --install` before first launch if the local runtime is not ready.")
@@ -1122,37 +1082,14 @@ class GemApp:
                 self._pending_images.clear()
                 self.console.print("Cleared queued images.")
                 return True
-            # Load image from path
-            img = load_image_from_path(arg)
-            if img:
-                self._pending_images.append(img)
-                self.console.print(f"  [cyan]Queued image: {arg} ({img.size_kb}KB)[/]")
-            else:
-                self.console.print(f"Could not load image: {arg}")
+            # Image loading removed
+            self.console.print("Image loading removed.")
             return True
         if name == "/paste":
-            if not self.profile.supports_vision:
-                self.console.print("Current model profile does not support vision.")
-                return True
-            img = read_clipboard_image()
-            if img:
-                self._pending_images.append(img)
-                self.console.print(f"  [cyan]Pasted image from clipboard ({img.size_kb}KB)[/]")
-            else:
-                self.console.print("No image found in clipboard.")
+            self.console.print("Image paste removed.")
             return True
         if name == "/screenshot":
-            if not self.profile.supports_vision:
-                self.console.print("Current model profile does not support vision.")
-                return True
-            mode = "selection" if arg == "select" else "full"
-            self.console.print(f"  [dim]Capturing {mode} screenshot...[/]")
-            img = take_screenshot(mode)
-            if img:
-                self._pending_images.append(img)
-                self.console.print(f"  [cyan]Screenshot captured ({img.size_kb}KB)[/]")
-            else:
-                self.console.print("Screenshot capture failed.")
+            self.console.print("Screenshots removed.")
             return True
         if name == "/audio":
             if not arg:
@@ -1166,12 +1103,7 @@ class GemApp:
                 self._pending_audio.clear()
                 self.console.print("Cleared queued audio.")
                 return True
-            aud = load_audio(arg)
-            if aud:
-                self._pending_audio.append(aud)
-                self.console.print(f"  [cyan]Queued audio: {arg} ({aud.duration_str}, ~{aud.estimated_tokens} tokens)[/]")
-            else:
-                self.console.print(f"Could not load audio: {arg}")
+            self.console.print("Audio loading removed.")
             return True
         if name == "/undo":
             if arg == "all":
