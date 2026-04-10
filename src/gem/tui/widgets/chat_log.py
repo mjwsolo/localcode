@@ -475,16 +475,9 @@ class ChatLog(RichLog):
         self._track_lines()
 
         if expanded:
-            # Available width: terminal - prefix(4) - padding(2) - scrollbar(2) - margin(4)
-            try:
-                avail = self.app.size.width - 14
-            except Exception:
-                avail = 60
-            avail = max(avail, 30)
             max_show = min(len(lines), 30)
             for line_text in lines[:max_show]:
-                tl = Text(no_wrap=True, overflow="ellipsis")
-                tl.append(f"    {line_text[:avail]}", style="dim italic")
+                tl = Text(f"    {line_text}", style="dim italic")
                 self.write(tl)
                 self._track_lines()
             if len(lines) > max_show:
