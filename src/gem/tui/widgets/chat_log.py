@@ -60,6 +60,16 @@ class ChatLog(RichLog):
 
     def __init__(self, **kwargs) -> None:
         super().__init__(wrap=True, **kwargs)
+
+    def write(self, content, *args, **kwargs) -> "ChatLog":
+        """Override to always constrain width to the visible area."""
+        try:
+            w = self.size.width - 2
+            if w > 10 and "width" not in kwargs:
+                kwargs["width"] = w
+        except Exception:
+            pass
+        return super().write(content, *args, **kwargs)
         # History of all content for re-rendering on thinking toggle
         self._history: list[tuple[str, ...]] = []
         # Thinking block states: index in _history -> expanded bool
