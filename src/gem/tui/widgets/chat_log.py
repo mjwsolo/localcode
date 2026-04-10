@@ -144,22 +144,17 @@ class ChatLog(RichLog):
     def _handle_thinking_click(self, y: int) -> None:
         """Toggle thinking expand/collapse on click."""
         try:
-            if 0 <= y < len(self.lines):
-                line_text = self.lines[y].text
-                if "▶" in line_text or "▼" in line_text:
-                    for idx in sorted(self._thinking_states.keys()):
-                        if self._history[idx][0] != "thinking":
-                            continue
-                        first_line = self._history[idx][1].strip().splitlines()[0][:30]
-                        if first_line[:15] in line_text or "thinking (" in line_text:
-                            self._thinking_states[idx] = not self._thinking_states[idx]
-                            self._rerender()
-                            return
-                    for idx in reversed(sorted(self._thinking_states.keys())):
-                        if self._history[idx][0] == "thinking":
-                            self._thinking_states[idx] = not self._thinking_states[idx]
-                            self._rerender()
-                            return
+            # Check if any line near the click contains the thinking marker
+            for check_y in range(max(0, y - 1), min(len(self.lines), y + 2)):
+                if check_y < len(self.lines):
+                    line_text = str(self.lines[check_y])
+                    if "▶" in line_text or "▼" in line_text:
+                        # Find the most recent thinking block and toggle it
+                        for idx in reversed(sorted(self._thinking_states.keys())):
+                            if self._history[idx][0] == "thinking":
+                                self._thinking_states[idx] = not self._thinking_states[idx]
+                                self._rerender()
+                                return
         except Exception:
             pass
 
