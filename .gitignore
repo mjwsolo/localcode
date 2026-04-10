@@ -46,3 +46,4 @@ site/
 # Test artifacts
 tests/test_results.json
 docs/
+.gem/
