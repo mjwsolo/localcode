@@ -15,12 +15,17 @@ def strip_wheel(whl_path: str) -> None:
     tmp = tempfile.mkdtemp()
     out = whl.parent / whl.name
 
+    record_name = None
     kept_files = []
     with zipfile.ZipFile(whl, 'r') as zin:
         with zipfile.ZipFile(f"{tmp}/stripped.whl", 'w', zipfile.ZIP_DEFLATED) as zout:
             for item in zin.infolist():
                 name = item.filename
-                # Keep: .so files, __init__.py, __main__.py, metadata, licenses
+                # Skip directories and RECORD (we'll rewrite it)
+                if name.endswith('/') or name.endswith('/RECORD') or name == 'RECORD':
+                    if 'RECORD' in name:
+                        record_name = name
+                    continue
                 # Remove: .py (source), .c (cython intermediate)
                 if name.endswith('.py'):
                     base = Path(name).name
@@ -32,16 +37,13 @@ def strip_wheel(whl_path: str) -> None:
                     continue
                 data = zin.read(name)
                 zout.writestr(item, data)
-                # Track for RECORD (skip RECORD itself)
-                if not name.endswith('/RECORD'):
-                    digest = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b'=').decode()
-                    kept_files.append(f"{name},sha256={digest},{len(data)}")
+                digest = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b'=').decode()
+                kept_files.append(f"{name},sha256={digest},{len(data)}")
 
-            # Rewrite RECORD with correct hashes
-            record_name = [n for n in zin.namelist() if n.endswith('/RECORD')][0]
-            kept_files.append(f"{record_name},,")
-            record_data = "\n".join(kept_files) + "\n"
-            zout.writestr(record_name, record_data)
+            # Write fresh RECORD
+            if record_name:
+                kept_files.append(f"{record_name},,")
+                zout.writestr(record_name, "\n".join(kept_files) + "\n")
 
     shutil.move(f"{tmp}/stripped.whl", str(out))
     shutil.rmtree(tmp)

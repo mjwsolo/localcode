@@ -158,16 +158,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _should_autobootstrap(config) -> bool:
-    explicit_model = bool(
-        config.runtime.model
-        or config.runtime.mlx_model_id
-        or config.runtime.huggingface_model_id
-    )
-    if explicit_model:
-        return False  # user has configured a model, don't bootstrap
-    provider_ok, _ = provider_readiness(config.runtime)
+    """Check if first-time setup is needed (server not reachable)."""
     runtime_ok, _ = GemRuntimeGateway(config.runtime).healthcheck()
-    return (not provider_ok) or (not runtime_ok)
+    return not runtime_ok
 
 
 def run_status() -> int:

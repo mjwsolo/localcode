@@ -190,7 +190,7 @@ class ChatLog(RichLog):
 
     def _sel_range(self) -> tuple[int, int, int, int] | None:
         """Get normalized selection range: (y1, x1, y2, x2)."""
-        if not self._sel_start or not self._sel_end:
+        if not getattr(self, '_sel_start', None) or not getattr(self, '_sel_end', None):
             return None
         y1, x1 = self._sel_start[1], self._sel_start[0]
         y2, x2 = self._sel_end[1], self._sel_end[0]

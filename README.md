@@ -1,4 +1,4 @@
-# 🏠 LocalCode
+<h1 align="center">🏠 LocalCode</h1>
 
 <p align="center">
   <img src="https://img.shields.io/badge/build-passing-4caf50?style=flat-square" alt="Build">
