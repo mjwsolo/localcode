@@ -362,7 +362,22 @@ class GemRuntimeGateway:
                 return data
             except Exception as exc:
                 last_error = exc
+                # If server returned 500, try restarting it
+                if hasattr(exc, 'response') and getattr(exc.response, 'status_code', 0) == 500:
+                    try:
+                        self._restart_server()
+                        import time; time.sleep(2)
+                    except Exception:
+                        pass
         raise RuntimeErrorWithContext(str(last_error) if last_error else "runtime request failed")
+
+    def _restart_server(self) -> None:
+        """Attempt to restart the llama-server if it crashed."""
+        import subprocess
+        try:
+            subprocess.run(["pkill", "-f", "llama-server"], capture_output=True, timeout=3)
+        except Exception:
+            pass
 
     def stream_chat_events(
         self,
