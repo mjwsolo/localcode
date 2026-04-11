@@ -52,6 +52,7 @@ class SetupScreen(Screen):
         self._spin_idx = 0
         self._spin_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
         self._failed_step = -1  # which step failed (-1 = none)
+        self._status_text = ""
 
     def compose(self) -> ComposeResult:
         from textual.containers import Vertical
@@ -77,12 +78,8 @@ class SetupScreen(Screen):
 
     def _update(self, step: int, status: str = "") -> None:
         self._current_step = step
-        try:
-            self.query_one("#setup-steps", Static).update(self._render_steps())
-            if status:
-                self.query_one("#setup-status", Static).update(f"[dim]{status}[/]")
-        except Exception:
-            pass
+        if status:
+            self._status_text = status
 
     def _show_error(self, msg: str) -> None:
         self._failed_step = self._current_step
@@ -99,9 +96,13 @@ class SetupScreen(Screen):
         self.run_worker(self._run_setup, thread=True)
 
     def _tick(self) -> None:
+        if self._failed_step >= 0:
+            return  # stop animating on error
         self._spin_idx += 1
         try:
             self.query_one("#setup-steps", Static).update(self._render_steps())
+            if hasattr(self, '_status_text') and self._status_text:
+                self.query_one("#setup-status", Static).update(f"[dim]{self._status_text}[/]")
         except Exception:
             pass
 
@@ -119,7 +120,8 @@ class SetupScreen(Screen):
         config = self.app.gem_config
 
         # ── Step 0: Server binary ──
-        self.app.call_from_thread(lambda: self._update(0, "Checking server..."))
+        self._current_step = 0
+        self._status_text = "Checking server..."
 
         binary_path = _turboquant_binary_path()
         if not binary_path and config.runtime.llama_cpp_binary:
@@ -129,7 +131,7 @@ class SetupScreen(Screen):
                 binary_path = p
 
         if not binary_path:
-            self.app.call_from_thread(lambda: self._update(0, "Downloading server..."))
+            self._status_text = "Downloading server..."
             if _find_turboquant_source():
                 ok, result = build_turboquant()
             else:
@@ -155,13 +157,14 @@ class SetupScreen(Screen):
             save_config(config)
 
         # ── Step 1: Model ──
-        self.app.call_from_thread(lambda: self._update(1, "Checking model..."))
+        self._current_step = 1
+        self._status_text = "Checking model..."
 
         model_path = get_model_path()
         if not model_path:
-            self.app.call_from_thread(lambda: self._update(1, "Downloading model (~10GB)..."))
+            self._status_text = "Downloading model (~10GB)..."
             ok, result = download_model(
-                on_progress=lambda msg: self.app.call_from_thread(lambda m=msg: self._update(1, m))
+                on_progress=lambda msg: setattr(self, '_status_text', msg)
             )
             if not ok:
                 err = str(result).replace("\n", " ").strip()[:60]
@@ -180,7 +183,7 @@ class SetupScreen(Screen):
                 if check.returncode != 0:
                     subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
                     time.sleep(2)
-                    self.app.call_from_thread(lambda: self._update(1, "Registering model..."))
+                    self._status_text = "Registering model..."
                     ok, result = create_ollama_model(str(model_path))
                     if not ok:
                         err = str(result).replace("\n", " ").strip()[:60]
@@ -190,7 +193,8 @@ class SetupScreen(Screen):
                 pass
 
         # ── Step 2: Start server ──
-        self.app.call_from_thread(lambda: self._update(2, "Starting server..."))
+        self._current_step = 2
+        self._status_text = "Starting server..."
         self.app.gem_config = load_config()
         config = self.app.gem_config
 
@@ -240,7 +244,7 @@ class SetupScreen(Screen):
                             break
                     except Exception:
                         pass
-                    self.app.call_from_thread(lambda i=i: self._update(2, f"Waiting for server... ({i+1}s)"))
+                    self._status_text = f"Loading model... ({i+1}s)"
 
                 if server_ok:
                     break

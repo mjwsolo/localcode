@@ -141,6 +141,8 @@ class GemRuntimeGateway:
         else:
             cmd.extend(["-b", str(self.config.llama_cpp_batch_size),
                         "-ub", str(min(512, self.config.llama_cpp_batch_size))])
+        # Skip warmup to avoid OOM on memory-tight machines (first real request warms up instead)
+        cmd.extend(["--no-warmup", "-np", "1"])
         return cmd
 
     @staticmethod
