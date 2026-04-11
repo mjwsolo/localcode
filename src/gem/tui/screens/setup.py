@@ -50,7 +50,7 @@ class SetupScreen(Screen):
         self._current_step = 0
         self._total_steps = len(self.STEPS)
         self._spin_idx = 0
-        self._spin_chars = "◐◓◑◒"
+        self._spin_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
         self._failed_step = -1  # which step failed (-1 = none)
         self._status_text = ""
 
