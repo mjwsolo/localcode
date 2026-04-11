@@ -100,9 +100,13 @@ class SetupScreen(Screen):
             return  # stop animating on error
         self._spin_idx += 1
         try:
-            self.query_one("#setup-steps", Static).update(self._render_steps())
-            if hasattr(self, '_status_text') and self._status_text:
-                self.query_one("#setup-status", Static).update(f"[dim]{self._status_text}[/]")
+            # Update status text (countdown) and spinner together
+            status = f"[dim]{self._status_text}[/]" if self._status_text else ""
+            spin = self._spin_chars[self._spin_idx % len(self._spin_chars)]
+            steps = self._render_steps()
+            self.query_one("#setup-status", Static).update(status)
+            self.query_one("#setup-steps", Static).update(steps)
+            self.refresh()
         except Exception:
             pass
 
