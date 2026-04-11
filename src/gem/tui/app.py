@@ -110,6 +110,7 @@ class LocalCodeTUI(App):
 
     async def _start_server_worker(self) -> None:
         """Start llama-server, wait for healthcheck, then show picker/chat."""
+        import os
         import time
         import subprocess
         from pathlib import Path
@@ -142,7 +143,10 @@ class LocalCodeTUI(App):
             gw = GemRuntimeGateway(config.runtime)
             cmd = gw.llama_server_command(str(model))
             log_fh = open(server_log, "w")
-            subprocess.Popen(cmd, stdout=log_fh, stderr=log_fh, start_new_session=True)
+            # Prevent system-installed ggml backends from overriding TurboQuant
+            env = dict(os.environ)
+            env["GGML_BACKEND_PATH"] = ""
+            subprocess.Popen(cmd, stdout=log_fh, stderr=log_fh, start_new_session=True, env=env)
         except Exception as exc:
             msg = str(exc)
             self.call_from_thread(lambda m=msg: self.notify(f"Server error: {m}", severity="error"))

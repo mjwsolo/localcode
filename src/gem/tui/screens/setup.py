@@ -203,8 +203,11 @@ class SetupScreen(Screen):
             server_log = log_dir / "server.log"
 
             try:
+                import os
                 log_fh = open(server_log, "w")
-                proc = subprocess.Popen(cmd, stdout=log_fh, stderr=log_fh, start_new_session=True)
+                env = dict(os.environ)
+                env["GGML_BACKEND_PATH"] = ""  # prevent system ggml from overriding TurboQuant
+                proc = subprocess.Popen(cmd, stdout=log_fh, stderr=log_fh, start_new_session=True, env=env)
             except Exception as exc:
                 self.app.call_from_thread(lambda e=str(exc): self._show_error(f"Failed to start: {e}"))
                 return

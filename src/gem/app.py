@@ -407,7 +407,10 @@ class GemApp:
                 _gw = GemRuntimeGateway(self.config.runtime)
                 _cmd = _gw.llama_server_command(_model)
                 try:
-                    _sp.Popen(_cmd, stdout=_sp.DEVNULL, stderr=_sp.DEVNULL, start_new_session=True)
+                    import os as _os
+                    _env = dict(_os.environ)
+                    _env["GGML_BACKEND_PATH"] = ""
+                    _sp.Popen(_cmd, stdout=_sp.DEVNULL, stderr=_sp.DEVNULL, start_new_session=True, env=_env)
                 except Exception:
                     pass
                 # Wait for server to be ready

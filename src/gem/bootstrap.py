@@ -262,11 +262,46 @@ _OLLAMA_MODEL_TAG = "gemma26b-iq3"
 
 
 def get_model_path() -> Path | None:
-    """Return path to downloaded GGUF model if it exists."""
+    """Return path to a usable GGUF model, checking multiple locations."""
+    # 1. Our download directory
     model_dir = Path.home() / ".local" / "share" / "localcode" / "models"
     model_file = model_dir / _MODEL_FILENAME
     if model_file.exists():
         return model_file
+
+    # 2. Config model path (if it's an actual file)
+    from .config import load_config
+    try:
+        config = load_config()
+        if config.runtime.model and Path(config.runtime.model).is_file():
+            return Path(config.runtime.model)
+    except Exception:
+        pass
+
+    # 3. Ollama blob (if ollama has the model registered)
+    try:
+        result = subprocess.run(
+            ["ollama", "show", _OLLAMA_MODEL_TAG, "--modelfile"],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+        for line in result.stdout.splitlines():
+            if line.startswith("FROM ") and ("/" in line or "\\" in line):
+                blob = Path(line.split("FROM ", 1)[1].strip())
+                if blob.is_file():
+                    return blob
+    except Exception:
+        pass
+
+    # 4. Common locations
+    for search_dir in [
+        Path.home() / "models",
+        Path.home() / ".cache" / "huggingface",
+    ]:
+        if search_dir.is_dir():
+            for f in search_dir.rglob("*IQ3_S*.gguf"):
+                if "26B" in f.name or "26b" in f.name:
+                    return f
+
     return None
 
 
