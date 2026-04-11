@@ -1,3 +1,5 @@
+include src/gem/bin/llama-server
+recursive-include src/gem/tui/styles *.tcss
 recursive-include llama-cpp-turboquant/cmake *
 recursive-include llama-cpp-turboquant/common *.cpp *.h *.hpp
 recursive-include llama-cpp-turboquant/ggml *.cpp *.h *.hpp *.c *.m *.metal

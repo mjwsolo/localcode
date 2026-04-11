@@ -40,7 +40,7 @@ class SetupScreen(Screen):
     """
 
     STEPS = [
-        ("server", "Download inference server"),
+        ("server", "Check inference server"),
         ("model", "Download model (~10GB)"),
         ("start", "Start server"),
     ]
