@@ -103,7 +103,7 @@ class GemRuntimeGateway:
         threads = 10 if mode == "context" else self.config.llama_cpp_threads
         ctx_size = self._target_num_ctx()
         if mem_gb <= 8:
-            ctx_size = min(ctx_size, 4096)  # limit context on 8GB
+            ctx_size = min(ctx_size, 2048)  # tight context on 8GB
 
         cmd = [
             binary,
@@ -127,9 +127,13 @@ class GemRuntimeGateway:
         else:
             # Speed mode (default): CPU mmap, no GPU
             cmd.extend(["--mmap", "-ngl", "0"])
-        # KV cache compression (asymmetric: q8_0 K + turbo4 V recommended)
+        # KV cache compression
         ctk = self.config.kv_cache_type_k
         ctv = self.config.kv_cache_type_v
+        if mem_gb <= 8:
+            # 8GB: use smallest KV cache types to save RAM
+            ctk = "q4_0"
+            ctv = "q4_0"
         if ctk and ctk != "f16":
             cmd.extend(["--cache-type-k", ctk])
         if ctv and ctv != "f16":
@@ -154,6 +158,9 @@ class GemRuntimeGateway:
         else:
             cmd.extend(["-b", str(self.config.llama_cpp_batch_size),
                         "-ub", str(min(512, self.config.llama_cpp_batch_size))])
+        # Single slot on low-RAM machines to avoid multiple KV cache allocations
+        if mem_gb <= 8:
+            cmd.extend(["-np", "1"])
         return cmd
 
     @staticmethod
