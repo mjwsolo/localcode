@@ -127,8 +127,9 @@ class LocalCodeTUI(App):
             gw = GemRuntimeGateway(config.runtime)
             cmd = gw.llama_server_command(str(model))
             subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-        except Exception as e:
-            self.call_from_thread(lambda: self.notify(f"Failed to start server: {e}", severity="error"))
+        except Exception as exc:
+            msg = str(exc)
+            self.call_from_thread(lambda m=msg: self.notify(f"Failed to start server: {m}", severity="error"))
             return
 
         # Wait for healthcheck (up to 30s)
