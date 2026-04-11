@@ -25,6 +25,14 @@ from textual.worker import Worker, WorkerState
 
 from ..bridge import AgentEvent, ApprovalRequest
 from ..widgets.chat_log import ChatLog
+from ...autonomy import AutonomyLevel, apply_autonomy_to_permissions, get_policy
+
+_SLASH_COMMANDS = [
+    ("/switch", "Toggle fast/reasoning mode"),
+    ("/permissions", "Toggle ask/auto-approve for commands"),
+    ("/clear", "Clear conversation history"),
+    ("/quit", "Exit LocalCode"),
+]
 
 if TYPE_CHECKING:
     from ..app import LocalCodeTUI
@@ -93,10 +101,20 @@ class ChatScreen(Screen):
     #queue-line {
         height: 1;
         padding: 0 1;
+        margin: 0 0 1 0;
         color: $warning;
         display: none;
     }
     #queue-line.active {
+        display: block;
+    }
+    #slash-menu {
+        height: auto;
+        max-height: 10;
+        padding: 0 1;
+        display: none;
+    }
+    #slash-menu.active {
         display: block;
     }
     #status-bar {
@@ -130,6 +148,8 @@ class ChatScreen(Screen):
         self._step_timer = None
         self._thinking_text: str = ""  # full thinking from last turn
         self._thinking_expanded: bool = False  # toggle state
+        self._slash_matches: list[tuple[str, str]] = []  # current filtered commands
+        self._slash_selected: int = 0  # highlighted index in slash menu
 
     @property
     def tui(self) -> "LocalCodeTUI":
@@ -140,6 +160,7 @@ class ChatScreen(Screen):
         yield ChatLog(id="chat-log", highlight=True, markup=True)
         yield Static("", id="active-step")
         yield Static("", id="queue-line")
+        yield Static("", id="slash-menu")
         yield Input(placeholder="Type a message...", id="chat-input")
         yield Static("", id="status-bar")
 
@@ -202,12 +223,21 @@ class ChatScreen(Screen):
     }
 
     def _show_active_step(self, name: str, args: str) -> None:
-        """Tool calls don't show in the status bar — they appear in the chat log.
-        Just keep the thinking indicator running while tools execute."""
+        """Show live tool call in the #active-step widget above the input."""
         self._active_tool_name = name
         self._active_tool_args = args
-        # Don't change the status bar — let "thinking..." keep showing
-        # The tool call is visible in the chat log with ● and ✓
+        # Show the tool name in the active step area with blue ball
+        verb = self._TOOL_VERBS.get(name, name)
+        args_short = args.strip().replace("\n", " ")[:40] if args else ""
+        display = f"{verb}({args_short})" if args_short else verb
+        self._active_step_text = display
+        self._active_mode = "tool"
+        self._scan_pos = 0
+        w = self.query_one("#active-step", Static)
+        w.add_class("active")
+        if self._step_timer is not None:
+            self._step_timer.stop()
+        self._step_timer = self.set_interval(0.05, self._tick_active)
 
     def _show_active_thinking(self, text: str = "thinking") -> None:
         """Show in-progress thinking status."""
@@ -250,8 +280,9 @@ class ChatScreen(Screen):
 
         timer = self._elapsed_str()
 
-        # Unified live status: "◆ thinking... (3s)" or "◆ searching... (12s)"
-        label = f"◆ {text}..."
+        # ● for tools (blue ball), ◆ for thinking
+        icon = "●" if self._active_mode == "tool" else "◆"
+        label = f"{icon} {text}..."
         self._scan_pos = (self._scan_pos + 1) % max(len(label), 1)
         rt = RichText()
         rt.append("  ", style="")
@@ -272,7 +303,14 @@ class ChatScreen(Screen):
         config = self.tui.gem_config
         mode = config.runtime.laptop_26b_runtime_mode
         mode_label = "fast" if not mode.endswith("-think") else "reasoning"
-        model = config.runtime.model
+        raw_model = config.runtime.model or ""
+        # Show friendly name for blob paths and GGUF files
+        if "sha256-" in raw_model or len(raw_model) > 60:
+            model = "gemma-4-26B IQ3_S"
+        elif raw_model.endswith(".gguf"):
+            model = raw_model.split("/")[-1].replace(".gguf", "")
+        else:
+            model = raw_model
         # Context REMAINING (starts at 100%, decreases)
         pct_remaining = max(0, 100 - int(self._context_used / max(1, self._context_max) * 100))
         bar = self.query_one("#status-bar", Static)
@@ -289,6 +327,45 @@ class ChatScreen(Screen):
             q.remove_class("active")
 
     # ── Input handling ──
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        """Show slash command menu when user types /."""
+        text = event.value
+        menu = self.query_one("#slash-menu", Static)
+        if text.startswith("/") and not text.startswith("/ "):
+            prefix = text.lower()
+            self._slash_matches = [(cmd, desc) for cmd, desc in _SLASH_COMMANDS if cmd.startswith(prefix)]
+            if self._slash_matches:
+                self._slash_selected = min(self._slash_selected, len(self._slash_matches) - 1)
+                self._render_slash_menu()
+                menu.add_class("active")
+            else:
+                self._slash_matches = []
+                menu.remove_class("active")
+        else:
+            self._slash_matches = []
+            self._slash_selected = 0
+            menu.remove_class("active")
+
+    def _render_slash_menu(self) -> None:
+        menu = self.query_one("#slash-menu", Static)
+        lines = []
+        for i, (cmd, desc) in enumerate(self._slash_matches):
+            if i == self._slash_selected:
+                lines.append(f"[bold white on #333333]{cmd:<18} {desc}[/]")
+            else:
+                lines.append(f"[bold #5f87ff]{cmd:<18}[/] [dim]{desc}[/]")
+        menu.update("\n".join(lines))
+
+    def on_paste(self, event) -> None:
+        """Handle multiline paste — join lines so nothing gets lost."""
+        text = event.text
+        if "\n" in text or "\r" in text:
+            # Replace newlines with spaces so the full paste goes into the input
+            joined = " ".join(text.splitlines())
+            event.prevent_default()
+            inp = self.query_one("#chat-input", Input)
+            inp.insert_text_at_cursor(joined)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
@@ -307,6 +384,7 @@ class ChatScreen(Screen):
             self._update_queue()
         else:
             log.append_user(text)
+            log.scroll_end(animate=False)
             self._start_turn(text)
 
     def _handle_command(self, text: str) -> None:
@@ -352,12 +430,23 @@ class ChatScreen(Screen):
                     log.append_error("Failed to copy")
             else:
                 log.append_info("Nothing to copy")
+        elif text == "/permissions":
+            app = self.tui.gem_app
+            if app:
+                from ..bridge import AgentEvent
+                if app._autonomy == AutonomyLevel.FULL_AUTO:
+                    app._autonomy = AutonomyLevel.AUTO_EDIT
+                    apply_autonomy_to_permissions(app.perms, get_policy(app._autonomy))
+                    log.append_info("Permissions ON — will ask before running commands")
+                else:
+                    app._autonomy = AutonomyLevel.FULL_AUTO
+                    apply_autonomy_to_permissions(app.perms, get_policy(app._autonomy))
+                    log.append_info("Permissions OFF — full auto, no questions asked")
         elif text == "/help":
-            log.append_info("/switch  toggle fast/reasoning mode")
-            log.append_info("/copy    copy last response to clipboard")
-            log.append_info("/undo    revert last file change")
-            log.append_info("/clear   clear conversation")
-            log.append_info("/quit    exit")
+            log.append_info("/switch       toggle fast/reasoning mode")
+            log.append_info("/permissions  toggle ask/auto-approve")
+            log.append_info("/clear        clear conversation")
+            log.append_info("/quit         exit")
         else:
             log.append_info(f"Unknown command: {text}")
 
@@ -587,7 +676,38 @@ class ChatScreen(Screen):
         self.focus()  # focus the screen itself to capture keys
 
     def on_key(self, event) -> None:
-        """Capture 1/2/y/n keys for inline approval. Block all other input."""
+        """Handle slash menu navigation and inline approval."""
+        # Slash menu navigation (arrow keys, tab, enter)
+        if self._slash_matches:
+            key = event.key
+            if key in ("down", "tab"):
+                self._slash_selected = (self._slash_selected + 1) % len(self._slash_matches)
+                self._render_slash_menu()
+                event.prevent_default()
+                event.stop()
+                return
+            elif key == "up":
+                self._slash_selected = (self._slash_selected - 1) % len(self._slash_matches)
+                self._render_slash_menu()
+                event.prevent_default()
+                event.stop()
+                return
+            elif key == "enter":
+                # Select the highlighted command
+                cmd = self._slash_matches[self._slash_selected][0]
+                inp = self.query_one("#chat-input", Input)
+                inp.value = cmd
+                inp.cursor_position = len(cmd)
+                # Don't prevent default — let Input.Submitted fire
+                return
+            elif key == "escape":
+                self._slash_matches = []
+                self._slash_selected = 0
+                self.query_one("#slash-menu", Static).remove_class("active")
+                event.prevent_default()
+                event.stop()
+                return
+
         if not self._awaiting_approval:
             return
         key = event.key

@@ -13,6 +13,179 @@ import json
 from .config import AppConfig, ensure_home_dirs, save_config
 
 
+def metal_gpu_available(memory_gb: int | None = None) -> bool:
+    """Check if Metal GPU is usable for full model offload RIGHT NOW.
+
+    On 32GB+ Macs: always True (Metal working set is large enough).
+    On 16GB Macs: only True if iogpu.wired_limit_mb >= 14000.
+    On <16GB or non-Mac: always False.
+
+    This is the SINGLE SOURCE OF TRUTH. Never assume GPU works just
+    because the config says ngl=999.
+    """
+    if platform.system().lower() != "darwin":
+        return False
+    if memory_gb is None:
+        try:
+            mem_bytes = int(subprocess.run(
+                ["sysctl", "-n", "hw.memsize"],
+                capture_output=True, text=True, timeout=2,
+            ).stdout.strip())
+            memory_gb = mem_bytes // (1024 ** 3)
+        except Exception:
+            memory_gb = 16
+    if memory_gb >= 32:
+        return True  # 32GB+ never needs sysctl
+    if memory_gb < 16:
+        return False  # 8GB can't fit model on GPU
+    # 16GB: must check sysctl
+    try:
+        r = subprocess.run(
+            ["sysctl", "-n", "iogpu.wired_limit_mb"],
+            capture_output=True, text=True, timeout=2,
+        )
+        return int(r.stdout.strip()) >= 14000
+    except Exception:
+        return False
+
+
+_LAUNCHDAEMON_PLIST = "/Library/LaunchDaemons/com.localcode.gpu-unlock.plist"
+_PLIST_CONTENT = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.localcode.gpu-unlock</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/sbin/sysctl</string>
+        <string>iogpu.wired_limit_mb=14336</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>
+"""
+
+
+def _sudo_via_osascript(shell_cmd: str) -> bool:
+    """Run a shell command as root using macOS native password dialog.
+
+    Uses osascript to show the standard macOS auth prompt — works from
+    any context (TUI, CLI, background process, no TTY needed).
+    The dialog shows "LocalCode" and explains why it needs permission.
+    """
+    escaped = shell_cmd.replace("\\", "\\\\").replace('"', '\\"')
+    script = (
+        f'do shell script "{escaped}" '
+        f'with administrator privileges '
+        f'with prompt "LocalCode needs to increase GPU memory to run the AI model. This is a one-time setup."'
+    )
+    try:
+        r = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True, text=True, timeout=60,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def ensure_gpu_unlock() -> bool:
+    """Ensure Metal GPU is unlocked for TurboQuant on 16GB Macs.
+
+    Fully automatic — no manual steps, no terminal commands, no user action
+    beyond clicking "OK" on the macOS password dialog (once, ever).
+
+    Strategy:
+    1. Already unlocked → done (instant)
+    2. LaunchDaemon installed but sysctl reset (reboot) → set it now via sudo -n
+    3. Nothing set up yet → show native macOS password dialog, install
+       LaunchDaemon (persistent) + set sysctl (immediate). One click, forever.
+
+    Returns True if GPU is ready after this call.
+    """
+    if platform.system().lower() != "darwin":
+        return False
+
+    # Check RAM — only 16GB Macs need this
+    try:
+        mem_bytes = int(subprocess.run(
+            ["sysctl", "-n", "hw.memsize"],
+            capture_output=True, text=True, timeout=2,
+        ).stdout.strip())
+        ram_gb = mem_bytes // (1024 ** 3)
+    except Exception:
+        ram_gb = 16
+
+    if ram_gb >= 32:
+        return True  # 32GB+ doesn't need sysctl
+    if ram_gb < 16:
+        return False  # 8GB can't fit model
+
+    # Already unlocked?
+    if metal_gpu_available(ram_gb):
+        # Ensure daemon is installed for persistence even if sysctl is already set
+        if not os.path.exists(_LAUNCHDAEMON_PLIST):
+            _install_gpu_daemon()
+        return True
+
+    # LaunchDaemon installed but sysctl not set (just rebooted)?
+    if os.path.exists(_LAUNCHDAEMON_PLIST):
+        # Try non-interactive first (sudo cache might be warm)
+        try:
+            subprocess.run(
+                ["sudo", "-n", "sysctl", "iogpu.wired_limit_mb=14336"],
+                capture_output=True, timeout=5,
+            )
+            if metal_gpu_available(ram_gb):
+                return True
+        except Exception:
+            pass
+        # Sudo cache cold — use osascript (native macOS dialog)
+        if _sudo_via_osascript("/usr/sbin/sysctl iogpu.wired_limit_mb=14336"):
+            return metal_gpu_available(ram_gb)
+        return False
+
+    # First time — install daemon + set sysctl via native macOS password dialog
+    return _install_gpu_daemon()
+
+
+def _install_gpu_daemon() -> bool:
+    """Install LaunchDaemon for persistent GPU unlock + set sysctl now.
+
+    Shows a native macOS password dialog via osascript. User clicks OK once,
+    GPU is unlocked forever (survives reboots).
+    """
+    import tempfile
+    tmp_path = None
+    try:
+        fd, tmp_path = tempfile.mkstemp(suffix=".plist")
+        with os.fdopen(fd, "w") as f:
+            f.write(_PLIST_CONTENT)
+
+        # Single osascript call: install daemon + set sysctl + load daemon
+        cmd = (
+            f"cp {tmp_path} {_LAUNCHDAEMON_PLIST} && "
+            f"chmod 644 {_LAUNCHDAEMON_PLIST} && "
+            f"chown root:wheel {_LAUNCHDAEMON_PLIST} && "
+            f"/usr/sbin/sysctl iogpu.wired_limit_mb=14336 && "
+            f"launchctl load {_LAUNCHDAEMON_PLIST}"
+        )
+        ok = _sudo_via_osascript(cmd)
+        return ok and metal_gpu_available()
+    except Exception:
+        return False
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+
+
 @dataclass(slots=True)
 class MachineProfile:
     system: str
@@ -208,7 +381,8 @@ def recommend_preset(
             planner_model = "gemma4:e2b"
             notes.append("Prefer quantized small variants and early compaction.")
     elif machine.tier == "large":
-        profile = "gemma4-e4b" if mode == "fast" else "gemma4-26b-moe"
+        use_26b = machine.system == "darwin" and machine.has_gpu
+        profile = "gemma4-26b-laptop" if use_26b else ("gemma4-e4b" if mode == "fast" else "gemma4-26b-moe")
         max_context_chars = 22000 if mode == "fast" else 36000
         planner_enabled = True
         adaptive_execution = True
@@ -248,26 +422,20 @@ def recommend_preset(
     kv_cache_type_k = "q8_0"
     kv_cache_type_v = "turbo4"
 
-    # Small tier (≤16GB): TurboQuant KV compression + CPU mmap
+    # Small tier (≤16GB): TurboQuant KV compression
     if machine.tier == "small":
-        kv_cache_type_k = "q8_0"   # preserve key quality
-        kv_cache_type_v = "turbo4"  # 3.8x V compression, +0.23% PPL — avoids pre-M5 turbo3 regression
-        # Note: expert_offload with -ngl 999 causes OOM on 16GB.
-        # Use -ngl 0 (pure CPU + mmap) which is stable and fast enough.
+        kv_cache_type_k = "q8_0"
+        kv_cache_type_v = "turbo4"
         expert_offload = False
-        llama_cpp_gpu_layers = 0  # CPU mmap is more stable on 16GB
-        notes.append("TurboQuant KV (q8_0-K + turbo4-V) + CPU mmap for 16GB.")
+        notes.append("TurboQuant KV (q8_0-K + turbo4-V).")
 
-    # Apple Silicon + 26B laptop: always use llama.cpp with TurboQuant
-    # MLX 4-bit doesn't fit on 16GB, Ollama doesn't support TurboQuant KV cache
-    if machine.system == "darwin" and machine.has_gpu and profile == "gemma4-26b-laptop":
+    # Apple Silicon: always TurboQuant llama.cpp — it's what gives us 32K context
+    if machine.system == "darwin" and machine.has_gpu and profile in ("gemma4-26b-laptop", "gemma4-26b-moe"):
         runtime_provider = "llama_cpp"
-        llama_cpp_gpu_layers = 0
+        llama_cpp_gpu_layers = 999
+        laptop_runtime_mode = "turbo"
         lookup_cache = True
-        notes.append("TurboQuant llama.cpp for 26B laptop mode (MLX/Ollama can't fit or lack turbo KV).")
-    elif machine.system == "darwin" and machine.has_gpu and profile == "gemma4-26b-moe":
-        runtime_provider = "ollama"
-        notes.append("Ollama MLX backend preferred for MoE models on Apple Silicon (3x faster).")
+        notes.append("TurboQuant llama.cpp: full GPU offload, 32K context.")
 
     # When using llama.cpp: enable n-gram speculation + prompt lookup
     if runtime_provider == "llama_cpp":

@@ -1,32 +1,35 @@
 """First-launch setup screen — downloads server and model."""
 from __future__ import annotations
 
+import platform
+
 from textual.app import ComposeResult
 from textual.screen import Screen
 from textual.widgets import Static
-
-_HEADER = "──────────────── 🏠 LocalCode ────────────────"
-
 
 class SetupScreen(Screen):
     """Shows bootstrap progress during first launch."""
 
     DEFAULT_CSS = """
     SetupScreen {
-        align: center middle;
-    }
-    #setup-wrap {
-        width: 52;
-        height: auto;
+        layout: vertical;
     }
     #setup-header {
-        width: 100%;
-        text-align: center;
-        color: $primary;
-        margin-bottom: 1;
+        dock: top;
+        height: 3;
+        padding: 1 1 1 1;
+        color: #5f87ff;
+        background: $surface;
+    }
+    #setup-spacer {
+        height: 1fr;
+    }
+    #setup-center {
+        height: 1fr;
+        align: center middle;
     }
     #setup-box {
-        width: 100%;
+        width: 52;
         height: auto;
         padding: 1 2;
         border: solid $primary;
@@ -34,7 +37,7 @@ class SetupScreen(Screen):
     #setup-status {
         width: 100%;
         color: $text-muted;
-        margin-top: 1;
+        margin: 1 0 0 0;
         text-align: center;
     }
     """
@@ -55,15 +58,29 @@ class SetupScreen(Screen):
         self._status_text = ""
 
     def compose(self) -> ComposeResult:
-        from textual.containers import Vertical
-        with Vertical(id="setup-wrap"):
-            yield Static(_HEADER, id="setup-header")
+        from textual.containers import Vertical, Container
+        yield Static("", id="setup-header")
+        with Container(id="setup-center"):
             with Vertical(id="setup-box"):
                 yield Static(self._render_steps(), id="setup-steps")
                 yield Static("", id="setup-status")
 
+    def on_resize(self) -> None:
+        self._update_header()
+
+    def _update_header(self) -> None:
+        try:
+            width = self.app.size.width or 80
+        except Exception:
+            width = 80
+        usable = width - 2
+        left = "🏠 LocalCode"
+        left_cols = 13
+        line = f"{left} {'─' * (usable - left_cols)}"
+        self.query_one("#setup-header", Static).update(line)
+
     def _render_steps(self) -> str:
-        lines = ["[bold]First-time setup[/]\n"]
+        lines = ["[bold]Setup[/]\n"]
         for i, (key, label) in enumerate(self.STEPS):
             if i == self._failed_step:
                 lines.append(f"  [red]✗[/] {label}")
@@ -92,6 +109,7 @@ class SetupScreen(Screen):
             pass
 
     def on_mount(self) -> None:
+        self._update_header()
         self.set_interval(0.1, self._tick)
         self.run_worker(self._run_setup, thread=True)
 
@@ -146,16 +164,17 @@ class SetupScreen(Screen):
             binary_path = result
             config.runtime.llama_cpp_binary = str(binary_path)
 
-        # Always ensure config is set for llama_cpp after we have a binary
+        # Set config for llama_cpp (GPU) or leave for Ollama fallback (decided later)
         changed = False
-        if config.runtime.provider != "llama_cpp":
-            config.runtime.provider = "llama_cpp"
-            changed = True
-        if "8081" not in config.runtime.base_url:
-            config.runtime.base_url = "http://localhost:8081"
-            changed = True
         if not config.runtime.llama_cpp_binary and binary_path:
             config.runtime.llama_cpp_binary = str(binary_path)
+            changed = True
+        # Default to llama_cpp — will be overridden to Ollama later if GPU unavailable
+        if config.runtime.provider not in ("llama_cpp", "ollama"):
+            config.runtime.provider = "llama_cpp"
+            changed = True
+        if config.runtime.provider == "llama_cpp" and "8081" not in config.runtime.base_url:
+            config.runtime.base_url = "http://localhost:8081"
             changed = True
         if changed:
             save_config(config)
@@ -252,78 +271,87 @@ class SetupScreen(Screen):
         env = dict(os.environ)
         env["GGML_BACKEND_PATH"] = ""  # prevent system ggml from overriding TurboQuant
 
-        gw = GemRuntimeGateway(config.runtime)
-        # Use bundled binary if config doesn't have one
-        from ...bootstrap import _turboquant_binary_path as _tbp
-        binary = config.runtime.llama_cpp_binary or str(_tbp() or "")
+        # Ensure GPU is unlocked — installs persistent LaunchDaemon on first run
+        from ...performance import ensure_gpu_unlock
+        self._status_text = "Checking GPU..."
+        gpu_ready = ensure_gpu_unlock()
 
-        if not binary:
-            self.app.call_from_thread(lambda: self._show_error("No server binary found. Reinstall localcode."))
+        if not gpu_ready:
+            self.app.call_from_thread(lambda: self._show_error(
+                "GPU unlock required for TurboQuant 32K context.\n"
+                "Run: sudo sysctl iogpu.wired_limit_mb=14336\n"
+                "Then restart LocalCode."
+            ))
             return
-        if not model_path:
-            self.app.call_from_thread(lambda: self._show_error("No model found. Delete ~/.gem/config.toml and retry."))
-            return
+        else:
+            # GPU available — use TurboQuant llama.cpp
+            gw = GemRuntimeGateway(config.runtime)
+            from ...bootstrap import _turboquant_binary_path as _tbp
+            binary = config.runtime.llama_cpp_binary or str(_tbp() or "")
 
-        if binary and model_path:
-            # Try up to 2 attempts: first with current mode, then CPU-only fallback
-            for attempt in range(2):
-                cmd = gw.llama_server_command(str(model_path))
+            if not binary:
+                self.app.call_from_thread(lambda: self._show_error("No server binary found. Reinstall localcode."))
+                return
+            if not model_path:
+                self.app.call_from_thread(lambda: self._show_error("No model found. Delete ~/.gem/config.toml and retry."))
+                return
 
+            cmd = gw.llama_server_command(str(model_path))
+
+            try:
+                log_fh = open(server_log, "w")
+                proc = subprocess.Popen(cmd, stdout=log_fh, stderr=log_fh, start_new_session=True, env=env)
+            except Exception as exc:
+                self.app.call_from_thread(lambda e=str(exc): self._show_error(f"Failed to start: {e}"))
+                return
+
+            # Wait for server to become ready (up to 60s)
+            server_ok = False
+            for i in range(60):
+                time.sleep(1)
+                if proc.poll() is not None:
+                    break  # crashed
                 try:
-                    log_fh = open(server_log, "w")
-                    proc = subprocess.Popen(cmd, stdout=log_fh, stderr=log_fh, start_new_session=True, env=env)
-                except Exception as exc:
-                    self.app.call_from_thread(lambda e=str(exc): self._show_error(f"Failed to start: {e}"))
-                    return
+                    ok, _ = gw.healthcheck()
+                    if ok:
+                        server_ok = True
+                        break
+                except Exception:
+                    pass
+                self._status_text = f"Loading model... ({i+1}s)"
 
-                # Wait for server to become ready (up to 60s)
-                server_ok = False
-                for i in range(60):
-                    time.sleep(1)
-                    if proc.poll() is not None:
-                        break  # crashed
-                    try:
-                        ok, _ = gw.healthcheck()
-                        if ok:
-                            server_ok = True
-                            break
-                    except Exception:
-                        pass
-                    self._status_text = f"Loading model... ({i+1}s)"
-
-                if server_ok:
-                    break
-
-                # Server failed — check if it's an OOM/memory issue
+            if not server_ok:
+                # Server failed — fall back to Ollama instead of broken CPU mode
                 err = ""
                 try:
                     log_fh.close()
                     err = server_log.read_text()
                 except Exception:
                     pass
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                self._status_text = "GPU server failed — switching to Ollama..."
+                time.sleep(1)
+                config.runtime.provider = "ollama"
+                config.runtime.base_url = "http://localhost:11434"
+                if not config.runtime.model or config.runtime.model.endswith(".gguf"):
+                    config.runtime.model = "gemma26b-iq3"
+                config.runtime.laptop_26b_runtime_mode = "speed"
+                from ...config import save_config
+                save_config(config)
 
-                server_crashed = proc.poll() is not None
-                is_oom = server_crashed and ("out of memory" in err.lower() or "ggml_metal_free" in err or "alloc" in err.lower())
-
-                if is_oom and attempt == 0:
-                    # Kill the crashed/stuck server and retry with CPU-only
-                    try:
-                        proc.kill()
-                    except Exception:
-                        pass
-                    self._status_text = "GPU OOM — retrying CPU-only..."
-                    time.sleep(1)
-                    # Force CPU-only mode
-                    config.runtime.laptop_26b_runtime_mode = "speed"
-                    config.runtime.llama_cpp_gpu_layers = 0
-                    from ...config import save_config
-                    save_config(config)
-                    gw = GemRuntimeGateway(config.runtime)
-                    continue
-
-                # Not OOM or second attempt also failed
-                self.app.call_from_thread(lambda e=err[-300:]: self._show_error(f"Server failed:\n{e}"))
-                return
+                # Check if Ollama is available as fallback
+                try:
+                    import httpx
+                    r = httpx.get("http://localhost:11434/api/tags", timeout=3)
+                    server_ok = r.status_code == 200
+                except Exception:
+                    pass
+                if not server_ok:
+                    self.app.call_from_thread(lambda e=err[-300:]: self._show_error(f"Server failed and Ollama not available:\n{e}"))
+                    return
 
         # Done
         self._current_step = 3

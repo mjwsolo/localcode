@@ -278,23 +278,12 @@ _OLLAMA_MODEL_TAG = "gemma26b-iq3"
 
 
 def get_model_path() -> Path | None:
-    """Return path to a usable GGUF model, checking multiple locations."""
-    # 1. Our download directory
-    model_dir = Path.home() / ".local" / "share" / "localcode" / "models"
-    model_file = model_dir / _MODEL_FILENAME
-    if model_file.exists():
-        return model_file
+    """Return path to a usable GGUF model, checking multiple locations.
 
-    # 2. Config model path (if it's an actual file)
-    from .config import load_config
-    try:
-        config = load_config()
-        if config.runtime.model and Path(config.runtime.model).is_file():
-            return Path(config.runtime.model)
-    except Exception:
-        pass
-
-    # 3. Ollama blob (if ollama has the model registered)
+    Prioritizes Ollama blob (integrity-verified by Ollama) over our HF download
+    because HF downloads can be corrupted by network issues or interrupted transfers.
+    """
+    # 1. Ollama blob — preferred because Ollama verifies SHA256 integrity
     try:
         result = subprocess.run(
             ["ollama", "show", _OLLAMA_MODEL_TAG, "--modelfile"],
@@ -307,6 +296,21 @@ def get_model_path() -> Path | None:
                     return blob
     except Exception:
         pass
+
+    # 2. Config model path (if it's an actual file)
+    from .config import load_config
+    try:
+        config = load_config()
+        if config.runtime.model and Path(config.runtime.model).is_file():
+            return Path(config.runtime.model)
+    except Exception:
+        pass
+
+    # 3. Our download directory
+    model_dir = Path.home() / ".local" / "share" / "localcode" / "models"
+    model_file = model_dir / _MODEL_FILENAME
+    if model_file.exists():
+        return model_file
 
     # 4. Common locations
     for search_dir in [
@@ -436,7 +440,35 @@ def _download_parallel(url: str, dest: Path, num_threads: int = 16,
 
 
 def download_model(on_progress: Callable[[str], None] | None = None) -> tuple[bool, str]:
-    """Download the Gemma 4 26B GGUF model directly from HuggingFace."""
+    """Download the Gemma 4 26B GGUF model.
+
+    Strategy:
+    1. Use Ollama (preferred) — integrity-verified via SHA256, resumable
+    2. Fall back to direct HuggingFace download if Ollama not available
+    """
+    # Check if Ollama already has it
+    existing = get_model_path()
+    if existing:
+        return True, str(existing)
+
+    # Try Ollama first — it verifies integrity automatically
+    if shutil.which("ollama"):
+        if on_progress:
+            on_progress(f"Downloading via Ollama ({_OLLAMA_MODEL_TAG})...")
+        try:
+            result = subprocess.run(
+                ["ollama", "pull", _OLLAMA_MODEL_TAG],
+                capture_output=True, text=True, timeout=3600,
+            )
+            if result.returncode == 0:
+                # Get the blob path
+                blob_path = get_model_path()
+                if blob_path:
+                    return True, str(blob_path)
+        except Exception:
+            pass  # Ollama pull failed, try HF
+
+    # Fallback: direct HuggingFace download
     model_dir = Path.home() / ".local" / "share" / "localcode" / "models"
     model_dir.mkdir(parents=True, exist_ok=True)
     model_file = model_dir / _MODEL_FILENAME
@@ -451,7 +483,6 @@ def download_model(on_progress: Callable[[str], None] | None = None) -> tuple[bo
         _download_parallel(_MODEL_URL, model_file, num_threads=16, on_progress=on_progress)
         return True, str(model_file)
     except Exception as e:
-        # Clean up partial download
         if model_file.exists():
             model_file.unlink()
         return False, f"Model download failed: {e}"

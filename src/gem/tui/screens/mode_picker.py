@@ -6,9 +6,6 @@ from textual.screen import Screen
 from textual.widgets import Static
 from textual.binding import Binding
 
-_HEADER = "──────────────── 🏠 LocalCode ────────────────"
-
-
 class ModePickerScreen(Screen):
     """Press 1 or 2 to select mode. No mouse needed."""
 
@@ -20,20 +17,21 @@ class ModePickerScreen(Screen):
 
     DEFAULT_CSS = """
     ModePickerScreen {
-        align: center middle;
-    }
-    #picker-wrap {
-        width: 52;
-        height: auto;
+        layout: vertical;
     }
     #picker-header {
-        width: 100%;
-        text-align: center;
-        color: $primary;
-        margin-bottom: 1;
+        dock: top;
+        height: 3;
+        padding: 1 1 1 1;
+        color: #5f87ff;
+        background: $surface;
+    }
+    #picker-center {
+        height: 1fr;
+        align: center middle;
     }
     #picker-box {
-        width: 100%;
+        width: 52;
         height: auto;
         padding: 1 2;
         border: solid $primary;
@@ -41,16 +39,33 @@ class ModePickerScreen(Screen):
     """
 
     def compose(self) -> ComposeResult:
-        from textual.containers import Vertical
-        with Vertical(id="picker-wrap"):
-            yield Static(_HEADER, id="picker-header")
+        from textual.containers import Container
+        yield Static("", id="picker-header")
+        with Container(id="picker-center"):
             yield Static(
-                "Select a mode:\n\n"
-                "  [bold]1.[/] Fast — quick answers\n"
-                "  [bold]2.[/] Reasoning — deep thinking\n\n"
-                "[dim]Press 1 or 2[/]",
-                id="picker-box",
-            )
+                    "Select a mode:\n\n"
+                    "  [bold]1.[/] Fast — quick answers\n"
+                    "  [bold]2.[/] Reasoning — deep thinking\n\n"
+                    "[dim]Press 1 or 2[/]",
+                    id="picker-box",
+                )
+
+    def on_mount(self) -> None:
+        self._update_header()
+
+    def on_resize(self) -> None:
+        self._update_header()
+
+    def _update_header(self) -> None:
+        try:
+            width = self.app.size.width or 80
+        except Exception:
+            width = 80
+        usable = width - 2
+        left = "🏠 LocalCode"
+        left_cols = 13
+        line = f"{left} {'─' * (usable - left_cols)}"
+        self.query_one("#picker-header", Static).update(line)
 
     def _save(self) -> None:
         from ...config import save_config

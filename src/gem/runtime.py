@@ -103,8 +103,7 @@ class GemRuntimeGateway:
 
         if mode in ("turbo", "turbo-think"):
             # Full GPU: all layers on Metal via mmap shared buffers, 2 graph splits
-            # Requires: sudo sysctl iogpu.wired_limit_mb=14336
-            cmd.extend(["--mmap", "-ngl", "999", "-fit", "off", "--cache-ram", "0"])
+            cmd.extend(["--mmap", "-ngl", "999"])
         elif mode == "context":
             # GPU mode: attention on Metal, experts on CPU, mmap for SSD paging
             cmd.extend(["--mmap", "-ngl", "999", "-ot", "exps=CPU"])
@@ -112,8 +111,8 @@ class GemRuntimeGateway:
             # Explicit expert offload (legacy config)
             cmd.extend(["--mmap", "-ngl", "999", "-ot", "exps=CPU"])
         else:
-            # Speed mode (default): CPU mmap, no GPU — fastest decode
-            cmd.extend(["--mmap", "-ngl", str(self.config.llama_cpp_gpu_layers)])
+            # Default GPU mode
+            cmd.extend(["--mmap", "-ngl", "999"])
         # KV cache compression (asymmetric: q8_0 K + turbo4 V recommended)
         ctk = self.config.kv_cache_type_k
         ctv = self.config.kv_cache_type_v
@@ -135,9 +134,9 @@ class GemRuntimeGateway:
         elif self.config.llama_cpp_spec_type:
             cmd.extend(["--spec-type", self.config.llama_cpp_spec_type,
                         "--draft-max", str(self.config.llama_cpp_draft_max)])
-        # Batch sizes — larger batches for GPU mode, smaller for CPU
-        if mode == "context":
-            cmd.extend(["-b", "2048", "-ub", "512"])  # GPU benefits from bigger batches
+        # Batch sizes — GPU benefits from bigger batches for prompt eval
+        if mode in ("turbo", "turbo-think", "context"):
+            cmd.extend(["-b", "2048", "-ub", "512"])
         else:
             cmd.extend(["-b", str(self.config.llama_cpp_batch_size),
                         "-ub", str(min(512, self.config.llama_cpp_batch_size))])
@@ -316,7 +315,7 @@ class GemRuntimeGateway:
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
-        think: bool = True,
+        think: bool = False,
         format: dict[str, Any] | str | None = None,
         num_predict: int | None = None,
     ) -> dict[str, Any]:
@@ -417,7 +416,7 @@ class GemRuntimeGateway:
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
-        think: bool = True,
+        think: bool = False,
         num_ctx: int | None = None,
         num_predict: int | None = None,
     ) -> Iterator[dict[str, Any]]:
