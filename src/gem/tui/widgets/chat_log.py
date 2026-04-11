@@ -336,15 +336,43 @@ class ChatLog(RichLog):
         self._render_turn_summary(summary_text)
 
     def stream_token(self, token: str) -> None:
-        if not hasattr(self, '_stream_buf'):
-            self._stream_buf = []
-        self._stream_buf.append(token)
+        """Append a streaming token — renders incrementally line by line."""
+        if not hasattr(self, '_stream_text'):
+            self._stream_text = ""
+            self._stream_started = False
+        self._stream_text += token
 
-    def finish_stream(self) -> None:
-        if hasattr(self, '_stream_buf') and self._stream_buf:
-            text = "".join(self._stream_buf)
-            self.append_assistant(text)
-            self._stream_buf.clear()
+        # Add initial spacer before first content
+        if not self._stream_started:
+            self.write(Text(""))
+            self._track_lines()
+            self._stream_started = True
+
+        # Render complete lines as they come in
+        # Keep the last (incomplete) line in the buffer
+        lines = self._stream_text.split("\n")
+        if len(lines) > 1:
+            # We have at least one complete line — render all complete lines
+            for complete_line in lines[:-1]:
+                self.write(Text(f"  {complete_line}"))
+                self._track_lines()
+            # Keep only the incomplete remainder
+            self._stream_text = lines[-1]
+            self.scroll_end(animate=False)
+
+    def finish_stream(self, full_text: str = "") -> None:
+        """Finalize streaming — render any remaining text and record in history."""
+        if hasattr(self, '_stream_text'):
+            # Render any remaining partial line
+            if self._stream_text.strip():
+                self.write(Text(f"  {self._stream_text}"))
+                self._track_lines()
+            self._stream_text = ""
+            self._stream_started = False
+        # Record in history for re-rendering (text was already shown line by line)
+        if full_text.strip():
+            self._history.append(("assistant", full_text))
+        self.scroll_end(animate=False)
 
     def clear(self) -> None:
         """Clear display and history."""
