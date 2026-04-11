@@ -332,17 +332,25 @@ def _download_parallel(url: str, dest: Path, num_threads: int = 16,
     import threading
     import urllib.request
 
-    # Create SSL context — use certifi if available, fall back to unverified
-    try:
-        import certifi
-        ssl_ctx = ssl.create_default_context(cafile=certifi.where())
-    except ImportError:
-        ssl_ctx = ssl.create_default_context()
-    # If default context fails, allow unverified as last resort
-    try:
-        req = urllib.request.Request(url, method="HEAD")
-        urllib.request.urlopen(req, context=ssl_ctx, timeout=10).close()
-    except ssl.SSLCertVerificationError:
+    # Create SSL context — try certifi, then system, then unverified
+    ssl_ctx = None
+    for _attempt in range(3):
+        try:
+            if _attempt == 0:
+                import certifi
+                ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+            elif _attempt == 1:
+                ssl_ctx = ssl.create_default_context()
+            else:
+                ssl_ctx = ssl._create_unverified_context()
+            req = urllib.request.Request(url, method="HEAD")
+            urllib.request.urlopen(req, context=ssl_ctx, timeout=10).close()
+            break  # this context works
+        except ImportError:
+            continue
+        except Exception:
+            continue
+    if ssl_ctx is None:
         ssl_ctx = ssl._create_unverified_context()
 
     # Get file size via HEAD
