@@ -241,7 +241,16 @@ class SetupScreen(Screen):
         env["GGML_BACKEND_PATH"] = ""  # prevent system ggml from overriding TurboQuant
 
         gw = GemRuntimeGateway(config.runtime)
-        binary = config.runtime.llama_cpp_binary
+        # Use bundled binary if config doesn't have one
+        from ...bootstrap import _turboquant_binary_path as _tbp
+        binary = config.runtime.llama_cpp_binary or str(_tbp() or "")
+
+        if not binary:
+            self.app.call_from_thread(lambda: self._show_error("No server binary found. Reinstall localcode."))
+            return
+        if not model_path:
+            self.app.call_from_thread(lambda: self._show_error("No model found. Delete ~/.gem/config.toml and retry."))
+            return
 
         if binary and model_path:
             # Try up to 2 attempts: first with current mode, then CPU-only fallback
@@ -289,7 +298,7 @@ class SetupScreen(Screen):
                         proc.kill()
                     except Exception:
                         pass
-                    self.app.call_from_thread(lambda: self._update(2, "GPU OOM — retrying CPU-only..."))
+                    self._status_text = "GPU OOM — retrying CPU-only..."
                     time.sleep(1)
                     # Force CPU-only mode
                     config.runtime.laptop_26b_runtime_mode = "speed"
@@ -304,7 +313,8 @@ class SetupScreen(Screen):
                 return
 
         # Done
-        self.app.call_from_thread(lambda: self._update(3, "Ready!"))
+        self._current_step = 3
+        self._status_text = "Ready!"
 
         import asyncio
         await asyncio.sleep(0.5)
