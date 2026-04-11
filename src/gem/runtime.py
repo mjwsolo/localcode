@@ -381,11 +381,19 @@ class GemRuntimeGateway:
         import subprocess
         import time
         from .bootstrap import get_model_path
+        # Kill by port first (catches zombies pkill misses)
         try:
-            subprocess.run(["pkill", "-f", "llama-server"], capture_output=True, timeout=3)
-            time.sleep(1)
+            r = subprocess.run(["lsof", "-ti", ":8081"], capture_output=True, text=True, timeout=3)
+            for pid in r.stdout.strip().split():
+                if pid:
+                    subprocess.run(["kill", "-9", pid], capture_output=True, timeout=2)
         except Exception:
             pass
+        try:
+            subprocess.run(["pkill", "-9", "-f", "llama-server"], capture_output=True, timeout=3)
+        except Exception:
+            pass
+        time.sleep(1)
         model = get_model_path()
         if not model:
             return
