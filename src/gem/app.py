@@ -218,8 +218,8 @@ class GemApp:
         self._input_field = InputField(history_file=history_path)
         self.session_allows: set[str] = set()
         self._thinking_tick = 0
-        self._pending_images: list[ImageData] = []
-        self._pending_audio: list[AudioInputData] = []
+        self._pending_images: list[dict] = []
+        self._pending_audio: list[dict] = []
         self.stats = SessionStats()
         self.tool_cache = ToolResultCache(self.repo_root)
         self.bg_indexer = None
@@ -1326,7 +1326,7 @@ class GemApp:
         self._pending_audio.clear()
         self.ask(user_text, stream=True, images=images, audio=audio)
 
-    def ask(self, user_text: str, stream: bool = True, images: list[ImageData] | None = None, audio: list[AudioInputData] | None = None) -> str:
+    def ask(self, user_text: str, stream: bool = True, images: list[dict] | None = None, audio: list[dict] | None = None) -> str:
         # Reset per-turn state
         self.perms.new_turn()
 
