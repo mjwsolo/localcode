@@ -265,24 +265,29 @@ def test_cli_bootstrap_sets_llama_cpp():
 # ── Test 10: Setup screen step 2 actually has server launch code ──
 def test_setup_screen_has_server_launch():
     """Verify setup.py Step 2 contains server launch code (not just a label)."""
-    import inspect
-    from gem.tui.screens.setup import SetupScreen
-    source = inspect.getsource(SetupScreen._run_setup)
+    # Read source file directly — inspect.getsource fails on Cython-compiled code
+    from pathlib import Path
+    setup_file = Path(__file__).parent.parent / "src" / "gem" / "tui" / "screens" / "setup.py"
+    source = setup_file.read_text()
     assert "Popen" in source, "Step 2 must launch server via Popen"
     assert "healthcheck" in source, "Step 2 must wait for healthcheck"
     assert "llama_server_command" in source, "Step 2 must use llama_server_command for full flags"
-    print("  Setup screen _run_setup contains: Popen, healthcheck, llama_server_command")
+    print("  Setup screen setup.py contains: Popen, healthcheck, llama_server_command")
     print("  ✓ PASS")
 
 
 # ── Test 11: download_model uses parallel download ──
 def test_download_uses_parallel():
     """Verify download_model calls _download_parallel, not urlretrieve."""
-    import inspect
-    from gem.bootstrap import download_model
-    source = inspect.getsource(download_model)
-    assert "_download_parallel" in source, "download_model must use _download_parallel"
-    assert "urlretrieve" not in source, "download_model must NOT use urlretrieve directly"
+    # Read source file directly — inspect.getsource fails on Cython-compiled code
+    from pathlib import Path
+    bootstrap_file = Path(__file__).parent.parent / "src" / "gem" / "bootstrap.py"
+    source = bootstrap_file.read_text()
+    # Find the download_model function body
+    idx = source.index("def download_model")
+    func_source = source[idx:idx+1000]
+    assert "_download_parallel" in func_source, "download_model must use _download_parallel"
+    assert "urlretrieve" not in func_source, "download_model must NOT use urlretrieve directly"
     print("  download_model uses _download_parallel ✓")
     print("  ✓ PASS")
 

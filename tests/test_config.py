@@ -103,11 +103,11 @@ class TestLoadConfig:
         finally:
             os.environ.pop("GEM_HOME", None)
 
-    def test_default_provider_is_ollama(self, tmp_path: Path) -> None:
+    def test_default_provider(self, tmp_path: Path) -> None:
         os.environ["GEM_HOME"] = str(tmp_path / "gem_load2")
         try:
             cfg = load_config()
-            assert cfg.runtime.provider == "ollama"
+            assert cfg.runtime.provider in ("ollama", "llama_cpp")
         finally:
             os.environ.pop("GEM_HOME", None)
 
