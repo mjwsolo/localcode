@@ -305,10 +305,11 @@ def get_model_path() -> Path | None:
     return None
 
 
-def _download_parallel(url: str, dest: Path, num_threads: int = 8,
+def _download_parallel(url: str, dest: Path, num_threads: int = 16,
                        on_progress: Callable[[str], None] | None = None) -> None:
-    """Download a large file using parallel HTTP range requests (8 threads).
+    """Download a large file using parallel HTTP range requests.
 
+    Uses 16 threads and 1MB buffers for maximum throughput.
     Falls back to single-threaded if the server doesn't support ranges.
     """
     import threading
@@ -345,7 +346,7 @@ def _download_parallel(url: str, dest: Path, num_threads: int = 8,
             req = urllib.request.Request(url)
             req.add_header("Range", f"bytes={start}-{end}")
             with urllib.request.urlopen(req) as resp:
-                buf_size = 256 * 1024  # 256KB read buffer
+                buf_size = 1024 * 1024  # 1MB read buffer
                 with open(dest, "r+b") as f:
                     f.seek(start)
                     while True:
@@ -409,7 +410,7 @@ def download_model(on_progress: Callable[[str], None] | None = None) -> tuple[bo
         on_progress(f"Downloading {_MODEL_FILENAME} (~10GB)...")
 
     try:
-        _download_parallel(_MODEL_URL, model_file, num_threads=8, on_progress=on_progress)
+        _download_parallel(_MODEL_URL, model_file, num_threads=16, on_progress=on_progress)
         return True, str(model_file)
     except Exception as e:
         # Clean up partial download
