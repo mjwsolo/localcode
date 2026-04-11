@@ -335,8 +335,9 @@ class GemApp:
                     self.console.print(f"[dim]  {content}[/]")
             self.console.print("[dim]  --- end ---[/]\n")
         # Re-create runtime engine after _pick_mode may have changed provider
+        from .runtime import GemRuntimeGateway as _GRG2
         self.engine.close()
-        self.engine = GemRuntimeGateway(self.config.runtime)
+        self.engine = _GRG2(self.config.runtime)
 
         # Warm up model with pulsating dots
         import sys as _sys
