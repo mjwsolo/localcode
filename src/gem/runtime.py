@@ -363,20 +363,45 @@ class GemRuntimeGateway:
                 return data
             except Exception as exc:
                 last_error = exc
-                # If server returned 500, try restarting it
-                if hasattr(exc, 'response') and getattr(exc.response, 'status_code', 0) == 500:
+                # Server error or connection lost — try restarting
+                is_500 = hasattr(exc, 'response') and getattr(exc.response, 'status_code', 0) == 500
+                is_conn_err = "connect" in str(exc).lower() or "refused" in str(exc).lower()
+                if is_500 or is_conn_err:
                     try:
                         self._restart_server()
-                        import time; time.sleep(2)
                     except Exception:
                         pass
         raise RuntimeErrorWithContext(str(last_error) if last_error else "runtime request failed")
 
     def _restart_server(self) -> None:
-        """Attempt to restart the llama-server if it crashed."""
+        """Kill and relaunch llama-server with correct binary and flags."""
+        import os
         import subprocess
+        import time
+        from .bootstrap import get_model_path
         try:
             subprocess.run(["pkill", "-f", "llama-server"], capture_output=True, timeout=3)
+            time.sleep(1)
+        except Exception:
+            pass
+        model = get_model_path()
+        if not model:
+            return
+        cmd = self.llama_server_command(str(model))
+        env = dict(os.environ)
+        env["GGML_BACKEND_PATH"] = ""
+        try:
+            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=True, env=env)
+            # Wait for healthcheck
+            for _ in range(30):
+                time.sleep(1)
+                try:
+                    ok, _ = self.healthcheck()
+                    if ok:
+                        return
+                except Exception:
+                    pass
         except Exception:
             pass
 
