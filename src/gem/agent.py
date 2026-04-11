@@ -692,6 +692,10 @@ def run_agent_loop(
         thinking_parts: list[str] = []
         tool_calls: list[dict] = []
         thinking_shown = False
+        content_streaming = False
+
+        # Signal TUI that we're starting generation
+        out.start_thinking()
 
         try:
             for event in app.engine.stream_chat_events(
@@ -701,15 +705,17 @@ def run_agent_loop(
                     chunk = _strip_thinking_tokens(event["content"])
                     if chunk:
                         if not thinking_shown:
-                            out._stop_indicator()
-                            sys.stdout.write("\033[2;3m  thinking...\033[0m\n")
                             thinking_shown = True
                         thinking_parts.append(chunk)
                         out.feed_thinking(chunk)
                 elif event["type"] == "content":
                     chunk = _strip_thinking_tokens(event["content"])
                     if chunk:
+                        if not content_streaming:
+                            out.start_streaming()
+                            content_streaming = True
                         content_parts.append(chunk)
+                        out.stream(chunk)
                 elif event["type"] == "tool_calls":
                     tool_calls = event["tool_calls"]
         except KeyboardInterrupt:
@@ -747,6 +753,7 @@ def run_agent_loop(
                         chunk = _strip_thinking_tokens(event["content"])
                         if chunk:
                             content_parts.append(chunk)
+                            out.stream(chunk)
                     elif event["type"] == "tool_calls":
                         tool_calls = event["tool_calls"]
                 if not content_parts and not tool_calls:

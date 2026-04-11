@@ -532,12 +532,10 @@ class ChatScreen(Screen):
 
         log = self.query_one("#chat-log", ChatLog)
 
-        # Only show response if response_done event didn't already handle it
-        if not self._response_shown and self._stream_buf:
-            text = "".join(self._stream_buf)
-            text = _clean_display_text(text)
-            if text:
-                log.append_assistant(text)
+        # Finalize any remaining streamed content
+        if not self._response_shown:
+            full_text = "".join(self._stream_buf)
+            log.finish_stream(full_text)
 
         self._stream_buf.clear()
 
@@ -576,16 +574,17 @@ class ChatScreen(Screen):
                 self._hide_active_step()
             chunk = p.get("chunk", "")
             self._stream_buf.append(chunk)
+            # Stream tokens to display in real time
+            log.stream_token(chunk)
             toks = max(1, len(chunk) // 4)
             self._turn_tokens += toks
             self._context_used += toks
             self._thinking_phase = "generating"
         elif t == "response_done":
-            text = p.get("text", "")
-            text = _clean_display_text(text)
-            if text:
-                log.append_assistant(text)
-                self._response_shown = True
+            # Finalize streaming display — text was already shown line by line
+            full_text = "".join(self._stream_buf)
+            log.finish_stream(full_text)
+            self._response_shown = True
             self._stream_buf.clear()
         elif t == "tool_start":
             name = p.get("name", "")
