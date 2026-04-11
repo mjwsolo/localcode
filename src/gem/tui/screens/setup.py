@@ -51,6 +51,7 @@ class SetupScreen(Screen):
         self._total_steps = len(self.STEPS)
         self._spin_idx = 0
         self._spin_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+        self._failed_step = -1  # which step failed (-1 = none)
 
     def compose(self) -> ComposeResult:
         from textual.containers import Vertical
@@ -63,9 +64,11 @@ class SetupScreen(Screen):
     def _render_steps(self) -> str:
         lines = ["[bold]First-time setup[/]\n"]
         for i, (key, label) in enumerate(self.STEPS):
-            if i < self._current_step:
+            if i == self._failed_step:
+                lines.append(f"  [red]✗[/] {label}")
+            elif i < self._current_step:
                 lines.append(f"  [green]✓[/] {label}")
-            elif i == self._current_step:
+            elif i == self._current_step and self._failed_step == -1:
                 spin = self._spin_chars[self._spin_idx % len(self._spin_chars)]
                 lines.append(f"  [bold yellow]{spin}[/] {label}...")
             else:
@@ -82,7 +85,9 @@ class SetupScreen(Screen):
             pass
 
     def _show_error(self, msg: str) -> None:
+        self._failed_step = self._current_step
         try:
+            self.query_one("#setup-steps", Static).update(self._render_steps())
             self.query_one("#setup-status", Static).update(
                 f"[red]{msg}[/]\n\n[dim]Press Ctrl+C to quit.\nRetry with 'localcode'.[/]"
             )
