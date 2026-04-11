@@ -86,7 +86,8 @@ class GemRuntimeGateway:
 
         Usage: subprocess.Popen(engine.llama_server_command("/path/to/model.gguf"))
         """
-        binary = self.config.llama_cpp_binary or "llama-server"
+        from .bootstrap import _turboquant_binary_path
+        binary = self.config.llama_cpp_binary or str(_turboquant_binary_path() or "") or "llama-server"
         mode = self.config.laptop_26b_runtime_mode
 
         # Context mode benefits from all CPU cores for expert computation
