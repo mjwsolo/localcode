@@ -70,21 +70,27 @@ class TestTurboquantBinaryPath:
         binary.parent.mkdir(parents=True)
         binary.write_text("#!/bin/sh\n")
         (tq / "CMakeLists.txt").write_text("cmake_minimum_required(VERSION 3.10)")
-        with patch("gem.bootstrap._find_turboquant_source", return_value=tq):
-            result = _turboquant_binary_path()
+        fake_bundled = tmp_path / "gem" / "bin" / "llama-server"  # doesn't exist
+        with patch("gem.bootstrap.__file__", str(tmp_path / "gem" / "bootstrap.py")):
+            with patch("gem.bootstrap._find_turboquant_source", return_value=tq):
+                result = _turboquant_binary_path()
         assert result == binary
 
     def test_returns_none_when_not_built(self, tmp_path: Path) -> None:
         tq = tmp_path / "llama-cpp-turboquant"
         tq.mkdir()
         (tq / "CMakeLists.txt").write_text("cmake_minimum_required(VERSION 3.10)")
-        with patch("gem.bootstrap._find_turboquant_source", return_value=tq):
-            result = _turboquant_binary_path()
+        with patch("gem.bootstrap.__file__", str(tmp_path / "gem" / "bootstrap.py")):
+            with patch("pathlib.Path.home", return_value=tmp_path / "fakehome"):
+                with patch("gem.bootstrap._find_turboquant_source", return_value=tq):
+                    result = _turboquant_binary_path()
         assert result is None
 
-    def test_returns_none_when_no_source(self) -> None:
-        with patch("gem.bootstrap._find_turboquant_source", return_value=None):
-            result = _turboquant_binary_path()
+    def test_returns_none_when_no_source(self, tmp_path: Path) -> None:
+        with patch("gem.bootstrap.__file__", str(tmp_path / "gem" / "bootstrap.py")):
+            with patch("pathlib.Path.home", return_value=tmp_path / "fakehome"):
+                with patch("gem.bootstrap._find_turboquant_source", return_value=None):
+                    result = _turboquant_binary_path()
         assert result is None
 
 
