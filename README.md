@@ -61,7 +61,7 @@ We are building for a world of truly democratized AI - where everyone has access
 - **Mac with Apple Silicon** (M1/M2/M3/M4)
 - **16GB RAM** minimum
 - **Python 3.11+**
-- **~12GB free disk**
+- **~12GB free disk** (10GB model + server)
 
 ## How LocalCode works
 

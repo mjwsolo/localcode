@@ -5,6 +5,7 @@ Screen {
     background: $surface;
 }
 
+
 /* ── Header bar (top) ── */
 
 #header-bar {

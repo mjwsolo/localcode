@@ -30,6 +30,7 @@ from textual.binding import Binding
 from .bridge import AgentEvent, ApprovalRequest, TUIBridge
 from .screens.chat import ChatScreen
 from .screens.mode_picker import ModePickerScreen
+from .screens.setup import SetupScreen
 
 
 class LocalCodeTUI(App):
@@ -45,6 +46,7 @@ class LocalCodeTUI(App):
     SCREENS = {
         "chat": ChatScreen,
         "mode_picker": ModePickerScreen,
+        "setup": SetupScreen,
     }
 
     def __init__(self, show_mode_picker: bool = True) -> None:
@@ -78,13 +80,73 @@ class LocalCodeTUI(App):
         self.gem_config = load_config()
         self.bridge = TUIBridge(self)
 
-        # Don't init GemApp here — it's heavy and may crash.
-        # ChatScreen will init it on first message.
+        # Check if server is reachable — if not, decide: setup or just start server
+        from ..runtime import GemRuntimeGateway
+        from ..bootstrap import _turboquant_binary_path
+        gw = GemRuntimeGateway(self.gem_config.runtime)
+        ok, _ = gw.healthcheck()
+        if not ok:
+            # If binary exists, server just needs starting — don't show setup
+            if _turboquant_binary_path() or self.gem_config.runtime.llama_cpp_binary:
+                # Try to start the server, then proceed
+                self._start_server_and_continue()
+                return
+            # First launch — nothing installed yet
+            self.push_screen("setup")
+            return
 
-        if self.show_mode_picker:
-            self.push_screen("mode_picker")
-        else:
+        # Skip mode picker if user already chose a mode previously
+        saved_mode = getattr(self.gem_config.runtime, 'laptop_26b_runtime_mode', '')
+        if saved_mode:
             self.push_screen("chat")
+        else:
+            self.push_screen("mode_picker")
+
+    def _start_server_and_continue(self) -> None:
+        """Server binary exists but isn't running — start it and wait."""
+        # No notification — setup screen or silent start
+        self.run_worker(self._start_server_worker, thread=True)
+
+    async def _start_server_worker(self) -> None:
+        """Start llama-server, wait for healthcheck, then show picker/chat."""
+        import time
+        import subprocess
+        from ..runtime import GemRuntimeGateway
+        from ..bootstrap import get_model_path
+
+        config = self.gem_config
+        binary = config.runtime.llama_cpp_binary
+        model = get_model_path()
+
+        if not binary or not model:
+            self.call_from_thread(lambda: self.push_screen("setup"))
+            return
+
+        # Build launch command
+        try:
+            gw = GemRuntimeGateway(config.runtime)
+            cmd = gw.llama_server_command(str(model))
+            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        except Exception as e:
+            self.call_from_thread(lambda: self.notify(f"Failed to start server: {e}", severity="error"))
+            return
+
+        # Wait for healthcheck (up to 30s)
+        for i in range(30):
+            time.sleep(1)
+            gw = GemRuntimeGateway(config.runtime)
+            ok, _ = gw.healthcheck()
+            if ok:
+                def _proceed():
+                    saved_mode = getattr(self.gem_config.runtime, 'laptop_26b_runtime_mode', '')
+                    if saved_mode:
+                        self.push_screen("chat")
+                    else:
+                        self.push_screen("mode_picker")
+                self.call_from_thread(_proceed)
+                return
+
+        self.call_from_thread(lambda: self.notify("Server failed to start after 30s. Check logs.", severity="error"))
 
     def ensure_backend(self) -> bool:
         """Lazily initialize GemApp backend. Returns True if ready."""

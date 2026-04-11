@@ -252,6 +252,50 @@ def download_turboquant_binary(on_progress: Callable[[str], None] | None = None)
         return False, f"Download failed: {e}\nBuild from source instead: clone llama-cpp-turboquant and run cmake."
 
 
+_MODEL_URL = "https://huggingface.co/bartowski/google_gemma-4-26b-a4b-it-GGUF/resolve/main/google_gemma-4-26b-a4b-it-IQ3_S.gguf"
+_MODEL_FILENAME = "gemma-4-26b-a4b-it-IQ3_S.gguf"
+
+
+def get_model_path() -> Path | None:
+    """Return path to downloaded GGUF model if it exists."""
+    model_dir = Path.home() / ".local" / "share" / "localcode" / "models"
+    model_file = model_dir / _MODEL_FILENAME
+    if model_file.exists():
+        return model_file
+    return None
+
+
+def download_model(on_progress: Callable[[str], None] | None = None) -> tuple[bool, str]:
+    """Download the Gemma 4 26B GGUF model directly from HuggingFace."""
+    import urllib.request
+
+    model_dir = Path.home() / ".local" / "share" / "localcode" / "models"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    model_file = model_dir / _MODEL_FILENAME
+
+    if model_file.exists():
+        return True, str(model_file)
+
+    if on_progress:
+        on_progress(f"Downloading {_MODEL_FILENAME} (~10GB)...")
+
+    try:
+        def _report(block_num, block_size, total_size):
+            if on_progress and total_size > 0:
+                pct = min(100, block_num * block_size * 100 // total_size)
+                mb_done = block_num * block_size // (1024 * 1024)
+                mb_total = total_size // (1024 * 1024)
+                on_progress(f"Downloading model: {mb_done}/{mb_total} MB ({pct}%)")
+
+        urllib.request.urlretrieve(_MODEL_URL, str(model_file), reporthook=_report)
+        return True, str(model_file)
+    except Exception as e:
+        # Clean up partial download
+        if model_file.exists():
+            model_file.unlink()
+        return False, f"Model download failed: {e}"
+
+
 def _ensure_cmake() -> bool:
     """Install cmake if not present. Returns True if cmake is available."""
     if shutil.which("cmake"):
@@ -372,7 +416,8 @@ def pull_model(model_name: str, on_progress: Callable[[str], None] | None = None
         process = subprocess.Popen(
             ["ollama", "pull", model_name],
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
             text=True,
         )
         lines: list[str] = []
@@ -672,22 +717,20 @@ def run_setup(
                 console.print(details)
             console.print(details)
 
-    # For llama_cpp provider, we still need Ollama to download the model GGUF
+    # Download model GGUF directly from HuggingFace (no Ollama needed)
     if auto_install and config.runtime.provider == "llama_cpp":
-        if not is_ollama_installed():
-            install_step = SetupStep("runtime-install", "installing Ollama", "Installing Ollama for model download.")
-            ok, details = run_with_runner(console, install_step, setup_steps, lambda: install_ollama(console))
-            if not ok:
-                console.print(details)
-                console.print("Install Ollama manually: https://ollama.com/download")
-        if is_ollama_installed():
-            # Start Ollama service if not running
-            import time as _time
-            subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-            _time.sleep(2)
-            model_step = SetupStep("model-prepare", "downloading model", f"Pulling {resolved_model} via Ollama.")
-            pulled, pull_details = run_with_runner(console, model_step, setup_steps, lambda: pull_model(resolved_model, on_progress=_set_progress))
-            console.print(pull_details)
+        model_path = get_model_path()
+        if model_path:
+            console.print(f"Model already downloaded: {model_path}")
+        else:
+            model_step = SetupStep("model-prepare", "downloading model", "Downloading Gemma 4 26B model (~10GB).")
+            ok, model_result = run_with_runner(console, model_step, setup_steps, lambda: download_model(on_progress=_set_progress))
+            if ok:
+                model_path = Path(model_result)
+                console.print(f"Model downloaded: {model_path}")
+            else:
+                console.print(f"Model download failed: {model_result}")
+                return 1
 
     engine = GemRuntimeGateway(config.runtime)
     runtime_step = SetupStep("runtime-check", "checking runtime", f"Checking {config.runtime.provider} readiness.")
