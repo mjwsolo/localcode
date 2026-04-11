@@ -50,3 +50,5 @@ docs/
 *.c
 *.so
 *.pyd
+*.pkg
+wheelhouse/
