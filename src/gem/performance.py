@@ -258,16 +258,13 @@ def recommend_preset(
         llama_cpp_gpu_layers = 0  # CPU mmap is more stable on 16GB
         notes.append("TurboQuant KV (q8_0-K + turbo4-V) + CPU mmap for 16GB.")
 
-    # Apple Silicon + MoE model: prefer MLX (3x faster than llama.cpp for MoE)
+    # Apple Silicon + 26B laptop: always use llama.cpp with TurboQuant
+    # MLX 4-bit doesn't fit on 16GB, Ollama doesn't support TurboQuant KV cache
     if machine.system == "darwin" and machine.has_gpu and profile == "gemma4-26b-laptop":
-        if laptop_runtime_mode == "fit":
-            runtime_provider = "llama_cpp"
-            llama_cpp_gpu_layers = 0
-            lookup_cache = True
-            notes.append("llama.cpp mmap path selected for fit-first 26B A4B laptop mode.")
-        else:
-            runtime_provider = "ollama"
-            notes.append("Ollama MLX backend preferred for speed-first 26B A4B laptop mode.")
+        runtime_provider = "llama_cpp"
+        llama_cpp_gpu_layers = 0
+        lookup_cache = True
+        notes.append("TurboQuant llama.cpp for 26B laptop mode (MLX/Ollama can't fit or lack turbo KV).")
     elif machine.system == "darwin" and machine.has_gpu and profile == "gemma4-26b-moe":
         runtime_provider = "ollama"
         notes.append("Ollama MLX backend preferred for MoE models on Apple Silicon (3x faster).")

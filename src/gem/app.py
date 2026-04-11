@@ -400,14 +400,14 @@ class GemApp:
                     save_config(self.config)
                 _sys.stderr.write(f"\r\033[33m  starting server...{' ' * 20}\033[0m")
                 _sys.stderr.flush()
-                # Inline server launch (runtime_launch module removed)
+                # Inline server launch — use llama_server_command() for full TurboQuant flags
                 import subprocess as _sp
-                _binary = self.config.runtime.llama_cpp_binary or "llama-server"
                 _model = self.config.runtime.model or ""
-                _port = self.config.runtime.base_url.split(":")[-1].rstrip("/") if ":" in self.config.runtime.base_url else "8081"
-                _cmd = [_binary, "-m", _model, "--port", _port, "-ngl", "999", "--mmap"]
+                from .runtime import GemRuntimeGateway
+                _gw = GemRuntimeGateway(self.config.runtime)
+                _cmd = _gw.llama_server_command(_model)
                 try:
-                    _sp.Popen(_cmd, stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+                    _sp.Popen(_cmd, stdout=_sp.DEVNULL, stderr=_sp.DEVNULL, start_new_session=True)
                 except Exception:
                     pass
                 # Wait for server to be ready
