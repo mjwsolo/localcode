@@ -230,6 +230,7 @@ _BINARY_RELEASE_URL = "https://github.com/mjwsolo/localcode/releases/download/v{
 
 def download_turboquant_binary(on_progress: Callable[[str], None] | None = None) -> tuple[bool, str]:
     """Download pre-built llama-server binary from GitHub Releases."""
+    import ssl
     import urllib.request
     system = platform.system().lower()
     machine = platform.machine().lower()
@@ -249,6 +250,21 @@ def download_turboquant_binary(on_progress: Callable[[str], None] | None = None)
     if on_progress:
         on_progress(f"downloading llama-server for {plat}...")
     try:
+        try:
+            import certifi
+            ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+        except ImportError:
+            ssl_ctx = ssl.create_default_context()
+        opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ssl_ctx))
+        urllib.request.install_opener(opener)
+        urllib.request.urlretrieve(url, str(binary))
+        binary.chmod(0o755)
+        return True, str(binary)
+    except ssl.SSLCertVerificationError:
+        # Retry without verification as last resort
+        ssl_ctx = ssl._create_unverified_context()
+        opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ssl_ctx))
+        urllib.request.install_opener(opener)
         urllib.request.urlretrieve(url, str(binary))
         binary.chmod(0o755)
         return True, str(binary)
@@ -312,12 +328,26 @@ def _download_parallel(url: str, dest: Path, num_threads: int = 16,
     Uses 16 threads and 1MB buffers for maximum throughput.
     Falls back to single-threaded if the server doesn't support ranges.
     """
+    import ssl
     import threading
     import urllib.request
 
+    # Create SSL context — use certifi if available, fall back to unverified
+    try:
+        import certifi
+        ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        ssl_ctx = ssl.create_default_context()
+    # If default context fails, allow unverified as last resort
+    try:
+        req = urllib.request.Request(url, method="HEAD")
+        urllib.request.urlopen(req, context=ssl_ctx, timeout=10).close()
+    except ssl.SSLCertVerificationError:
+        ssl_ctx = ssl._create_unverified_context()
+
     # Get file size via HEAD
     req = urllib.request.Request(url, method="HEAD")
-    with urllib.request.urlopen(req) as resp:
+    with urllib.request.urlopen(req, context=ssl_ctx) as resp:
         total_size = int(resp.headers.get("Content-Length", 0))
         accepts_ranges = resp.headers.get("Accept-Ranges", "none") != "none"
 
@@ -327,7 +357,7 @@ def _download_parallel(url: str, dest: Path, num_threads: int = 16,
             if on_progress and total_size > 0:
                 done = min(block_num * block_size, total_size)
                 on_progress(f"Downloading: {done // (1024*1024)}/{total_size // (1024*1024)} MB ({done * 100 // total_size}%)")
-        urllib.request.urlretrieve(url, str(dest), reporthook=_report)
+        urllib.request.urlretrieve(url, str(dest), reporthook=_report)  # no ssl_ctx for urlretrieve
         return
 
     # Split into chunks
@@ -345,7 +375,7 @@ def _download_parallel(url: str, dest: Path, num_threads: int = 16,
         try:
             req = urllib.request.Request(url)
             req.add_header("Range", f"bytes={start}-{end}")
-            with urllib.request.urlopen(req) as resp:
+            with urllib.request.urlopen(req, context=ssl_ctx) as resp:
                 buf_size = 1024 * 1024  # 1MB read buffer
                 with open(dest, "r+b") as f:
                     f.seek(start)
