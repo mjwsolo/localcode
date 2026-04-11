@@ -189,6 +189,13 @@ class SetupScreen(Screen):
         self.app.gem_config = load_config()
         config = self.app.gem_config
 
+        # Kill any existing llama-server to free the port
+        try:
+            subprocess.run(["pkill", "-f", "llama-server"], capture_output=True, timeout=3)
+            time.sleep(1)
+        except Exception:
+            pass
+
         # Actually launch llama-server — try GPU first, fall back to CPU on OOM
         from pathlib import Path
         import os
