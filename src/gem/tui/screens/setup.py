@@ -106,7 +106,9 @@ class SetupScreen(Screen):
         from ...bootstrap import (
             _turboquant_binary_path, _find_turboquant_source,
             build_turboquant, download_turboquant_binary,
-            is_ollama_installed, install_ollama, pull_model,
+            is_ollama_installed, install_ollama,
+            download_model, get_model_path, create_ollama_model,
+            _OLLAMA_MODEL_TAG,
         )
 
         config = self.app.gem_config
@@ -134,36 +136,38 @@ class SetupScreen(Screen):
             config.runtime.llama_cpp_binary = str(binary_path)
             save_config(config)
 
-        # ── Step 1: Model via Ollama ──
-        self.app.call_from_thread(lambda: self._update(1, "Checking Ollama..."))
-        if not is_ollama_installed():
-            from rich.console import Console
-            ok, _ = install_ollama(Console(quiet=True))
-            if not ok:
-                self.app.call_from_thread(lambda: self._show_error("Install Ollama: ollama.com/download"))
-                return
+        # ── Step 1: Model ──
+        self.app.call_from_thread(lambda: self._update(1, "Checking model..."))
 
-        import subprocess
-        subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-        time.sleep(2)
-
-        resolved_model = config.runtime.model or "gemma26b-iq3"
-
-        # Check if model already exists locally before pulling
-        try:
-            check = subprocess.run(["ollama", "show", resolved_model],
-                                   capture_output=True, text=True, timeout=10)
-            model_exists = check.returncode == 0
-        except Exception:
-            model_exists = False
-
-        if not model_exists:
-            self.app.call_from_thread(lambda: self._update(1, f"Downloading {resolved_model}..."))
-            ok, result = pull_model(resolved_model, on_progress=lambda _: None)
+        model_path = get_model_path()
+        if not model_path:
+            self.app.call_from_thread(lambda: self._update(1, "Downloading model (~10GB)..."))
+            ok, result = download_model(
+                on_progress=lambda msg: self.app.call_from_thread(lambda m=msg: self._update(1, m))
+            )
             if not ok:
                 err = str(result).replace("\n", " ").strip()[:60]
                 self.app.call_from_thread(lambda e=err: self._show_error(e))
                 return
+            model_path = result
+
+        # Ensure Ollama has the model registered
+        import subprocess
+        if is_ollama_installed():
+            try:
+                check = subprocess.run(["ollama", "show", _OLLAMA_MODEL_TAG],
+                                       capture_output=True, text=True, timeout=10)
+                if check.returncode != 0:
+                    subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                    time.sleep(2)
+                    self.app.call_from_thread(lambda: self._update(1, "Registering model..."))
+                    ok, result = create_ollama_model(str(model_path))
+                    if not ok:
+                        err = str(result).replace("\n", " ").strip()[:60]
+                        self.app.call_from_thread(lambda e=err: self._show_error(e))
+                        return
+            except Exception:
+                pass
 
         # ── Step 2: Start server ──
         self.app.call_from_thread(lambda: self._update(2, "Starting server..."))

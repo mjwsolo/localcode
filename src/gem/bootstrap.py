@@ -256,8 +256,9 @@ def download_turboquant_binary(on_progress: Callable[[str], None] | None = None)
         return False, f"Download failed: {e}\nBuild from source instead: clone llama-cpp-turboquant and run cmake."
 
 
-_MODEL_URL = "https://huggingface.co/bartowski/google_gemma-4-26b-a4b-it-GGUF/resolve/main/google_gemma-4-26b-a4b-it-IQ3_S.gguf"
-_MODEL_FILENAME = "gemma-4-26b-a4b-it-IQ3_S.gguf"
+_MODEL_URL = "https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF/resolve/main/gemma-4-26B-A4B-it-UD-IQ3_S.gguf"
+_MODEL_FILENAME = "gemma-4-26B-A4B-it-UD-IQ3_S.gguf"
+_OLLAMA_MODEL_TAG = "gemma26b-iq3"
 
 
 def get_model_path() -> Path | None:
@@ -298,6 +299,28 @@ def download_model(on_progress: Callable[[str], None] | None = None) -> tuple[bo
         if model_file.exists():
             model_file.unlink()
         return False, f"Model download failed: {e}"
+
+
+def create_ollama_model(gguf_path: str, on_progress: Callable[[str], None] | None = None) -> tuple[bool, str]:
+    """Create an Ollama model from a GGUF file."""
+    import tempfile
+    modelfile = tempfile.NamedTemporaryFile(mode='w', suffix='.Modelfile', delete=False)
+    modelfile.write(f"FROM {gguf_path}\n")
+    modelfile.close()
+    try:
+        if on_progress:
+            on_progress(f"Creating Ollama model {_OLLAMA_MODEL_TAG}...")
+        result = subprocess.run(
+            ["ollama", "create", _OLLAMA_MODEL_TAG, "-f", modelfile.name],
+            capture_output=True, text=True, timeout=120,
+        )
+        Path(modelfile.name).unlink(missing_ok=True)
+        if result.returncode == 0:
+            return True, f"Created {_OLLAMA_MODEL_TAG}"
+        return False, f"ollama create failed: {result.stderr.strip()[:100]}"
+    except Exception as e:
+        Path(modelfile.name).unlink(missing_ok=True)
+        return False, f"ollama create failed: {e}"
 
 
 def _ensure_cmake() -> bool:
