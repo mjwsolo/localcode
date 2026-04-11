@@ -90,20 +90,33 @@ class GemRuntimeGateway:
         binary = self.config.llama_cpp_binary or str(_turboquant_binary_path() or "") or "llama-server"
         mode = self.config.laptop_26b_runtime_mode
 
+        # Detect system RAM — force CPU-only on ≤8GB machines
+        try:
+            import subprocess as _sp
+            mem_bytes = int(_sp.run(["sysctl", "-n", "hw.memsize"],
+                                    capture_output=True, text=True, timeout=3).stdout.strip())
+            mem_gb = mem_bytes // (1024 ** 3)
+        except Exception:
+            mem_gb = 16  # assume 16GB if detection fails
+
         # Context mode benefits from all CPU cores for expert computation
         threads = 10 if mode == "context" else self.config.llama_cpp_threads
+        ctx_size = self._target_num_ctx()
+        if mem_gb <= 8:
+            ctx_size = min(ctx_size, 4096)  # limit context on 8GB
+
         cmd = [
             binary,
             "--model", model_path,
             "--port", str(port),
-            "--ctx-size", str(self._target_num_ctx()),
+            "--ctx-size", str(ctx_size),
             "--threads", str(threads),
             "--flash-attn", "on",
         ]
 
         if mode in ("turbo", "turbo-think"):
             # Full GPU: all layers on Metal via mmap shared buffers, 2 graph splits
-            # Requires: sudo sysctl iogpu.wired_limit_mb=14336
+            # Requires: sudo sysctl iogpu.wired_limit_mb=14336 (16GB Macs)
             cmd.extend(["--mmap", "-ngl", "999", "-fit", "off", "--cache-ram", "0"])
         elif mode == "context":
             # GPU mode: attention on Metal, experts on CPU, mmap for SSD paging
@@ -112,8 +125,8 @@ class GemRuntimeGateway:
             # Explicit expert offload (legacy config)
             cmd.extend(["--mmap", "-ngl", "999", "-ot", "exps=CPU"])
         else:
-            # Speed mode (default): CPU mmap, no GPU — fastest decode
-            cmd.extend(["--mmap", "-ngl", str(self.config.llama_cpp_gpu_layers)])
+            # Speed mode (default): CPU mmap, no GPU
+            cmd.extend(["--mmap", "-ngl", "0"])
         # KV cache compression (asymmetric: q8_0 K + turbo4 V recommended)
         ctk = self.config.kv_cache_type_k
         ctv = self.config.kv_cache_type_v

@@ -189,55 +189,78 @@ class SetupScreen(Screen):
         self.app.gem_config = load_config()
         config = self.app.gem_config
 
-        # Actually launch llama-server
+        # Actually launch llama-server — try GPU first, fall back to CPU on OOM
         from pathlib import Path
+        import os
         from ...runtime import GemRuntimeGateway
+
+        log_dir = Path.home() / ".local" / "share" / "localcode"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        server_log = log_dir / "server.log"
+        env = dict(os.environ)
+        env["GGML_BACKEND_PATH"] = ""  # prevent system ggml from overriding TurboQuant
+
         gw = GemRuntimeGateway(config.runtime)
         binary = config.runtime.llama_cpp_binary
+
         if binary and model_path:
-            cmd = gw.llama_server_command(str(model_path))
+            # Try up to 2 attempts: first with current mode, then CPU-only fallback
+            for attempt in range(2):
+                cmd = gw.llama_server_command(str(model_path))
 
-            # Log server output for debugging
-            log_dir = Path.home() / ".local" / "share" / "localcode"
-            log_dir.mkdir(parents=True, exist_ok=True)
-            server_log = log_dir / "server.log"
+                try:
+                    log_fh = open(server_log, "w")
+                    proc = subprocess.Popen(cmd, stdout=log_fh, stderr=log_fh, start_new_session=True, env=env)
+                except Exception as exc:
+                    self.app.call_from_thread(lambda e=str(exc): self._show_error(f"Failed to start: {e}"))
+                    return
 
-            try:
-                import os
-                log_fh = open(server_log, "w")
-                env = dict(os.environ)
-                env["GGML_BACKEND_PATH"] = ""  # prevent system ggml from overriding TurboQuant
-                proc = subprocess.Popen(cmd, stdout=log_fh, stderr=log_fh, start_new_session=True, env=env)
-            except Exception as exc:
-                self.app.call_from_thread(lambda e=str(exc): self._show_error(f"Failed to start: {e}"))
-                return
-
-            # Wait for server to become ready (up to 60s)
-            for i in range(60):
-                time.sleep(1)
-                # Check if process died
-                if proc.poll() is not None:
-                    err = ""
+                # Wait for server to become ready (up to 60s)
+                server_ok = False
+                for i in range(60):
+                    time.sleep(1)
+                    if proc.poll() is not None:
+                        break  # crashed
                     try:
-                        err = server_log.read_text()[-300:]
+                        ok, _ = gw.healthcheck()
+                        if ok:
+                            server_ok = True
+                            break
                     except Exception:
                         pass
-                    self.app.call_from_thread(lambda e=err: self._show_error(f"Server crashed:\n{e}"))
-                    return
-                try:
-                    ok, _ = gw.healthcheck()
-                    if ok:
-                        break
-                except Exception:
-                    pass
-                self.app.call_from_thread(lambda i=i: self._update(2, f"Waiting for server... ({i+1}s)"))
-            else:
+                    self.app.call_from_thread(lambda i=i: self._update(2, f"Waiting for server... ({i+1}s)"))
+
+                if server_ok:
+                    break
+
+                # Server failed — check if it's an OOM/memory issue
                 err = ""
                 try:
-                    err = server_log.read_text()[-300:]
+                    log_fh.close()
+                    err = server_log.read_text()
                 except Exception:
                     pass
-                self.app.call_from_thread(lambda e=err: self._show_error(f"Server timeout (60s):\n{e}"))
+
+                is_oom = "working set size" in err or "out of memory" in err.lower() or "allocated size" in err
+
+                if is_oom and attempt == 0:
+                    # Kill the crashed/stuck server and retry with CPU-only
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                    self.app.call_from_thread(lambda: self._update(2, "GPU OOM — retrying CPU-only..."))
+                    time.sleep(1)
+                    # Force CPU-only mode
+                    config.runtime.laptop_26b_runtime_mode = "speed"
+                    config.runtime.llama_cpp_gpu_layers = 0
+                    from ...config import save_config
+                    save_config(config)
+                    gw = GemRuntimeGateway(config.runtime)
+                    continue
+
+                # Not OOM or second attempt also failed
+                self.app.call_from_thread(lambda e=err[-300:]: self._show_error(f"Server failed:\n{e}"))
                 return
 
         # Done
