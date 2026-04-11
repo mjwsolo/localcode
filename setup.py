@@ -28,10 +28,28 @@ class StripSourceBuildWheel:
     pass
 
 
+from setuptools.command.build_py import build_py
+
+class CustomBuildPy(build_py):
+    """Include binary and data files that setuptools normally skips."""
+    def build_package_data(self):
+        super().build_package_data()
+        # Copy llama-server binary
+        src = Path("src/gem/bin/llama-server")
+        if src.exists():
+            dst_dir = Path(self.build_lib) / "gem" / "bin"
+            dst_dir.mkdir(parents=True, exist_ok=True)
+            import shutil
+            shutil.copy2(str(src), str(dst_dir / "llama-server"))
+
 setup(
     ext_modules=ext_modules,
+    cmdclass={"build_py": CustomBuildPy},
     options={
         "bdist_wheel": {},
+    },
+    package_data={
+        "gem": ["bin/*", "**/*.tcss"],
     },
     exclude_package_data={
         "gem": ["*.c"],

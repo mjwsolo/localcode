@@ -206,8 +206,12 @@ def _find_turboquant_source() -> Path | None:
 
 
 def _turboquant_binary_path() -> Path | None:
-    """Return path to the built TurboQuant llama-server binary, or None if not built."""
-    # Check data dir first (pre-built binary downloaded by bootstrap)
+    """Return path to the TurboQuant llama-server binary."""
+    # Check bundled binary in package first (pip install)
+    bundled = Path(__file__).parent / "bin" / "llama-server"
+    if bundled.exists():
+        return bundled
+    # Check data dir (downloaded by bootstrap)
     data_dir = Path.home() / ".local" / "share" / "localcode"
     data_binary = data_dir / "llama-server"
     if data_binary.exists():
@@ -236,7 +240,7 @@ def download_turboquant_binary(on_progress: Callable[[str], None] | None = None)
     else:
         return False, f"No pre-built binary for {system}-{machine}. Clone the repo and build from source."
 
-    version = "0.0.2"
+    version = "0.1.8"
     url = _BINARY_RELEASE_URL.format(version=version, platform=plat)
     data_dir = Path.home() / ".local" / "share" / "localcode"
     data_dir.mkdir(parents=True, exist_ok=True)
