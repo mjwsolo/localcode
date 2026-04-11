@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
 import logging
 from pathlib import Path
+import platform
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
@@ -333,6 +334,10 @@ class GemApp:
                 elif role == "assistant":
                     self.console.print(f"[dim]  {content}[/]")
             self.console.print("[dim]  --- end ---[/]\n")
+        # Re-create runtime engine after _pick_mode may have changed provider
+        self.engine.close()
+        self.engine = GemRuntimeGateway(self.config.runtime)
+
         # Warm up model with pulsating dots
         import sys as _sys
         import threading
@@ -368,11 +373,15 @@ class GemApp:
         anim = threading.Thread(target=_animate, daemon=True)
         anim.start()
         try:
-            # Auto-start server if not running
+            # Check if backend is running
             import httpx as _httpx
             server_ok = False
             try:
-                r = _httpx.get(f"{self.config.runtime.base_url.rstrip('/')}/health", timeout=3)
+                base = self.config.runtime.base_url.rstrip('/')
+                if self.config.runtime.provider == "ollama":
+                    r = _httpx.get(f"{base}/api/tags", timeout=3)
+                else:
+                    r = _httpx.get(f"{base}/health", timeout=3)
                 server_ok = r.status_code == 200
             except Exception:
                 pass
@@ -535,110 +544,85 @@ class GemApp:
         return Group(Text(""), Rule("🏠 [bold]LOCALcode[/]", style="green"))
 
     def _pick_mode(self) -> None:
-        """Mode picker shown after banner."""
-        import subprocess
+        """Mode picker — GPU unlock is fully automatic via native macOS dialog."""
         import sys
         import tty
         import termios
-        # Detect system RAM to decide if sysctl GPU unlock is needed.
-        # On 16GB Macs, Metal's default working set (~11GB) can't fit the
-        # 10.4GB model + KV cache. On 24GB+, there's plenty of headroom.
-        try:
-            mem_bytes = int(subprocess.run(
-                ["sysctl", "-n", "hw.memsize"],
-                capture_output=True, text=True, timeout=2
-            ).stdout.strip())
-            system_ram_gb = mem_bytes // (1024 ** 3)
-        except Exception:
-            system_ram_gb = 16  # conservative fallback
-        needs_sysctl = system_ram_gb <= 16
-        # Check if GPU memory is already unlocked
-        try:
-            r = subprocess.run(["sysctl", "-n", "iogpu.wired_limit_mb"],
-                               capture_output=True, text=True, timeout=2)
-            gpu_ok = int(r.stdout.strip()) >= 14000
-        except Exception:
-            gpu_ok = False
-        if needs_sysctl and not gpu_ok:
-            print("  GPU needs a one-time unlock (resets on reboot).")
-            if input("  Allow? [Y/n]: ").strip().lower() in ("", "y", "yes"):
-                subprocess.run(["sudo", "sysctl", "iogpu.wired_limit_mb=14336"])
-                gpu_ok = True
-        elif not needs_sysctl:
-            gpu_ok = True  # 24GB+ Macs don't need the unlock
-        if gpu_ok:
-            print()
-            print("  \033[1mSelect a mode:\033[0m")
-            print()
-            print("  1. \033[1mFast\033[0m - quicker answers for routine work")
-            print("  2. \033[1mReasoning\033[0m - deeper thinking for harder tasks")
-            print()
-            rule = self._composer_rule()
-            model_short = self.runtime_model.split("/")[-1] if "/" in self.runtime_model else self.runtime_model
-            path = f"~/{self.repo_root.name}" if self.repo_root != Path.home() else "~"
-            status = f"{model_short} · {path}"
-            hint = ""
-            # Save position before the input block so we can redraw in place
-            sys.stdout.write("\033[s")  # save anchor
+        from .performance import ensure_gpu_unlock
+
+        # Fully automatic — shows native macOS password dialog if needed
+        ensure_gpu_unlock()
+
+        print()
+        print("  \033[1mSelect a mode:\033[0m")
+        print()
+        print("  1. \033[1mFast\033[0m - quicker answers for routine work")
+        print("  2. \033[1mReasoning\033[0m - deeper thinking for harder tasks")
+        print()
+        rule = self._composer_rule()
+        model_short = self.runtime_model.split("/")[-1] if "/" in self.runtime_model else self.runtime_model
+        path = f"~/{self.repo_root.name}" if self.repo_root != Path.home() else "~"
+        status = f"{model_short} · {path}"
+        hint = ""
+        # Save position before the input block so we can redraw in place
+        sys.stdout.write("\033[s")  # save anchor
+        sys.stdout.flush()
+        while True:
+            # Restore to anchor, clear everything below, redraw
+            sys.stdout.write("\033[u\033[J")
+            if hint:
+                sys.stdout.write(f"\033[2m  {hint}\033[0m\n")
+            sys.stdout.write(f"\033[2m{rule}\033[0m\n")
+            sys.stdout.write("  › ")
+            sys.stdout.write(f"\n\033[2m{rule}\033[0m")
+            sys.stdout.write(f"\n\033[2m  {status}\033[0m")
+            # Move cursor back to input line (3 lines up: bottom rule + status + 1)
+            sys.stdout.write("\033[2A\r    ")  # go up 2, move to col 5
             sys.stdout.flush()
-            while True:
-                # Restore to anchor, clear everything below, redraw
-                sys.stdout.write("\033[u\033[J")
-                if hint:
-                    sys.stdout.write(f"\033[2m  {hint}\033[0m\n")
-                sys.stdout.write(f"\033[2m{rule}\033[0m\n")
-                sys.stdout.write("  › ")
-                sys.stdout.write(f"\n\033[2m{rule}\033[0m")
-                sys.stdout.write(f"\n\033[2m  {status}\033[0m")
-                # Move cursor back to input line (3 lines up: bottom rule + status + 1)
-                sys.stdout.write("\033[2A\r    ")  # go up 2, move to col 5
-                sys.stdout.flush()
 
-                ch = ""
+            ch = ""
+            try:
+                fd = sys.stdin.fileno()
+                old = termios.tcgetattr(fd)
                 try:
-                    fd = sys.stdin.fileno()
-                    old = termios.tcgetattr(fd)
-                    try:
-                        tty.setraw(fd)
-                        ch = sys.stdin.read(1)
-                    finally:
-                        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+                    tty.setraw(fd)
+                    ch = sys.stdin.read(1)
+                finally:
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old)
+            except Exception:
+                try:
+                    ch = input().strip()
+                except EOFError:
+                    ch = "1"
+
+            ch = (ch or "").strip().lower()[:1]
+
+            if ch in {"\x03", "\x1b", "q"}:
+                sys.stdout.write("\033[u\033[J\n")
+                sys.stdout.flush()
+                raise KeyboardInterrupt
+
+            if ch == "1":
+                sys.stdout.write("\033[u\033[J")
+                sys.stdout.write("\n\033[32m  fast ✓\033[0m\n")
+                sys.stdout.flush()
+                self.config.runtime.laptop_26b_runtime_mode = "turbo"
+                break
+            elif ch == "2":
+                sys.stdout.write("\033[u\033[J")
+                sys.stdout.write("\n\033[32m  reasoning ✓\033[0m\n")
+                sys.stdout.flush()
+                self.config.runtime.laptop_26b_runtime_mode = "turbo-think"
+                break
+            else:
+                # Wrong key — flush paste buffer, set hint, loop redraws in place
+                import select
+                try:
+                    while select.select([sys.stdin], [], [], 0.0)[0]:
+                        sys.stdin.read(1)
                 except Exception:
-                    try:
-                        ch = input().strip()
-                    except EOFError:
-                        ch = "1"
-
-                ch = (ch or "").strip().lower()[:1]
-
-                if ch in {"\x03", "\x1b", "q"}:
-                    sys.stdout.write("\033[u\033[J\n")
-                    sys.stdout.flush()
-                    raise KeyboardInterrupt
-
-                if ch == "1":
-                    sys.stdout.write("\033[u\033[J")
-                    sys.stdout.write("\n\033[32m  fast ✓\033[0m\n")
-                    sys.stdout.flush()
-                    self.config.runtime.laptop_26b_runtime_mode = "turbo"
-                    break
-                elif ch == "2":
-                    sys.stdout.write("\033[u\033[J")
-                    sys.stdout.write("\n\033[32m  reasoning ✓\033[0m\n")
-                    sys.stdout.flush()
-                    self.config.runtime.laptop_26b_runtime_mode = "turbo-think"
-                    break
-                else:
-                    # Wrong key — flush paste buffer, set hint, loop redraws in place
-                    import select
-                    try:
-                        while select.select([sys.stdin], [], [], 0.0)[0]:
-                            sys.stdin.read(1)
-                    except Exception:
-                        pass
-                    hint = "press 1 or 2"
-        else:
-            self.config.runtime.laptop_26b_runtime_mode = "speed"
+                    pass
+                hint = "press 1 or 2"
 
     def _confirm(self, prompt: str, default: bool = False) -> bool:
         suffix = " [Y/n] " if default else " [y/N] "

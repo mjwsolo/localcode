@@ -393,7 +393,8 @@ class ChatLog(RichLog):
                 self.write(entry[1])
                 self._track_lines()
         del self._rerendering
-        self.scroll_end(animate=False)
+        # Don't scroll to bottom — keep the user's current scroll position
+        # The expanded thinking just pushes content down in place
 
     # ── Render methods (write to display, no history recording) ──
 
@@ -475,11 +476,21 @@ class ChatLog(RichLog):
         self._track_lines()
 
         if expanded:
+            import textwrap
+            try:
+                avail_w = self.app.size.width - 6
+            except Exception:
+                avail_w = 76
+            avail_w = max(avail_w, 40)
             max_show = min(len(lines), 30)
             for line_text in lines[:max_show]:
-                tl = Text(f"    {line_text}", style="dim italic")
-                self.write(tl)
-                self._track_lines()
+                wrapped = textwrap.fill(line_text, width=avail_w - 4,
+                                        initial_indent="    ",
+                                        subsequent_indent="    ")
+                for wline in wrapped.split("\n"):
+                    tl = Text(wline, style="dim italic")
+                    self.write(tl)
+                    self._track_lines()
             if len(lines) > max_show:
                 more = Text()
                 more.append(f"    … +{len(lines) - max_show} more lines", style="dim italic")
@@ -661,6 +672,8 @@ class ChatLog(RichLog):
         self._track_lines()
 
     def _render_turn_summary(self, summary_text: str) -> None:
+        self.write(Text(""))
+        self._track_lines()
         line = Text()
         line.append("  ", style="")
         line.append(summary_text, style="dim")
