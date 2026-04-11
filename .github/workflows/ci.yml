@@ -20,7 +20,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e .
-          python -m pip install pytest ruff build
+          python -m pip install pytest ruff build cython
       - name: Lint
         run: ruff check --select E9,F63,F7,F82 src tests
       - name: Test
