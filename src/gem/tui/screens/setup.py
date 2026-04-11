@@ -190,20 +190,37 @@ class SetupScreen(Screen):
         config = self.app.gem_config
 
         # Actually launch llama-server
+        from pathlib import Path
         from ...runtime import GemRuntimeGateway
         gw = GemRuntimeGateway(config.runtime)
         binary = config.runtime.llama_cpp_binary
         if binary and model_path:
             cmd = gw.llama_server_command(str(model_path))
+
+            # Log server output for debugging
+            log_dir = Path.home() / ".local" / "share" / "localcode"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            server_log = log_dir / "server.log"
+
             try:
-                subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-            except Exception:
-                self.app.call_from_thread(lambda: self._show_error("Failed to start server."))
+                log_fh = open(server_log, "w")
+                proc = subprocess.Popen(cmd, stdout=log_fh, stderr=log_fh, start_new_session=True)
+            except Exception as exc:
+                self.app.call_from_thread(lambda e=str(exc): self._show_error(f"Failed to start: {e}"))
                 return
 
-            # Wait for server to become ready (up to 30s)
-            for i in range(30):
+            # Wait for server to become ready (up to 60s)
+            for i in range(60):
                 time.sleep(1)
+                # Check if process died
+                if proc.poll() is not None:
+                    err = ""
+                    try:
+                        err = server_log.read_text()[-300:]
+                    except Exception:
+                        pass
+                    self.app.call_from_thread(lambda e=err: self._show_error(f"Server crashed:\n{e}"))
+                    return
                 try:
                     ok, _ = gw.healthcheck()
                     if ok:
@@ -212,7 +229,12 @@ class SetupScreen(Screen):
                     pass
                 self.app.call_from_thread(lambda i=i: self._update(2, f"Waiting for server... ({i+1}s)"))
             else:
-                self.app.call_from_thread(lambda: self._show_error("Server failed to start after 30s."))
+                err = ""
+                try:
+                    err = server_log.read_text()[-300:]
+                except Exception:
+                    pass
+                self.app.call_from_thread(lambda e=err: self._show_error(f"Server timeout (60s):\n{e}"))
                 return
 
         # Done
