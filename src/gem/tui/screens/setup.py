@@ -198,6 +198,30 @@ class SetupScreen(Screen):
         self.app.gem_config = load_config()
         config = self.app.gem_config
 
+        # Check if server is already running AND can actually serve requests
+        from ...runtime import GemRuntimeGateway
+        gw = GemRuntimeGateway(config.runtime)
+        try:
+            ok, _ = gw.healthcheck()
+            if ok:
+                # Quick inference test to make sure it's not a zombie
+                import httpx
+                r = httpx.post(
+                    f"{config.runtime.base_url.rstrip('/')}/v1/chat/completions",
+                    json={"messages": [{"role": "user", "content": "hi"}], "max_tokens": 1},
+                    timeout=15,
+                )
+                if r.status_code == 200:
+                    # Server is genuinely working — skip to done
+                    self._current_step = 3
+                    self._status_text = "Ready!"
+                    import asyncio
+                    await asyncio.sleep(0.3)
+                    self.app.call_from_thread(self._finish)
+                    return
+        except Exception:
+            pass
+
         # Kill any existing llama-server to free the port
         try:
             subprocess.run(["pkill", "-f", "llama-server"], capture_output=True, timeout=3)
