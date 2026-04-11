@@ -49,7 +49,7 @@ setup(
         "bdist_wheel": {},
     },
     package_data={
-        "gem": ["bin/*", "**/*.tcss"],
+        "gem": ["bin/llama-server", "bin/*.dylib", "**/*.tcss"],
     },
     exclude_package_data={
         "gem": ["*.c"],
