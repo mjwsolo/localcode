@@ -226,12 +226,20 @@ class SetupScreen(Screen):
         except Exception:
             pass
 
-        # Kill any existing llama-server to free the port
+        # Kill anything on port 8081 to free it
         try:
-            subprocess.run(["pkill", "-f", "llama-server"], capture_output=True, timeout=3)
-            time.sleep(1)
+            r = subprocess.run(["lsof", "-ti", ":8081"], capture_output=True, text=True, timeout=3)
+            pids = r.stdout.strip().split()
+            for pid in pids:
+                if pid:
+                    subprocess.run(["kill", "-9", pid], capture_output=True, timeout=2)
         except Exception:
             pass
+        try:
+            subprocess.run(["pkill", "-9", "-f", "llama-server"], capture_output=True, timeout=3)
+        except Exception:
+            pass
+        time.sleep(1)
 
         # Actually launch llama-server — try GPU first, fall back to CPU on OOM
         from pathlib import Path
