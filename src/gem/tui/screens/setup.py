@@ -302,7 +302,8 @@ class SetupScreen(Screen):
                 except Exception:
                     pass
 
-                is_oom = "working set size" in err or "out of memory" in err.lower() or "allocated size" in err
+                server_crashed = proc.poll() is not None
+                is_oom = server_crashed and ("out of memory" in err.lower() or "ggml_metal_free" in err or "alloc" in err.lower())
 
                 if is_oom and attempt == 0:
                     # Kill the crashed/stuck server and retry with CPU-only
