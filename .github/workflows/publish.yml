@@ -7,8 +7,19 @@ on:
 
 jobs:
   build-wheels:
-    name: Build wheels
-    runs-on: macos-14
+    name: Build wheels (${{ matrix.os }})
+    strategy:
+      matrix:
+        include:
+          # macOS arm64 + universal2
+          - os: macos-14
+            cibw_archs: "arm64 universal2"
+            macos_target: "11.0"
+          # macOS x86_64
+          - os: macos-13
+            cibw_archs: "x86_64"
+            macos_target: "10.9"
+    runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
@@ -21,8 +32,9 @@ jobs:
         uses: pypa/cibuildwheel@v2.22
         env:
           CIBW_BUILD: "cp311-macosx_* cp312-macosx_* cp313-macosx_*"
-          CIBW_ARCHS_MACOS: "arm64 x86_64"
+          CIBW_ARCHS_MACOS: ${{ matrix.cibw_archs }}
           CIBW_BEFORE_BUILD: "pip install cython>=3.0 setuptools wheel"
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos_target }}
 
       - name: Strip source from wheels
         run: |
@@ -32,20 +44,36 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: wheels
+          name: wheels-${{ matrix.os }}
           path: wheelhouse/*.whl
 
-  publish:
-    needs: build-wheels
+  build-sdist:
+    name: Build sdist
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install build
+      - run: python -m build --sdist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  publish:
+    needs: [build-wheels, build-sdist]
+    runs-on: ubuntu-latest
+    environment: pypi
     permissions:
       id-token: write
 
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: wheels
           path: dist/
+          merge-multiple: true
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
