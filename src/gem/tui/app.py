@@ -74,27 +74,15 @@ class LocalCodeTUI(App):
                 pass
 
     def on_mount(self) -> None:
-        """Initialize config and show first screen. GemApp loaded lazily."""
+        """Initialize config and show first screen."""
         from ..config import load_config
 
         self.gem_config = load_config()
         self.bridge = TUIBridge(self)
 
-        # Check if server is reachable
-        from ..runtime import GemRuntimeGateway
-        gw = GemRuntimeGateway(self.gem_config.runtime)
-        ok, _ = gw.healthcheck()
-        if ok:
-            # Server running — go straight to chat or mode picker
-            saved_mode = getattr(self.gem_config.runtime, 'laptop_26b_runtime_mode', '')
-            if saved_mode:
-                self.push_screen("chat")
-            else:
-                self.push_screen("mode_picker")
-            return
-
-        # Server not running — always go to setup screen.
-        # Setup handles everything: binary check, model download, server launch.
+        # Always go through setup screen on launch.
+        # Setup checks binary, model, starts server — skips steps already done.
+        # This avoids stale healthcheck false positives from zombie servers.
         self.push_screen("setup")
 
     def ensure_backend(self) -> bool:
