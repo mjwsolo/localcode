@@ -270,10 +270,99 @@ def get_model_path() -> Path | None:
     return None
 
 
-def download_model(on_progress: Callable[[str], None] | None = None) -> tuple[bool, str]:
-    """Download the Gemma 4 26B GGUF model directly from HuggingFace."""
+def _download_parallel(url: str, dest: Path, num_threads: int = 8,
+                       on_progress: Callable[[str], None] | None = None) -> None:
+    """Download a large file using parallel HTTP range requests (8 threads).
+
+    Falls back to single-threaded if the server doesn't support ranges.
+    """
+    import threading
     import urllib.request
 
+    # Get file size via HEAD
+    req = urllib.request.Request(url, method="HEAD")
+    with urllib.request.urlopen(req) as resp:
+        total_size = int(resp.headers.get("Content-Length", 0))
+        accepts_ranges = resp.headers.get("Accept-Ranges", "none") != "none"
+
+    if not total_size or not accepts_ranges:
+        # Fallback: single-threaded
+        def _report(block_num, block_size, _total):
+            if on_progress and total_size > 0:
+                done = min(block_num * block_size, total_size)
+                on_progress(f"Downloading: {done // (1024*1024)}/{total_size // (1024*1024)} MB ({done * 100 // total_size}%)")
+        urllib.request.urlretrieve(url, str(dest), reporthook=_report)
+        return
+
+    # Split into chunks
+    chunk_size = total_size // num_threads
+    downloaded = [0] * num_threads  # bytes per thread for progress
+    errors: list[str] = []
+    lock = threading.Lock()
+
+    # Pre-allocate the output file
+    with open(dest, "wb") as f:
+        f.seek(total_size - 1)
+        f.write(b"\0")
+
+    def _download_chunk(idx: int, start: int, end: int) -> None:
+        try:
+            req = urllib.request.Request(url)
+            req.add_header("Range", f"bytes={start}-{end}")
+            with urllib.request.urlopen(req) as resp:
+                buf_size = 256 * 1024  # 256KB read buffer
+                with open(dest, "r+b") as f:
+                    f.seek(start)
+                    while True:
+                        data = resp.read(buf_size)
+                        if not data:
+                            break
+                        f.write(data)
+                        with lock:
+                            downloaded[idx] += len(data)
+        except Exception as e:
+            with lock:
+                errors.append(f"Chunk {idx}: {e}")
+
+    # Progress reporter
+    progress_stop = threading.Event()
+
+    def _report_progress() -> None:
+        while not progress_stop.is_set():
+            total_done = sum(downloaded)
+            mb_done = total_done // (1024 * 1024)
+            mb_total = total_size // (1024 * 1024)
+            pct = min(100, total_done * 100 // total_size) if total_size else 0
+            speed_label = ""
+            if on_progress:
+                on_progress(f"Downloading: {mb_done}/{mb_total} MB ({pct}%){speed_label}")
+            progress_stop.wait(0.5)
+
+    progress_thread = threading.Thread(target=_report_progress, daemon=True)
+    progress_thread.start()
+
+    # Launch parallel downloads
+    threads: list[threading.Thread] = []
+    for i in range(num_threads):
+        start = i * chunk_size
+        end = total_size - 1 if i == num_threads - 1 else (i + 1) * chunk_size - 1
+        t = threading.Thread(target=_download_chunk, args=(i, start, end))
+        t.start()
+        threads.append(t)
+
+    for t in threads:
+        t.join()
+
+    progress_stop.set()
+    progress_thread.join(timeout=1)
+
+    if errors:
+        dest.unlink(missing_ok=True)
+        raise RuntimeError("; ".join(errors))
+
+
+def download_model(on_progress: Callable[[str], None] | None = None) -> tuple[bool, str]:
+    """Download the Gemma 4 26B GGUF model directly from HuggingFace."""
     model_dir = Path.home() / ".local" / "share" / "localcode" / "models"
     model_dir.mkdir(parents=True, exist_ok=True)
     model_file = model_dir / _MODEL_FILENAME
@@ -285,14 +374,7 @@ def download_model(on_progress: Callable[[str], None] | None = None) -> tuple[bo
         on_progress(f"Downloading {_MODEL_FILENAME} (~10GB)...")
 
     try:
-        def _report(block_num, block_size, total_size):
-            if on_progress and total_size > 0:
-                pct = min(100, block_num * block_size * 100 // total_size)
-                mb_done = block_num * block_size // (1024 * 1024)
-                mb_total = total_size // (1024 * 1024)
-                on_progress(f"Downloading model: {mb_done}/{mb_total} MB ({pct}%)")
-
-        urllib.request.urlretrieve(_MODEL_URL, str(model_file), reporthook=_report)
+        _download_parallel(_MODEL_URL, model_file, num_threads=8, on_progress=on_progress)
         return True, str(model_file)
     except Exception as e:
         # Clean up partial download
@@ -758,6 +840,13 @@ def run_setup(
             else:
                 console.print(f"Model download failed: {model_result}")
                 return 1
+        # Ensure model path is saved to config
+        if model_path and not config.runtime.model:
+            config.runtime.model = str(model_path)
+        # Ensure base_url is correct for llama_cpp
+        if "8081" not in config.runtime.base_url:
+            config.runtime.base_url = "http://localhost:8081"
+        save_config(config)
 
     engine = GemRuntimeGateway(config.runtime)
     runtime_step = SetupStep("runtime-check", "checking runtime", f"Checking {config.runtime.provider} readiness.")
