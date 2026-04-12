@@ -310,13 +310,13 @@ class ChatScreen(Screen):
         mode = config.runtime.laptop_26b_runtime_mode
         mode_label = "fast" if not mode.endswith("-think") else "reasoning"
         raw_model = config.runtime.model or ""
-        # Show friendly name for blob paths and GGUF files
-        if "sha256-" in raw_model or len(raw_model) > 60:
+        # Show friendly name for all model variants
+        if "sha256-" in raw_model or len(raw_model) > 60 or "gemma" in raw_model.lower():
             model = "gemma-4-26B IQ3_S"
         elif raw_model.endswith(".gguf"):
             model = raw_model.split("/")[-1].replace(".gguf", "")
         else:
-            model = raw_model
+            model = raw_model or "gemma-4-26B IQ3_S"
         # Context REMAINING (starts at 100%, decreases)
         pct_remaining = max(0, 100 - int(self._context_used / max(1, self._context_max) * 100))
         bar = self.query_one("#status-bar", Static)

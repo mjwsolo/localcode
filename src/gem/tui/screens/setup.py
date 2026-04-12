@@ -364,9 +364,12 @@ class SetupScreen(Screen):
                 self.app.call_from_thread(lambda e=str(exc): self._show_error(f"Failed to start: {e}"))
                 return
 
-            # Wait for server to become ready (up to 60s)
+            # Wait for server to become ready
+            # 8GB CPU mode needs longer — model loads slower via mmap without GPU
+            is_cpu_mode = config.runtime.llama_cpp_gpu_layers == 0
+            wait_time = 180 if is_cpu_mode else 60
             server_ok = False
-            for i in range(60):
+            for i in range(wait_time):
                 time.sleep(1)
                 if proc.poll() is not None:
                     break  # crashed
@@ -377,7 +380,10 @@ class SetupScreen(Screen):
                         break
                 except Exception:
                     pass
-                self._status_text = f"Loading model... ({i+1}s)"
+                if is_cpu_mode:
+                    self._status_text = f"Loading model (CPU mode, this takes a while)... ({i+1}s)"
+                else:
+                    self._status_text = f"Loading model... ({i+1}s)"
 
             if not server_ok:
                 # Server failed — fall back to Ollama instead of broken CPU mode
