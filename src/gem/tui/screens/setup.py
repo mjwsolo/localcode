@@ -341,8 +341,9 @@ class SetupScreen(Screen):
                         self.app.exit(return_code=42)
                     self.app.call_from_thread(_exit_and_unlock)
                     return
-        else:
-            # GPU available — use TurboQuant llama.cpp
+
+        # Launch server (runs for ALL paths: 8GB CPU, 16GB GPU, 32GB+ GPU)
+        if gpu_ready:
             gw = GemRuntimeGateway(config.runtime)
             from ...bootstrap import _turboquant_binary_path as _tbp
             binary = config.runtime.llama_cpp_binary or str(_tbp() or "")
