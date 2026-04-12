@@ -216,11 +216,19 @@ class OutputManager:
             self.state.tool_actions[idx].result = result
         with self._lock:
             self._custom_stage = ""
+        # Include tool name/args so TUI doesn't rely on stale _active_tool_name
+        tool_name = ""
+        tool_args = ""
+        if idx >= 0 and idx < len(self.state.tool_actions):
+            tool_name = self.state.tool_actions[idx].name
+            tool_args = self.state.tool_actions[idx].args
         self._emit_event(
             "tool_result",
             error=str(error).lower(),
             index=str(idx),
             result=result[:4000],
+            name=tool_name,
+            args=tool_args[:200],
         )
         self._stop_indicator()
         lines = result.strip().splitlines()
