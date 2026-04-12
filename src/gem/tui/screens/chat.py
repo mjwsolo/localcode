@@ -289,8 +289,9 @@ class ChatScreen(Screen):
         # ● for tools (blue ball), ◆ for thinking
         icon = "●" if self._active_mode == "tool" else "◆"
         label = f"{icon} {text}..."
-        # Sweep highlight left-to-right using markup (no RichText objects)
-        pos = self._scan_pos % max(len(label), 1)
+        # Advance sweep position
+        self._scan_pos = (self._scan_pos + 1) % max(len(label), 1)
+        pos = self._scan_pos
         bright = label[:pos + 1]
         dim = label[pos + 1:]
         # Escape markup characters in the text
@@ -643,6 +644,10 @@ class ChatScreen(Screen):
             chunk = p.get("chunk", "")
             self._thinking_text += chunk
             self._thinking_phase = "thinking"
+            # Update active step with thinking preview
+            preview = self._thinking_text.strip().replace("\n", " ")[:60]
+            if preview:
+                self._active_step_text = preview
         elif t == "thinking_peek":
             self._thinking_phase = "thinking"
         elif t == "thinking_done":

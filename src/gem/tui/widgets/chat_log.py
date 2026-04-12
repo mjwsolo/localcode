@@ -417,6 +417,8 @@ class ChatLog(RichLog):
     def _rerender(self) -> None:
         """Clear display and re-render from history (preserves history)."""
         self._rerendering = True
+        # Save scroll position to restore after re-render
+        saved_scroll = self.scroll_offset.y
         super().clear()
         self._thinking_line_map.clear()
         self._line_counter = 0
@@ -452,8 +454,8 @@ class ChatLog(RichLog):
                 self.write(entry[1])
                 self._track_lines()
         del self._rerendering
-        # Don't scroll to bottom — keep the user's current scroll position
-        # The expanded thinking just pushes content down in place
+        # Restore scroll position — expanding thinking shouldn't jump to bottom
+        self.scroll_to(y=saved_scroll, animate=False)
 
     # ── Render methods (write to display, no history recording) ──
 
