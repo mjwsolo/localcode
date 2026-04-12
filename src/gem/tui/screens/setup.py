@@ -323,7 +323,7 @@ class SetupScreen(Screen):
                 # 8GB: run with CPU-only mode and smaller context
                 self._status_text = "Configuring for 8GB (CPU mode)..."
                 config.runtime.llama_cpp_gpu_layers = 0
-                config.runtime.context_size = 32768
+                config.runtime.max_context_chars = 32768 * 4  # 32K tokens
                 save_config(config)
                 gpu_ready = True
             else:
