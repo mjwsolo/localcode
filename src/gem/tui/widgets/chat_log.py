@@ -322,9 +322,9 @@ class ChatLog(RichLog):
             parts.append(", ".join(tool_parts))
         if tokens_out:
             if tokens_out >= 1000:
-                parts.append(f"↓ {tokens_out / 1000:.1f}k tokens")
+                parts.append(f"{tokens_out / 1000:.1f}k tokens")
             else:
-                parts.append(f"↓ {tokens_out} tokens")
+                parts.append(f"{tokens_out} tokens")
         if cost_saved > 0:
             parts.append(f"${cost_saved:.3f} saved")
         summary_text = " · ".join(parts)

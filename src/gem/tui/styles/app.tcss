@@ -3,15 +3,17 @@
 Screen {
     layout: vertical;
     background: $surface;
+    overflow: hidden;
 }
+
 
 
 /* ── Header bar (top) ── */
 
 #header-bar {
     dock: top;
-    height: 3;
-    padding: 1 1 1 1;
+    height: 1;
+    padding: 0 1;
     color: #5f87ff;
     background: $surface;
 }
@@ -22,6 +24,7 @@ Screen {
     height: 1fr;
     overflow-y: scroll;
     padding: 0 1;
+    background: $surface;
     scrollbar-size: 1 1;
     scrollbar-color: $surface-lighten-1;
     scrollbar-background: $surface;
@@ -31,21 +34,23 @@ Screen {
 /* ── Input area ── */
 
 #chat-input {
-    border: tall $surface-lighten-1;
-    padding: 0 1;
-    margin: 1 0 0 0;
+    border: round #5f87ff;
+    padding: 0 1 0 2;
+    margin: 1 1 0 1;
+    height: 3;
+    background: $surface;
 }
 
 #chat-input:focus {
-    border: tall #5f87ff;
+    border: round #5f87ff;
 }
 
 /* ── Status bar (bottom) ── */
 
 #status-bar {
     dock: bottom;
-    height: 3;
-    padding: 1 1 1 1;
+    height: 1;
+    padding: 0 1;
     color: $text-muted;
     background: $surface;
 }

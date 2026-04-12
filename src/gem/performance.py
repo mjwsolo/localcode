@@ -350,8 +350,13 @@ def recommend_preset(
     cache_policy = "adaptive"
     rolling_window_messages = 24
     llama_cpp_gpu_layers = 0
-    llama_cpp_threads = max(2, min(machine.cpu_cores, 8))
-    llama_cpp_batch_size = 128
+    # Apple Silicon with TurboQuant llama.cpp: use all perf cores, large batches
+    if machine.system == "darwin" and machine.has_gpu:
+        llama_cpp_threads = max(4, min(machine.cpu_cores, 12))
+        llama_cpp_batch_size = 2048
+    else:
+        llama_cpp_threads = max(2, min(machine.cpu_cores, 8))
+        llama_cpp_batch_size = 128
     if str(laptop_26b_runtime_mode).lower() in {"speed", "fit"}:
         laptop_runtime_mode = str(laptop_26b_runtime_mode).lower()
     else:

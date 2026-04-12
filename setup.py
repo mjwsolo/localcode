@@ -1,26 +1,32 @@
-"""Build script — compiles all .py to .so via Cython for distribution."""
+"""Build script — compiles all .py to .so via Cython for distribution.
+
+Skip Cython for editable/dev installs: LOCALCODE_NO_CYTHON=1 pip install -e .
+"""
 import os
 from pathlib import Path
 from setuptools import setup
-from Cython.Build import cythonize
 
-# Find all .py files in gem/ (excluding __init__.py and __main__.py which must stay as .py)
-source_dir = Path("src/gem")
-py_files = []
-for f in sorted(source_dir.rglob("*.py")):
-    name = f.name
-    if name in ("__init__.py", "__main__.py"):
-        continue
-    py_files.append(str(f))
+ext_modules = []
 
-if py_files:
-    ext_modules = cythonize(
-        py_files,
-        compiler_directives={"language_level": "3"},
-        quiet=True,
-    )
-else:
-    ext_modules = []
+# Only compile Cython for wheel builds, not editable/dev installs
+if not os.environ.get("LOCALCODE_NO_CYTHON") and not os.environ.get("SKIP_CYTHON"):
+    try:
+        from Cython.Build import cythonize
+        source_dir = Path("src/gem")
+        py_files = []
+        for f in sorted(source_dir.rglob("*.py")):
+            name = f.name
+            if name in ("__init__.py", "__main__.py"):
+                continue
+            py_files.append(str(f))
+        if py_files:
+            ext_modules = cythonize(
+                py_files,
+                compiler_directives={"language_level": "3"},
+                quiet=True,
+            )
+    except ImportError:
+        pass
 
 
 class StripSourceBuildWheel:

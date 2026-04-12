@@ -28,7 +28,7 @@ from .runtime import GemRuntimeGateway, RuntimeErrorWithContext
 from .session import SessionStore
 from .shell import run_shell
 from .tool_router import route_tools
-from .cache import BackgroundIndexer, SpeculativeExecutor, ToolResultCache
+from .cache import SpeculativeExecutor, ToolResultCache
 from .keybindings import get_editing_mode
 from .permissions_v2 import PermissionManager
 from .tasks import TaskStore
@@ -223,10 +223,6 @@ class GemApp:
         self._pending_audio: list[dict] = []
         self.stats = SessionStats()
         self.tool_cache = ToolResultCache(self.repo_root)
-        self.bg_indexer = None
-        if not self.config.runtime.low_overhead_mode:
-            self.bg_indexer = BackgroundIndexer(self.repo_root)
-            self.bg_indexer.start()
         self._vim_mode = False
         self._active_plan = None
         self._output_style: str = ""
@@ -2735,5 +2731,3 @@ class GemApp:
             self.out._stop_indicator()
         self.toolkit.close()
         self.engine.close()
-        if self.bg_indexer is not None:
-            self.bg_indexer.stop()

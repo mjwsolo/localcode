@@ -21,8 +21,8 @@ class ModePickerScreen(Screen):
     }
     #picker-header {
         dock: top;
-        height: 3;
-        padding: 1 1 1 1;
+        height: 1;
+        padding: 0 1;
         color: #5f87ff;
         background: $surface;
     }
@@ -34,7 +34,7 @@ class ModePickerScreen(Screen):
         width: 52;
         height: auto;
         padding: 1 2;
-        border: solid $primary;
+        border: round #5f87ff;
     }
     """
 
@@ -63,8 +63,9 @@ class ModePickerScreen(Screen):
             width = 80
         usable = width - 2
         left = "🏠 LocalCode"
-        left_cols = 13
-        line = f"{left} {'─' * (usable - left_cols)}"
+        left_cols = 14
+        remaining = max(0, usable - left_cols)
+        line = f"{left} {'─' * remaining}"
         self.query_one("#picker-header", Static).update(line)
 
     def _save(self) -> None:
