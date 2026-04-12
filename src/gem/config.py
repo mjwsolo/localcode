@@ -117,8 +117,8 @@ class RuntimeConfig:
     cache_policy: str = "adaptive"
     rolling_window_messages: int = 24
     llama_cpp_gpu_layers: int = 0
-    llama_cpp_threads: int = 8
-    llama_cpp_batch_size: int = 128
+    llama_cpp_threads: int = -1   # -1 = auto-detect from CPU cores at startup
+    llama_cpp_batch_size: int = -1  # -1 = auto-detect from platform at startup
     # Speed optimizations
     llama_cpp_spec_type: str = ""         # "ngram-mod", "ngram-simple" — speculative decoding (1.5-2x)
     llama_cpp_draft_max: int = 64         # max draft tokens for speculation

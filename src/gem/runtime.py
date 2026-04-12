@@ -90,8 +90,18 @@ class GemRuntimeGateway:
         binary = self.config.llama_cpp_binary or str(_turboquant_binary_path() or "") or "llama-server"
         mode = self.config.laptop_26b_runtime_mode
 
-        # Context mode benefits from all CPU cores for expert computation
-        threads = 10 if mode == "context" else self.config.llama_cpp_threads
+        # Auto-detect threads and batch size if not explicitly set
+        import os, platform
+        if self.config.llama_cpp_threads <= 0:
+            cpu_count = os.cpu_count() or 4
+            if platform.system() == "Darwin":
+                threads = max(4, min(cpu_count, 12))  # Apple Silicon: use perf cores
+            else:
+                threads = max(2, min(cpu_count, 8))
+        else:
+            threads = self.config.llama_cpp_threads
+        if mode == "context":
+            threads = max(threads, 10)  # context mode benefits from all cores
         cmd = [
             binary,
             "--model", model_path,
@@ -138,8 +148,10 @@ class GemRuntimeGateway:
         if mode in ("turbo", "turbo-think", "context"):
             cmd.extend(["-b", "2048", "-ub", "512"])
         else:
-            cmd.extend(["-b", str(self.config.llama_cpp_batch_size),
-                        "-ub", str(min(512, self.config.llama_cpp_batch_size))])
+            batch = self.config.llama_cpp_batch_size
+            if batch <= 0:
+                batch = 2048 if platform.system() == "Darwin" else 128
+            cmd.extend(["-b", str(batch), "-ub", str(min(512, batch))])
         # TurboQuant: disable cross-request prompt cache (WHT rotation corrupts it)
         cmd.extend(["--cache-ram", "0"])
         # Single slot, disable fit check (we manage memory via sysctl)
