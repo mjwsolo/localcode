@@ -140,6 +140,10 @@ class GemRuntimeGateway:
         else:
             cmd.extend(["-b", str(self.config.llama_cpp_batch_size),
                         "-ub", str(min(512, self.config.llama_cpp_batch_size))])
+        # TurboQuant: disable cross-request prompt cache (WHT rotation corrupts it)
+        cmd.extend(["--cache-ram", "0"])
+        # Single slot, disable fit check (we manage memory via sysctl)
+        cmd.extend(["-np", "1", "-fit", "off"])
         return cmd
 
     @staticmethod

@@ -50,6 +50,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--profile", help="Gemma 4 profile: e2b, e4b, 26b-laptop, 26b-moe, 31b")
     parser.add_argument("--model", help="Explicit local runtime model tag")
     parser.add_argument("--cli", action="store_true", help="Use the classic CLI instead of the TUI")
+    parser.add_argument("-c", "--cwd", type=str, default=None,
+                        help="Working directory for the project (defaults to current directory)")
     subparsers = parser.add_subparsers(dest="command")
 
     subparsers.add_parser("config-init", help="create a default config file")
@@ -239,6 +241,16 @@ def main(argv: list[str] | None = None) -> None:
     os.environ["OLLAMA_KV_CACHE_TYPE"] = config.runtime.kv_cache_type_k
     configure_logging(config.ui.show_debug)
     console = Console()
+
+    # Resolve project directory from -c/--cwd flag or current directory
+    if args.cwd:
+        project_dir = Path(args.cwd).resolve()
+        if not project_dir.is_dir():
+            console.print(f"[red]Error:[/] directory not found: {args.cwd}")
+            sys.exit(1)
+        os.chdir(project_dir)
+    else:
+        project_dir = Path.cwd()
 
     # TUI is the default UI. Use --cli for the classic terminal interface.
     if not getattr(args, 'cli', False) and args.command is None and not os.environ.get("LOCALCODE_CLI"):

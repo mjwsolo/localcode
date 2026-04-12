@@ -47,60 +47,15 @@ class TUIBridge:
 
         OutputManager calls: callback(event_type, payload_dict)
         Direct calls use: on_event(event_type, key=val, ...)
-
-        Streaming events (content, thinking) bypass the Textual message queue
-        and directly update the widget via call_from_thread for real-time display.
-        Other events use post_message.
         """
         if payload is None:
             payload = kwargs
         elif isinstance(payload, dict):
             payload.update(kwargs)
         try:
-            # For content streaming, bypass message queue — directly invoke
-            # the widget update on the UI thread for real-time line-by-line display
-            if event_type == "content":
-                chunk = payload.get("chunk", "")
-                if chunk:
-                    self.tui_app.call_from_thread(self._direct_stream_content, chunk)
-                return
-            msg = AgentEvent(event_type, payload)
-            if event_type in ("thinking_start", "thinking_chunk",
-                              "thinking_done", "stream_start", "thinking_peek"):
-                self.tui_app.call_from_thread(self.tui_app.post_message, msg)
-            else:
-                self.tui_app.post_message(msg)
+            self.tui_app.post_message(AgentEvent(event_type, payload))
         except Exception:
             pass  # app might be shutting down
-
-    def _direct_stream_content(self, chunk: str) -> None:
-        """Directly update chat log with streaming content on UI thread.
-
-        Called via call_from_thread — runs on the Textual event loop,
-        bypassing the message queue for immediate visual updates.
-        """
-        try:
-            screen = self.tui_app.screen
-            # Update stream buffer on the screen for history tracking
-            if hasattr(screen, '_stream_buf'):
-                screen._stream_buf.append(chunk)
-            if hasattr(screen, '_thinking_phase'):
-                screen._thinking_phase = "generating"
-            # Track token counts
-            toks = max(1, len(chunk) // 4)
-            if hasattr(screen, '_turn_tokens'):
-                screen._turn_tokens += toks
-            if hasattr(screen, '_context_used'):
-                screen._context_used += toks
-            # Hide animation on first content
-            if hasattr(screen, '_active_mode') and screen._active_mode:
-                if hasattr(screen, '_hide_active_step'):
-                    screen._hide_active_step()
-            # Directly stream to chat log widget
-            log = screen.query_one("#chat-log")
-            log.stream_token(chunk)
-        except Exception:
-            pass
 
     def request_approval(self, tool_name: str, command: str) -> bool:
         """Block the worker thread until user approves/denies. Returns True if approved."""

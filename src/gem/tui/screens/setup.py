@@ -16,8 +16,8 @@ class SetupScreen(Screen):
     }
     #setup-header {
         dock: top;
-        height: 3;
-        padding: 1 1 1 1;
+        height: 1;
+        padding: 0 1;
         color: #5f87ff;
         background: $surface;
     }
@@ -32,7 +32,7 @@ class SetupScreen(Screen):
         width: 52;
         height: auto;
         padding: 1 2;
-        border: solid $primary;
+        border: round #5f87ff;
     }
     #setup-status {
         width: 100%;
@@ -75,8 +75,9 @@ class SetupScreen(Screen):
             width = 80
         usable = width - 2
         left = "🏠 LocalCode"
-        left_cols = 13
-        line = f"{left} {'─' * (usable - left_cols)}"
+        left_cols = 14
+        remaining = max(0, usable - left_cols)
+        line = f"{left} {'─' * remaining}"
         self.query_one("#setup-header", Static).update(line)
 
     def _render_steps(self) -> str:

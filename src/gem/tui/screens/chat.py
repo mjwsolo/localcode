@@ -85,6 +85,7 @@ class ChatScreen(Screen):
         dock: top;
         height: 1;
         padding: 0 1;
+        width: 1fr;
         color: #5f87ff;
         background: $surface;
     }
@@ -171,6 +172,9 @@ class ChatScreen(Screen):
         self.query_one("#chat-input", Input).focus()
         self.query_one("#chat-log", ChatLog)
 
+    def on_resize(self, event) -> None:
+        self._update_header()
+
     # ── Header bar ──
 
     def _update_header(self) -> None:
@@ -181,8 +185,9 @@ class ChatScreen(Screen):
         usable = width - 2
 
         left = "🏠 LocalCode"
-        left_cols = 13
-        line = f"{left} {'─' * (usable - left_cols)}"
+        left_cols = 14  # 🏠=2cols + space + "LocalCode"=9 + space + 1 buffer
+        remaining = max(0, usable - left_cols)
+        line = f"{left} {'─' * remaining}"
 
         header = self.query_one("#header-bar", Static)
         header.update(line)
@@ -192,7 +197,7 @@ class ChatScreen(Screen):
         self._thinking_phase = ""
         self._response_shown = False
         if self._spin_timer is None:
-            self._spin_timer = self.set_interval(0.15, self._tick_thinking)
+            self._spin_timer = self.set_interval(1.0, self._tick_thinking)
         self._update_header()
 
     def _hide_thinking(self) -> None:
@@ -238,7 +243,7 @@ class ChatScreen(Screen):
         w.add_class("active")
         if self._step_timer is not None:
             self._step_timer.stop()
-        self._step_timer = self.set_interval(0.05, self._tick_active)
+        self._step_timer = self.set_interval(0.25, self._tick_active)
 
     def _show_active_thinking(self, text: str = "thinking") -> None:
         """Show in-progress thinking status."""
@@ -252,7 +257,7 @@ class ChatScreen(Screen):
         w.add_class("active")
         if self._step_timer is not None:
             self._step_timer.stop()
-        self._step_timer = self.set_interval(0.05, self._tick_active)
+        self._step_timer = self.set_interval(0.25, self._tick_active)
 
     def _hide_active_step(self) -> None:
         """Hide the active step animation."""
@@ -283,19 +288,10 @@ class ChatScreen(Screen):
 
         # ● for tools (blue ball), ◆ for thinking
         icon = "●" if self._active_mode == "tool" else "◆"
-        label = f"{icon} {text}..."
-        self._scan_pos = (self._scan_pos + 1) % max(len(label), 1)
-        rt = RichText()
-        rt.append("  ", style="")
-        for i, ch in enumerate(label):
-            if i <= self._scan_pos:
-                rt.append(ch, style="bold dim")
-            else:
-                rt.append(ch, style="dim italic")
-        rt.append(f"  {timer}", style="dim")
+        label = f"  {icon} {text}...  {timer}"
 
         w = self.query_one("#active-step", Static)
-        w.update(rt)
+        w.update(label)
 
     # ── Status bar (bottom — model, mode, context remaining) ──
 
@@ -666,6 +662,12 @@ class ChatScreen(Screen):
                     self._show_active_thinking(stage)
         elif t == "done":
             pass  # handled by on_worker_state_changed
+        elif t == "_approval_request":
+            log.append_approval(p.get("tool_name", ""), p.get("command", ""))
+            self._awaiting_approval = True
+            inp = self.query_one("#chat-input", Input)
+            inp.disabled = True
+            self.focus()
 
     # ── Tool approval (inline, like Claude Code) ──
 
