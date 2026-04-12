@@ -144,17 +144,13 @@ class ChatLog(RichLog):
     def _handle_thinking_click(self, y: int) -> None:
         """Toggle thinking expand/collapse on click."""
         try:
-            # Check if any line near the click contains the thinking marker
+            # Check nearby lines for a thinking header mapped in _thinking_line_map
             for check_y in range(max(0, y - 1), min(len(self.lines), y + 2)):
-                if check_y < len(self.lines):
-                    line_text = str(self.lines[check_y])
-                    if "▶" in line_text or "▼" in line_text:
-                        # Find the most recent thinking block and toggle it
-                        for idx in reversed(sorted(self._thinking_states.keys())):
-                            if self._history[idx][0] == "thinking":
-                                self._thinking_states[idx] = not self._thinking_states[idx]
-                                self._rerender()
-                                return
+                if check_y in self._thinking_line_map:
+                    hist_idx = self._thinking_line_map[check_y]
+                    self._thinking_states[hist_idx] = not self._thinking_states.get(hist_idx, False)
+                    self._rerender()
+                    return
         except Exception:
             pass
 
@@ -329,11 +325,32 @@ class ChatLog(RichLog):
                 parts.append(f"↓ {tokens_out / 1000:.1f}k tokens")
             else:
                 parts.append(f"↓ {tokens_out} tokens")
-        if cost_saved > 0.001:
+        if cost_saved > 0:
             parts.append(f"${cost_saved:.3f} saved")
         summary_text = " · ".join(parts)
         self._history.append(("turn_summary", summary_text))
         self._render_turn_summary(summary_text)
+
+    def _stream_avail_width(self) -> int:
+        """Available width for streamed text (matches _render_assistant)."""
+        try:
+            w = self.app.size.width - 6  # padding + scrollbar
+        except Exception:
+            w = 76
+        return max(w, 40) - 2  # 2 for leading indent
+
+    def _write_wrapped(self, line: str) -> None:
+        """Write a line with word-wrapping to fit the widget width."""
+        import textwrap
+        avail = self._stream_avail_width()
+        if not line.strip():
+            self.write(Text(f"  {line}"))
+            self._track_lines()
+            return
+        wrapped = textwrap.fill(line, width=avail)
+        for wline in wrapped.split("\n"):
+            self.write(Text(f"  {wline}"))
+            self._track_lines()
 
     def stream_token(self, token: str) -> None:
         """Append a streaming token — renders incrementally line by line."""
@@ -354,8 +371,7 @@ class ChatLog(RichLog):
         if len(lines) > 1:
             # We have at least one complete line — render all complete lines
             for complete_line in lines[:-1]:
-                self.write(Text(f"  {complete_line}"))
-                self._track_lines()
+                self._write_wrapped(complete_line)
             # Keep only the incomplete remainder
             self._stream_text = lines[-1]
             self.scroll_end(animate=False)
@@ -365,8 +381,7 @@ class ChatLog(RichLog):
         if hasattr(self, '_stream_text'):
             # Render any remaining partial line
             if self._stream_text.strip():
-                self.write(Text(f"  {self._stream_text}"))
-                self._track_lines()
+                self._write_wrapped(self._stream_text)
             self._stream_text = ""
             self._stream_started = False
         # Record in history for re-rendering (text was already shown line by line)
@@ -439,7 +454,7 @@ class ChatLog(RichLog):
         self.write(Text(""))
         self._track_lines()
         line = Text()
-        line.append("↻ ", style="dim yellow")
+        line.append("  ↻ ", style="dim yellow")
         line.append(text, style="dim italic")
         line.append("  (queued)", style="dim yellow")
         self.write(line)
@@ -663,6 +678,8 @@ class ChatLog(RichLog):
             shown += 1
 
     def _render_info(self, text: str) -> None:
+        self.write(Text(""))
+        self._track_lines()
         self.write(Text(f"  {text}", style="dim"))
         self._track_lines()
 

@@ -100,8 +100,8 @@ class ChatScreen(Screen):
     }
     #queue-line {
         height: 1;
-        padding: 0 1;
-        margin: 0 0 1 0;
+        padding: 0 1 0 3;
+        margin: 0;
         color: $warning;
         display: none;
     }
@@ -139,6 +139,7 @@ class ChatScreen(Screen):
         self._context_max: int = 32768
         self._turn_tokens: int = 0
         self._total_tokens: int = 0
+        self._total_cost_saved: float = 0.0
         self._thinking_phase: str = ""
         self._response_shown: bool = False
         self._active_step_text: str = ""  # raw text for scanning animation
@@ -399,6 +400,7 @@ class ChatScreen(Screen):
                 self.tui.gem_app.session.messages.clear()
             self._context_used = 0
             self._total_tokens = 0
+            self._total_cost_saved = 0.0
             self._update_status()
         elif text == "/switch":
             config = self.tui.gem_config
@@ -539,13 +541,14 @@ class ChatScreen(Screen):
 
         self._stream_buf.clear()
 
-        # Turn summary
+        # Turn summary — cumulative savings across session
         elapsed = time.time() - self._turn_start
-        cost = self._turn_tokens * _CLOUD_COST_PER_TOKEN
+        turn_cost = self._turn_tokens * _CLOUD_COST_PER_TOKEN
+        self._total_cost_saved += turn_cost
         log.append_turn_summary(
             elapsed, self._tools_used,
             tokens_out=self._turn_tokens,
-            cost_saved=cost,
+            cost_saved=self._total_cost_saved,
         )
         self._total_tokens += self._turn_tokens
         # Estimate total context from session messages
@@ -602,8 +605,9 @@ class ChatScreen(Screen):
             is_error = error == "true" or error is True
             # Hide floating animation
             self._hide_active_step()
-            name = self._active_tool_name
-            args = self._active_tool_args
+            # Use name from event payload (reliable) instead of _active_tool_name (can go stale)
+            name = p.get("name", "") or self._active_tool_name
+            args = p.get("args", "") or self._active_tool_args
             # Write completed ✓ line to chat log
             if is_error:
                 log.append_tool(name, args)
@@ -647,6 +651,9 @@ class ChatScreen(Screen):
             self._thinking_phase = "generating"
             # Show gem-themed animation while generating response
             self._show_active_thinking("generating")
+            # Hide any active tool step animation
+            if self._active_mode == "tool":
+                self._hide_active_step()
         elif t == "error":
             msg = p.get("message", "Unknown error")
             log.append_error(msg)
