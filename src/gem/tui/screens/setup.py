@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import platform
+import subprocess
 
 from textual.app import ComposeResult
 from textual.screen import Screen
@@ -231,7 +232,6 @@ class SetupScreen(Screen):
             save_config(config)
 
         # Ensure Ollama has the model registered
-        import subprocess
         if is_ollama_installed():
             try:
                 check = subprocess.run(["ollama", "show", _OLLAMA_MODEL_TAG],
