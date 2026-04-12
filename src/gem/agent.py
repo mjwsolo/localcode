@@ -712,6 +712,12 @@ def run_agent_loop(
                     chunk = _strip_thinking_tokens(event["content"])
                     if chunk:
                         if not content_streaming:
+                            # Emit thinking block NOW so user can expand it
+                            # while content is still streaming
+                            if thinking_parts:
+                                t_text = "".join(thinking_parts).strip()
+                                if t_text:
+                                    out.thinking_done(t_text)
                             out.start_streaming()
                             content_streaming = True
                         content_parts.append(chunk)
@@ -763,7 +769,8 @@ def run_agent_loop(
                 break
 
         # Show thinking summary if present (collapsed, dim)
-        if thinking_parts:
+        # Skip if already emitted when content started streaming
+        if thinking_parts and not content_streaming:
             thinking_text = "".join(thinking_parts).strip()
             if thinking_text:
                 out.thinking_done(thinking_text)

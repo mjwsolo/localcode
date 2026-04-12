@@ -144,13 +144,29 @@ class ChatLog(RichLog):
     def _handle_thinking_click(self, y: int) -> None:
         """Toggle thinking expand/collapse on click."""
         try:
-            # Check nearby lines for a thinking header mapped in _thinking_line_map
-            for check_y in range(max(0, y - 1), min(len(self.lines), y + 2)):
+            # Widen search range to account for scroll/render drift
+            for check_y in range(max(0, y - 2), min(len(self.lines), y + 3)):
                 if check_y in self._thinking_line_map:
                     hist_idx = self._thinking_line_map[check_y]
                     self._thinking_states[hist_idx] = not self._thinking_states.get(hist_idx, False)
                     self._rerender()
                     return
+            # Fallback: check if the clicked line contains a thinking marker
+            for check_y in range(max(0, y - 2), min(len(self.lines), y + 3)):
+                if check_y < len(self.lines):
+                    line_text = str(self.lines[check_y])
+                    if "▶" in line_text or "▼" in line_text:
+                        # Find the closest thinking entry in history
+                        for idx in sorted(self._thinking_states.keys()):
+                            self._thinking_states[idx] = not self._thinking_states[idx]
+                            self._rerender()
+                            return
+                        # No states yet — find thinking entries in history
+                        for idx, entry in enumerate(self._history):
+                            if entry[0] == "thinking":
+                                self._thinking_states[idx] = True
+                                self._rerender()
+                                return
         except Exception:
             pass
 
