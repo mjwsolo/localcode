@@ -82,7 +82,15 @@ class ModePickerScreen(Screen):
         if ok:
             self.app.switch_screen("chat")
         else:
-            self.notify(f"Server not ready: {details}", severity="error")
+            # Show error in the picker box, not as a tiny toast
+            box = self.query_one("#picker-box", Static)
+            short = str(details).replace("\n", " ")[:80]
+            box.update(
+                f"[bold red]Server not ready[/]\n\n"
+                f"[dim]{short}[/]\n\n"
+                f"The server may still be starting up.\n"
+                f"[dim]Press 1 or 2 to retry.[/]"
+            )
 
     def action_select_fast(self) -> None:
         self._select_mode("turbo")
