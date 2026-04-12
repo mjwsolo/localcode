@@ -288,10 +288,18 @@ class ChatScreen(Screen):
 
         # ● for tools (blue ball), ◆ for thinking
         icon = "●" if self._active_mode == "tool" else "◆"
-        label = f"  {icon} {text}...  {timer}"
+        label = f"{icon} {text}..."
+        # Sweep highlight left-to-right using markup (no RichText objects)
+        pos = self._scan_pos % max(len(label), 1)
+        bright = label[:pos + 1]
+        dim = label[pos + 1:]
+        # Escape markup characters in the text
+        bright = bright.replace("[", "\\[")
+        dim = dim.replace("[", "\\[")
+        line = f"  [bold]{bright}[/][dim italic]{dim}[/]  [dim]{timer}[/]"
 
         w = self.query_one("#active-step", Static)
-        w.update(label)
+        w.update(line)
 
     # ── Status bar (bottom — model, mode, context remaining) ──
 
