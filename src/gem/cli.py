@@ -257,6 +257,16 @@ def main(argv: list[str] | None = None) -> None:
         from .tui.app import LocalCodeTUI
         app = LocalCodeTUI(show_mode_picker=True)
         app.run()
+        # Handle GPU unlock: TUI exits with code 42 when sudo is needed
+        if getattr(app, 'return_code', None) == 42:
+            console.print("\n[bold]GPU memory unlock required (one-time setup)[/]\n")
+            import subprocess as sp
+            result = sp.run(["sudo", "sysctl", "iogpu.wired_limit_mb=14336"])
+            if result.returncode == 0:
+                console.print("\n[green]Done![/] Restarting LocalCode...\n")
+                os.execv(sys.executable, [sys.executable] + sys.argv)
+            else:
+                console.print("\n[red]Failed.[/] Run manually: sudo sysctl iogpu.wired_limit_mb=14336")
         return
 
     if args.command == "config-init":

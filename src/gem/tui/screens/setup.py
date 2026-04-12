@@ -142,6 +142,22 @@ class SetupScreen(Screen):
 
         config = self.app.gem_config
 
+        # ── Pre-flight: RAM check ──
+        try:
+            mem_bytes = int(subprocess.run(
+                ["sysctl", "-n", "hw.memsize"],
+                capture_output=True, text=True, timeout=2,
+            ).stdout.strip())
+            memory_gb = mem_bytes // (1024 ** 3)
+            if memory_gb < 8:
+                self.app.call_from_thread(lambda m=memory_gb: self._show_error(
+                    f"LocalCode requires at least 8GB of RAM.\n"
+                    f"Your Mac has {m}GB."
+                ))
+                return
+        except Exception:
+            pass
+
         # ── Step 0: Server binary ──
         self._current_step = 0
         self._status_text = "Checking server..."
@@ -186,13 +202,29 @@ class SetupScreen(Screen):
 
         model_path = get_model_path()
         if not model_path:
+            # Check disk space before downloading 10GB model
+            try:
+                import shutil
+                free_gb = shutil.disk_usage(Path.home()).free / (1024 ** 3)
+                if free_gb < 12:
+                    self.app.call_from_thread(lambda f=free_gb: self._show_error(
+                        f"Not enough disk space to download the model.\n"
+                        f"Need ~12GB free, you have {f:.1f}GB.\n\n"
+                        f"Free up space and try again."
+                    ))
+                    return
+            except Exception:
+                pass
             self._status_text = "Downloading model (~10GB)..."
             ok, result = download_model(
                 on_progress=lambda msg: setattr(self, '_status_text', msg)
             )
             if not ok:
-                err = str(result).replace("\n", " ").strip()[:60]
-                self.app.call_from_thread(lambda e=err: self._show_error(e))
+                err = str(result).replace("\n", " ").strip()[:80]
+                self.app.call_from_thread(lambda e=err: self._show_error(
+                    f"Model download failed:\n{e}\n\n"
+                    f"Check your internet connection and try again."
+                ))
                 return
             model_path = result
             config.runtime.model = str(result)
@@ -278,12 +310,37 @@ class SetupScreen(Screen):
         gpu_ready = ensure_gpu_unlock()
 
         if not gpu_ready:
-            self.app.call_from_thread(lambda: self._show_error(
-                "GPU unlock required for TurboQuant 32K context.\n"
-                "Run: sudo sysctl iogpu.wired_limit_mb=14336\n"
-                "Then restart LocalCode."
-            ))
-            return
+            try:
+                mem_bytes = int(subprocess.run(
+                    ["sysctl", "-n", "hw.memsize"],
+                    capture_output=True, text=True, timeout=2,
+                ).stdout.strip())
+                memory_gb = mem_bytes // (1024 ** 3)
+            except Exception:
+                memory_gb = 8
+
+            if memory_gb < 16:
+                # 8GB: run with CPU-only mode and smaller context
+                self._status_text = "Configuring for 8GB (CPU mode)..."
+                config.runtime.llama_cpp_gpu_layers = 0
+                config.runtime.context_size = 32768
+                save_config(config)
+                gpu_ready = True
+            else:
+                # 16GB: need GPU unlock
+                # First try: native macOS password dialog (osascript)
+                self._status_text = "Requesting GPU access..."
+                from ...performance import _sudo_via_osascript, metal_gpu_available
+                if _sudo_via_osascript("/usr/sbin/sysctl iogpu.wired_limit_mb=14336"):
+                    if metal_gpu_available(memory_gb):
+                        gpu_ready = True
+
+                if not gpu_ready:
+                    # osascript failed — exit TUI, explain, run sudo in terminal
+                    def _exit_and_unlock():
+                        self.app.exit(return_code=42)
+                    self.app.call_from_thread(_exit_and_unlock)
+                    return
         else:
             # GPU available — use TurboQuant llama.cpp
             gw = GemRuntimeGateway(config.runtime)
