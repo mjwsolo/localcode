@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "localcode"
-version = "0.2.11rc6"
+version = "0.2.11rc7"
 description = "High-performance AI coding on consumer hardware."
 readme = "README.md"
 requires-python = ">=3.11"
