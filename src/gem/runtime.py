@@ -58,10 +58,14 @@ class GemRuntimeGateway:
     def client(self) -> httpx.Client:
         """Persistent connection-pooled HTTP client for speed."""
         if self._client is None or self._client.is_closed:
+            # CPU-only mode (8GB) needs much longer timeout — inference is slow
+            read_timeout = float(self.config.request_timeout_seconds)
+            if self.config.llama_cpp_gpu_layers == 0:
+                read_timeout = max(read_timeout, 600.0)  # 10 min for CPU mode
             self._client = httpx.Client(
                 timeout=httpx.Timeout(
                     connect=10.0,
-                    read=float(self.config.request_timeout_seconds),
+                    read=read_timeout,
                     write=30.0,
                     pool=10.0,
                 ),
