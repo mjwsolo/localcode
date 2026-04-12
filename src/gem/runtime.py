@@ -112,8 +112,9 @@ class GemRuntimeGateway:
         ]
 
         if mode in ("turbo", "turbo-think"):
-            # Full GPU: all layers on Metal via mmap shared buffers, 2 graph splits
-            cmd.extend(["--mmap", "-ngl", "999"])
+            # Respect gpu_layers config (0 = CPU-only for 8GB machines)
+            ngl = self.config.llama_cpp_gpu_layers if self.config.llama_cpp_gpu_layers >= 0 else 999
+            cmd.extend(["--mmap", "-ngl", str(ngl)])
         elif mode == "context":
             # GPU mode: attention on Metal, experts on CPU, mmap for SSD paging
             cmd.extend(["--mmap", "-ngl", "999", "-ot", "exps=CPU"])
