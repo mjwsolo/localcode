@@ -602,18 +602,19 @@ class ChatScreen(Screen):
         elif t == "tool_result":
             result = p.get("result", "")
             error = p.get("error", "")
-            is_error = error == "true" or error is True
+            is_error = str(error).lower() == "true"
             # Hide floating animation
             self._hide_active_step()
             # Use name from event payload (reliable) instead of _active_tool_name (can go stale)
             name = p.get("name", "") or self._active_tool_name
             args = p.get("args", "") or self._active_tool_args
-            # Write completed ✓ line to chat log
+            # Always render ✓ green for success, ● + error for failure
             if is_error:
                 log.append_tool(name, args)
                 log.append_tool_result(result, error=True)
             else:
                 lines = result.strip().splitlines()
+                summary = lines[0][:80] if lines else ""
                 is_diff = len(lines) > 1 and _is_diff_result(result)
                 if is_diff:
                     # For diffs, extract file path from --- line as summary
@@ -625,7 +626,6 @@ class ChatScreen(Screen):
                     log.append_tool_done(name, args, f"--- {file_path}" if file_path else "")
                     log.append_tool_result(result)
                 else:
-                    summary = lines[0][:80] if lines else ""
                     log.append_tool_done(name, args, summary)
             self._thinking_phase = ""
             # Show thinking indicator immediately after tool completion
