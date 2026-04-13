@@ -12,11 +12,9 @@ license = "LicenseRef-Proprietary"
 authors = [
   { name = "LocalCode" }
 ]
-classifiers = [
-  "License :: Other/Proprietary License",
-]
 keywords = ["ai", "cli", "coding-assistant", "gemma", "local-first", "tui"]
 classifiers = [
+  "License :: Other/Proprietary License",
   "Development Status :: 3 - Alpha",
   "Environment :: Console",
   "Intended Audience :: Developers",
