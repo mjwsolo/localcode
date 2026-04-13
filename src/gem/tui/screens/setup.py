@@ -150,10 +150,12 @@ class SetupScreen(Screen):
                 capture_output=True, text=True, timeout=2,
             ).stdout.strip())
             memory_gb = mem_bytes // (1024 ** 3)
-            if memory_gb < 8:
+            if memory_gb < 16:
                 self.app.call_from_thread(lambda m=memory_gb: self._show_error(
-                    f"LocalCode requires at least 8GB of RAM.\n"
-                    f"Your Mac has {m}GB."
+                    f"LocalCode requires at least 16GB of RAM.\n"
+                    f"Your Mac has {m}GB — not enough to run\n"
+                    f"Gemma 4 26B (10.4GB model).\n\n"
+                    f"A smaller model for 8GB Macs is coming soon."
                 ))
                 return
         except Exception:
@@ -320,12 +322,13 @@ class SetupScreen(Screen):
                 memory_gb = 8
 
             if memory_gb < 16:
-                # 8GB: run with CPU-only mode and smaller context
-                self._status_text = "Configuring for 8GB (CPU mode)..."
-                config.runtime.llama_cpp_gpu_layers = 0
-                config.runtime.max_context_chars = 32768 * 4  # 32K tokens
-                save_config(config)
-                gpu_ready = True
+                self.app.call_from_thread(lambda m=memory_gb: self._show_error(
+                    f"LocalCode requires at least 16GB of RAM.\n"
+                    f"Your Mac has {m}GB — not enough to run\n"
+                    f"Gemma 4 26B (10.4GB model).\n\n"
+                    f"A smaller model for 8GB Macs is coming soon."
+                ))
+                return
             else:
                 # 16GB: need GPU unlock
                 # First try: native macOS password dialog (osascript)
@@ -342,8 +345,15 @@ class SetupScreen(Screen):
                     self.app.call_from_thread(_exit_and_unlock)
                     return
 
-        # Launch server (runs for ALL paths: 8GB CPU, 16GB GPU, 32GB+ GPU)
+        # Set GPU layers based on CURRENT hardware state — never trust saved config
         if gpu_ready:
+            config.runtime.llama_cpp_gpu_layers = 999  # GPU mode
+        else:
+            config.runtime.llama_cpp_gpu_layers = 0    # CPU mode
+        save_config(config)
+
+        # Launch server
+        if True:
             gw = GemRuntimeGateway(config.runtime)
             from ...bootstrap import _turboquant_binary_path as _tbp
             binary = config.runtime.llama_cpp_binary or str(_tbp() or "")
@@ -364,25 +374,41 @@ class SetupScreen(Screen):
                 self.app.call_from_thread(lambda e=str(exc): self._show_error(f"Failed to start: {e}"))
                 return
 
-            # Wait for server to become ready
-            # 8GB CPU mode needs longer — model loads slower via mmap without GPU
+            # Wait for server to become ready — must pass BOTH health + inference test
             is_cpu_mode = config.runtime.llama_cpp_gpu_layers == 0
-            wait_time = 180 if is_cpu_mode else 60
+            wait_time = 180 if is_cpu_mode else 120
             server_ok = False
+            health_ok = False
             for i in range(wait_time):
                 time.sleep(1)
                 if proc.poll() is not None:
                     break  # crashed
                 try:
-                    ok, _ = gw.healthcheck()
-                    if ok:
-                        server_ok = True
-                        break
+                    if not health_ok:
+                        ok, _ = gw.healthcheck()
+                        if ok:
+                            health_ok = True
+                            self._status_text = f"Warming up model... ({i+1}s)"
+                            # Server is listening — now verify it can actually serve
+                            import httpx
+                            try:
+                                r = httpx.post(
+                                    f"{config.runtime.base_url.rstrip('/')}/v1/chat/completions",
+                                    json={"messages": [{"role": "user", "content": "hi"}], "max_tokens": 1,
+                                          "chat_template_kwargs": {"enable_thinking": False}},
+                                    timeout=90,
+                                )
+                                if r.status_code == 200:
+                                    server_ok = True
+                                    break
+                            except Exception:
+                                pass
+                    else:
+                        # Health passed but warmup request still pending
+                        self._status_text = f"Warming up model... ({i+1}s)"
                 except Exception:
                     pass
-                if is_cpu_mode:
-                    self._status_text = f"Loading model (CPU mode, this takes a while)... ({i+1}s)"
-                else:
+                if not health_ok:
                     self._status_text = f"Loading model... ({i+1}s)"
 
             if not server_ok:

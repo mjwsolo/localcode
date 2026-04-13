@@ -224,7 +224,10 @@ def run_status() -> int:
 
 def main(argv: list[str] | None = None) -> None:
     import os
+    import signal
     import warnings
+    # Clean exit on Ctrl+C — suppress ugly asyncio/threading tracebacks
+    signal.signal(signal.SIGINT, lambda *_: os._exit(0))
     os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
     os.environ["MallocStackLogging"] = "0"

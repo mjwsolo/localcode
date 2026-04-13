@@ -75,22 +75,8 @@ class ModePickerScreen(Screen):
     def _select_mode(self, mode: str) -> None:
         self.app.gem_config.runtime.laptop_26b_runtime_mode = mode
         self._save()
-        # Verify server is reachable before entering chat
-        from ...runtime import GemRuntimeGateway
-        gw = GemRuntimeGateway(self.app.gem_config.runtime)
-        ok, details = gw.healthcheck()
-        if ok:
-            self.app.switch_screen("chat")
-        else:
-            # Show error in the picker box, not as a tiny toast
-            box = self.query_one("#picker-box", Static)
-            short = str(details).replace("\n", " ")[:80]
-            box.update(
-                f"[bold red]Server not ready[/]\n\n"
-                f"[dim]{short}[/]\n\n"
-                f"The server may still be starting up.\n"
-                f"[dim]Press 1 or 2 to retry.[/]"
-            )
+        # Setup screen already verified server is ready — go straight to chat
+        self.app.switch_screen("chat")
 
     def action_select_fast(self) -> None:
         self._select_mode("turbo")
