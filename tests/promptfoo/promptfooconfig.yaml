@@ -1,0 +1,151 @@
+# promptfoo configuration for LocalCode prompt evaluation.
+#
+# What this does
+# --------------
+# Runs our real system prompt (loaded from src/localcode/agent.py's
+# SYSTEM_PROMPT) against a matrix of scripted user prompts, hitting our
+# local llama-server's OpenAI-compatible endpoint. Asserts structural
+# properties on each response (did the model call the right tools, was
+# the output short/non-hedging, did it produce the expected artifact).
+#
+# Each scenario runs N times (see `repeat:` below) because IQ3/IQ2
+# quants are stochastic — single-run pass/fail is noise. Aggregate
+# pass rate + confidence interval is what we care about.
+#
+# How to run
+# ----------
+#   # one-off eval, current prompt:
+#   npx promptfoo@latest eval -c tests/promptfoo/promptfooconfig.yaml
+#
+#   # compare two prompt versions (e.g. before/after trimming a rule):
+#   # duplicate the prompts: block with two files and promptfoo runs
+#   # the scenario matrix against both automatically.
+#
+#   # view results in browser (local dashboard):
+#   npx promptfoo@latest view
+#
+# Stepwise adoption path
+# ----------------------
+# This is v1 — 3 scenarios, 3 repeats each. Once we trust the loop,
+# we'll expand to the full 15+ scenarios we want to cover and bump
+# repeat: to 10 for real statistical signal. For now: prove the loop
+# works, then scale.
+
+description: "LocalCode system-prompt regression suite"
+
+# ── Target provider ─────────────────────────────────────────────────
+# Hits our local llama-server via its OpenAI-compatible endpoint. No
+# cloud calls. `model` is whatever the server has loaded — the server
+# doesn't actually use the model name for routing (single-model
+# setup), but promptfoo requires one.
+providers:
+  # promptfoo's provider identifier IS the protocol+type+model string.
+  # Docs: https://www.promptfoo.dev/docs/providers/openai/#using-a-custom-endpoint
+  # We're using the OpenAI-chat provider against a local endpoint —
+  # the server doesn't care about the model name (single-model setup),
+  # but providing a concrete id keeps logs + dashboards readable.
+  - id: openai:chat:gemma-4-26B-A4B-it-UD-IQ3_S
+    label: "llama-server @ localhost:8081"
+    config:
+      apiBaseUrl: "http://127.0.0.1:8081/v1"
+      apiKey: "not-required-for-local-server"
+      temperature: 0.2
+      max_tokens: 2048
+
+# ── Prompts under test ──────────────────────────────────────────────
+# The prompt is our REAL SYSTEM_PROMPT — loaded via a shim that imports
+# src/localcode/agent.py and returns the formatted prompt. This keeps
+# the eval honest: we're testing the exact string the agent ships to
+# the model, not a paraphrase.
+#
+# To A/B test a prompt change:
+#   1. commit your prompt edit
+#   2. run `npx promptfoo eval` on the new commit
+#   3. git stash / checkout the old commit, run again
+#   4. `npx promptfoo view` diffs the two runs side-by-side
+#
+# Adding another prompt file here produces a matrix run automatically.
+prompts:
+  # A/B comparison: promptfoo runs the full scenario × repeat matrix
+  # against BOTH prompts and emits a side-by-side diff in the
+  # dashboard. `:prompt` suffix = call the prompt() function (not
+  # read file as literal text).
+  # Docs: https://www.promptfoo.dev/docs/configuration/parameters/#python
+  - id: "baseline"
+    label: "baseline (full 30-rule prompt, 19180 chars)"
+    raw: file://prompts/current_prompt.py:prompt
+  - id: "trimmed"
+    label: "trimmed (rules 27/28a/28b removed, 17471 chars, -8%)"
+    raw: file://prompts/trimmed_prompt.py:prompt
+
+# ── Test scenarios ──────────────────────────────────────────────────
+# Each scenario = one user message + structural assertions. Every
+# scenario runs against every prompt against every provider — matrix
+# is prompts × providers × tests × repeat.
+#
+# `vars:` are substituted into the prompt template at `{{varname}}`
+# positions. Our loader expects `user_text` so the same shim can be
+# reused for every scenario.
+tests:
+  - description: "short-chat: does the model reply at all"
+    vars:
+      user_text: "reply with a single word: ok"
+    assert:
+      - type: javascript
+        # Any non-empty response counts. Just verifies the model is
+        # awake and the endpoint is wired.
+        value: "output.length > 0"
+      - type: not-contains
+        value: "I cannot"
+      - type: not-contains
+        value: "I am unable to"
+
+  - description: "narration: multi-step task should have per-step prose"
+    vars:
+      user_text: "Create a new directory called promptfoo-test-scratch, write a file hello.txt with the word hi inside it, then list the contents of the directory."
+    assert:
+      # This catches the bug we hit in this session where the model
+      # fires 4 bashes in silence then emits a summary. We want
+      # at least ONE narrative sentence somewhere in the response
+      # OUTSIDE the tool call format. Proxy heuristic: total
+      # non-tool-call chars > 40.
+      - type: javascript
+        value: |
+          // strip tool_call tokens (both Gemma native and generic) + trim
+          const stripped = output
+            .replace(/<\|tool_call\>.*?<tool_call\|>/gs, "")
+            .replace(/<tool_call>.*?<\/tool_call>/gs, "")
+            .trim();
+          return stripped.length > 40;
+      # No hedging superlatives from rule 5.
+      - type: not-contains
+        value: "amazing"
+      - type: not-contains
+        value: "perfect!"
+
+  - description: "ambiguous-build: model should ASK clarifying question, not dive in"
+    vars:
+      user_text: "build me an app"
+    assert:
+      # Rule 22 says ask ONE clarifying question for ambiguous
+      # multi-file UI builds. The model's response should contain a
+      # question mark and NOT immediately fire tool calls.
+      - type: contains
+        value: "?"
+      - type: not-contains-any
+        # If the model dove in, one of these tool-call tokens would
+        # appear in the raw output. This assertion fires if NONE of
+        # them are present — i.e. model asked instead of acted.
+        value: ["<|tool_call>", "<tool_call>"]
+
+# ── Run configuration ───────────────────────────────────────────────
+# N=3 is a sanity baseline — enough to notice gross flakiness, cheap
+# enough to iterate. Bump to N=10 once the loop is proven trustworthy.
+# IQ3/IQ2 stochasticity requires multi-run aggregation for any real
+# A/B claim (see research notes: labs use 5-20 reps).
+defaultTest:
+  options:
+    # promptfoo runs `repeat` copies of each test and computes pass
+    # rate + variance. This is the statistical machinery our existing
+    # harness lacks.
+    repeat: 3
