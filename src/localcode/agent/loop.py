@@ -1,0 +1,1666 @@
+"""The agent turn engine.
+
+Final T0.1 slice. `run_agent_loop` used to live in agent/__init__.py
+and everyone imported it as `from localcode.agent import run_agent_loop`.
+That import path still works — `agent/__init__.py` now re-exports this
+function from `agent/loop.py` so external callers don't notice the move.
+
+The function itself is the core of LocalCode: one call per user turn,
+drives the model / tool-dispatch loop until either (a) the model emits
+a final response with no tool calls, (b) MAX_ROUNDS is hit, or (c) a
+stall-recovery cap is exhausted.
+
+It depends on every other submodule in agent/:
+  • constants — policy knobs, safety caps
+  • prompts   — SYSTEM_PROMPT, NOTEBOOK_RULES_TEMPLATE, REASONING_RULES
+  • context   — _prepare_model_messages, _compact_messages, truncation
+  • recovery  — detect_stall, nudge_for
+  • helpers   — _execute_tool, _needs_confirmation, display helpers
+
+If you're reading this to understand the agent behaviour, start with
+`run_agent_loop` below and follow the imports into the submodules as
+you hit them.
+"""
+from __future__ import annotations
+
+import json
+import re
+import sys
+import time
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ..app import LocalCodeApp
+    from ..output import OutputManager
+
+
+__all__ = ["run_agent_loop"]
+
+
+from .constants import (
+    MAX_ROUNDS,
+    MAX_OUTPUT_TOKENS,
+    MAX_THINKING_SECONDS,
+    MAX_THINKING_CHARS,
+    MAX_AGGREGATE_PER_TURN,
+)
+from .goal import GoalState, infer_goal_state
+from .context import (
+    _prepare_model_messages,
+    _summarize_args,
+    _truncate_result,
+    _estimate_tokens,
+    _compact_messages,
+)
+from .helpers import (
+    _execute_tool,
+    _execute_tool_result,
+    _needs_confirmation,
+    _render_markdown,
+    _brief_result,
+    _grounded_file_summary,
+    _tool_stage_label,
+    _first_token,
+)
+from .prompts import (
+    SYSTEM_PROMPT,
+)
+from .prompt_context import build_agent_system_prompt
+from .recovery import (
+    StallMode,
+    detect_stall,
+    nudge_for,
+    MAX_EMPTY_ROUND_RETRIES,
+)
+from .tool_orchestration import prefetch_parallel_tool_calls
+from .streaming import finish_thinking_display, stream_model_round
+from .tool_execution import (
+    ToolExecutionState,
+    canonical_args,
+    dedup_stub_for_tool,
+    oversize_stub_for_tool,
+    repeat_stub_for_tool,
+    tool_result_is_error,
+    track_tool_result,
+)
+from .turn_finalization import finalize_turn, strip_ephemeral_nudges
+from ..tools import schemas_for_goal
+from ..tools.facts import extract_tool_facts, facts_suffix
+from .hooks import (
+    TurnState,
+    after_tool as hook_after_tool,
+    before_model as hook_before_model,
+    before_turn as hook_before_turn,
+    completion_gate as hook_completion_gate,
+    quality_monitor as hook_quality_monitor,
+)
+from .app_tasks import (
+    extract_port,
+    format_run_or_launch_summary,
+    ground_run_or_launch_text,
+    has_launch_signal,
+    has_runtime_verification_signal,
+    is_app_build_request,
+    is_focused_blocking_question,
+    looks_like_partial_handoff,
+)
+
+def run_agent_loop(
+    app: "LocalCodeApp",
+    user_text: str,
+    composed_messages: list[dict],
+    out: "OutputManager",
+    *,
+    system_prompt: str | None = None,
+) -> str:
+    """Model-driven agent loop.
+
+    The model decides what to do via native Gemma 4 tool calls.
+    We execute tools and feed results back until the model is done.
+
+    Returns the final text response from the model.
+
+    Parameters
+    ----------
+    system_prompt : optional
+        The unformatted prompt template. When None (the default), the
+        module-level `SYSTEM_PROMPT` from `agent/prompts.py` is used
+        — which is what production and app.py always want. Eval and
+        tests pass an alternative here (e.g. the rendered minimal-core
+        variant) to exercise different prompts without monkey-patching
+        module globals. The string still goes through `.format(cwd=...,
+        project_instructions=..., network_status=..., skills_block=...,
+        reasoning_rules=..., notebook_block=...)` so any caller-supplied
+        override must expose the same placeholder slots (our variant
+        renderers all produce strings that have already had these
+        placeholders baked in to no-op values, so `.format()` is
+        effectively an identity pass when there are no placeholders
+        left — that's why the existing variant registry works here
+        too).
+
+    Telemetry: emits a `turn_start` lifecycle event so `tail -f
+    lifecycle.log` shows the new code is actually loaded and a turn
+    is in flight — without this, conversational turns (no tool calls,
+    no compactable history) leave the log silent for the entire turn
+    and the user can't tell whether the latest code is running.
+    """
+    # DI default — reach into module globals only if caller didn't
+    # pass an override. Means app.py keeps calling without worrying
+    # about prompts while eval can inject a variant per run.
+    if system_prompt is None:
+        system_prompt = SYSTEM_PROMPT
+    # Per-turn telemetry. Captures FULL user input so the events log
+    # is a complete record of "what was asked + what was done." The
+    # log is per-project, gitignored, never shipped to users — it's
+    # for the dev team to replay and debug sessions later.
+    import time as _time_mod
+    import uuid as _uuid
+    _turn_started_mono = _time_mod.monotonic()
+    _turn_id = _uuid.uuid4().hex[:12]
+
+    def _emit_internal_error(where: str, exc: BaseException) -> None:
+        try:
+            from ..events import emit as _emit_error
+            _emit_error(
+                "error",
+                turn_id=_turn_id,
+                where=where,
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+        except Exception:
+            pass
+
+    _active_goal_payload = getattr(app, "_active_goal_state", None)
+    if isinstance(_active_goal_payload, dict):
+        try:
+            _payload = dict(_active_goal_payload)
+            _payload["success_criteria"] = tuple(_payload.get("success_criteria") or ())
+            _goal_state = GoalState(**_payload)
+        except Exception as exc:
+            _emit_internal_error("active_goal_state_parse", exc)
+            _goal_state = infer_goal_state(user_text)
+    else:
+        _goal_state = infer_goal_state(user_text)
+    _task_state = getattr(getattr(app, "session", None), "current_task", None)
+    _last_announced_task_stage = str(getattr(_task_state, "current_stage", "") or "")
+
+    def _announce_task_stage(stage: str, *, force: bool = False) -> None:
+        nonlocal _last_announced_task_stage
+        stage = (stage or "").strip()
+        if not stage:
+            return
+        if not force and stage == _last_announced_task_stage:
+            return
+        _last_announced_task_stage = stage
+        try:
+            out.set_stage(f"task: {stage}")
+        except Exception as exc:
+            _emit_internal_error("announce_task_stage_output", exc)
+        try:
+            if hasattr(app, "store") and getattr(app, "session", None) is not None:
+                app.store.update_task(
+                    app.session,
+                    status="in_progress",
+                    current_stage=stage,
+                )
+        except Exception as exc:
+            _emit_internal_error("announce_task_stage_store", exc)
+    from ..thinking import should_use_thinking
+    _mode = getattr(app.config.runtime, "laptop_26b_runtime_mode", "") or ""
+    _reasoning = should_use_thinking(
+        _mode,
+        getattr(app.config.runtime, "internal_thinking_mode", "off"),
+        goal_type=_goal_state.goal_type,
+        task_stage=getattr(_task_state, "current_stage", "") if _task_state is not None else "",
+        user_text=user_text,
+    )
+    try:
+        from ..events import emit
+        emit("turn_start",
+             turn_id=_turn_id,
+             task_id=getattr(_task_state, "task_id", ""),
+             task_status=getattr(_task_state, "status", ""),
+             task_stage=getattr(_task_state, "current_stage", ""),
+             task_kind=getattr(_task_state, "task_kind", ""),
+             task_slug=getattr(_task_state, "task_slug", ""),
+             chars=len(user_text),
+             text=user_text,                       # FULL input
+             model=str(app.config.runtime.model or ""),
+             runtime_mode=_mode,
+             reasoning=_reasoning,
+             goal_type=_goal_state.goal_type,
+             goal_summary=_goal_state.goal_summary,
+             success_criteria=_goal_state.success_criteria)
+    except Exception as exc:
+        _emit_internal_error("turn_start_emit", exc)
+
+    # ── Build messages ──
+    # composed_messages already has system prompt + context + full conversation + current user msg
+    # Inject our tool-loop system prompt at the front
+    from ..app import is_online
+    online = is_online()
+    if online:
+        network_status = "Network: ONLINE — you can download files, install packages, fetch URLs."
+    else:
+        network_status = (
+            "Network: OFFLINE — NO internet. Do NOT attempt downloads, pip install, curl, wget, or any network requests. "
+            "Use only local files and already-installed packages. Generate sample/mock data locally instead of downloading."
+        )
+    def _current_task_stage_for_thinking() -> str:
+        stage = str(_last_announced_task_stage or getattr(_task_state, "current_stage", "") or "").strip()
+        if stage:
+            return stage
+        if _goal_state.goal_type == "build_app":
+            return "planning"
+        return ""
+
+    use_thinking = _reasoning
+    if _goal_state.goal_type == "build_app":
+        _announce_task_stage(getattr(_task_state, "current_stage", "") or "planning", force=True)
+    prompt_result = build_agent_system_prompt(
+        app=app,
+        user_text=user_text,
+        goal_state=_goal_state,
+        task_state=_task_state,
+        base_system_prompt=system_prompt,
+        network_status=network_status,
+        use_thinking=use_thinking,
+    )
+    agent_system = prompt_result.system_prompt
+    try:
+        from ..events import emit as _emit_skills
+        _emit_skills(
+            "skill_selection",
+            turn_id=_turn_id,
+            candidates=prompt_result.skill_candidates,
+            candidate_count=len(prompt_result.skill_candidates),
+            selected=prompt_result.selected_skills,
+            selected_count=len(prompt_result.selected_skills),
+            selected_origins=prompt_result.selected_skill_origins,
+            selected_chars=prompt_result.selected_skill_chars,
+        )
+        _emit_skills(
+            "skill_injection",
+            turn_id=_turn_id,
+            skills=prompt_result.selected_skills,
+            origins=prompt_result.selected_skill_origins,
+            chars=prompt_result.selected_skill_chars,
+            count=len(prompt_result.selected_skills),
+        )
+    except Exception:
+        pass
+
+    messages: list[dict[str, Any]] = []
+
+    # Our agent prompt goes first — it's the most important
+    messages.append({"role": "system", "content": agent_system})
+
+    if _goal_state.goal_type == "question":
+        # Question/diagnostic turns should not replay old tool protocol.
+        # A one-character "?" after a failed build used to inherit the
+        # previous tool chain and the model resumed building instead of
+        # answering. Keep only recent conversational text; if evidence is
+        # needed, the model can inspect logs/files explicitly.
+        conversational = [
+            m
+            for m in composed_messages
+            if m.get("role") in {"user", "assistant"}
+            and not str(m.get("content", "")).lstrip().startswith("SYSTEM:")
+        ]
+        for m in conversational[-6:]:
+            messages.append(m)
+    elif use_thinking:
+        # Thinking mode: keep context shorter but preserve recent assistant responses
+        # Only drop very large blocks (repo structure dumps, huge tool results)
+        for m in composed_messages:
+            if m.get("role") == "system":
+                continue
+            content = str(m.get("content", ""))
+            # Skip very large context blocks (repo structure, bulk retrieval results)
+            # but keep normal assistant responses so model remembers recent conversation
+            if len(content) > 1500 and m.get("role") not in ("user", "assistant"):
+                continue
+            messages.append(m)
+    else:
+        for m in composed_messages:
+            if m.get("role") == "system":
+                continue  # skip old system prompt — ours is authoritative
+            messages.append(m)
+
+    # Add current user message if not already there
+    if not messages or messages[-1].get("content") != user_text:
+        messages.append({"role": "user", "content": user_text})
+
+    full_response: list[str] = []
+    start_time = time.time()
+    tools_called: list[str] = []
+    changed_files: list[str] = []
+    bash_history: list[tuple[str, str]] = []
+    _turn_prompt_tokens = 0
+    _turn_completion_tokens = 0
+    _turn_total_tokens = 0
+    loop_detected = False
+    _hook_state = TurnState(
+        user_text=user_text,
+        goal_state=_goal_state,
+        task_state=_task_state,
+        changed_files=changed_files,
+        bash_history=bash_history,
+        tools_called=tools_called,
+    )
+    hook_before_turn(_hook_state)
+    _app_build_request = is_app_build_request(user_text) or _goal_state.goal_type == "build_app"
+    _aggregate_budget = 24_000 if _app_build_request else MAX_AGGREGATE_PER_TURN
+    _compact_token_limit = 12_000 if _app_build_request else 27_000
+    _completion_gate_retries = 0
+    _MAX_COMPLETION_GATE_RETRIES = 1
+    _edit_recovery_nudges = 0
+    _MAX_CONSECUTIVE_CORRECTIONS = 2
+    _generic_correction_nudges = 0
+    # Per-tool caps removed 2026-04-26 (commits ce8a714 → this one).
+    # Telemetry showed `3-in-a-row` exact-repeat guard fired 0 times
+    # ever in observed sessions; `same-tool > 10` fired once and it
+    # was a false-positive on legitimate iterative data analysis;
+    # `file-edit > 3` never appeared. Keeping them was paying
+    # bookkeeping cost on every tool call to catch nothing real, and
+    # cutting legitimate work when they did fire. Matches agent /
+    # terminal coding tools pattern: rely on user Ctrl+C plus the targeted
+    # surviving guards (thinking caps, empty-round nudge,
+    # investigation-spin / looks-fine nudges) for loop termination.
+
+    # Per-turn counter of auto-recovered empty rounds. Caps how many
+    # times we'll nudge a stream that ended with just thinking (no
+    # content, no tool calls) before giving up and ending the turn
+    # with a visible message. Recovery logic + nudge text live in
+    # agent/recovery.py (T0.1-d split).
+    _empty_rounds_this_turn = 0
+    _MAX_EMPTY_ROUND_RETRIES = MAX_EMPTY_ROUND_RETRIES
+    _last_round_signature: tuple[int, str] | None = None
+    _same_round_signature_count = 0
+    _same_round_synthetic_rejections = 0
+    _MUTATING_TOOLS = frozenset({
+        "write_file",
+        "append_file",
+        "edit_file",
+        "multi_edit",
+        "edit_diff",
+    })
+
+    # ── Investigation-spin detector ──
+    # The 20-round "let me check the CSS / let me check the JS / everything
+    # looks fine / let me check…" pathology, observed 2026-04-26 on a
+    # browser-rendering bug the agent could never see (no DOM access, no
+    # screenshots). The existing loop-breakers don't trip:
+    #   - identical-3-in-a-row guard: each read_file is a different path
+    #   - same-tool > N: read_file count was 7, under the 10 cap
+    # …so the agent kept reading until MAX_ROUNDS hit at round 20.
+    #
+    # New detector: count rounds where (a) only read-only tools were used
+    # AND (b) content matched a "looks fine"-shaped phrase. After 3 such
+    # rounds in a row (or 5 read-only rounds total, "looks fine" or not),
+    # inject ONE synthetic user message telling the model to either
+    # commit to a concrete change or ask the user a focused question, and
+    # forbid further read-only investigation this turn. One nudge per
+    # turn — if the model ignores it, the next round's natural exit
+    # path applies.
+    _READONLY_TOOLS = frozenset({
+        "read_file", "grep", "glob", "list_files", "web_fetch", "web_search",
+    })
+    _LOOKS_FINE_RE = re.compile(
+        r"\b(?:looks?\s+(?:fine|correct|good|ok)|seems?\s+(?:fine|correct|good)"
+        r"|works?\s+fine|(?:load|run|work|render)(?:s|ing)?\s+(?:fine|correctly)"
+        r"|checks?\s+out|all\s+(?:good|correct|fine)"
+        r"|everything\s+(?:looks?|seems?)\s+(?:fine|correct|good|ok))\b",
+        re.IGNORECASE,
+    )
+    _readonly_streak = 0
+    _looks_fine_streak = 0
+    _spin_nudge_done = False
+    # Why did the loop exit? Set right before each `break` so the
+    # turn_end event records the actual exit path. Without this, we
+    # had to guess from indirect signals (last round_end finish_reason,
+    # tool counts, etc.) and there was no way to tell whether a stall
+    # guard, exception, or user cancel ended it.
+    _loop_exit_reason: str = ""
+
+    # Read-dedup state: maps path → round_idx of last read so we can
+    # detect "model is re-reading the same file with no edit between."
+    # Modified-set tracks any path the model wrote / edited / multi-
+    # edited this turn — that invalidates a prior read (file changed).
+    # Both reset per turn (this loop body is per-turn).
+    _tool_exec_state = ToolExecutionState(changed_files=changed_files)
+    _read_file_chars_this_turn = 0
+    _edit_failures_this_turn = 0
+    _write_existing_rejections_this_turn = 0
+    _edit_context_seen = False
+    # Generalized dedup for cacheable read-only investigations:
+    # list_files / glob / grep with identical args within a turn return
+    # the same content (modulo external file-system changes we can't
+    # observe). Key is (tool_name, canonical_args_json) → round_num so
+    # the dedup-stub can name the round the model already ran this. Any
+    # write/edit invalidates the WHOLE map — cheap, safe, less granular
+    # than per-path tracking but list_files/glob/grep can target
+    # directories whose contents change after a write.
+    # Indices of nudge messages we inject into `messages` so we can
+    # strip them BEFORE this turn returns. Without this, every nudge
+    # ("STOP investigating, do NOT call read_file…", "your last
+    # response had no action — try again") becomes a PERMANENT
+    # SYSTEM-prefixed user message in the conversation history, and
+    # subsequent turns inherit those instructions. Real failure mode
+    # observed 2026-04-26: a session accumulated 6+ spin nudges and
+    # 4+ stall nudges, then "continue" produced 540 chars of "Now let
+    # me update X" with ZERO tool calls — the model was obeying the
+    # accumulated "do not call read tools" instructions, not the
+    # current user intent. Ephemeral cleanup at end-of-turn.
+    _ephemeral_nudge_indices: list[int] = []
+    # Bumped from 5 → 10 on 2026-04-26. Threshold of 5 false-positived
+    # on legitimate "redesign this section" investigations where the
+    # agent reasonably reads ~6-8 files (UI, JS, backend route, data,
+    # data shape probes) before having enough context to commit to a
+    # design. The looks_fine_streak signal still catches the higher-
+    # confidence spin pattern ("X looks fine, let me check Y" repeated)
+    # which is the genuinely-stuck failure mode worth interrupting.
+    _MAX_READONLY_STREAK = 10
+    _MAX_LOOKS_FINE_STREAK = 3
+    _deterministic_launch_done = False
+    _verified_launch_summary = ""
+
+    if _goal_state.goal_type == "run_or_launch":
+        try:
+            from ..launcher import launch_project_app
+            preferred_port = int(getattr(_task_state, "active_port", 0) or 0)
+            launch = launch_project_app(
+                app.repo_root,
+                preferred_port=preferred_port,
+                open_browser=True,
+            )
+            if launch.port and hasattr(app, "store") and getattr(app, "session", None) is not None:
+                app.store.update_task(
+                    app.session,
+                    active_port=launch.port,
+                    current_stage="verified" if launch.verified else "running",
+                )
+            try:
+                from ..events import emit as _emit_launch
+                _emit_launch(
+                    "launcher_result",
+                    turn_id=_turn_id,
+                    ok=launch.ok,
+                    verified=launch.verified,
+                    kind=launch.kind,
+                    root=launch.root,
+                    command=launch.command,
+                    port=launch.port,
+                    url=launch.url,
+                    log_path=launch.log_path,
+                    message=launch.message,
+                    browser_opened=launch.browser_opened,
+                    browser_error=launch.browser_error,
+                )
+            except Exception:
+                pass
+            if launch.ok:
+                summary = (
+                    f"The app is running and verified.\n\n"
+                    f"URL: {launch.url}\n"
+                    f"Command: `{launch.command}`\n"
+                    f"Log: `{launch.log_path}`\n"
+                    f"Browser opened: {'yes' if launch.browser_opened else 'no'}"
+                    + (f"\nBrowser error: {launch.browser_error}" if launch.browser_error else "")
+                )
+                _render_markdown(summary, app.console if hasattr(app, 'console') else None)
+                full_response.append(summary)
+                _loop_exit_reason = "verified_run_or_launch"
+                _deterministic_launch_done = True
+                _verified_launch_summary = summary
+            messages.append({
+                "role": "user",
+                "content": (
+                    "SYSTEM: Deterministic launcher could not complete this run_or_launch turn.\n"
+                    f"Launcher result: {launch.message}\n"
+                    "Inspect the project minimally, then run exactly one explicit launch command, "
+                    "verify with one probe, and report the concrete URL. Do not loop on repeated "
+                    "npm start / package edits."
+                ),
+            })
+            _ephemeral_nudge_indices.append(len(messages) - 1)
+        except Exception as _launcher_err:
+            try:
+                from ..events import emit as _emit_launch_err
+                _emit_launch_err("launcher_error", turn_id=_turn_id, error=str(_launcher_err))
+            except Exception:
+                pass
+
+    # ── Main loop ──
+    # MAX_ROUNDS=0 → no hard cap (agent pattern). The
+    # targeted safety nets above catch real failure modes; round
+    # counting was emergency insurance with no observed claims.
+    # `itertools.count()` gives an unbounded loop; positive
+    # MAX_ROUNDS still works for eval / batch use cases.
+    import itertools as _itertools
+    _round_iter = (
+        () if _deterministic_launch_done else
+        _itertools.count() if MAX_ROUNDS <= 0 else range(MAX_ROUNDS)
+    )
+    for round_num in _round_iter:
+        # Cancel check — user typed "stop" while the turn was running.
+        # Poll at round boundary so an in-flight stream can finish rather
+        # than leaving a partial corrupt response in history.
+        if getattr(app, "cancel_requested", False):
+            out.print_info("Stopped by user.")
+            _loop_exit_reason = "user_cancel"
+            break
+
+        # Signal TUI that we're starting generation.
+        out.start_thinking()
+
+        # Conversation compaction: if the running prompt is about to
+        # crowd out the context window, mutate `messages` in place with
+        # a summarized version before the next model call. See
+        # src/localcode/compaction.py for the minimal-agent-inspired design.
+        try:
+            from ..compaction import should_compact, compact, estimate_tokens
+            # Authoritative source: ask the runtime gateway what context
+            # size the server was actually launched with. The previous
+            # `getattr(..., "llama_cpp_ctx_size", 0) or 32768` fallback
+            # was wrong on every modern setup — turbo mode on a 16 GB
+            # Mac runs at 65536 (see runtime.py `_target_num_ctx`),
+            # which meant `should_compact` triggered at ~50% of real
+            # utilization and we summarized the conversation HALF AS
+            # OFTEN AS NEEDED, NO — TWICE AS OFTEN AS NEEDED, throwing
+            # away useful recent history. Read the real value.
+            try:
+                ctx_tokens = int(app.engine._target_num_ctx())
+            except Exception:
+                ctx_tokens = (
+                    int(getattr(app.config.runtime, "llama_cpp_ctx_size", 0))
+                    or 65536
+                )
+            if should_compact(messages, context_window=ctx_tokens):
+                out.print_info(
+                    f"Compacting conversation (≈{estimate_tokens(messages)} tokens "
+                    f"of {ctx_tokens} context → summary)..."
+                )
+                messages[:] = compact(messages, app.engine, context_window=ctx_tokens)
+        except Exception as _compact_err:
+            # Never let compaction failure kill the agent loop — continue
+            # with the unchanged messages and let the user see the error.
+            out.print_info(f"(compaction skipped: {_compact_err})")
+
+        # Per-round diagnostic state. Populated as the stream runs;
+        # flushed via `round_end` after the round terminates so we can
+        # correlate "what the model did" with "what we then did" without
+        # guessing. Without this, debugging an agent-loop misbehaviour
+        # means re-running with `--debug` and watching live — these
+        # fields make the events.jsonl trace self-contained.
+        _round_finish_reason = ""
+        _round_raw_tail = ""
+        _round_content_chars = 0
+        _round_reasoning_chars = 0
+        _round_pending_tool_count = 0
+        # Per-round timing breakdown so events.jsonl can answer
+        # "where does the time go?" without guessing. Three buckets:
+        #   ttft_ms      — request-start → first token (prompt eval)
+        #   decode_ms    — first token → end of stream (token gen)
+        #   tool_exec_ms — sum of wall-time for tools in this round
+        # Sum of these ≤ duration_ms; the remainder is bridge / agent-
+        # loop overhead. Captured from stream_done + the tool dispatch
+        # loop below.
+        _round_ttft_ms = 0
+        _round_decode_ms = 0
+        _round_tool_exec_ms = 0
+        _round_started_at = time.monotonic()
+        round_task_stage = _current_task_stage_for_thinking()
+        round_use_thinking = should_use_thinking(
+            app.config.runtime.laptop_26b_runtime_mode,
+            app.config.runtime.internal_thinking_mode,
+            goal_type=_goal_state.goal_type,
+            task_stage=round_task_stage,
+            user_text=user_text,
+        )
+        try:
+            # Compact older tool results so every round's prompt stays small
+            # enough for hybrid-memory models (Qwen 3.6) to re-evaluate fast.
+            model_messages = hook_before_model(_prepare_model_messages(messages), _hook_state)
+            round_tool_schemas = schemas_for_goal(
+                _goal_state.goal_type,
+                user_text,
+                task_stage=round_task_stage,
+            )
+            try:
+                app._tool_content_max_chars = None
+            except Exception:
+                pass
+            round_tool_names = [
+                str(((schema.get("function") or {}).get("name") or ""))
+                for schema in round_tool_schemas
+            ]
+            # Pre-stream snapshot of what we're sending. Char count +
+            # message count are cheap and tell us if the prompt was
+            # truncated by upstream compaction in a way that would
+            # explain a cold response.
+            try:
+                from ..events import emit as _emit_round
+                _emit_round(
+                    "round_start",
+                    turn_id=_turn_id,
+                    round_idx=round_num,
+                    messages_count=len(model_messages),
+                    prompt_chars=sum(
+                        len(str(m.get("content") or "")) for m in model_messages
+                    ),
+                    use_thinking=bool(round_use_thinking),
+                    max_output_tokens=int(MAX_OUTPUT_TOKENS),
+                    tool_schema_count=len(round_tool_schemas),
+                    tool_schemas=round_tool_names,
+                )
+            except Exception:
+                pass
+            _stream_result = stream_model_round(
+                app,
+                out,
+                model_messages,
+                round_use_thinking=round_use_thinking,
+                retry_messages=messages,
+                tool_schemas=round_tool_schemas,
+                recovery_mode="",
+                stream_policy=_goal_state.goal_type,
+            )
+            _round_finish_reason = _stream_result.finish_reason
+            _round_raw_tail = _stream_result.raw_tail
+            _round_content_chars = _stream_result.content_chars
+            _round_reasoning_chars = _stream_result.reasoning_chars
+            _round_pending_tool_count = _stream_result.pending_tool_count
+            _round_ttft_ms = _stream_result.ttft_ms
+            _round_decode_ms = _stream_result.decode_ms
+            _stream_tool_calls = _stream_result.tool_calls
+            _primary_round_tool = (
+                getattr(_stream_result, "limited_tool_name", "") or ""
+            )
+            if not _primary_round_tool and _stream_tool_calls:
+                try:
+                    _primary_round_tool = str(
+                        ((_stream_tool_calls[0].get("function") or {}).get("name") or "")
+                    )
+                except Exception:
+                    _primary_round_tool = ""
+            _round_signature = (_round_content_chars, _primary_round_tool)
+            if _primary_round_tool and _round_signature == _last_round_signature:
+                _same_round_signature_count += 1
+            else:
+                _last_round_signature = _round_signature
+                _same_round_signature_count = 1 if _primary_round_tool else 0
+            _turn_prompt_tokens += int(_stream_result.prompt_tokens or 0)
+            _turn_completion_tokens += int(_stream_result.completion_tokens or 0)
+            _turn_total_tokens += int(
+                _stream_result.total_tokens
+                or ((_stream_result.prompt_tokens or 0) + (_stream_result.completion_tokens or 0))
+            )
+        except KeyboardInterrupt:
+            out.print_info("Interrupted.")
+            _loop_exit_reason = "stream_interrupt"
+            break
+        except Exception as exc:
+            from ..errors import format_for_user
+            out.set_error(format_for_user(exc, fallback_code="E3102"))
+            _loop_exit_reason = f"stream_error:{type(exc).__name__}"
+            break
+
+        # If we bailed on a stuck thinking loop, tell the user explicitly so
+        # they know why the turn ended and can try a different prompt.
+        if _stream_result.thinking_abort:
+            out.print_info(
+                f"Stopped: model reasoning exceeded the per-round cap "
+                f"({MAX_THINKING_SECONDS}s or {MAX_THINKING_CHARS} chars) without "
+                f"emitting a response. Small quantized models (IQ2_M, IQ3_S) often "
+                f"produce better output in fast mode — try `/mode` to switch, or "
+                f"rephrase the task in smaller steps."
+            )
+
+        # Show thinking summary if present (collapsed, dim)
+        # Skip if already emitted when content started streaming
+        finish_thinking_display(_stream_result, out)
+
+        content = _stream_result.content
+        tool_calls = _stream_result.tool_calls
+
+        # Clear the indicator before rendering output
+        out._stop_indicator()
+        sys.stdout.write("\r\033[K")  # clear indicator line
+        sys.stdout.flush()
+
+        # Build assistant message for history
+        assistant_msg: dict[str, Any] = {"role": "assistant", "content": content}
+        if tool_calls:
+            assistant_msg["tool_calls"] = tool_calls
+        messages.append(assistant_msg)
+        _assistant_msg_idx = len(messages) - 1
+
+        # ── Round-end telemetry ──
+        # Single self-contained record of what THIS round did. Has every
+        # field needed to attribute "model bailed mid-turn" failures
+        # (raw_tail + finish_reason + parse_markers_seen) without
+        # re-running with --debug. Lives in events.jsonl bucket=round.
+        try:
+            from ..events import emit as _emit_round_end
+            _round_total_ms = int((time.monotonic() - _round_started_at) * 1000)
+            _emit_round_end(
+                "round_end",
+                round_idx=round_num,
+                duration_ms=_round_total_ms,
+                # Latency breakdown so optimization decisions can be
+                # data-driven instead of guessing. Sum of these three
+                # ≤ duration_ms; the residual (overhead_ms) is bridge,
+                # event dispatch, dedup checks, history mutation, etc.
+                ttft_ms=_round_ttft_ms,
+                decode_ms=_round_decode_ms,
+                tool_exec_ms=_round_tool_exec_ms,
+                overhead_ms=max(
+                    0,
+                    _round_total_ms - _round_ttft_ms - _round_decode_ms - _round_tool_exec_ms,
+                ),
+                finish_reason=_round_finish_reason,
+                content_chars=_round_content_chars,
+                reasoning_chars=_round_reasoning_chars,
+                tool_count=len(tool_calls) if tool_calls else 0,
+                tool_names=[
+                    (tc.get("function") or {}).get("name", "")
+                    for tc in (tool_calls or [])
+                ][:8],
+                pending_tool_count=_round_pending_tool_count,
+                prompt_tokens=int(_stream_result.prompt_tokens or 0),
+                completion_tokens=int(_stream_result.completion_tokens or 0),
+                total_tokens=int(
+                    _stream_result.total_tokens
+                    or ((_stream_result.prompt_tokens or 0) + (_stream_result.completion_tokens or 0))
+                ),
+                usage_estimated=bool(getattr(_stream_result, "usage_estimated", False)),
+                tool_args_limited=bool(getattr(_stream_result, "tool_args_limited", False)),
+                limited_tool_name=getattr(_stream_result, "limited_tool_name", ""),
+                limited_args_chars=int(getattr(_stream_result, "limited_args_chars", 0) or 0),
+                # Tail of raw content stream — captured ONLY when the
+                # round looks suspect (content but no tools, or zero
+                # output entirely) so we don't bloat normal logs.
+                raw_tail=(
+                    _round_raw_tail[-500:]
+                    if (not tool_calls and (content or _round_pending_tool_count == 0))
+                    else ""
+                ),
+                content_tail=content[-200:] if content else "",
+            )
+        except Exception:
+            pass
+
+        if _same_round_signature_count >= 5:
+            try:
+                from ..events import emit as _emit_same_signature_loop
+
+                _emit_same_signature_loop(
+                    "auto_nudge",
+                    signal="same_round_signature_loop",
+                    reason="same_content_chars_and_tool_repeated",
+                    repeat_count=_same_round_signature_count,
+                    content_chars=_round_content_chars,
+                    tool_name=_primary_round_tool,
+                    finish_reason=_round_finish_reason,
+                )
+            except Exception:
+                pass
+            if tool_calls:
+                # This detector runs before normal tool dispatch. Previously it
+                # only appended a user nudge and continued, so no tool_result was
+                # ever produced and the failure ledger never advanced. Feed a
+                # synthetic failed tool result into the conversation instead; the
+                # next round sees a normal recoverable tool failure and the
+                # schema selector can remove the repeated tool.
+                _same_round_synthetic_rejections += 1
+                for _tc in tool_calls:
+                    _fn = _tc.get("function") or {}
+                    _name = str(_fn.get("name") or _primary_round_tool or "tool")
+                    _args = _fn.get("arguments") or {}
+                    if isinstance(_args, str):
+                        try:
+                            _args_for_key = json.loads(_args)
+                        except Exception:
+                            _args_for_key = {"arguments": _args[:500]}
+                    elif isinstance(_args, dict):
+                        _args_for_key = _args
+                    else:
+                        _args_for_key = {"arguments": str(_args)[:500]}
+                    _tool_exec_state.failed_calls[(_name, canonical_args(_args_for_key))] = (
+                        _tool_exec_state.failed_calls.get((_name, canonical_args(_args_for_key)), 0) + 1
+                    )
+                    messages.append({
+                        "role": "tool",
+                        "content": (
+                            "REJECTED: repeated identical tool pattern. "
+                            "Use a materially different tool or arguments next; "
+                            "do not retry this exact action."
+                        ),
+                        "tool_call_id": _tc.get("id", ""),
+                    })
+                if _same_round_synthetic_rejections >= 3:
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "SYSTEM: The last repeated action was rejected several "
+                            "times. Change strategy now: inspect current files, use "
+                            "a different write/edit path, or verify what exists. "
+                            "Do not call the same tool with the same shape again."
+                        ),
+                    })
+                    _ephemeral_nudge_indices.append(len(messages) - 1)
+            else:
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "SYSTEM: You are repeating the same output pattern. "
+                        "Take a materially different next action now. Continue "
+                        "the task; do not summarize or ask the user."
+                    ),
+                })
+                _ephemeral_nudge_indices.append(len(messages) - 1)
+            _empty_rounds_this_turn = 0
+            continue
+
+        # If generation hit the token cap while a tool call was being
+        # produced, do not execute it. The args may be syntactically
+        # salvageable but semantically truncated, which caused a real
+        # refactor failure to run write_file with `{}` after a 6-minute
+        # decode. Retry once with explicit chunking instructions.
+        if (
+            _round_finish_reason in ("length", "tool_args_limit")
+            and (tool_calls or _round_pending_tool_count)
+        ):
+            try:
+                if 0 <= _assistant_msg_idx < len(messages):
+                    del messages[_assistant_msg_idx]
+            except Exception:
+                pass
+            _limited_tool_name = getattr(_stream_result, "limited_tool_name", "") or "tool"
+            if _limited_tool_name == "tool" and _primary_round_tool:
+                _limited_tool_name = _primary_round_tool
+            _limited_args_chars = int(getattr(_stream_result, "limited_args_chars", 0) or 0)
+            _limited_reason = getattr(_stream_result, "limited_reason", "") or "adaptive stream guard"
+            _limited_args_snippet = getattr(_stream_result, "limited_args_snippet", "") or ""
+            if _limited_tool_name:
+                # A tool_args_limit round never reaches normal tool execution,
+                # so record it explicitly in the same failure ledger used by
+                # repeated executed tool errors. The key is intentionally
+                # coarse: partial JSON snippets vary, but the failure mode is
+                # the same tool repeatedly failing to finish an argument stream.
+                _stream_limit_key = (
+                    _limited_tool_name,
+                    f"stream_limit:{_limited_reason or _round_finish_reason}",
+                )
+                _tool_exec_state.failed_calls[_stream_limit_key] = (
+                    _tool_exec_state.failed_calls.get(_stream_limit_key, 0) + 1
+                )
+            if _empty_rounds_this_turn < _MAX_EMPTY_ROUND_RETRIES:
+                _empty_rounds_this_turn += 1
+                try:
+                    from ..events import emit as _emit_truncated_tool
+                    _emit_truncated_tool(
+                        "auto_nudge",
+                        signal="tool_args_limited",
+                        reason="truncated_tool_call",
+                        stall_mode="truncated_tool_call",
+                        retry=_empty_rounds_this_turn,
+                        retry_cap=_MAX_EMPTY_ROUND_RETRIES,
+                        finish_reason=_round_finish_reason,
+                        pending_tool_count=_round_pending_tool_count,
+                        tool_count=len(tool_calls) if tool_calls else 0,
+                        limited_tool_name=getattr(_stream_result, "limited_tool_name", ""),
+                        limited_args_chars=int(getattr(_stream_result, "limited_args_chars", 0) or 0),
+                        limited_reason=getattr(_stream_result, "limited_reason", ""),
+                    )
+                except Exception:
+                    pass
+                _limited_args_snippet = (
+                    _limited_args_snippet
+                ).replace("\n", " ")[:300]
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        f"SYSTEM: Your previous {_limited_tool_name} call was "
+                        f"truncated mid-args at {_limited_args_chars} chars — "
+                        "the output token budget ran out before the JSON "
+                        "closed, so the call was discarded.\n"
+                        "To recover, write the file in CHUNKS:\n"
+                        f"  1. Call write_file with the FIRST ~100 lines.\n"
+                        f"  2. Call append_file repeatedly to add the rest, "
+                        f"~100 lines per call.\n"
+                        "Each call's args must fit the per-round token "
+                        "budget. Do NOT retry write_file with the same large "
+                        "content — it will hit the same wall.\n"
+                        f"- Reason: {_limited_reason}\n"
+                        f"- Leading snippet: {_limited_args_snippet}"
+                    ),
+                })
+                _ephemeral_nudge_indices.append(len(messages) - 1)
+                continue
+            _loop_exit_reason = "truncated_tool_call_exhausted"
+            break
+
+        # ── Investigation-spin detector ──
+        # After every round, decide if THIS round was pure investigation
+        # ("looks fine" + read-only tools). Streak length drives whether
+        # we inject a corrective nudge into the next round.
+        _round_tool_names = {
+            (tc.get("function") or {}).get("name", "") for tc in (tool_calls or [])
+        }
+        _round_was_readonly = bool(_round_tool_names) and _round_tool_names.issubset(_READONLY_TOOLS)
+        _round_said_looks_fine = bool(content and _LOOKS_FINE_RE.search(content))
+        if _round_was_readonly:
+            _readonly_streak += 1
+        else:
+            _readonly_streak = 0
+        if _round_said_looks_fine and _round_was_readonly:
+            _looks_fine_streak += 1
+        else:
+            _looks_fine_streak = 0
+        # Trip when EITHER the streak crosses its threshold AND we
+        # haven't nudged this turn yet. Two thresholds because some
+        # spins fire one signal but not the other:
+        #   - a model that reads 6 different files without commenting
+        #     ("let me check X" without "looks fine") trips readonly_streak
+        #   - a model that says "looks fine" 3× and then bash-curls a
+        #     new endpoint trips looks_fine_streak
+        if not _spin_nudge_done and (
+            _readonly_streak >= _MAX_READONLY_STREAK
+            or _looks_fine_streak >= _MAX_LOOKS_FINE_STREAK
+        ):
+            _spin_nudge_done = True
+            try:
+                from ..events import emit as _emit_spin
+                _emit_spin(
+                    "auto_nudge",
+                    kind="investigation_spin",
+                    readonly_streak=_readonly_streak,
+                    looks_fine_streak=_looks_fine_streak,
+                    round_idx=round_num,
+                )
+            except Exception:
+                pass
+            messages.append({
+                "role": "user",
+                "content": (
+                    "SYSTEM: You've spent several rounds investigating with "
+                    "read-only tools and concluding things look correct, but "
+                    "the bug the user reported is real. The files are fine; "
+                    "the failure is runtime/browser/environment-side and not "
+                    "visible from source. Stop investigating. Your next "
+                    "response MUST be one of:\n"
+                    "  (a) ONE concrete change you think might fix it — add "
+                    "console.error hooks, add a try/catch with a visible "
+                    "error message in the UI, add defensive null checks, "
+                    "add a debug endpoint, or similar — then write/edit a "
+                    "file and verify.\n"
+                    "  (b) ONE focused question to the user describing what "
+                    "you can't see — e.g. \"Is the page blank, unstyled, or "
+                    "showing data? Any errors in the browser console "
+                    "(Cmd+Opt+J)? What URL did you open?\"\n"
+                    "Do NOT call read_file, grep, list_files, glob, "
+                    "web_fetch, or web_search this turn. Pick (a) or (b) "
+                    "and respond now."
+                ),
+            })
+            _ephemeral_nudge_indices.append(len(messages) - 1)
+
+        # ── Stalled-round recovery ──
+        # Three failure modes end a round with the model NOT actually
+        # done, but the user watching a frozen screen:
+        #
+        # (A) Empty round — long reasoning, then server closes the
+        #     stream with NO content and NO tool_calls. Images 107/108.
+        #
+        # (B) Intent-without-action — model emits ONE sentence of
+        #     forward-looking narration ("I'll build the web app now.
+        #     Let me create this.") and stops, with no tool call. Image
+        #     112. Happens because IQ2/IQ3 sometimes exits the reasoning
+        #     channel with just a sign-off instead of an action.
+        #
+        # (C) Gave-up-after-rejection — most recent tool call returned
+        #     a "REJECTED" / "Error" string AND the round ended with no
+        #     follow-up tool call. The model hit a snag and bailed
+        #     instead of reading the rejection's actionable feedback
+        #     and retrying. This was image 123: write_file got
+        #     REJECTED for syntax error, model stopped completely.
+        #
+        # Stall detection + nudge. Logic lives in agent/recovery.py
+        # (T0.1-d split). `stall` is None for a productive round,
+        # otherwise a `StallMode` enum that drives both the telemetry
+        # label and the per-mode nudge text.
+        # Gated on Feature.AUTO_NUDGE_RECOVERY. Disabled → stalls end
+        # the turn silently (no synthetic SYSTEM: nudge), which is the
+        # pre-recovery behaviour and what eval wants when A/B-ing the
+        # nudge feature's actual contribution to task completion.
+        from ..features import Feature, is_enabled as _is_enabled
+        stall = detect_stall(
+            tool_calls=tool_calls,
+            content=content,
+            tools_called_prior=tools_called,
+            messages=messages,
+            thinking_abort=_stream_result.thinking_abort,
+        ) if _is_enabled(Feature.AUTO_NUDGE_RECOVERY) else None
+
+        if stall is not None:
+            # Narration-only / empty stalled assistant messages should not
+            # stay in history. Keeping them conditions the next round on the
+            # same failed "about to act" text and wastes context.
+            if stall in {StallMode.EMPTY, StallMode.NARRATION}:
+                try:
+                    if 0 <= _assistant_msg_idx < len(messages):
+                        del messages[_assistant_msg_idx]
+                except Exception:
+                    pass
+            if _empty_rounds_this_turn < _MAX_EMPTY_ROUND_RETRIES:
+                _empty_rounds_this_turn += 1
+                mode_label = stall.value
+                # Telemetry event for every auto-nudge. Lets us answer
+                # "how often does the model stall + recover via nudge
+                # vs stall and truly give up?" from events.jsonl alone.
+                try:
+                    from ..events import emit as _emit_ev
+                    _emit_ev("auto_nudge",
+                             stall_mode=mode_label,
+                             retry=_empty_rounds_this_turn,
+                             retry_cap=_MAX_EMPTY_ROUND_RETRIES)
+                except Exception:
+                    pass
+                out.print_info(
+                    f"Model round ended with {mode_label} — nudging it to "
+                    f"continue… (auto-retry {_empty_rounds_this_turn}/"
+                    f"{_MAX_EMPTY_ROUND_RETRIES})"
+                )
+                messages.append({"role": "user", "content": nudge_for(stall)})
+                _ephemeral_nudge_indices.append(len(messages) - 1)
+                continue  # next round of the main loop
+            else:
+                out.print_info(
+                    f"Model ended {_MAX_EMPTY_ROUND_RETRIES + 1} rounds in a "
+                    "row without acting. Ending turn. Try rephrasing, "
+                    "splitting the task, or `/model` to switch models."
+                )
+                _loop_exit_reason = "stall_exhausted"
+                break
+
+        # ── No tool calls = model is done ──
+        if not tool_calls:
+            # Match v0.2.12's no-tool-calls path exactly: render content,
+            # render any grounded file summary, break. Nothing else.
+            #
+            # Removed 2026-04-29:
+            #   • completion-gate retry loop — caused multi-round
+            #     paraphrase loops on Q&A turns by deleting the assistant
+            #     answer and forcing more rounds.
+            #   • quality-monitor retry path — same shape (delete msg +
+            #     re-run with a "SYSTEM: Do NOT stop…" injection). Even
+            #     with the gate gone, this path could still re-fire on
+            #     a subset of phrasings ("would you like me to…",
+            #     "should I…") and reproduce the multi-round artefact.
+            # The model's final answer stands as written; if it asks a
+            # permission question, the user gets to answer — the runtime
+            # does not silently force a retry.
+            _blocking_question = is_focused_blocking_question(content)
+            if _goal_state.goal_type == "run_or_launch":
+                _task_port = int(getattr(_task_state, "active_port", 0) or 0)
+                content = ground_run_or_launch_text(content, _task_port)
+            if content:
+                _render_markdown(content, app.console if hasattr(app, 'console') else None)
+                full_response.append(content)
+            # Always show grounded file summary after model response
+            if changed_files:
+                grounded = _grounded_file_summary(app.repo_root, changed_files)
+                if grounded:
+                    _render_markdown(grounded, app.console if hasattr(app, 'console') else None)
+                    full_response.append(grounded)
+            if _goal_state.goal_type == "run_or_launch":
+                _task_port = int(getattr(_task_state, "active_port", 0) or 0)
+                if _task_port:
+                    grounded_access = (
+                        f"Running app URL: http://localhost:{_task_port}\n"
+                        f"Use that exact port if you open the browser or re-run the server."
+                    )
+                    _render_markdown(grounded_access, app.console if hasattr(app, 'console') else None)
+                    full_response.append(grounded_access)
+            _loop_exit_reason = "blocked_question" if _blocking_question else "model_done"
+            break
+
+        # ── Execute tools ──
+        aggregate_size = 0
+
+        _parallel_futures: dict[int, "object"] = {}
+        _parallel_pool = None
+
+        def _skip_parallel(_idx: int, _name: str, _args: dict) -> bool:
+            if _name == "read_file":
+                _p = _args.get("path") or _args.get("file_path") or ""
+                if (isinstance(_p, str) and _p
+                        and _p in _tool_exec_state.files_read
+                        and _p not in _tool_exec_state.files_modified):
+                    return True
+            return False
+
+        _parallel_futures, _parallel_pool = prefetch_parallel_tool_calls(
+            tool_calls,
+            should_skip=_skip_parallel,
+            execute_tool=lambda _name, _args: _execute_tool_result(app, _name, _args, out),
+        )
+        if _parallel_futures:
+            try:
+                from ..events import emit as _emit_par
+                _emit_par("parallel_tool_dispatch",
+                          turn_id=_turn_id,
+                          round=round_num,
+                          count=len(_parallel_futures),
+                          names=[tool_calls[_i].get("function", {}).get("name", "")
+                                 for _i in _parallel_futures])
+            except Exception:
+                pass
+
+        for _tc_idx, tc in enumerate(tool_calls):
+            # Cancel check — poll before EACH tool so a long tool chain
+            # stops the moment the user asks, not after all queued calls
+            # have run. We can't interrupt a tool mid-execution
+            # (subprocess would need SIGTERM); per-call granularity is
+            # the honest trade-off.
+            if getattr(app, "cancel_requested", False):
+                out.print_info("Stopped by user.")
+                loop_detected = True
+                _loop_exit_reason = "user_cancel_mid_tool"
+                break
+            fn = tc.get("function", {})
+            tool_name = fn.get("name", "unknown")
+            try:
+                args = json.loads(fn.get("arguments", "{}"))
+            except json.JSONDecodeError:
+                args = {}
+                out.print_info(f"Warning: malformed args for {tool_name}")
+
+            # Update indicator immediately
+            stage = _tool_stage_label(tool_name, args)
+            out.set_stage(stage)
+            idx = out.log_tool(tool_name, _summarize_args(args))
+
+            # Safety: confirm destructive commands (honors current autonomy
+            # level so /permissions toggles take effect immediately).
+            # The approval returns one of "once" / "always" / "deny".
+            # "always" adds the command's first token (e.g. "git") to the
+            # session allowlist so we stop asking for that family.
+            if _needs_confirmation(tool_name, args, app):
+                cmd = args.get("command", "")
+                verdict = "deny"
+                if out._approval_callback is not None:
+                    raw = out._approval_callback(tool_name, cmd)
+                    # Callback may be a bool (legacy) or the new verdict string.
+                    if isinstance(raw, bool):
+                        verdict = "once" if raw else "deny"
+                    else:
+                        verdict = str(raw)
+                else:
+                    # CLI mode: terminal-based approval with 3 options.
+                    import tty
+                    import termios
+                    out._stop_indicator()
+                    rule = app._composer_rule() if hasattr(app, "_composer_rule") else "  " + ("─" * 60)
+                    first_tok = _first_token(cmd) or tool_name
+                    sys.stdout.write("\n\033[33m  Allow this command?\033[0m\n")
+                    sys.stdout.write(f"\033[2m  {cmd[:80]}\033[0m\n")
+                    sys.stdout.write("  \033[1m1\033[0m  allow once\n")
+                    sys.stdout.write(f"  \033[1m2\033[0m  always allow `{first_tok}` (this session)\n")
+                    sys.stdout.write("  \033[1m3\033[0m  deny\n")
+                    sys.stdout.write("\033[s")
+                    sys.stdout.write(f"\033[2m{rule}\033[0m\n")
+                    sys.stdout.write("  › ")
+                    sys.stdout.write(f"\n\033[2m{rule}\033[0m")
+                    sys.stdout.write("\033[1A\r    ")
+                    sys.stdout.flush()
+                    try:
+                        fd = sys.stdin.fileno()
+                        old = termios.tcgetattr(fd)
+                        try:
+                            tty.setraw(fd)
+                            ch = sys.stdin.read(1)
+                        finally:
+                            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+                    except Exception:
+                        try:
+                            ch = input().strip()
+                        except EOFError:
+                            ch = "3"
+                    sys.stdout.write("\033[u\033[J")
+                    if ch in ("1", "y"):
+                        verdict = "once"
+                    elif ch == "2":
+                        verdict = "always"
+                    else:
+                        verdict = "deny"
+
+                # Act on the verdict.
+                if verdict == "always":
+                    allow_set = getattr(app, "_session_allow", None)
+                    if allow_set is None:
+                        app._session_allow = set()
+                        allow_set = app._session_allow
+                    allow_set.add(_first_token(cmd))
+                    sys.stdout.write(
+                        f"\033[2m  └ always allowing `{_first_token(cmd)}` for this session\033[0m\n"
+                    )
+                elif verdict == "once":
+                    sys.stdout.write("\033[2m  └ approved command\033[0m\n")
+                else:  # deny
+                    sys.stdout.write("\033[2m  └ denied\033[0m\n")
+                    messages.append({"role": "tool", "content": "Denied by user.", "tool_call_id": tc.get("id", "")})
+                    continue
+
+            # Per-tool loop guards REMOVED 2026-04-26 (option C).
+            # Telemetry showed:
+            #   - 3-in-a-row exact-repeat guard: fired 0× ever
+            #   - same-tool > 10 guard: fired 1×, false-positive on
+            #     legitimate iterative data analysis (11 different
+            #     python3 probes against an 11K-record JSON)
+            #   - file-edit > 3 guard: fired 0× ever
+            # These guards were paying bookkeeping cost on every tool
+            # dispatch to catch loops that don't happen, and cutting
+            # legitimate iteration when they did fire. agent (`maxTurns`
+            # opt-in) and terminal coding tools (no limit) ship without these too.
+            #
+            # Loop termination now comes from:
+            #   - User Ctrl+C / cancel_requested (always fires)
+            #   - thinking-time / thinking-char caps (per-round)
+            #   - empty-round nudge (3 strikes)
+            #   - investigation-spin nudge (10+ read-only rounds)
+            #   - looks-fine streak nudge (3 rounds)
+            # If a residual failure pattern emerges in production we
+            # add a TARGETED guard for it then. No more coarse counters.
+
+            # Read-dedup: if this is `read_file` for a path we already
+            # read THIS TURN AND nobody edited it since, skip the actual
+            # dispatch and inject a tiny stub. Real-world heat cause
+            # observed 2026-04-26: model re-reads `app.py` (445 lines),
+            # `index.html` (76), `app.js` (220) two-three times each
+            # while investigating. Each duplicate adds 5-10K chars to
+            # the prompt; by round 13 the prompt was 66K chars =
+            # 70-90s TTFT/round = full GPU = laptop heat.
+            _dedup_stub = dedup_stub_for_tool(tool_name, args, _tool_exec_state)
+            # Same-call 3× guard for tools without their own dedup
+            # (bash / web_fetch / web_search / launch_app). Took the
+            # place of the broader exact-repeat counter that was retired
+            # 2026-04-26 — re-added narrowly after a "how hot in france"
+            # turn fired the same `curl wttr.in/Paris?format=…` 4× in a
+            # row. dedup_stub wins ties so list_files/glob/grep keep
+            # their existing message.
+            if _dedup_stub is None:
+                _repeat_stub = repeat_stub_for_tool(tool_name, args, _tool_exec_state)
+                if _repeat_stub is not None:
+                    _dedup_stub = _repeat_stub
+
+            # Tool-arg size guard. Blocks the runaway-edit class
+            # (model emitting 100K+ JSON in a single edit_file/
+            # write_file/multi_edit). Real failure 2026-04-26: model
+            # tried to stuff hundreds of common English words into
+            # one edit; the args reached 112,964 chars before
+            # truncating mid-string, llama-server's tool-call parser
+            # returned HTTP 500, the turn died with E3102. We REJECT
+            # with a specific instruction that tells the model HOW
+            # to recover (split into multiple edits) so the existing
+            # POST_REJECTION stall path nudges it to retry — model
+            # doesn't just stop, it actually splits the work.
+            _oversize_stub = oversize_stub_for_tool(tool_name, args, 1_000_000)
+            _edit_sequence_stub = None
+            if (
+                _goal_state.goal_type == "edit_existing"
+                and tool_name in {"write_file", "append_file", "edit_file", "multi_edit", "edit_diff"}
+                and not _edit_context_seen
+            ):
+                _edit_sequence_stub = (
+                    "REJECTED: edit_existing workflow requires context before patching. "
+                    "First locate the relevant files with list_files/grep/glob and read "
+                    "the target file or focused range with read_file. Then apply the "
+                    "smallest targeted edit and verify it."
+                )
+
+            # Execute (timed — wall-clock added to _round_tool_exec_ms
+            # so round_end can show the model what fraction of its
+            # round time was spent waiting on tools vs LLM).
+            _tool_started_at = time.monotonic()
+            if _edit_sequence_stub is not None:
+                from ..tools import ToolResult as _ToolResult
+                _tool_result_obj = _ToolResult(text=_edit_sequence_stub, ok=False, facts={"tool": tool_name, "ok": False, "edit_sequence": "missing_context"})
+            elif _oversize_stub is not None:
+                from ..tools import ToolResult as _ToolResult
+                _tool_result_obj = _ToolResult(text=_oversize_stub, ok=False, facts={"tool": tool_name, "ok": False, "oversize": True})
+            elif _dedup_stub is not None:
+                from ..tools import ToolResult as _ToolResult
+                _dedup_is_error = str(_dedup_stub).startswith("REJECTED:")
+                _tool_result_obj = _ToolResult(
+                    text=_dedup_stub,
+                    ok=not _dedup_is_error,
+                    facts={
+                        "tool": tool_name,
+                        "ok": not _dedup_is_error,
+                        "dedup": not _dedup_is_error,
+                        "repeated_failed_call": _dedup_is_error,
+                    },
+                )
+            elif _tc_idx in _parallel_futures:
+                # Already running in the prefetch ThreadPool above; .result()
+                # blocks until done. By the time we reach the Nth tool in
+                # the serial loop, the first N-1 have usually finished.
+                try:
+                    _tool_result_obj = _parallel_futures[_tc_idx].result()
+                except Exception as _e:
+                    from ..tools import ToolResult as _ToolResult
+                    _tool_result_obj = _ToolResult(
+                        text=f"Error in {tool_name}: {type(_e).__name__}: {_e}",
+                        ok=False,
+                        facts={"tool": tool_name, "ok": False, "error_type": type(_e).__name__},
+                    )
+            else:
+                _tool_result_obj = _execute_tool_result(app, tool_name, args, out)
+            tool_result = hook_after_tool(tool_name, args, str(_tool_result_obj), _hook_state)
+            _tool_facts = dict(getattr(_tool_result_obj, "facts", {}) or {})
+            if tool_result != str(_tool_result_obj):
+                _tool_facts = extract_tool_facts(tool_name, args, str(tool_result))
+            _hook_state.evidence.add_tool_result(
+                tool_name,
+                args,
+                str(tool_result),
+                _tool_facts,
+            )
+            if tool_name in {"read_file", "grep", "glob", "list_files"} and not tool_result_is_error(str(tool_result)):
+                _edit_context_seen = True
+            try:
+                from ..events import emit as _emit_tool_facts
+                _emit_tool_facts(
+                    "tool_facts",
+                    turn_id=_turn_id,
+                    name=tool_name,
+                    facts=_tool_facts,
+                )
+            except Exception:
+                pass
+            try:
+                from ..events import emit as _emit_tool_result
+
+                _result_text_for_event = str(tool_result)
+                _emit_tool_result(
+                    "tool_result",
+                    name=tool_name,
+                    error=str(
+                        bool(not _tool_facts.get("ok", True))
+                        or tool_result_is_error(_result_text_for_event)
+                    ).lower(),
+                    chars=len(_result_text_for_event),
+                    preview=_result_text_for_event[:160].replace("\n", " "),
+                )
+            except Exception:
+                pass
+            _round_tool_exec_ms += int(
+                (time.monotonic() - _tool_started_at) * 1000
+            )
+            if tool_name == "bash":
+                _bash_cmd = str(args.get("command", ""))
+                bash_history.append((_bash_cmd, str(tool_result)))
+                if str(tool_result).startswith("[exit code ") or str(tool_result).startswith("REJECTED:"):
+                    app._last_failed_tool_name = tool_name
+                else:
+                    app._last_failed_tool_name = ""
+                if _goal_state.goal_type in {"build_app", "run_or_launch"}:
+                    port = extract_port(f"{args.get('command', '')}\n{tool_result}")
+                    if port:
+                        try:
+                            if hasattr(app, "store") and getattr(app, "session", None) is not None:
+                                app.store.update_task(
+                                    app.session,
+                                    active_port=port,
+                                )
+                        except Exception:
+                            pass
+            if (
+                tool_name == "launch_app"
+                and _goal_state.goal_type in {"build_app", "run_or_launch"}
+                and "App launched and verified." in str(tool_result)
+            ):
+                _launch_url = ""
+                _launch_port = 0
+                _url_match = re.search(r"URL:\s*(http://[^\s]+)", str(tool_result))
+                if _url_match:
+                    _launch_url = _url_match.group(1).strip()
+                    _launch_port = extract_port(_launch_url)
+                if _launch_port:
+                    try:
+                        if hasattr(app, "store") and getattr(app, "session", None) is not None:
+                            app.store.update_task(
+                                app.session,
+                                active_port=_launch_port,
+                                current_stage="verified",
+                            )
+                    except Exception:
+                        pass
+                _verified_launch_summary = (
+                    f"The app is running and verified.\n\n"
+                    f"URL: {_launch_url or 'verified by launch_app'}"
+                )
+                if _goal_state.goal_type == "run_or_launch":
+                    _loop_exit_reason = "verified_run_or_launch"
+            tools_called.append(tool_name)
+            try:
+                _recent = list(getattr(app, "_recent_tool_names", []) or [])
+                if tool_name in _recent:
+                    _recent.remove(tool_name)
+                _recent.insert(0, tool_name)
+                app._recent_tool_names = _recent[:8]
+            except Exception:
+                pass
+            track_tool_result(
+                tool_name=tool_name,
+                args=args,
+                tool_result=str(tool_result),
+                round_num=round_num,
+                state=_tool_exec_state,
+                dedup_stub=_dedup_stub,
+            )
+            _failure_count = 0
+            if tool_result_is_error(str(tool_result)):
+                _failure_count = _tool_exec_state.failed_calls.get(
+                    (tool_name, canonical_args(args)),
+                    0,
+                )
+                if _failure_count >= 2 and tool_name in {
+                    "write_file",
+                    "append_file",
+                    "edit_file",
+                    "multi_edit",
+                    "edit_diff",
+                    "bash",
+                }:
+                    if _generic_correction_nudges < _MAX_CONSECUTIVE_CORRECTIONS:
+                        _generic_correction_nudges += 1
+                        messages.append({
+                            "role": "user",
+                            "content": (
+                                f"SYSTEM: The last {tool_name} call failed repeatedly. "
+                                "Try a materially different approach now. Do not retry "
+                                "the same tool arguments."
+                            ),
+                        })
+                        _ephemeral_nudge_indices.append(len(messages) - 1)
+                    try:
+                        from ..events import emit as _emit_repeat_failure
+
+                        _emit_repeat_failure(
+                            "auto_nudge",
+                            stall_mode="repeated_failed_tool_call",
+                            retry=_failure_count,
+                            failed_tool=tool_name,
+                        )
+                    except Exception:
+                        pass
+            if tool_name == "read_file":
+                _read_file_chars_this_turn += len(str(tool_result))
+            if tool_name in {"edit_file", "multi_edit", "edit_diff"} and (
+                "old_string not found" in str(tool_result)
+                or "applied 0/" in str(tool_result).lower()
+                or str(tool_result).startswith("Error:")
+                or str(tool_result).startswith("REJECTED:")
+                or bool(_tool_facts.get("reverted"))
+            ):
+                _edit_failures_this_turn += 1
+            if tool_name == "write_file" and "already exists" in str(tool_result):
+                _write_existing_rejections_this_turn += 1
+            # Show result to user — send full result for write/edit so TUI can render diff
+            is_error = tool_result_is_error(tool_result)
+            is_rejected = tool_result.startswith("REJECTED:")
+            if is_rejected:
+                out.tool_result(tool_result, error=True, idx=idx)
+            elif tool_name in ("write_file", "append_file", "edit_file") and not is_error:
+                out.tool_result(tool_result, error=False, idx=idx)
+            else:
+                out.tool_result(_brief_result(tool_name, tool_result), error=is_error, idx=idx)
+
+            # Truncate per-tool
+            _facts_note = facts_suffix(_tool_facts)
+            if _facts_note and _facts_note not in tool_result:
+                tool_result = f"{tool_result}{_facts_note}"
+            tool_result = _truncate_result(tool_result, tool_name)
+            aggregate_size += len(tool_result)
+
+            # Aggregate budget
+            if aggregate_size > _aggregate_budget:
+                tool_result = tool_result[:500] + "\n[Truncated — context budget exceeded this turn]"
+
+            # Add to history
+            messages.append({
+                "role": "tool",
+                "content": tool_result,
+                "tool_call_id": tc.get("id", ""),
+            })
+            if (
+                tool_name in {"edit_file", "multi_edit", "edit_diff"}
+                and (not bool(_tool_facts.get("ok", True)) or bool(_tool_facts.get("reverted")))
+                and _edit_recovery_nudges < 2
+            ):
+                _edit_recovery_nudges += 1
+                path_hint = args.get("path") or args.get("file_path") or "the target file"
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "SYSTEM: Edit recovery required. Do not retry the same large or fuzzy edit. "
+                        f"Read a focused range around {path_hint!r}, copy a smaller exact old_string "
+                        "from that read output, then use edit_file/multi_edit with the minimal targeted "
+                        "change. If the file is syntactically broken, fix the nearest syntax error first "
+                        "and run the smallest verification command."
+                    ),
+                })
+                _ephemeral_nudge_indices.append(len(messages) - 1)
+            if _loop_exit_reason == "verified_run_or_launch":
+                break
+
+        # Tear down the prefetch pool. By this point every future has
+        # been .result()'d in the serial loop above (or the loop broke
+        # early on cancel — orphaned futures are allowed to drain
+        # because their underlying file/network ops are short-lived).
+        if _parallel_pool is not None:
+            _parallel_pool.shutdown(wait=False)
+
+        # Content was already streamed live via out.stream(); just record it
+        # for the return value (don't re-render — that produced duplicate text
+        # below tool results in CLI mode).
+        if content:
+            full_response.append(content)
+
+        if _loop_exit_reason == "verified_run_or_launch":
+            if _verified_launch_summary:
+                _render_markdown(
+                    _verified_launch_summary,
+                    app.console if hasattr(app, 'console') else None,
+                )
+                full_response.append(_verified_launch_summary)
+            break
+
+        if _goal_state.goal_type == "run_or_launch":
+            _task_port = int(getattr(_task_state, "active_port", 0) or 0)
+            _launched = has_launch_signal(bash_history)
+            _verified = has_runtime_verification_signal(bash_history)
+            if _task_port and (_launched or _verified):
+                grounded_access = format_run_or_launch_summary(_task_port, _verified)
+                _render_markdown(grounded_access, app.console if hasattr(app, 'console') else None)
+                full_response.append(grounded_access)
+                _loop_exit_reason = "verified_run_or_launch" if _verified else "run_or_launch_ready"
+                break
+
+        # Break outer loop if loop was detected
+        if loop_detected:
+            break
+
+        # Context compaction check (85% of 32K = ~27K tokens)
+        if _estimate_tokens(messages) > _compact_token_limit:
+            messages = _compact_messages(messages, out)
+
+    else:
+        # `for…else` only fires when the loop exhausted naturally
+        # (i.e. `range(MAX_ROUNDS)` was consumed without a `break`).
+        # When MAX_ROUNDS<=0 we use `itertools.count()` which never
+        # exhausts, so this branch only fires for a positive cap.
+        if MAX_ROUNDS > 0:
+            out.print_info(f"Reached max rounds ({MAX_ROUNDS})")
+            _loop_exit_reason = "max_rounds"
+
+    # Fallback: if we somehow exited without setting a reason, mark
+    # so it's visible in telemetry rather than blank. Covers any
+    # break path I haven't yet annotated.
+    if not _loop_exit_reason:
+        _loop_exit_reason = "unknown"
+
+    # Strip ephemeral nudges from `messages` BEFORE persisting the
+    # turn. These were synthetic SYSTEM-prefixed user messages we
+    # injected mid-loop to push the model out of a spin or stall;
+    # they served their purpose during this turn. Leaving them in
+    # `messages` poisons future turns — the model continues honoring
+    # "STOP investigating, do NOT call read_file…" instructions long
+    # after the spin is over. Pop in reverse so earlier indices stay
+    # valid.
+    if _ephemeral_nudge_indices:
+        strip_ephemeral_nudges(messages, _ephemeral_nudge_indices)
+
+    # End-of-turn telemetry. Captures the complete picture: full
+    # user input was in turn_start; full final assistant response
+    # goes here along with tool counts, duration, and success flag.
+    # Together turn_start + turn_end form a replayable record of
+    # the turn for offline debugging.
+    final_text = "".join(full_response).strip()
+    try:
+        from ..events import emit as _emit_edit_quality
+        _emit_edit_quality(
+            "edit_quality",
+            turn_id=_turn_id,
+            read_file_chars=_read_file_chars_this_turn,
+            edit_failures=_edit_failures_this_turn,
+            write_existing_rejections=_write_existing_rejections_this_turn,
+            changed_files_count=len(changed_files),
+            changed_files=changed_files[:20],
+        )
+    except Exception:
+        pass
+    _final_task_stage = getattr(_task_state, "current_stage", "")
+    finalize_turn(
+        app=app,
+        turn_id=_turn_id,
+        task_state=_task_state,
+        goal_state=_goal_state,
+        prompt_result=prompt_result,
+        final_text=final_text,
+        loop_exit_reason=_loop_exit_reason,
+        final_task_stage=_final_task_stage,
+        started_mono=_turn_started_mono,
+        time_module=_time_mod,
+        tools_called=tools_called,
+        round_num=round_num if "round_num" in dir() else None,
+        tokens_in=_turn_prompt_tokens,
+        tokens_out=_turn_completion_tokens,
+        tokens_total=_turn_total_tokens,
+    )
+    return final_text
