@@ -1,0 +1,182 @@
+/* LocalCode Textual TUI — terminal-palette-driven styling.
+
+   Background = `ansi_default`, the Textual color name that emits
+   SGR 49 — the terminal's "default background" escape code. Same
+   mechanism agent/terminal coding tools TUI use via `ansi:black`. The user's
+   own terminal profile decides what the colours actually look like
+   (light/dark/solarized/dracula/etc.); LocalCode just defers.
+
+   Paired with App.theme = "textual-ansi" set in tui/app.py — that
+   theme defines `$background`, `$foreground`, `$surface` etc. all
+   as ansi_default, so any widget that uses Textual variables instead
+   of explicit hexes also inherits the terminal palette.
+
+   `background-tint: transparent 0%` on every widget kills Textual's
+   default ~5% foreground wash that was making the scrollable middle
+   look lighter than the dock'd top/bottom regions. */
+
+Screen {
+    layout: vertical;
+    background: ansi_default;
+    background-tint: transparent 0%;
+    overflow: hidden;
+}
+
+
+
+/* ── Brand bar (bottom, screens without a status row) ──
+   Chat has its own bottom status row that includes the brand
+   prefix; setup / mode-picker / model-picker have no status,
+   so they yield a #brand-bar widget that docks here. */
+
+#brand-bar {
+    dock: bottom;
+    height: 1;
+    padding: 0 1;
+    background: ansi_default;
+    background-tint: transparent 0%;
+}
+
+/* ── Chat log (scrollable center) ── */
+
+#chat-log {
+    height: 1fr;
+    overflow-y: scroll;
+    padding: 0 1;
+    background: ansi_default;
+    background-tint: transparent 0%;
+    scrollbar-size-vertical: 1;
+    scrollbar-color: #333333;
+    scrollbar-color-hover: #555555;
+    scrollbar-color-active: #666666;
+    scrollbar-background: ansi_default;
+    scrollbar-corner-color: ansi_default;
+}
+
+/* ── Input area ── */
+
+#input-row {
+    height: 3;
+    border-top: heavy #444444;
+    border-bottom: heavy #444444;
+    border-left: none;
+    border-right: none;
+    background: ansi_default;
+    background-tint: transparent 0%;
+}
+
+#input-prompt {
+    width: 2;
+    height: 1;
+    padding: 0 0 0 1;
+    color: #888888;
+    background: ansi_default;
+    background-tint: transparent 0%;
+    content-align: left middle;
+}
+
+#chat-input {
+    border: none;
+    padding: 0;
+    margin: 0;
+    height: 1;
+    width: 1fr;
+    background: ansi_default;
+    background-tint: transparent 0%;
+}
+
+#chat-input:focus {
+    border: none;
+    background: ansi_default;
+    background-tint: transparent 0%;
+}
+
+/* Disabled state. Hit during the approval prompt: chat.py sets
+   inp.disabled = True so the user can't type while the verdict
+   buttons are showing. Textual's default disabled style paints a
+   solid dark grey background that ignores ansi_default — read as
+   "input is broken" by the user. Force the same terminal-palette
+   background as the active state; Textual still dims the foreground
+   text via its own disabled handling so the affordance is preserved. */
+#chat-input:disabled {
+    background: ansi_default;
+    background-tint: transparent 0%;
+}
+
+/* Underline cursor. Terminals only render in 1-cell units, so a true
+   sub-cell `|` thin cursor isn't possible in pure CSS — the closest
+   approximation is `text-style: underline` on the cursor cell, which
+   styles just the bottom edge of the character at cursor position
+   instead of filling the whole cell with a block. Visually reads as
+   a thin marker rather than a solid white square. Background stays
+   ansi_default (terminal palette) so we don't paint a block at all.
+   Earlier we used `background: white` for a solid-block cursor —
+   user feedback was "make it narrower like |". */
+/* Cursor cell — pairs with `_NoTintInput.render_line` which
+   substitutes the cursor cell's character with `▏` (U+258F).
+   No `text-style: underline` here — that was leftover from an
+   earlier underline-cursor attempt and stacked under the bar
+   glyph, making the cursor look like `|_` instead of `|`.
+   White foreground on terminal-default background. */
+#chat-input > .input--cursor {
+    background: ansi_default;
+    color: white;
+    text-style: none;
+}
+
+Input:focus {
+    background-tint: transparent 0%;
+}
+
+/* ── Status bar (bottom) ── */
+
+#status-bar {
+    dock: bottom;
+    height: 1;
+    padding: 0 1;
+    color: $text-muted;
+    background: ansi_default;
+    background-tint: transparent 0%;
+    /* Left-aligned. When content > width the right end clips, but
+       the version stays last in priority order — server / context
+       / mode / model are all more important to keep visible. */
+    text-align: left;
+}
+
+/* ── Queue indicator ── */
+
+#queue-line {
+    height: 1;
+    padding: 0 1;
+    color: $warning;
+    background: ansi_default;
+    background-tint: transparent 0%;
+    display: none;
+}
+
+#queue-line.active {
+    display: block;
+}
+
+/* ── Mode picker ── */
+
+#mode-picker {
+    align: center middle;
+    padding: 2 4;
+}
+
+#mode-picker Static {
+    text-align: center;
+    margin-bottom: 1;
+}
+
+#mode-picker RadioSet {
+    margin: 1 0;
+}
+
+#start-btn {
+    margin-top: 1;
+    align: center middle;
+}
+
+/* ── Approval modal (compact, bottom-aligned) ── */

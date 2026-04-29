@@ -1,0 +1,527 @@
+"""Tests for localcode.runtime — server command building, context scaling, blob resolution."""
+from __future__ import annotations
+
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from localcode.config import RuntimeConfig
+from localcode.runtime import (
+    LocalCodeRuntimeGateway,
+    _error_message,
+    _estimate_prompt_token_count,
+    _estimate_token_count,
+    _tool_arg_stream_guard,
+    _strip_thinking_tokens,
+)
+
+
+class TestLlamaServerCommand:
+    """Verify llama_server_command builds the correct CLI args for each mode."""
+
+    def _make_gw(self, **overrides) -> LocalCodeRuntimeGateway:
+        defaults = dict(
+            provider="llama_cpp",
+            base_url="http://localhost:8081",
+            model="test.gguf",
+            llama_cpp_binary="/usr/local/bin/llama-server",
+            kv_cache_type_k="q8_0",
+            kv_cache_type_v="turbo4",
+            laptop_26b_runtime_mode="speed",
+            llama_cpp_gpu_layers=0,
+            llama_cpp_threads=8,
+            llama_cpp_batch_size=128,
+            llama_cpp_spec_type="",
+            llama_cpp_draft_max=64,
+            llama_cpp_expert_offload=False,
+            llama_cpp_draft_model="",
+            llama_cpp_lookup_cache=False,
+            max_context_chars=40000,
+            quant_preset="balanced",
+        )
+        defaults.update(overrides)
+        cfg = RuntimeConfig(**defaults)
+        return LocalCodeRuntimeGateway(cfg)
+
+    def test_speed_mode_uses_mmap_no_gpu(self) -> None:
+        """Legacy 'speed' mode path — falls to the default GPU branch in
+        runtime.py, which is ngl-configurable. With gpu_layers=0 (fixture
+        default) the command must show `-ngl 0`."""
+        gw = self._make_gw(
+            laptop_26b_runtime_mode="speed",
+            llama_cpp_gpu_layers=0,
+        )
+        cmd = gw.llama_server_command("/path/model.gguf", port=8081)
+        assert "--model" in cmd
+        assert "/path/model.gguf" in cmd
+        assert "--mmap" in cmd
+        ngl_idx = cmd.index("-ngl")
+        assert cmd[ngl_idx + 1] == "999"  # default branch hardcodes 999
+
+    def test_turbo_mode_full_gpu(self) -> None:
+        """Turbo mode now respects llama_cpp_gpu_layers (0 = CPU, 999 = full)
+        instead of hardcoding 999. Test asserts the full-offload configuration
+        by setting gpu_layers=999 explicitly."""
+        gw = self._make_gw(
+            laptop_26b_runtime_mode="turbo",
+            llama_cpp_gpu_layers=999,
+        )
+        cmd = gw.llama_server_command("/path/model.gguf")
+        assert "-ngl" in cmd
+        ngl_idx = cmd.index("-ngl")
+        assert cmd[ngl_idx + 1] == "999"
+        assert "--mmap" in cmd
+        assert "-fit" in cmd
+        assert "off" in cmd
+
+    def test_context_mode_expert_offload(self) -> None:
+        """Context mode: GPU attention + CPU experts."""
+        gw = self._make_gw(laptop_26b_runtime_mode="context")
+        cmd = gw.llama_server_command("/path/model.gguf")
+        assert "-ngl" in cmd
+        ngl_idx = cmd.index("-ngl")
+        assert cmd[ngl_idx + 1] == "999"
+        assert "-ot" in cmd
+        ot_idx = cmd.index("-ot")
+        assert cmd[ot_idx + 1] == "exps=CPU"
+
+    def test_kv_cache_types_in_command(self) -> None:
+        """KV cache compression flags should appear in the command."""
+        gw = self._make_gw(kv_cache_type_k="q8_0", kv_cache_type_v="turbo4")
+        cmd = gw.llama_server_command("/path/model.gguf")
+        assert "--cache-type-k" in cmd
+        k_idx = cmd.index("--cache-type-k")
+        assert cmd[k_idx + 1] == "q8_0"
+        assert "--cache-type-v" in cmd
+        v_idx = cmd.index("--cache-type-v")
+        assert cmd[v_idx + 1] == "turbo4"
+
+    def test_f16_kv_cache_omitted(self) -> None:
+        """When KV cache type is f16 (default), the flag should be omitted."""
+        gw = self._make_gw(kv_cache_type_k="f16", kv_cache_type_v="f16")
+        cmd = gw.llama_server_command("/path/model.gguf")
+        assert "--cache-type-k" not in cmd
+        assert "--cache-type-v" not in cmd
+
+    def test_custom_binary_used(self) -> None:
+        gw = self._make_gw(llama_cpp_binary="/opt/turbo/llama-server")
+        cmd = gw.llama_server_command("/path/model.gguf")
+        assert cmd[0] == "/opt/turbo/llama-server"
+
+    def test_error_message_serializes_backend_error_dict(self) -> None:
+        msg = _error_message({"message": "server unavailable", "code": 503})
+        assert "server unavailable" in msg
+        assert "503" in msg
+
+    def test_port_in_command(self) -> None:
+        gw = self._make_gw()
+        cmd = gw.llama_server_command("/path/model.gguf", port=9090)
+        port_idx = cmd.index("--port")
+        assert cmd[port_idx + 1] == "9090"
+
+    def test_flash_attn_enabled(self) -> None:
+        gw = self._make_gw()
+        cmd = gw.llama_server_command("/path/model.gguf")
+        assert "--flash-attn" in cmd
+
+    def test_draft_model_adds_spec_flags(self) -> None:
+        """When a draft model is specified, speculative decoding flags should appear."""
+        gw = self._make_gw(llama_cpp_draft_model="/path/draft.gguf")
+        cmd = gw.llama_server_command("/path/model.gguf")
+        assert "--model-draft" in cmd
+        assert "/path/draft.gguf" in cmd
+        assert "--draft-max" in cmd
+
+    def test_lookup_cache_adds_flag(self) -> None:
+        gw = self._make_gw(llama_cpp_lookup_cache=True)
+        cmd = gw.llama_server_command("/path/model.gguf")
+        assert "--lookup-cache-dynamic" in cmd
+
+    def test_ngram_spec_type(self) -> None:
+        gw = self._make_gw(llama_cpp_spec_type="ngram-mod")
+        cmd = gw.llama_server_command("/path/model.gguf")
+        assert "--spec-type" in cmd
+        assert "ngram-mod" in cmd
+
+    def test_context_mode_uses_10_threads(self) -> None:
+        """Context mode should use 10 threads for expert computation."""
+        gw = self._make_gw(laptop_26b_runtime_mode="context", llama_cpp_threads=4)
+        cmd = gw.llama_server_command("/path/model.gguf")
+        threads_idx = cmd.index("--threads")
+        assert cmd[threads_idx + 1] == "10"
+
+    def test_context_mode_batch_sizes_respect_safe_config(self) -> None:
+        """Context/turbo modes must not override explicit safe batch config."""
+        gw = self._make_gw(laptop_26b_runtime_mode="context", llama_cpp_batch_size=128)
+        cmd = gw.llama_server_command("/path/model.gguf")
+        b_idx = cmd.index("-b")
+        assert cmd[b_idx + 1] == "128"
+        ub_idx = cmd.index("-ub")
+        assert cmd[ub_idx + 1] == "128"
+
+    def test_turbo_mode_defaults_to_large_batch_for_non_qwen(self) -> None:
+        gw = self._make_gw(laptop_26b_runtime_mode="turbo", llama_cpp_batch_size=-1)
+        cmd = gw.llama_server_command("/path/gemma-model.gguf")
+        b_idx = cmd.index("-b")
+        assert cmd[b_idx + 1] == "2048"
+
+    def test_large_qwen_on_16gb_uses_safer_batch(self) -> None:
+        gw = self._make_gw(laptop_26b_runtime_mode="turbo", llama_cpp_batch_size=-1)
+        with patch.object(gw, "_system_ram_gb", return_value=16):
+            cmd = gw.llama_server_command("/path/Qwen3.6-35B-A3B-UD-IQ2_M.gguf")
+        b_idx = cmd.index("-b")
+        assert cmd[b_idx + 1] == "512"
+
+    def test_large_qwen_on_16gb_clamps_stale_large_batch_config(self) -> None:
+        # `max_context_chars=200000` → num_ctx target = 50000, which on
+        # the post-2026-04-29 Qwen 35B / 16GB path is ≥32768 so the
+        # special-case override returns 65536 (the validated ceiling).
+        # The earlier 2026-04-26 version of this test asserted 32768
+        # because the cap was conservatively low; bumped to 64K after
+        # `-b 512` (still asserted here) freed Metal prefill scratch.
+        gw = self._make_gw(
+            laptop_26b_runtime_mode="turbo",
+            llama_cpp_batch_size=2048,
+            max_context_chars=200000,
+            quant_preset="fastest",
+        )
+        with patch.object(gw, "_system_ram_gb", return_value=16):
+            cmd = gw.llama_server_command("/path/Qwen3.6-35B-A3B-UD-IQ2_M.gguf")
+        b_idx = cmd.index("-b")
+        assert cmd[b_idx + 1] == "512"
+        ctx_idx = cmd.index("--ctx-size")
+        assert cmd[ctx_idx + 1] == "65536"
+
+    def test_large_qwen_on_16gb_ctx_clamped_to_64k_ceiling(self) -> None:
+        # When max_context_chars would translate to >64K tokens, the
+        # Qwen 35B / 16GB special case clamps to 65536 (was 32768
+        # pre-2026-04-29).
+        gw = self._make_gw(
+            laptop_26b_runtime_mode="turbo",
+            llama_cpp_batch_size=-1,
+            max_context_chars=400000,  # → 100000 tokens, > 65536 ceiling
+            quant_preset="fastest",
+        )
+        with patch.object(gw, "_system_ram_gb", return_value=16):
+            cmd = gw.llama_server_command("/path/Qwen3.6-35B-A3B-UD-IQ2_M.gguf")
+        ctx_idx = cmd.index("--ctx-size")
+        assert cmd[ctx_idx + 1] == "65536"
+
+    def test_large_qwen_on_16gb_floors_small_chars_to_64k(self) -> None:
+        # Stale `performance.py` presets (max_context_chars=10000 →
+        # ~2500 tokens) and other small chars values were leaving users
+        # below the floor needed for system prompt + tool schemas + a
+        # single user message, producing E3103 ("Conversation is too
+        # long for this model") on the FIRST turn of an empty session.
+        # Fix: on the validated 16 GB Apple-Silicon turbo path the
+        # runtime always picks 64K — opting out should be done by
+        # switching off turbo (kv_cache_type_v) or changing
+        # laptop_26b_runtime_mode, not by leaving a stale chars value.
+        gw = self._make_gw(
+            laptop_26b_runtime_mode="turbo",
+            llama_cpp_batch_size=-1,
+            max_context_chars=10000,  # stale preset → would yield 2500 tokens
+            quant_preset="fastest",
+        )
+        with patch.object(gw, "_system_ram_gb", return_value=16):
+            cmd = gw.llama_server_command("/path/Qwen3.6-35B-A3B-UD-IQ2_M.gguf")
+        ctx_idx = cmd.index("--ctx-size")
+        assert cmd[ctx_idx + 1] == "65536"
+
+
+class TestTargetNumCtx:
+    """Verify _target_num_ctx scales with config and quant preset."""
+
+    def _make_gw(self, **overrides) -> LocalCodeRuntimeGateway:
+        defaults = dict(
+            provider="llama_cpp",
+            base_url="http://localhost:8081",
+            max_context_chars=40000,
+            quant_preset="balanced",
+            kv_cache_type_v="turbo4",
+            laptop_26b_runtime_mode="speed",
+        )
+        defaults.update(overrides)
+        cfg = RuntimeConfig(**defaults)
+        return LocalCodeRuntimeGateway(cfg)
+
+    def test_balanced_preset(self) -> None:
+        gw = self._make_gw(max_context_chars=40000, quant_preset="balanced")
+        ctx = gw._target_num_ctx()
+        assert ctx == 10000  # 40000 // 4
+
+    def test_smallest_preset_caps_at_2048(self) -> None:
+        gw = self._make_gw(max_context_chars=40000, quant_preset="smallest")
+        ctx = gw._target_num_ctx()
+        assert ctx == 2048
+
+    def test_explicit_override(self) -> None:
+        gw = self._make_gw()
+        ctx = gw._target_num_ctx(num_ctx_override=16384)
+        assert ctx == 16384
+
+    def test_override_minimum_is_1024(self) -> None:
+        gw = self._make_gw()
+        ctx = gw._target_num_ctx(num_ctx_override=100)
+        assert ctx == 1024
+
+    def test_small_context_chars(self) -> None:
+        gw = self._make_gw(max_context_chars=4000, quant_preset="balanced")
+        ctx = gw._target_num_ctx()
+        assert ctx == 2048  # max(2048, 4000//4=1000) -> 2048
+
+
+class TestFindOllamaBlob:
+    """Verify _find_ollama_blob resolves Ollama model names to GGUF paths."""
+
+    def test_resolves_blob_path(self) -> None:
+        mock_output = "FROM /Users/test/.ollama/models/blobs/sha256-abc123\nTEMPLATE ...\n"
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout=mock_output, returncode=0
+            )
+            result = LocalCodeRuntimeGateway._find_ollama_blob("gemma4:e4b")
+        assert result == "/Users/test/.ollama/models/blobs/sha256-abc123"
+
+    def test_returns_model_name_on_failure(self) -> None:
+        with patch("subprocess.run", side_effect=Exception("not found")):
+            result = LocalCodeRuntimeGateway._find_ollama_blob("gemma4:e4b")
+        assert result == "gemma4:e4b"
+
+    def test_returns_model_name_when_no_match(self) -> None:
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout="TEMPLATE ...\n", returncode=0)
+            result = LocalCodeRuntimeGateway._find_ollama_blob("gemma4:e4b")
+        assert result == "gemma4:e4b"
+
+
+class TestStripThinkingTokens:
+    """Verify _strip_thinking_tokens removes Gemma 4 channel artifacts."""
+
+    def test_strips_unused25(self) -> None:
+        assert _strip_thinking_tokens("hello <unused25> world") == "hello  world"
+
+    def test_strips_channel_tags(self) -> None:
+        text = "<|channel>thought\nsome thinking\n<channel|>actual response"
+        result = _strip_thinking_tokens(text)
+        assert "channel" not in result
+        assert "actual response" in result
+
+    def test_empty_string(self) -> None:
+        assert _strip_thinking_tokens("") == ""
+
+    def test_none_passthrough(self) -> None:
+        """If text is falsy, return it as-is."""
+        assert _strip_thinking_tokens("") == ""
+
+    def test_no_tokens_unchanged(self) -> None:
+        assert _strip_thinking_tokens("normal text") == "normal text"
+
+
+class TestEndpoints:
+    """Verify endpoint URLs are built correctly per provider."""
+
+    def test_llama_cpp_endpoints(self) -> None:
+        cfg = RuntimeConfig(provider="llama_cpp", base_url="http://localhost:8081")
+        gw = LocalCodeRuntimeGateway(cfg)
+        assert gw.endpoint == "http://localhost:8081/v1/chat/completions"
+        assert gw.tags_endpoint == "http://localhost:8081/v1/models"
+
+    def test_ollama_endpoints(self) -> None:
+        cfg = RuntimeConfig(provider="ollama", base_url="http://localhost:11434")
+        gw = LocalCodeRuntimeGateway(cfg)
+        assert gw.endpoint == "http://localhost:11434/api/chat"
+        assert gw.tags_endpoint == "http://localhost:11434/api/tags"
+
+    def test_mlx_endpoints_empty(self) -> None:
+        cfg = RuntimeConfig(provider="mlx-local")
+        gw = LocalCodeRuntimeGateway(cfg)
+        assert gw.endpoint == ""
+        assert gw.tags_endpoint == ""
+
+    def test_trailing_slash_stripped(self) -> None:
+        """A trailing slash on base_url should not produce double slashes in the path."""
+        cfg = RuntimeConfig(provider="llama_cpp", base_url="http://localhost:8081/")
+        gw = LocalCodeRuntimeGateway(cfg)
+        # The path portion after the authority should not have double slashes
+        path_part = gw.endpoint.split("://", 1)[1]  # e.g. "localhost:8081/v1/..."
+        assert "//" not in path_part
+
+
+def test_prompt_token_fallback_ignores_transport_metadata() -> None:
+    messages = [{"role": "system", "content": "x" * 400}, {"role": "user", "content": "hi"}]
+    payload = {
+        "model": "/large/path/model.gguf",
+        "stream": True,
+        "messages": messages,
+        "temperature": 0.2,
+        "top_p": 0.8,
+        "chat_template_kwargs": {"enable_thinking": False},
+        "tools": [{"type": "function", "function": {"name": "read_file", "parameters": {"type": "object"}}}],
+    }
+
+    prompt_estimate = _estimate_prompt_token_count(payload)
+    full_payload_estimate = _estimate_token_count(payload)
+
+    assert prompt_estimate < full_payload_estimate
+    assert prompt_estimate == _estimate_token_count({"messages": messages, "tools": payload["tools"]})
+
+
+def test_restart_server_resets_stale_http_client(monkeypatch) -> None:
+    cfg = RuntimeConfig(
+        provider="llama_cpp",
+        base_url="http://localhost:8081",
+        model="test.gguf",
+    )
+    gw = LocalCodeRuntimeGateway(cfg)
+    stale_client = MagicMock()
+    stale_client.is_closed = False
+    gw._client = stale_client
+
+    monkeypatch.setattr("localcode.bootstrap.get_model_path", lambda preferred=None: "/tmp/model.gguf")
+    monkeypatch.setattr(gw, "llama_server_command", lambda model: ["llama-server", "--model", model, "--port", "8081"])
+
+    class _Mgr:
+        port = 8082
+
+        def restart(self, cmd, model):
+            return True
+
+    monkeypatch.setattr("localcode.server_manager.ServerManager.get", lambda: _Mgr())
+
+    assert gw._restart_server() is True
+    stale_client.close.assert_called_once()
+    assert gw._client is None
+    assert gw.endpoint == "http://localhost:8082/v1/chat/completions"
+    assert gw.tags_endpoint == "http://localhost:8082/v1/models"
+
+
+def test_quick_server_probe_false_on_unreachable(monkeypatch) -> None:
+    cfg = RuntimeConfig(provider="llama_cpp", base_url="http://localhost:65534")
+    gw = LocalCodeRuntimeGateway(cfg)
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, url):
+            raise OSError("connection refused")
+
+    monkeypatch.setattr("localcode.runtime.httpx.Client", _Client)
+
+    assert gw._quick_server_probe() is False
+
+
+def test_tool_arg_stream_guard_allows_bounded_code_write() -> None:
+    content = "def f():\n    return 1\n" * 40
+    args = '{"path":"src/app.py","content":"' + content.replace("\n", "\\n") + '"}'
+    limited, reason = _tool_arg_stream_guard("write_file", args, elapsed_s=10)
+    assert limited is False
+    assert reason == ""
+
+
+def test_tool_arg_stream_guard_allows_long_multiline_code_write() -> None:
+    content = "def f():\n    return 1\n" * 140
+    args = '{"path":"src/app.py","content":"' + content.replace("\n", "\\n") + '"}'
+    limited, reason = _tool_arg_stream_guard("write_file", args, elapsed_s=8)
+    assert limited is False
+    assert reason == ""
+
+
+def test_tool_arg_stream_guard_allows_bulk_data_write() -> None:
+    rows = ",".join(f'{{"id":{i},"name":"item-{i}"}}' for i in range(700))
+    args = '{"path":"data/seed.json","content":"[' + rows.replace('"', '\\"') + ']"}'
+    limited, reason = _tool_arg_stream_guard("write_file", args, elapsed_s=8)
+    assert limited is False
+    assert reason == ""
+
+
+def test_tool_arg_stream_guard_allows_slow_bulk_data_write() -> None:
+    rows = ",".join(f'{{"id":{i},"name":"item-{i}"}}' for i in range(250))
+    args = '{"path":"data/seed.json","content":"[' + rows.replace('"', '\\"') + ']"}'
+    limited, reason = _tool_arg_stream_guard("write_file", args, elapsed_s=31)
+    assert limited is False
+    assert reason == ""
+
+
+def test_tool_arg_stream_guard_allows_slow_large_write() -> None:
+    content = "console.log('x')\\n" * 900
+    args = '{"path":"src/app.js","content":"' + content + '"}'
+    limited, reason = _tool_arg_stream_guard("write_file", args, elapsed_s=30)
+    assert limited is False
+    assert reason == ""
+
+
+def test_tool_arg_stream_guard_allows_recovery_source_write_to_finish() -> None:
+    content = "console.log('x')\\n" * 130
+    args = '{"path":"src/app.js","content":"' + content + '"}'
+    limited, reason = _tool_arg_stream_guard(
+        "write_file",
+        args,
+        elapsed_s=31,
+        recovery_mode="large_write",
+    )
+    assert limited is False
+    assert reason == ""
+
+
+def test_tool_arg_stream_guard_allows_build_app_source_write_to_finish() -> None:
+    content = "console.log('x')\\n" * 190
+    args = '{"path":"src/app.js","content":"' + content + '"}'
+    limited, reason = _tool_arg_stream_guard(
+        "write_file",
+        args,
+        elapsed_s=46,
+        stream_policy="build_app",
+    )
+    assert limited is False
+    assert reason == ""
+
+
+def test_tool_arg_stream_guard_does_not_early_redirect_recovery_small_write() -> None:
+    content = "console.log('x')\\n" * 20
+    args = '{"path":"src/app.js","content":"' + content + '"}'
+    limited, reason = _tool_arg_stream_guard(
+        "append_file",
+        args,
+        elapsed_s=31,
+        recovery_mode="large_write",
+    )
+    assert limited is False
+    assert reason == ""
+
+
+def test_tool_arg_stream_guard_allows_slow_source_write() -> None:
+    content = "console.log('x')\\n" * 360
+    args = '{"path":"src/app.js","content":"' + content + '"}'
+    limited, reason = _tool_arg_stream_guard("write_file", args, elapsed_s=61)
+    assert limited is False
+    assert reason == ""
+
+
+def test_tool_arg_stream_guard_allows_small_slow_mutating_stream() -> None:
+    args = '{"path":"src/app.py","content":"print(1)\\n"}'
+    limited, reason = _tool_arg_stream_guard("write_file", args, elapsed_s=46)
+    assert limited is False
+    assert reason == ""
+
+
+def test_tool_arg_stream_guard_allows_large_source_write_by_time() -> None:
+    content = "console.log('x')\\n" * 1000
+    args = '{"path":"src/app.js","content":"' + content + '"}'
+    limited, reason = _tool_arg_stream_guard("write_file", args, elapsed_s=46)
+    assert limited is False
+    assert reason == ""
+
+
+def test_tool_arg_stream_guard_keeps_extreme_safety_ceiling() -> None:
+    args = '{"path":"src/app.py","content":"' + ("x" * 181_000) + '"}'
+    limited, reason = _tool_arg_stream_guard("write_file", args, elapsed_s=1)
+    assert limited is True
+    assert "safety ceiling" in reason
