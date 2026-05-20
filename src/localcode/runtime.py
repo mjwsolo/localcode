@@ -362,6 +362,13 @@ class LocalCodeRuntimeGateway:
         name = (model_path or self.config.model or "").lower()
         return "qwen" in name and any(token in name for token in ("30b", "32b", "35b"))
 
+    def _is_large_gemma_gguf(self, model_path: str | None = None) -> bool:
+        name = (model_path or self.config.model or "").lower()
+        return "gemma" in name and any(token in name for token in ("26b", "27b", "30b"))
+
+    def _is_large_local_gguf(self, model_path: str | None = None) -> bool:
+        return self._is_large_qwen_gguf(model_path) or self._is_large_gemma_gguf(model_path)
+
     def _effective_llama_batch_size(self, model_path: str | None = None) -> int:
         configured = self.config.llama_cpp_batch_size
         if self._is_large_qwen_gguf(model_path) and self._system_ram_gb() <= 18:
@@ -528,7 +535,7 @@ class LocalCodeRuntimeGateway:
                 # same 64K until someone runs the mmap-patched server
                 # on real 24 / 32 GB hardware and measures their safe
                 # ceiling — then bump explicitly, not by extrapolation.
-                if self._is_large_qwen_gguf(model_path) and ram_gb <= 18:
+                if self._is_large_local_gguf(model_path) and ram_gb <= 18:
                     # Validated path on 16 GB Apple Silicon: q8_0-K +
                     # turbo4-V at 64K ≈ 2.8 GB KV, fits the 14336 MB
                     # Metal wired budget. We always pick 64K here,
