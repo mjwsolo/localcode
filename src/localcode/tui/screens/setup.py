@@ -6,11 +6,19 @@ from ..._subproc_env import clean_env
 import subprocess
 
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.screen import Screen
 from textual.widgets import Static
 
 class SetupScreen(Screen):
     """Shows bootstrap progress during first launch."""
+
+    BINDINGS = [
+        # Only fire while the screen is in the failed state — see
+        # action_retry / action_quit which gate on self._failed_step.
+        Binding("r", "retry", "Retry", show=False),
+        Binding("q", "quit", "Quit", show=False),
+    ]
 
     DEFAULT_CSS = """
     SetupScreen {
@@ -42,12 +50,21 @@ class SetupScreen(Screen):
         margin: 1 0 0 0;
         text-align: center;
     }
+    /* Add breathing room between the status area (which may include
+       error + retry hints) and the dimmed one-time-download note so
+       the note doesn't visually crowd the error. */
+    #setup-onetime-note {
+        background: ansi_default;
+        width: 100%;
+        margin: 2 0 0 0;
+        text-align: center;
+    }
     /* Brand at bottom-left — `#brand-bar` styled in tui/styles/app.tcss. */
     """
 
     STEPS = [
         ("server", "Check inference server"),
-        ("model", "Download model (~10GB)"),
+        ("model", "Download model"),  # size substituted in _render_steps()
         ("start", "Start server"),
     ]
 
@@ -70,6 +87,11 @@ class SetupScreen(Screen):
             with Vertical(id="setup-box"):
                 yield Static(self._render_steps(), id="setup-steps")
                 yield Static("", id="setup-status")
+                yield Static(
+                    "[dim italic]Note: one-time download — cached locally so future "
+                    "launches start in seconds without re-downloading.[/]",
+                    id="setup-onetime-note",
+                )
 
     def on_resize(self) -> None:
         # No-op now that the header bar is gone. Kept so any future
@@ -77,8 +99,38 @@ class SetupScreen(Screen):
         return
 
     def _render_steps(self) -> str:
+        # Substitute the actually-selected model's size into the "Download model"
+        # label so the user sees the real number, not a hardcoded ~10GB.
+        # If a partial download exists on disk (from a prior aborted attempt),
+        # surface that as "Resume download" so the user knows we're picking up
+        # where they left off — not starting over.
+        try:
+            from ...models_catalog import current as current_choice
+            cfg = getattr(self.app, "config", None)
+            chosen = current_choice(cfg) if cfg is not None else None
+            if chosen is not None:
+                verb = "Download"
+                # huggingface_hub writes `.incomplete` sidecars; our urllib
+                # fallback pre-allocates the final filename. Detect both.
+                partial = chosen.local_path
+                incomplete = partial.with_name(partial.name + ".incomplete")
+                has_partial = (
+                    (partial.exists() and partial.stat().st_size > 0
+                     and partial.stat().st_size < int(chosen.size_gb * 1024 ** 3 * 0.99))
+                    or incomplete.exists()
+                )
+                if has_partial:
+                    verb = "Resume"
+                model_label = f"{verb} model (~{chosen.size_gb:.1f} GB)"
+            else:
+                model_label = "Download model"
+        except Exception:
+            model_label = "Download model"
+
         lines = ["[bold]Setup[/]\n"]
         for i, (key, label) in enumerate(self.STEPS):
+            if key == "model":
+                label = model_label
             if i == self._failed_step:
                 lines.append(f"  [red]✗[/] {label}")
             elif i < self._current_step:
@@ -132,12 +184,41 @@ class SetupScreen(Screen):
                 body += f"\n\n[dim](full log: .localcode/last_error.log)[/]"
             except Exception:
                 pass
-        body += "\n\n[dim]Press Ctrl+C to quit.  Retry with 'localcode'.[/]"
+        body += "\n\n[dim]Press [bold]r[/] to retry · [bold]q[/] / Ctrl+C to quit.[/]"
         try:
             self.query_one("#setup-steps", Static).update(self._render_steps())
             self.query_one("#setup-status", Static).update(body)
         except Exception:
             pass
+
+    def action_retry(self) -> None:
+        """Retry the setup pipeline from the failed step without quitting.
+
+        Resets failure state and re-runs the worker. The download path
+        leaves partial files in place across attempts, so this picks up
+        from where the last attempt died rather than re-downloading from 0.
+        """
+        if self._failed_step < 0:
+            return  # nothing to retry
+        self._failed_step = -1
+        self._status_text = "Retrying..."
+        # Reset the failed step so the spinner resumes on it.
+        # _run_setup is idempotent on the server-binary and model-exists
+        # checks, so it'll skip already-completed steps automatically.
+        self._current_step = 0
+        try:
+            self.query_one("#setup-status", Static).update("")
+            self.query_one("#setup-steps", Static).update(self._render_steps())
+        except Exception:
+            pass
+        self.run_worker(self._run_setup, thread=True)
+
+    def action_quit(self) -> None:
+        """Quit only when in the failed state — otherwise the user might
+        kill an in-flight setup by accidentally hitting q."""
+        if self._failed_step < 0:
+            return
+        self.app.exit()
 
     def on_mount(self) -> None:
         self.set_interval(0.1, self._tick)

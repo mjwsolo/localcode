@@ -228,7 +228,28 @@ class LocalCodeRuntimeGateway:
         Usage: subprocess.Popen(engine.llama_server_command("/path/to/model.gguf"))
         """
         from .bootstrap import _turboquant_binary_path
-        binary = self.config.llama_cpp_binary or str(_turboquant_binary_path() or "") or "llama-server"
+        from pathlib import Path as _P
+        # Prefer the configured binary, BUT fall back to discovery if it
+        # no longer exists on disk. This is the failure mode we hit when
+        # the user moved the repo to ~/Desktop/GitHub and config still
+        # pointed at the old ~/localcodetest path — Errno 2 surfaces as
+        # "Failed to start" with no obvious cause. Self-healing here
+        # silently re-discovers and persists the new path next time
+        # `save_config` runs.
+        configured = self.config.llama_cpp_binary or ""
+        if configured and _P(configured).is_file():
+            binary = configured
+        else:
+            discovered = _turboquant_binary_path()
+            binary = str(discovered) if discovered else "llama-server"
+            # Update the in-memory config so the next save_config persists
+            # the corrected path (no need to wait for the user to re-run
+            # `localcode setup`).
+            if discovered and configured != str(discovered):
+                try:
+                    self.config.llama_cpp_binary = str(discovered)
+                except Exception:
+                    pass
         mode = self.config.laptop_26b_runtime_mode
 
         # Auto-detect threads and batch size if not explicitly set
@@ -243,14 +264,34 @@ class LocalCodeRuntimeGateway:
             threads = self.config.llama_cpp_threads
         if mode == "context":
             threads = max(threads, 10)  # context mode benefits from all cores
+        # Flash attention helps on GPU (Metal/CUDA) but hurts on CPU —
+        # the kernel does more arithmetic to save memory, which is
+        # backwards when memory is plentiful and arithmetic is the
+        # bottleneck. Only enable when we're actually offloading to GPU.
+        ngl_for_flash = self.config.llama_cpp_gpu_layers if self.config.llama_cpp_gpu_layers >= 0 else 999
+        flash_attn_on = ngl_for_flash > 0
         cmd = [
             binary,
             "--model", model_path,
             "--port", str(port),
             "--ctx-size", str(self._target_num_ctx(model_path=model_path)),
             "--threads", str(threads),
-            "--flash-attn", "on",
+            "--flash-attn", "on" if flash_attn_on else "off",
         ]
+        # Multimodal projector — if the currently-selected catalog entry
+        # has an mmproj sidecar AND the sidecar is on disk, pass --mmproj
+        # so llama-server loads the vision encoder alongside the text
+        # decoder. We don't auto-download here; the chat layer prompts
+        # the user on first vision use (see voice.py / vision flow).
+        try:
+            from .models_catalog import by_filename
+            from pathlib import Path as _P
+            choice = by_filename(_P(model_path).name)
+            if choice is not None and choice.mmproj_path and choice.mmproj_path.is_file():
+                cmd.extend(["--mmproj", str(choice.mmproj_path)])
+        except Exception:
+            # Never block server launch on mmproj lookup
+            pass
 
         if mode in ("turbo", "turbo-think"):
             # Respect gpu_layers config (0 = CPU-only for 8GB machines)
@@ -1013,13 +1054,13 @@ class LocalCodeRuntimeGateway:
                         is_transient = 500 <= response.status_code < 600
                         if is_transient and attempt < max(1, self.config.max_retries):
                             import time as _time
-                            # Longer backoff (1s, 2s, 4s, 8s = ~15s total)
-                            # to cover Qwen cold-swap warmup which can take
-                            # 10+s for first inference while kv cache is
-                            # being rebuilt. Earlier 0.5→1→2s budget
-                            # exhausted before Qwen was ready, surfacing
-                            # 503 as a user error.
-                            _time.sleep(1.0 * (2 ** attempt))
+                            # Backoff capped at 3 s per attempt — the
+                            # earlier exponential 1/2/4/8 s schedule
+                            # accumulated up to 15 s of user-visible
+                            # latency on bad turns. Qwen cold-swap warmup
+                            # still fits in 2–3 s total which is well
+                            # within the new cap × max_retries budget.
+                            _time.sleep(min(3.0, 1.0 * (2 ** attempt)))
                             raise RuntimeErrorWithContext(
                                 f"HTTP {response.status_code} from {self.endpoint}"
                                 + (f" — {snippet}" if snippet else "")

@@ -23,6 +23,7 @@ from rich.text import Text as RichText
 
 from textual import work
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Input, Static
@@ -162,9 +163,38 @@ class _NoTintInput(Input):
         return True
 
     def on_key(self, event) -> None:
-        # Arrow-key history navigation. Only intercept when there's
-        # something to scroll; otherwise let Textual's default (cursor
-        # left/right within input) handle it.
+        # ── Space → push-to-talk when voice mode is on ──
+        # Three branches to handle the "user wants to keep typing
+        # spaces in their sentence" vs "user wants to record more"
+        # tension:
+        #   1. Already recording → ALWAYS PTT (treat as key-repeat).
+        #   2. Input ends with a space → user is mid-sentence → type
+        #      a space (don't hijack).
+        #   3. Otherwise (input empty OR ends in non-space char) →
+        #      PTT. After dictation, the transcript lands and the
+        #      user just hits Enter or starts editing — pressing
+        #      Space again at the end of "hello" would START a new
+        #      recording (appending dictation to the existing text).
+        if event.key == "space":
+            vs = getattr(self.app, "voice_state", None)
+            if vs is not None and getattr(vs, "enabled", False):
+                already_recording = getattr(
+                    self.screen, "_ptt_recorder", None
+                ) is not None
+                cur = self.value or ""
+                ends_with_space = cur.endswith(" ")
+                if already_recording or not ends_with_space:
+                    screen = self.screen
+                    ptt = getattr(screen, "action_ptt_space", None)
+                    if callable(ptt):
+                        ptt()
+                        event.prevent_default()
+                        event.stop()
+                        return
+
+        # ── Arrow-key history navigation ──
+        # Only intercept when there's something to scroll; otherwise let
+        # Textual's default (cursor left/right within input) handle it.
         #
         # IMPORTANT: when the slash-command menu is open, up/down must
         # navigate the menu, not history. The screen-level on_key has
@@ -193,6 +223,29 @@ class _NoTintInput(Input):
     # is over it (same trade-off as block / underline cursors). When the
     # caret is past end-of-input there's nothing to hide.
     _CURSOR_GLYPH = "▏"
+    # While recording, the cursor cycles through these 8 vertical fill
+    # levels based on mic amplitude — visually "moves up and down" with
+    # voice volume. Plus the rainbow palette in render_line tints it.
+    _VOICE_FILL_LEVELS = ("▁", "▂", "▃", "▄", "▅", "▆", "▇", "█")
+
+    @property
+    def _active_cursor_glyph(self) -> str:
+        try:
+            screen = self.screen
+            rec = getattr(screen, "_ptt_recorder", None)
+            if rec is not None:
+                # Map mic peak [0,1] → one of the 8 fill chars. Boost
+                # by 8× so typical speech (peak ~0.05-0.3) actually
+                # reaches the top of the bar. Floor at index 1 (▁) so
+                # even silence shows a visible "I'm listening" baseline
+                # instead of a blank cell.
+                peak = float(getattr(rec, "peak", 0.0) or 0.0)
+                idx = max(1, min(len(self._VOICE_FILL_LEVELS) - 1,
+                                  int(peak * 8.0 * len(self._VOICE_FILL_LEVELS))))
+                return self._VOICE_FILL_LEVELS[idx]
+        except Exception:
+            pass
+        return self._CURSOR_GLYPH
 
     def render_line(self, y):  # type: ignore[override]
         from rich.text import Text as _RichText
@@ -214,10 +267,10 @@ class _NoTintInput(Input):
                 style=self.get_component_rich_style("input--placeholder"),
             )
             if len(placeholder) == 0:
-                placeholder = _RichText(self._CURSOR_GLYPH, end="")
+                placeholder = _RichText(self._active_cursor_glyph, end="")
             else:
                 placeholder = _RichText(
-                    self._CURSOR_GLYPH + str(placeholder)[1:],
+                    self._active_cursor_glyph + str(placeholder)[1:],
                     end="",
                     style=placeholder.style,
                 )
@@ -229,6 +282,27 @@ class _NoTintInput(Input):
         # the bar glyph (white, terminal-default background). Anything
         # past end-of-input gets a single padded space we can overwrite.
         cursor_style = self.get_component_rich_style("input--cursor")
+        # While voice is recording, cycle the cursor through a rainbow
+        # AND tint brightness by mic amplitude. The chat screen runs a
+        # 50ms refresh timer while recording so this rebuilds every
+        # frame, giving the "alive" pulse Claude Code shows.
+        try:
+            screen = self.screen
+            rec = getattr(screen, "_ptt_recorder", None)
+            if rec is not None:
+                from rich.style import Style as _RichStyle
+                import time as _t
+                _RAINBOW = (
+                    "#ff5470", "#ff8a5b", "#ffd166", "#9bff8a", "#5bffc1",
+                    "#5bd1ff", "#5b96ff", "#9b5bff", "#e75bff", "#ff5bd1",
+                )
+                # Cycle every ~0.7s, plus jump-ahead on loud peaks.
+                peak = float(getattr(rec, "peak", 0.0) or 0.0)
+                phase = int(_t.time() * 5) + int(min(1.0, peak * 8.0) * 4)
+                color = _RAINBOW[phase % len(_RAINBOW)]
+                cursor_style = _RichStyle(color="white", bgcolor=color, bold=True)
+        except Exception:
+            pass
         result = self._value.copy()
         if not self.selection.is_empty:
             start, end = self.selection
@@ -237,14 +311,14 @@ class _NoTintInput(Input):
                 self.get_component_rich_style("input--selection"), start, end,
             )
         if cursor_pos >= len(result.plain):
-            result.append(self._CURSOR_GLYPH, style=cursor_style)
+            result.append(self._active_cursor_glyph, style=cursor_style)
         else:
             # Replace the character at cursor position with the bar
             # glyph. Rich's Text doesn't have a direct "replace at
             # index" — rebuild the plain string with substitution and
             # reapply the cursor style on that cell.
             plain = result.plain
-            new_plain = plain[:cursor_pos] + self._CURSOR_GLYPH + plain[cursor_pos + 1:]
+            new_plain = plain[:cursor_pos] + self._active_cursor_glyph + plain[cursor_pos + 1:]
             new_text = _RichText(new_plain, end="", style=result.style)
             # Preserve the value's original styling on non-cursor spans
             for span in result.spans:
@@ -267,11 +341,16 @@ from ...autonomy import AutonomyLevel, apply_autonomy_to_permissions, get_policy
 
 _SLASH_COMMANDS = [
     ("/permissions", "Toggle ask/auto-approve for commands"),
+    ("/status", "Show runtime: server health, current model, perf config"),
+    ("/restart", "Restart the model server (use when /status shows 'unreachable')"),
     ("/model", "List available models / switch (e.g. /model qwen)"),
     ("/thinking", "Show / set hidden reasoning policy (off|auto)"),
     ("/sounds", "Toggle completion + approval notification sounds"),
+    ("/voice", "Toggle voice mode (push-to-talk dictation into the input box)"),
+    ("/audio", "Toggle audio output (assistant reads replies aloud via macOS say)"),
+    ("/vision", "Toggle vision mode (let the model see images)"),
     ("/clear", "Clear conversation history"),
-    ("/quit", "Exit LocalCode"),
+    ("/exit", "Exit LocalCode"),
 ]
 # /search dropped from the palette — Ctrl+F is the canonical entry. The
 # command handler still treats it as a no-op alias to avoid surprising
@@ -442,6 +521,22 @@ class ChatScreen(Screen):
 
     BINDINGS = [
         ("ctrl+f", "toggle_search", "Search"),
+        # Push-to-talk: press F2 to start recording, F2 again to stop +
+        # transcribe + drop the text into the input box. Only active when
+        # /voice on has been run. F2 picked because it's near-universally
+        # unused inside terminals and doesn't fight with text input.
+        # Space = push-to-talk when voice mode is on; types a regular
+        # space character into the input box when voice mode is off.
+        # `priority=True` is critical — without it the Input widget's
+        # default Space handler ("type a space char") consumes the key
+        # before our screen binding ever sees it, and PTT silently
+        # does nothing. We compensate in the handler by manually
+        # inserting a space via `insert_text_at_cursor` when voice
+        # is off, so typing still works normally.
+        Binding("space", "ptt_space", "Push-to-talk / type space", priority=True),
+        # Esc cancels an active recording (throws away the audio, no
+        # transcription). Doesn't fire when no recording is in flight.
+        ("escape", "ptt_cancel", "Cancel recording"),
     ]
 
     def __init__(self) -> None:
@@ -527,9 +622,17 @@ class ChatScreen(Screen):
         yield Static("", id="queue-line")
         yield Static("", id="search-bar")
         yield Input(placeholder="Search conversation...", id="search-input")
+        # Voice visualizer is a dedicated widget pinned to the right of
+        # the input. It's the most reliable way to show a colored,
+        # amplitude-cycling bar — coloring the Input's own cursor via
+        # render_line was getting overwritten by textual's base-style
+        # application pipeline and showing up white. The sibling widget
+        # has its own render path so color + glyph both stick.
+        from ..widgets.voice_visualizer import VoiceVisualizer
         with Horizontal(id="input-row"):
             yield Static("›", id="input-prompt")
             yield _NoTintInput(placeholder="", id="chat-input")
+            yield VoiceVisualizer(id="voice-visualizer")
         # Slash command palette appears BELOW the input (terminal coding tools style),
         # not above. Visually it reads as a dropdown extending downward from
         # the prompt the user is typing in.
@@ -539,7 +642,31 @@ class ChatScreen(Screen):
     def on_mount(self) -> None:
         self._update_status()
         self.query_one("#chat-input", Input).focus()
-        self.query_one("#chat-log", ChatLog)
+        log = self.query_one("#chat-log", ChatLog)
+        # If the user launched with --resume, the TUI app stored prior
+        # messages in `_pending_resume_messages`. Replay them into the
+        # chat log now so the conversation picks up visually where it
+        # left off. We render in a compact "history" style (dim labels)
+        # to distinguish from live turns.
+        msgs = getattr(self.tui, "_pending_resume_messages", None)
+        if msgs:
+            log.append_info(f"[dim]── resumed session ({len(msgs)} messages) ──[/]")
+            for m in msgs:
+                role = (m.get("role") or "").lower()
+                text = (m.get("content") or "").strip()
+                if not text:
+                    continue
+                if role == "user":
+                    log.append_info(f"[dim]you:[/] {text}")
+                elif role == "assistant":
+                    log.append_info(f"[dim]assistant:[/] {text}")
+                # tool / system messages are noise on replay — skip
+            log.append_info("[dim]── continuing… ──[/]")
+            # Clear so a reload doesn't double-replay
+            try:
+                self.tui._pending_resume_messages = []
+            except Exception:
+                pass
         # Periodic status refresh — without this, the status bar stays
         # stale when the server dies silently (e.g. pressure_kill
         # SIGTERMs llama-server but no event reaches this screen). 2 s
@@ -819,7 +946,13 @@ class ChatScreen(Screen):
             # bar that contradicted the error.
             try:
                 from ...server_manager import ServerManager as _SM
-                _alive = _SM.get().is_running()
+                _mgr = _SM.get()
+                # ALSO probe the live port — `is_running()` only knows
+                # about processes we spawned, but a llama-server launched
+                # by the user (or a prior session) on the same port is
+                # serving fine and our HTTP requests would succeed.
+                # Don't claim "stopped" when the agent can clearly reach it.
+                _alive = _mgr.is_running() or _mgr.is_healthy()
             except Exception:
                 _alive = True  # if we can't probe, fall through to old behaviour
             server_label = "server: ready" if _alive else "server: stopped"
@@ -989,29 +1122,25 @@ class ChatScreen(Screen):
             status_bar.remove_class("hidden")
 
     def _render_slash_menu(self) -> None:
-        """Render the slash palette below the input, terminal coding tools style.
+        """Render the slash palette below the input.
 
-        Selection is whole-row weight: selected row is bold across both
-        columns, idle rows are dim across both columns. Earlier version
-        kept the command column bold on every row (so the LHS read as
-        "always highlighted") — user feedback was that only the active
-        row should look highlighted, not the whole left column.
+        Each row stays on exactly ONE line. If the description doesn't
+        fit, truncate with `…` instead of wrapping (wrapping made it
+        look like there were extra options below). Width is computed
+        from the actual screen width minus the fixed command column.
         """
         menu = self.query_one("#slash-menu", Static)
+        try:
+            avail = max(20, (self.size.width or 80) - 18)
+        except Exception:
+            avail = 60
         lines = []
         for i, (cmd, desc) in enumerate(self._slash_matches):
+            d = desc if len(desc) <= avail else desc[: max(0, avail - 1)].rstrip() + "…"
             if i == self._slash_selected:
-                # Selected row — bold across cmd + desc.
-                lines.append(
-                    f"[bold]{cmd:<14}[/]  [bold]{desc}[/]"
-                )
+                lines.append(f"[bold]{cmd:<14}[/]  [bold]{d}[/]")
             else:
-                # Idle row — dim across cmd + desc. Same weight on
-                # both columns means the LHS no longer pretends every
-                # row is selected.
-                lines.append(
-                    f"[dim]{cmd:<14}[/]  [dim]{desc}[/]"
-                )
+                lines.append(f"[dim]{cmd:<14}[/]  [dim]{d}[/]")
         menu.update("\n".join(lines))
 
     # Screen-level on_paste was removed 2026-04-26: `_NoTintInput._on_paste`
@@ -1086,9 +1215,9 @@ class ChatScreen(Screen):
 
     def _handle_command(self, text: str) -> None:
         log = self.query_one("#chat-log", ChatLog)
-        if text not in ("/quit", "/clear"):
+        if text not in ("/quit", "/exit", "/clear"):
             log.write(RichText(""))  # spacing before command output
-        if text == "/quit":
+        if text in ("/quit", "/exit"):
             quit_action = getattr(self.app, "action_quit", None)
             if callable(quit_action):
                 quit_action()
@@ -1138,6 +1267,18 @@ class ChatScreen(Screen):
             self._handle_model_command(text)
         elif text == "/thinking" or text.startswith("/thinking "):
             self._handle_thinking_command(text)
+        elif text == "/status":
+            self._handle_status_command()
+        elif text == "/restart":
+            log = self.query_one("#chat-log", ChatLog)
+            log.append_info("Restarting model server...")
+            self._restart_for_vision_change(reason="Server restarted")
+        elif text == "/voice" or text.startswith("/voice "):
+            self._handle_voice_command(text)
+        elif text == "/audio" or text.startswith("/audio "):
+            self._handle_audio_command(text)
+        elif text == "/vision" or text.startswith("/vision "):
+            self._handle_vision_command(text)
         elif text == "/sounds":
             cfg = self.tui.config
             cfg.ui.sounds_enabled = not cfg.ui.sounds_enabled
@@ -1198,6 +1339,467 @@ class ChatScreen(Screen):
         except Exception:
             pass
         log.append_info(f"Thinking {value}.")
+
+    def _handle_status_command(self) -> None:
+        """Show what's running, what model is loaded, and where things live.
+
+        Replaces the deleted `localcode status` CLI subcommand — same info,
+        but accessible mid-conversation without quitting.
+        """
+        from pathlib import Path as _P
+        from ...models_catalog import current as current_choice
+        from ...runtime import LocalCodeRuntimeGateway
+        log = self.query_one("#chat-log", ChatLog)
+        config = self.tui.config
+
+        # Server health
+        try:
+            gw = LocalCodeRuntimeGateway(config.runtime)
+            ok, details = gw.healthcheck()
+        except Exception as e:
+            ok, details = False, str(e)
+        status_str = "🟢 ok" if ok else f"🔴 unreachable ({details})"
+
+        # Resolve the catalog entry behind the configured model path.
+        choice = current_choice(config)
+        model_disp = choice.name if choice is not None else _P(config.runtime.model or "—").name
+        mmproj_on = "yes" if (choice and choice.mmproj_path and choice.mmproj_path.is_file()) else "no"
+
+        # Voice state (lazy)
+        vs = getattr(self.tui, "voice_state", None)
+        voice_disp = (
+            f"on (tts={vs.tts_engine}, speak={vs.tts_speak_mode})"
+            if (vs is not None and vs.enabled) else "off"
+        )
+
+        # Plain text only — append_info uses `Text(line, style="dim")`
+        # which does NOT parse [bold]/[/] markup. We section the output
+        # with ALL-CAPS labels + leading blank lines instead.
+        lines = [
+            "RUNTIME",
+            f"  server          {status_str}",
+            f"  url             {config.runtime.base_url}",
+            f"  provider        {config.runtime.provider}",
+            f"  model file      {_P(config.runtime.model or '').name or '—'}",
+            f"  model name      {model_disp}",
+            f"  profile         {config.runtime.profile}",
+            f"  vision (mmproj) {mmproj_on}",
+            f"  voice           {voice_disp}",
+            "",
+            "PERFORMANCE",
+            f"  gpu_layers      {getattr(config.runtime, 'llama_cpp_gpu_layers', '—')}",
+            f"  threads         {getattr(config.runtime, 'llama_cpp_threads', '—')}",
+            f"  kv_cache        {config.runtime.kv_cache_type_k} / {config.runtime.kv_cache_type_v}",
+            f"  context         {getattr(config.runtime, 'cache_policy', '—')}",
+            "",
+            "PATHS",
+            "  config          ~/.localcode/config.toml",
+            "  models dir      ~/.local/share/localcode/models/",
+            "  voice dir       ~/.local/share/localcode/voice/",
+            "  server log      ~/.local/share/localcode/server.log",
+        ]
+        log.append_info("\n".join(lines))
+
+    def _handle_voice_command(self, text: str) -> None:
+        """`/voice` toggles voice mode on/off — same pattern as /sounds.
+
+        First-time-on auto-downloads the Whisper STT model (~370 MB)
+        with an inline confirm. Subcommands kept for power users:
+          /voice setup  — download model only, don't enable
+          /voice tts off|final|always
+          /voice tts say|piper
+          /voice status — verbose diagnostic
+        """
+        log = self.query_one("#chat-log", ChatLog)
+        if not hasattr(self.tui, "voice_state"):
+            from ...voice import VoiceState as _VS
+            self.tui.voice_state = _VS()
+        state = self.tui.voice_state
+        from ...voice import stt_model_ready, ensure_stt_model
+
+        parts = text.strip().split()
+        sub = parts[1] if len(parts) >= 2 else None
+
+        # ── bare /voice → toggle ──────────────────────────────────
+        if sub is None:
+            if state.enabled:
+                state.enabled = False
+                log.append_info("Voice mode OFF.")
+                return
+            # Turning ON
+            if not stt_model_ready(state):
+                # Already-running guard so a frustrated user mashing
+                # /voice doesn't kick off two concurrent downloads.
+                if getattr(self, "_voice_download_in_flight", False):
+                    log.append_info("Voice model is already downloading — please wait.")
+                    return
+                self._voice_download_in_flight = True
+                log.append_info(
+                    "Voice mode needs the Whisper STT model (~514 MB). "
+                    "Downloading in background — UI stays responsive. "
+                    "Resumable, will auto-retry on transient errors."
+                )
+                # Single-line dynamic progress — `Downloading: X% (Y/Z MB)`
+                # is shown in the `#active-step` Static widget (already
+                # designed for transient one-line status), not appended
+                # to the chat log. That way the number updates in place
+                # instead of dumping 70+ lines into the conversation.
+                def _progress_from_thread(msg: str) -> None:
+                    try:
+                        is_progress = msg.startswith("Downloading:")
+                        if is_progress:
+                            # Mutate the single-line status widget in place
+                            self.app.call_from_thread(self._set_download_line, msg)
+                        else:
+                            # Non-progress messages (retry, fallback, completion)
+                            # still go into the chat log so the user has a
+                            # durable record.
+                            self.app.call_from_thread(log.append_info, msg)
+                    except Exception:
+                        pass
+
+                def _worker() -> None:
+                    ok, result = ensure_stt_model(state, on_progress=_progress_from_thread)
+                    self.app.call_from_thread(self._finish_voice_download, ok, result)
+
+                import threading as _t
+                _t.Thread(target=_worker, daemon=True).start()
+                return
+            # Model already on disk — just toggle on synchronously.
+            state.enabled = True
+            log.append_info(
+                f"Voice mode ON. Hold {state.ptt_key.upper()} to talk."
+            )
+            self._maybe_warn_terminal_mic_access(log)
+            return
+
+        # ── explicit subcommands (power users) ─────────────────────
+        if sub in ("on", "off"):
+            # Legacy explicit form — keep working but route through toggle logic
+            if sub == "on" and not state.enabled:
+                self._handle_voice_command("/voice")
+                return
+            if sub == "off" and state.enabled:
+                state.enabled = False
+                log.append_info("Voice mode OFF.")
+            return
+
+        if sub == "setup":
+            log.append_info("Downloading Whisper STT model… (one-time, ~370 MB)")
+            ok, result = ensure_stt_model(
+                state, on_progress=lambda m: log.append_info(m),
+            )
+            if ok:
+                from pathlib import Path as _P
+                state.stt_model_path = _P(result)
+                log.append_info("STT model ready.")
+            else:
+                log.append_error(f"Setup failed: {result}")
+            return
+
+        if sub == "status":
+            ready = stt_model_ready(state)
+            log.append_info(
+                f"Voice: {'on' if state.enabled else 'off'} · "
+                f"STT model {'ready' if ready else 'missing'} · "
+                f"TTS={state.tts_engine}/{state.tts_speak_mode} · "
+                f"PTT={state.ptt_key.upper()}"
+            )
+            return
+
+        if sub == "tts" and len(parts) >= 3:
+            mode = parts[2]
+            if mode in ("off", "final", "always"):
+                state.tts_speak_mode = mode
+                log.append_info(f"TTS speak mode: {mode}")
+            elif mode in ("say", "piper"):
+                state.tts_engine = mode
+                log.append_info(f"TTS engine: {mode}")
+            else:
+                log.append_info(
+                    "Usage: /voice tts off|final|always   OR   /voice tts say|piper"
+                )
+            return
+
+        log.append_info("Usage: /voice  (toggle)  ·  /voice setup  ·  /voice tts …  ·  /voice status")
+
+    def _set_download_line(self, msg: str) -> None:
+        """Update the single-line transient status widget with a download
+        progress message. Called on the UI thread only."""
+        try:
+            self.query_one("#active-step", Static).update(f"[dim]{msg}[/]")
+        except Exception:
+            pass
+
+    def _clear_download_line(self) -> None:
+        try:
+            self.query_one("#active-step", Static).update("")
+        except Exception:
+            pass
+
+    def _handle_audio_command(self, text: str) -> None:
+        """`/audio` toggles spoken responses (TTS) on/off.
+
+        Independent of /voice — TTS uses macOS `say` (built-in, no
+        download). State lives in voice_state.tts_speak_mode but the
+        command is named `/audio` because users think of "voice" as
+        "I talk" and "audio" as "it talks back".
+
+        Subcommands:
+          /audio              — toggle off ⇄ final
+          /audio off          — silent
+          /audio final        — speak only the final answer of each turn
+          /audio always       — speak every assistant message
+        """
+        log = self.query_one("#chat-log", ChatLog)
+        if not hasattr(self.tui, "voice_state"):
+            from ...voice import VoiceState as _VS
+            self.tui.voice_state = _VS()
+        state = self.tui.voice_state
+
+        parts = text.strip().split()
+        sub = parts[1] if len(parts) >= 2 else None
+
+        if sub is None:
+            # Toggle off ⇄ final
+            if state.tts_speak_mode != "off":
+                state.tts_speak_mode = "off"
+                log.append_info("Audio output OFF.")
+            else:
+                state.tts_speak_mode = "final"
+                log.append_info(
+                    "Audio output ON. Final answer of each turn will be read aloud."
+                )
+            return
+
+        if sub in ("off", "final", "always"):
+            state.tts_speak_mode = sub
+            if sub == "off":
+                log.append_info("Audio output OFF.")
+            elif sub == "final":
+                log.append_info("Audio output: final answer only.")
+            else:
+                log.append_info("Audio output: every assistant message.")
+            return
+
+        log.append_info("Usage: /audio  (toggle)  ·  /audio off|final|always")
+
+    def _finish_voice_download(self, ok: bool, result: str) -> None:
+        """Called on the UI thread when the background voice-model download
+        completes. Enables voice mode on success or surfaces an error +
+        retry hint."""
+        self._voice_download_in_flight = False
+        self._clear_download_line()
+        log = self.query_one("#chat-log", ChatLog)
+        state = getattr(self.tui, "voice_state", None)
+        if not ok or state is None:
+            log.append_error(f"Couldn't enable voice: {result}")
+            log.append_info(
+                "Type [bold]/voice[/] again to retry — partial download is "
+                "preserved on disk and will resume from where it stopped."
+            )
+            return
+        from pathlib import Path as _P
+        state.stt_model_path = _P(result)
+        state.enabled = True
+        log.append_info(
+            f"Voice mode ON. Hold {state.ptt_key.upper()} to talk."
+        )
+        self._maybe_warn_terminal_mic_access(log)
+
+    def _maybe_warn_terminal_mic_access(self, log) -> None:
+        """If the host terminal can't request mic access (e.g. VS Code's
+        integrated terminal), warn the user upfront so they don't waste
+        time wondering why Space-hold does nothing."""
+        try:
+            from ...voice import host_terminal_supports_mic
+            ok, hint = host_terminal_supports_mic()
+            if not ok and hint:
+                log.append_info(hint)
+        except Exception:
+            pass
+
+    def _finish_vision_download(self, ok: bool, result: str, choice_key: str) -> None:
+        """Called on the UI thread when the background mmproj download
+        completes. Auto-restarts the server so --mmproj gets picked up —
+        the user never has to type /model themselves."""
+        self._vision_download_in_flight = False
+        self._clear_download_line()
+        log = self.query_one("#chat-log", ChatLog)
+        if not ok:
+            log.append_error(f"Couldn't enable vision: {result}")
+            log.append_info(
+                "Type [bold]/vision[/] again to retry — partial download is preserved."
+            )
+            return
+        log.append_info("Vision projector ready — restarting server to activate...")
+        self._restart_for_vision_change(reason="Vision ON")
+
+    def _restart_for_vision_change(self, reason: str) -> None:
+        """Force a server restart to pick up an mmproj change.
+
+        Used both when vision turns ON (mmproj just downloaded; runtime
+        needs to re-launch with --mmproj) and when it turns OFF (mmproj
+        deleted; runtime needs to re-launch without --mmproj).
+
+        The /model handler short-circuits when the same model is
+        already loaded, so we bypass it and call _restart_server
+        directly. Mirrors the same _server_restarting / queue-pending
+        UX so user input during the swap is not lost.
+        """
+        log = self.query_one("#chat-log", ChatLog)
+        self._server_restarting = True
+        self._update_status()
+
+        def _worker() -> None:
+            # Auto-init the backend if it hasn't been touched yet — the
+            # /vision toggle should never fail just because the user
+            # hadn't sent their first message yet. ensure_backend is
+            # idempotent + cheap when already up.
+            try:
+                self.app.call_from_thread(self.tui.ensure_backend)
+                import time as _t
+                # Give the call_from_thread a tick to land before we
+                # check engine. 50ms is enough; engine init is in-process.
+                _t.sleep(0.05)
+            except Exception:
+                pass
+            engine = (
+                self.tui.engine.engine
+                if (self.tui.engine is not None and hasattr(self.tui.engine, "engine"))
+                else self.tui.engine
+            )
+            if engine is None:
+                self.app.call_from_thread(
+                    self._on_server_restart_failed,
+                    "Backend couldn't initialize. Check ~/.localcode/last_error.log.",
+                )
+                return
+            try:
+                ok = engine._restart_server()
+            except Exception as e:
+                self.app.call_from_thread(
+                    self._on_server_restart_failed, f"Restart failed: {e}"
+                )
+                return
+            if ok:
+                self.app.call_from_thread(self._on_server_ready, reason)
+            else:
+                # Show the user the LAST lines of server.log so they
+                # have a real reason instead of the generic "didn't come
+                # back". Empirically this surfaces jetsam OOMs, port-
+                # conflicts, and corrupt-config-flag errors directly to
+                # the chat log.
+                hint = "Server didn't come back up after restart."
+                try:
+                    from pathlib import Path as _P
+                    log_p = _P.home() / ".local" / "share" / "localcode" / "server.log"
+                    if log_p.is_file():
+                        tail = log_p.read_text(errors="replace").splitlines()[-6:]
+                        if tail:
+                            hint += "\nlast server.log lines:\n  " + "\n  ".join(tail)
+                except Exception:
+                    pass
+                hint += "\nType /restart to try again, or /status to inspect."
+                self.app.call_from_thread(self._on_server_restart_failed, hint)
+
+        self.run_worker(_worker, thread=True, exclusive=False)
+
+    def _handle_vision_command(self, text: str) -> None:
+        """`/vision` toggles vision on/off for the current model.
+
+        Same UX as /voice — bare command toggles; first-time-on does
+        the one-time mmproj download with progress. Power users still
+        have /vision setup and /vision status for explicit control.
+        """
+        from ...models_catalog import current as current_choice
+        log = self.query_one("#chat-log", ChatLog)
+        config = self.tui.config
+        choice = current_choice(config)
+        if choice is None:
+            log.append_info("No model selected — pick one via /model first.")
+            return
+        if not choice.supports_vision:
+            log.append_info(
+                f"{choice.name} doesn't support vision. Use a Gemma 4 or Qwen 3.6 model."
+            )
+            return
+        mmproj = choice.mmproj_path
+        has = bool(mmproj and mmproj.is_file())
+
+        parts = text.strip().split()
+        sub = parts[1] if len(parts) >= 2 else None
+
+        # ── bare /vision → toggle ─────────────────────────────────
+        if sub is None:
+            if has:
+                # Currently "on" → remove projector + restart server so
+                # it relaunches without --mmproj. Frees RAM immediately.
+                try:
+                    mmproj.unlink()
+                except Exception as e:
+                    log.append_error(f"Couldn't remove projector: {e}")
+                    return
+                log.append_info("Vision OFF — restarting server to release projector memory…")
+                self._restart_for_vision_change(reason="Vision OFF")
+                return
+            # Currently "off" → download + activate (async — keeps UI live)
+            if getattr(self, "_vision_download_in_flight", False):
+                log.append_info("Vision projector is already downloading — please wait.")
+                return
+            self._vision_download_in_flight = True
+            log.append_info(
+                f"Vision mode needs the projector (~{choice.mmproj_size_gb:.1f} GB) "
+                f"for {choice.name}. Downloading in background — UI stays responsive."
+            )
+
+            def _progress_from_thread(msg: str) -> None:
+                try:
+                    if msg.startswith("Downloading:"):
+                        self.app.call_from_thread(self._set_download_line, msg)
+                    else:
+                        self.app.call_from_thread(log.append_info, msg)
+                except Exception:
+                    pass
+
+            def _worker() -> None:
+                from ...bootstrap import download_mmproj as _dl
+                ok, result = _dl(choice, on_progress=_progress_from_thread)
+                self.app.call_from_thread(
+                    self._finish_vision_download, ok, result, choice.key,
+                )
+
+            import threading as _t
+            _t.Thread(target=_worker, daemon=True).start()
+            return
+
+        # ── power-user subcommands ───────────────────────────────
+        if sub == "status":
+            if has:
+                mb = mmproj.stat().st_size // (1024 * 1024)
+                log.append_info(f"Vision: on · {mmproj.name} · {mb} MB")
+            else:
+                log.append_info(
+                    f"Vision: off · type /vision to enable "
+                    f"(~{choice.mmproj_size_gb:.1f} GB)"
+                )
+            return
+
+        if sub in ("on", "download", "setup"):
+            if has:
+                log.append_info("Vision already on.")
+                return
+            self._handle_vision_command("/vision")
+            return
+
+        if sub == "off":
+            if has:
+                self._handle_vision_command("/vision")
+            else:
+                log.append_info("Vision already off.")
+            return
+
+        log.append_info("Usage: /vision  (toggle)  ·  /vision status")
 
     def _handle_model_command(self, text: str) -> None:
         """Handle /model — open the visual picker or switch directly by key."""
@@ -1425,6 +2027,316 @@ class ChatScreen(Screen):
 
     # ── Search ──
 
+    def action_ptt_space(self) -> None:
+        """Space handler with dual behavior:
+
+        * Voice mode OFF → insert a space character into the focused input
+          box (preserves normal typing).
+        * Voice mode ON, not recording → start recording + spawn the
+          streaming transcription loop (re-transcribes every 1.5 s so
+          text appears in the input box while the user is still talking).
+          Track the press timestamp.
+        * Voice mode ON, recording → treat as a key-repeat (user is
+          still holding Space). Reset `_ptt_last_key_ts`. The watchdog
+          stops the recording when no Space event arrives for 350 ms,
+          which is how we detect "released" in a terminal that can't
+          send key-release events.
+        """
+        # Lazy-create voice state
+        if not hasattr(self.tui, "voice_state"):
+            from ...voice import VoiceState as _VS
+            self.tui.voice_state = _VS()
+        state = self.tui.voice_state
+
+        # ── Voice OFF: space is just a space ────────────────────
+        if not state.enabled:
+            try:
+                inp = self.query_one("#chat-input", Input)
+                inp.insert_text_at_cursor(" ")
+            except Exception:
+                pass
+            return
+
+        import time as _t
+        now = _t.time()
+
+        # ── Voice ON, recording: this is a key-repeat — reset watchdog ─
+        if getattr(self, "_ptt_recorder", None) is not None:
+            self._ptt_last_key_ts = now
+            return
+
+        # ── Voice ON, not recording: start ──────────────────────
+        log = self.query_one("#chat-log", ChatLog)
+        from ...voice import Recorder
+        try:
+            rec = Recorder(state)
+            rec.start()
+            self._ptt_recorder = rec
+            # Session counter — increments per recording so in-flight
+            # streaming workers from a PREVIOUS session can detect they
+            # were orphaned (and not overwrite the input box that the
+            # user is now typing into).
+            self._ptt_session = getattr(self, "_ptt_session", 0) + 1
+            self._ptt_start_ts = now
+            self._ptt_last_key_ts = now
+            # Save what's currently in the input — could be user-typed
+            # text, a previous transcription, or both. Streaming /
+            # final transcripts APPEND to this prefix so consecutive
+            # recordings stack ("hello" + hold-Space + "how are you"
+            # → "hello how are you") instead of overwriting.
+            try:
+                existing = self.query_one("#chat-input", Input).value or ""
+                # Ensure exactly one trailing space so the join is clean.
+                self._ptt_input_prefix = existing.rstrip() + " " if existing.strip() else ""
+            except Exception:
+                self._ptt_input_prefix = ""
+            # Don't log "Recording — release Space" anymore — it spammed
+            # the chat log if the watchdog mis-fired. The visualizer bar
+            # next to the input is now the only recording indicator.
+            # Visualizer widget — colored block right of the input,
+            # animated by its own 30 FPS timer.
+            try:
+                from ..widgets.voice_visualizer import VoiceVisualizer
+                vis = self.query_one("#voice-visualizer", VoiceVisualizer)
+                vis.activate(rec)
+            except Exception:
+                pass
+
+            def _hold_watchdog() -> None:
+                """Detect Space release in a terminal that doesn't send key-up
+                events. We watch the gap between consecutive Space events.
+
+                Three-phase logic to avoid the false-stop bug where the
+                watchdog fired BEFORE the first key-repeat could arrive:
+
+                1. WAIT_FOR_FIRST_REPEAT (0 to ~1.2 s): hold open. macOS
+                   default initial-key-repeat delay is 500 ms but it's
+                   user-configurable up to 2 s. We give it 1.2 s of grace.
+                   During this window, EITHER a repeat lands (→ phase 2)
+                   OR no repeat lands (→ user tapped, fall back to
+                   silence-auto-stop, phase 3).
+                2. STEADY_HOLD: repeats arriving regularly (every ~33 ms
+                   after initial). Stop when gap > 350 ms.
+                3. TAP_FALLBACK: no repeat arrived — user tapped Space.
+                   Stop on 1.5 s of silence (from the Recorder).
+                """
+                r = self._ptt_recorder
+                if r is None:
+                    return
+                now = _t.time()
+                elapsed = now - self._ptt_start_ts
+                # We learn the user is HOLDING when last_key_ts advances
+                # past start_ts (a key-repeat arrived).
+                got_repeat = self._ptt_last_key_ts > self._ptt_start_ts + 0.01
+
+                # Phase 1: wait up to 1.2 s for the first repeat
+                if not got_repeat and elapsed < 1.2:
+                    return
+                # Phase 3: user tapped, no hold → use silence as stop
+                if not got_repeat:
+                    try:
+                        if r.silence_seconds > 1.5:
+                            self._ptt_stop_and_finalize()
+                    except Exception:
+                        pass
+                    return
+                # Phase 2: steady hold — release when gap > 350 ms
+                gap = now - self._ptt_last_key_ts
+                if gap > 0.35:
+                    self._ptt_stop_and_finalize()
+            self._ptt_hold_timer = self.set_interval(0.08, _hold_watchdog)
+
+            # Streaming transcription loop — every 1.5 s, snapshot the
+            # audio captured so far, transcribe it on a worker thread,
+            # and push the result to the input box.
+            self._ptt_streaming_busy = False
+            def _stream_tick() -> None:
+                r = self._ptt_recorder
+                if r is None or self._ptt_streaming_busy:
+                    return
+                snap = r.snapshot_wav()
+                if snap is None:
+                    return
+                self._ptt_streaming_busy = True
+                session_at_start = self._ptt_session
+                def _worker():
+                    try:
+                        from ...voice import transcribe as _trans
+                        ok, text = _trans(state, snap)
+                        if ok and text:
+                            # Capture session at worker spawn; only apply
+                            # if the recording is still ours. Stops in-
+                            # flight workers from an old recording from
+                            # overwriting the input the user is now
+                            # typing into.
+                            self.app.call_from_thread(
+                                self._apply_partial_transcript, text, session_at_start
+                            )
+                    finally:
+                        try:
+                            snap.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+                        self._ptt_streaming_busy = False
+                import threading as _t2
+                _t2.Thread(target=_worker, daemon=True).start()
+            # 0.35 s re-decode for true word-by-word feel. Whisper
+            # distil-medium.en runs ~15× realtime on M5 Max so re-decoding
+            # ≤10 s of audio takes ~700 ms — still under the next tick
+            # because of the busy guard.
+            self._ptt_stream_timer = self.set_interval(0.35, _stream_tick)
+        except Exception as e:
+            log.append_error(f"Couldn't start mic: {e}")
+            # Disable voice mode so subsequent Space presses don't
+            # spam the same error 6 times in a row. User can /voice
+            # again to re-enable once they've fixed the underlying
+            # issue (granted permission, plugged in mic, etc.).
+            state.enabled = False
+            log.append_info(
+                "Voice mode turned OFF. Fix the issue above, then "
+                "type /voice to re-enable."
+            )
+
+    def _apply_partial_transcript(self, text: str, session: int = -1) -> None:
+        """Push a partial transcript into the input field.
+
+        Word-by-word stream: compare to last applied transcript, find
+        the longest common prefix in word units, and only APPEND the
+        new tail words. This stops the visible "rewind and rewrite"
+        feel where each tick would replace the entire string and the
+        cursor would briefly jump backwards.
+
+        `session` is the recording id this transcript was produced for.
+        Stale workers from a previous recording carry an old id; if it
+        doesn't match the current `_ptt_session`, drop silently.
+        """
+        if session >= 0 and session != getattr(self, "_ptt_session", -1):
+            return
+        try:
+            inp = self.query_one("#chat-input", Input)
+            prefix = getattr(self, "_ptt_input_prefix", "") or ""
+            # Compare to whatever we last wrote during THIS session
+            # (per-session so a new recording starts fresh).
+            last_full = getattr(self, "_ptt_last_transcript", "")
+            last_session = getattr(self, "_ptt_last_transcript_session", -2)
+            if last_session != getattr(self, "_ptt_session", -1):
+                last_full = ""
+            # Word-level diff: find common leading words, only append tail.
+            old_words = last_full.split()
+            new_words = text.split()
+            i = 0
+            while i < len(old_words) and i < len(new_words) and old_words[i] == new_words[i]:
+                i += 1
+            # New tail = words we haven't shown yet.
+            tail = " ".join(new_words[i:])
+            self._ptt_last_transcript = text
+            self._ptt_last_transcript_session = getattr(self, "_ptt_session", -1)
+            joined = (prefix + text).strip() if prefix else text
+            # Single authoritative write each tick — `joined` is what
+            # the input box should hold right now. The diff above is
+            # purely so we COULD do something fancier (e.g. cursor
+            # animation) on `tail` if we wanted; setting the full
+            # `joined` matches what's been transcribed so far.
+            inp.value = joined
+            inp.cursor_position = len(joined)
+            inp.focus()
+        except Exception:
+            pass
+
+    def _ptt_stop_and_finalize(self) -> None:
+        """Called when the hold watchdog detects Space was released, or
+        from action_ptt_cancel when user hits Esc. Tears down timers,
+        stops the recorder, does one final transcription pass so the
+        input field has the complete text, then cleans up."""
+        rec = getattr(self, "_ptt_recorder", None)
+        if rec is None:
+            return
+        # Tear down timers immediately so they don't re-fire mid-finalize
+        for attr in ("_ptt_hold_timer", "_ptt_stream_timer", "_ptt_cursor_timer"):
+            try:
+                t = getattr(self, attr, None)
+                if t is not None:
+                    t.stop()
+            except Exception:
+                pass
+            setattr(self, attr, None)
+        # Tear down visualizer widget.
+        try:
+            from ..widgets.voice_visualizer import VoiceVisualizer
+            vis = self.query_one("#voice-visualizer", VoiceVisualizer)
+            vis.deactivate()
+        except Exception:
+            pass
+        try:
+            wav_path = rec.stop()
+        except Exception:
+            wav_path = None
+        self._ptt_recorder = None
+        if wav_path is None:
+            return
+        # Final transcription on the full audio (overrides any streaming
+        # partial). Done on a worker so we don't block the UI thread.
+        # We pass the FINAL session (current session id) so the apply
+        # only lands if the user hasn't already started a new recording.
+        state = self.tui.voice_state
+        session_final = getattr(self, "_ptt_session", 0)
+        def _final_worker():
+            try:
+                from ...voice import transcribe as _trans
+                ok, text = _trans(state, wav_path)
+                if ok and text:
+                    self.app.call_from_thread(
+                        self._apply_partial_transcript, text, session_final
+                    )
+            finally:
+                try:
+                    from pathlib import Path as _P
+                    _P(wav_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+        import threading as _t3
+        _t3.Thread(target=_final_worker, daemon=True).start()
+
+    def action_ptt_cancel(self) -> None:
+        """Cancel an active recording — throws away audio, no transcription.
+
+        Only fires when a recording is actually in flight. When idle,
+        Esc keeps its normal behavior (e.g. closing the search bar)
+        because we early-return without consuming the event.
+        """
+        if not getattr(self, "_ptt_recorder", None):
+            return  # let other Esc handlers run
+        log = self.query_one("#chat-log", ChatLog)
+        # Tear down watchdog + visualizer + streaming timer
+        for attr in ("_ptt_silence_timer", "_ptt_hold_timer", "_ptt_stream_timer", "_ptt_cursor_timer"):
+            try:
+                t = getattr(self, attr, None)
+                if t is not None:
+                    t.stop()
+            except Exception:
+                pass
+            setattr(self, attr, None)
+        # Tear down visualizer widget.
+        try:
+            from ..widgets.voice_visualizer import VoiceVisualizer
+            vis = self.query_one("#voice-visualizer", VoiceVisualizer)
+            vis.deactivate()
+        except Exception:
+            pass
+        # Stop the recorder, discard the wav
+        try:
+            wav_path = self._ptt_recorder.stop()
+            if wav_path is not None:
+                from pathlib import Path as _P
+                try:
+                    _P(wav_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        self._ptt_recorder = None
+        log.append_info("Recording cancelled.")
+
     def action_toggle_search(self) -> None:
         """Toggle the search bar with Ctrl+F."""
         search_input = self.query_one("#search-input", Input)
@@ -1603,6 +2515,19 @@ class ChatScreen(Screen):
         try:
             from ...sounds import play_completion
             play_completion(self.tui.config.ui.sounds_enabled)
+        except Exception:
+            pass
+
+        # TTS — opt-in via /audio (off|final|always). Independent of
+        # /voice — TTS uses macOS `say`, no Whisper dependency. Runs
+        # in a background thread so the turn doesn't pause for audio.
+        try:
+            vs = getattr(self.tui, "voice_state", None)
+            if vs is not None and vs.tts_speak_mode != "off":
+                spoken = (self._last_assistant_text or "").strip()
+                if spoken:
+                    from ...voice import speak as _speak
+                    _speak(spoken, vs)
         except Exception:
             pass
 

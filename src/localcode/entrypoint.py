@@ -5,16 +5,15 @@ import argparse
 from pathlib import Path
 import sys
 
+# Lightweight imports only at module level — these are needed for
+# `--help` and argument parsing.  The heavy modules (`bootstrap`,
+# `models`, `runtime`, `performance`, and `rich.{Panel,Table}`) are
+# only imported inside the subcommand branches that actually use
+# them, shaving ~300–500 ms off `localcode --help` and the no-op
+# TUI launch path on cold start.
 from rich.console import Console
-from rich.panel import Panel
-from rich.table import Table
-
-from .bootstrap import run_setup
 from .config import get_config_path, init_config_file, load_config
 from .logging_utils import configure_logging
-from .models import GEMMA_PROFILES, get_runtime_model, resolve_profile
-from .performance import benchmark_report
-from .runtime import LocalCodeRuntimeGateway
 
 
 _TERMINAL_RESTORE = (
@@ -44,6 +43,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="localcode", description="LocalCode — AI coding assistant running entirely on your machine")
     parser.add_argument("--profile", help="Gemma 4 profile: e2b, e4b, 26b-laptop, 26b-moe, 31b")
     parser.add_argument("--model", help="Explicit local runtime model tag")
+    parser.add_argument(
+        "--resume",
+        metavar="SESSION_ID",
+        default=None,
+        help="Resume a previous session by ID (use `--resume last` for the most recent). "
+             "Session IDs are printed when LocalCode exits.",
+    )
     parser.add_argument("-c", "--cwd", type=str, default=None,
                         help="Working directory for the project (defaults to current directory)")
     parser.add_argument(
@@ -61,8 +67,9 @@ def build_parser() -> argparse.ArgumentParser:
     setup.add_argument("--benchmark", action="store_true", help="benchmark the local machine and apply a recommended preset")
     benchmark = subparsers.add_parser("benchmark", help="inspect the local machine and recommend a LocalCode performance preset")
     benchmark.add_argument("--mode", choices=["fast", "balanced", "deep"])
-    subparsers.add_parser("status", help="show runtime status and configuration")
-    subparsers.add_parser("doctor", help="(alias for status)")
+    # `status` / `doctor` were CLI subcommands; replaced with the
+    # in-TUI `/status` slash command. Run localcode and type `/status`
+    # in the chat input.
     subparsers.add_parser("models", help="list Gemma profiles and installed local models")
     subparsers.add_parser(
         "unstick",
@@ -73,41 +80,64 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def run_status() -> int:
-    config = load_config()
-    profile = resolve_profile(config.runtime.profile, config.runtime.model)
-    config.runtime.model = get_runtime_model(profile, config.runtime.model)
-    gateway = LocalCodeRuntimeGateway(config.runtime)
-    ok, details = gateway.healthcheck()
-    console = Console()
+def _harden_against_debugger_attach() -> None:
+    """Refuse all debugger attachments at the kernel level.
 
-    runtime_table = Table(show_header=False, title="Runtime", title_style="bold green")
-    runtime_table.add_row("status", "[green]ok[/green]" if ok else "[red]unreachable[/red]")
-    runtime_table.add_row("provider", config.runtime.provider)
-    runtime_table.add_row("model", config.runtime.model)
-    runtime_table.add_row("profile", profile.key)
-    runtime_table.add_row("mode", config.runtime.mode)
-    runtime_table.add_row("server", config.runtime.base_url)
-    if not ok:
-        runtime_table.add_row("error", details)
-    console.print(runtime_table)
+    macOS ptrace(PT_DENY_ATTACH=31, 0, 0, 0) tells the kernel that this
+    process will NEVER be a debug target. Any subsequent
+    `lldb -p <our-pid>`, `dtrace -p <our-pid>`, etc. fails with
+    "Operation not permitted" — they can't reach in to SIGSTOP us, can't
+    dump backtraces, can't trigger the Touch ID prompt.
 
-    perf_table = Table(show_header=False, title="Performance", title_style="bold green")
-    if config.runtime.provider == "llama_cpp":
-        perf_table.add_row("gpu_layers", str(config.runtime.llama_cpp_gpu_layers))
-        perf_table.add_row("threads", str(config.runtime.llama_cpp_threads))
-    perf_table.add_row("kv_cache", f"{config.runtime.kv_cache_type_k} / {config.runtime.kv_cache_type_v}")
-    perf_table.add_row("context", config.runtime.cache_policy)
-    console.print(perf_table)
+    This is the bulletproof complement to the bash-tool regex block.
+    The bash regex stops the AGENT from spawning lldb in the first place;
+    PT_DENY_ATTACH stops ANY OTHER process (a stray terminal, a misclick,
+    Activity Monitor's "Sample Process", a wrapper script) from doing it
+    either. Both layers — defense in depth.
 
-    config_table = Table(show_header=False, title="Config", title_style="bold green")
-    config_table.add_row("file", str(get_config_path()))
-    console.print(config_table)
-
-    return 0 if ok else 1
+    Side effect: legitimate `lldb -p $(pgrep localcode)` from a developer
+    also fails. Acceptable trade-off given the user-impact of accidental
+    SIGSTOPs killing the TUI mid-session. To debug, use logs in
+    ~/.localcode/ or set LOCALCODE_ALLOW_DEBUGGER=1 to skip this.
+    """
+    import os, platform
+    if platform.system() != "Darwin":
+        return
+    if os.environ.get("LOCALCODE_ALLOW_DEBUGGER") == "1":
+        return
+    try:
+        import ctypes
+        libc = ctypes.CDLL("/usr/lib/libc.dylib")
+        PT_DENY_ATTACH = 31
+        # Annotate the call signature — ptrace returns int. Without an
+        # explicit restype/argtypes ctypes can corrupt the return on
+        # arm64, hide a non-zero failure code, and silently no-op
+        # without raising. Setting restype catches that.
+        libc.ptrace.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_int]
+        libc.ptrace.restype = ctypes.c_int
+        rc = libc.ptrace(PT_DENY_ATTACH, 0, None, 0)
+        # Log to a known file so user can verify it ran on their box.
+        import os as _os
+        log_dir = _os.path.expanduser("~/.localcode")
+        try:
+            _os.makedirs(log_dir, exist_ok=True)
+            with open(_os.path.join(log_dir, "logs", "startup.log"), "a") as _f:
+                _f.write(f"[startup] PT_DENY_ATTACH rc={rc} pid={_os.getpid()}\n")
+        except Exception:
+            pass
+    except Exception as e:
+        try:
+            import os as _os
+            log_dir = _os.path.expanduser("~/.localcode/logs")
+            _os.makedirs(log_dir, exist_ok=True)
+            with open(_os.path.join(log_dir, "startup.log"), "a") as _f:
+                _f.write(f"[startup] PT_DENY_ATTACH FAILED: {e}\n")
+        except Exception:
+            pass
 
 
 def main(argv: list[str] | None = None) -> None:
+    _harden_against_debugger_attach()
     import os
     import signal
     import warnings
@@ -159,8 +189,12 @@ def main(argv: list[str] | None = None) -> None:
         console.print(f"\n{'[green]✓[/]' if ok else '[yellow]⚠[/]'} {msg}")
         sys.exit(0 if ok else 1)
     if args.command == "setup":
+        from .bootstrap import run_setup
         raise SystemExit(run_setup(config, args.profile, args.model, args.install, args.benchmark))
     if args.command == "benchmark":
+        from .performance import benchmark_report
+        from rich.panel import Panel
+        from rich.table import Table
         machine, preset = benchmark_report(config, args.mode)
         table = Table(show_header=False)
         table.add_row("system", machine.system)
@@ -174,9 +208,9 @@ def main(argv: list[str] | None = None) -> None:
         if preset.notes:
             console.print(Panel("\n".join(preset.notes), title="Recommendations"))
         return
-    if args.command in ("status", "doctor"):
-        raise SystemExit(run_status())
     if args.command == "models":
+        from .models import GEMMA_PROFILES
+        from rich.table import Table
         table = Table("profile", "default_model", "variant", "context_window", "summary")
         for profile in GEMMA_PROFILES.values():
             table.add_row(
@@ -203,6 +237,10 @@ def main(argv: list[str] | None = None) -> None:
     from .server_manager import ServerManager
 
     app = LocalCodeTUI(show_mode_picker=False)
+    # Pass through --resume so the TUI can seed the chat log with the
+    # prior session's messages before showing the chat screen.
+    if getattr(args, "resume", None):
+        app._resume_session_id = args.resume
     try:
         app.run()
     finally:
@@ -211,11 +249,23 @@ def main(argv: list[str] | None = None) -> None:
         except Exception:
             pass
         try:
-            ServerManager.get().shutdown()
+            # force=True → SIGKILL straight away. The graceful path
+            # waits up to 5 s for llama-server to dealloc 38 GB of
+            # Metal memory, which the kernel reclaims for free on
+            # process death anyway. Skipping it = exit feels instant.
+            ServerManager.get().shutdown(force=True)
         except Exception:
             pass
         try:
             _reset_terminal_state()
+        except Exception:
+            pass
+        # Print exit summary AFTER textual has restored the terminal so
+        # the lines survive in scrollback — same UX as Claude Code's
+        # "Resume with: ..." footer. Pull session ID + last assistant
+        # message from app state; silent no-op if we can't find them.
+        try:
+            _print_exit_summary(app)
         except Exception:
             pass
     # Handle GPU unlock: TUI exits with code 42 when sudo is needed
@@ -228,6 +278,71 @@ def main(argv: list[str] | None = None) -> None:
             os.execv(sys.executable, [sys.executable] + sys.argv)
         else:
             console.print("\n[red]Failed.[/] Run manually: sudo sysctl iogpu.wired_limit_mb=14336")
+
+
+def _print_exit_summary(app) -> None:
+    """Print a Claude-Code-style exit footer to stdout so the user sees:
+
+      - the last assistant exchange (briefly), and
+      - a `localcode --resume <id>` hint they can copy-paste
+
+    This runs AFTER textual restores the terminal, so the lines persist
+    in the user's terminal scrollback — they can scroll back through the
+    whole conversation since textual was in inline-output mode for the
+    last bit and the chat log itself was rendered into a normal scroll
+    buffer (which we plan to add separately if textual ate it).
+    """
+    session_id = None
+    last_user = ""
+    last_assistant = ""
+    # Pull from the engine's session if available
+    try:
+        engine = getattr(app, "engine", None)
+        if engine is not None and getattr(engine, "session", None) is not None:
+            session_id = engine.session.session_id
+            for m in reversed(engine.session.messages):
+                role = m.get("role", "")
+                if not last_assistant and role == "assistant":
+                    last_assistant = m.get("content", "")[:240]
+                if not last_user and role == "user":
+                    last_user = m.get("content", "")[:120]
+                if last_user and last_assistant:
+                    break
+    except Exception:
+        pass
+    # Fallback: latest session file on disk
+    if session_id is None:
+        try:
+            from .session import SessionStore
+            store = SessionStore()
+            sess = sorted(
+                store.sessions_dir.glob("*.json"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            if sess:
+                session_id = sess[0].stem
+        except Exception:
+            pass
+    # Build the footer. Plain ANSI — Rich/Textual is gone by now.
+    # ALWAYS print something so the user has visible confirmation
+    # localcode shut down cleanly and knows how to come back.
+    BOLD, DIM, RESET = "\033[1m", "\033[2m", "\033[0m"
+    GREEN = "\033[32m"
+    out = ["", f"{DIM}─── LocalCode session ended ───{RESET}"]
+    if last_user:
+        out.append(f"  {DIM}you:{RESET}       {last_user}")
+    if last_assistant:
+        clipped = last_assistant.replace("\n", " ")
+        out.append(f"  {DIM}assistant:{RESET}  {clipped}")
+    out.append("")
+    if session_id:
+        out.append(f"  {BOLD}Resume:{RESET}  {GREEN}localcode --resume {session_id}{RESET}")
+        out.append(f"  {DIM}Or just `localcode --resume last` to grab the most recent.{RESET}")
+    else:
+        out.append(f"  {BOLD}Restart:{RESET}  {GREEN}localcode{RESET}")
+    out.append("")
+    print("\n".join(out))
 
 
 if __name__ == "__main__":

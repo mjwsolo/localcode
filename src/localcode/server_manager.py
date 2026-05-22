@@ -444,12 +444,49 @@ class ServerManager:
         """
         return self.start(cmd, model_path, port=port, timeout_s=timeout_s)
 
-    def shutdown(self) -> None:
-        """Stop the server. Idempotent; safe to call multiple times. This is
-        the atexit handler, so it runs on normal Python exit.
+    def shutdown(self, force: bool = False) -> None:
+        """Stop the server. Idempotent; safe to call multiple times.
+
+        ``force=False`` (default, used for model swaps): graceful path —
+        SIGTERM → wait up to 3 s for clean shutdown → SIGKILL fallback.
+        Lets llama-server release its Metal allocations cleanly so the
+        replacement model can claim them without an OOM.
+
+        ``force=True`` (used on app exit): straight to SIGKILL with a
+        0.5 s reap timeout. The kernel reclaims the Metal allocations
+        on process death anyway, and skipping the 5–10 s graceful
+        cleanup is the difference between a snappy exit and the user
+        wondering if localcode is hung.
         """
         with self._lock:
-            self._shutdown_locked()
+            if force:
+                self._force_kill_locked()
+            else:
+                self._shutdown_locked()
+
+    def _force_kill_locked(self) -> None:
+        """SIGKILL-immediately path for app exit. Must be called with
+        self._lock held."""
+        if self._process is None:
+            return
+        pid = self._process.pid
+        try:
+            pgid = os.getpgid(pid)
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except Exception:
+            try:
+                self._process.kill()
+            except Exception:
+                pass
+        try:
+            self._process.wait(timeout=0.5)
+        except Exception:
+            pass
+        self._process = None
+        self._model_path = None
+        self._port = None
 
     def is_healthy(self, port: int = DEFAULT_PORT) -> bool:
         """Non-blocking health probe. Does not touch subprocess state."""
