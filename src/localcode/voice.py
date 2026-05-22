@@ -702,9 +702,15 @@ def _ensure_piper_voice(voice_id: str) -> Path | None:
 def _speak_piper(text: str, state: VoiceState) -> bool:
     """Piper TTS — natural neural voice, free, fully local.
 
-    Returns True if playback started, False on any failure (so the
+    Returns True if playback completed, False on any failure (so the
     caller can fall back to macOS `say`). Auto-downloads the .onnx +
     .json voice file on first use into the piper voice cache.
+
+    Uses the modern piper-tts API: `synthesize()` yields AudioChunk
+    objects with `audio_int16_bytes` payloads. (The older
+    `synthesize_stream_raw` method we tried first was renamed years
+    ago in the v1.0+ rewrite — that's why TTS was silently falling
+    back to macOS `say` even when Piper was installed.)
     """
     try:
         from piper import PiperVoice  # type: ignore
@@ -721,10 +727,14 @@ def _speak_piper(text: str, state: VoiceState) -> bool:
         import numpy as np
         sample_rate = voice.config.sample_rate
         with sd.OutputStream(samplerate=sample_rate, channels=1, dtype="int16") as out:
-            for chunk in voice.synthesize_stream_raw(text):
-                arr = np.frombuffer(chunk, dtype="int16")
-                out.write(arr)
-        return True
+            wrote_anything = False
+            for chunk in voice.synthesize(text):
+                # AudioChunk → int16 bytes → sounddevice
+                arr = np.frombuffer(chunk.audio_int16_bytes, dtype="int16")
+                if arr.size:
+                    out.write(arr)
+                    wrote_anything = True
+        return wrote_anything
     except Exception:
         return False
 
