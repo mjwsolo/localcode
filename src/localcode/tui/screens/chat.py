@@ -935,7 +935,13 @@ class ChatScreen(Screen):
             # bar that contradicted the error.
             try:
                 from ...server_manager import ServerManager as _SM
-                _alive = _SM.get().is_running()
+                _mgr = _SM.get()
+                # ALSO probe the live port — `is_running()` only knows
+                # about processes we spawned, but a llama-server launched
+                # by the user (or a prior session) on the same port is
+                # serving fine and our HTTP requests would succeed.
+                # Don't claim "stopped" when the agent can clearly reach it.
+                _alive = _mgr.is_running() or _mgr.is_healthy()
             except Exception:
                 _alive = True  # if we can't probe, fall through to old behaviour
             server_label = "server: ready" if _alive else "server: stopped"

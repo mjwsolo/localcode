@@ -109,10 +109,31 @@ def _harden_against_debugger_attach() -> None:
         import ctypes
         libc = ctypes.CDLL("/usr/lib/libc.dylib")
         PT_DENY_ATTACH = 31
-        libc.ptrace(PT_DENY_ATTACH, 0, 0, 0)
-    except Exception:
-        # Silent — worst case is the bash-tool guard still works.
-        pass
+        # Annotate the call signature — ptrace returns int. Without an
+        # explicit restype/argtypes ctypes can corrupt the return on
+        # arm64, hide a non-zero failure code, and silently no-op
+        # without raising. Setting restype catches that.
+        libc.ptrace.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_int]
+        libc.ptrace.restype = ctypes.c_int
+        rc = libc.ptrace(PT_DENY_ATTACH, 0, None, 0)
+        # Log to a known file so user can verify it ran on their box.
+        import os as _os
+        log_dir = _os.path.expanduser("~/.localcode")
+        try:
+            _os.makedirs(log_dir, exist_ok=True)
+            with open(_os.path.join(log_dir, "logs", "startup.log"), "a") as _f:
+                _f.write(f"[startup] PT_DENY_ATTACH rc={rc} pid={_os.getpid()}\n")
+        except Exception:
+            pass
+    except Exception as e:
+        try:
+            import os as _os
+            log_dir = _os.path.expanduser("~/.localcode/logs")
+            _os.makedirs(log_dir, exist_ok=True)
+            with open(_os.path.join(log_dir, "startup.log"), "a") as _f:
+                _f.write(f"[startup] PT_DENY_ATTACH FAILED: {e}\n")
+        except Exception:
+            pass
 
 
 def main(argv: list[str] | None = None) -> None:
