@@ -207,9 +207,47 @@ _WHISPER_ANNOTATION_STARS = _re.compile(r"\*[A-Za-z][A-Za-z _\-]*\*")
 
 
 def _clean_transcript(text: str) -> str:
-    """Remove Whisper's non-speech annotations + collapse whitespace."""
+    """Remove Whisper artifacts + apply common dictation directives.
+
+    Whisper transcribes literally — if you say "capital T" expecting
+    phone-style "capitalize the next letter" behavior, it just outputs
+    "capital T" as words. The model downstream sees that and gets
+    confused (one user observed it re-printing code in response to
+    a stray "capital T" in the message). We post-process those into
+    the directives the user intended:
+
+      - "comma" → ","
+      - "full stop" / "period" → "."
+      - "question mark" → "?"
+      - "exclamation point" / "exclamation mark" → "!"
+      - "new line" / "newline" / "new paragraph" → "\\n"
+      - "capital X" → "X" (capitalized form of the named letter)
+    """
     text = _WHISPER_ANNOTATION_BRACKETS.sub("", text or "")
     text = _WHISPER_ANNOTATION_STARS.sub("", text)
+    if not text:
+        return ""
+    # Capital-letter directive: "capital t" → "T". Case-insensitive on
+    # the "capital" keyword. Only matches single-letter targets so a
+    # phrase like "capital city" isn't mangled.
+    text = _re.sub(
+        r"\bcapital\s+([A-Za-z])\b",
+        lambda m: m.group(1).upper(),
+        text, flags=_re.IGNORECASE,
+    )
+    # Punctuation directives — bare words get replaced with the symbol.
+    # Surrounding spaces are normalized at the end via .split().
+    _DIRECTIVES = [
+        (r"\bcomma\b", ","),
+        (r"\bfull\s+stop\b", "."),
+        (r"\bperiod\b", "."),
+        (r"\bquestion\s+mark\b", "?"),
+        (r"\bexclamation\s+(?:point|mark)\b", "!"),
+        (r"\b(?:new\s+line|newline)\b", "\n"),
+        (r"\bnew\s+paragraph\b", "\n\n"),
+    ]
+    for pattern, repl in _DIRECTIVES:
+        text = _re.sub(pattern, repl, text, flags=_re.IGNORECASE)
     return " ".join(text.split())
 
 
@@ -671,10 +709,24 @@ def speak(text: str, state: VoiceState) -> None:
     """
     if not text or state.tts_engine == "off":
         return
-    # Strip code blocks / URLs / markdown markers — TTS sounds like
-    # gibberish when reading them aloud ("print capital H quote
-    # Hello exclamation quote close paren").
+    raw_text = text
     text = _strip_for_tts(text)
+    # Diagnostic log so when the user hears something weird, we can
+    # check what string was actually sent to TTS. Lives in the same
+    # logs dir as everything else.
+    try:
+        import os as _os
+        from pathlib import Path as _P
+        log_p = _P.home() / ".localcode" / "logs" / "tts.log"
+        log_p.parent.mkdir(parents=True, exist_ok=True)
+        import datetime as _dt
+        ts = _dt.datetime.now().isoformat(timespec="seconds")
+        with open(log_p, "a") as f:
+            f.write(f"[{ts}] engine={state.tts_engine} voice={state.tts_voice}\n")
+            f.write(f"  raw:   {raw_text!r}\n")
+            f.write(f"  spoken:{text!r}\n")
+    except Exception:
+        pass
     if not text:
         return
     engine = state.tts_engine
