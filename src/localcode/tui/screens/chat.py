@@ -1168,6 +1168,16 @@ class ChatScreen(Screen):
         if hasattr(event.input, "history_push") and not text.startswith("/"):
             event.input.history_push(text)
         event.input.clear()
+        # Invalidate any in-flight voice transcription so a worker that
+        # finishes AFTER this submit doesn't write the just-submitted
+        # text back into the now-empty input. Bumping the session
+        # counter makes the worker's captured `session_at_start` mismatch
+        # `_ptt_session`, so `_apply_partial_transcript` silently drops
+        # the update. Also clear the prefix so the next voice session
+        # starts fresh.
+        self._ptt_session = getattr(self, "_ptt_session", 0) + 1
+        self._ptt_input_prefix = ""
+        self._ptt_last_transcript = ""
 
         if text.startswith("/"):
             self._handle_command(text)
@@ -1426,6 +1436,17 @@ class ChatScreen(Screen):
                 state.enabled = False
                 log.append_info("Voice mode OFF.")
                 return
+            # Hardware capability gate — bail BEFORE the user waits for
+            # a 514 MB download that won't work because there's no mic,
+            # no Info.plist mic descriptor on the host terminal, etc.
+            try:
+                from ...voice import detect_voice_capability
+                ok, hint = detect_voice_capability()
+                if not ok:
+                    log.append_error(f"Voice unavailable: {hint}")
+                    return
+            except Exception:
+                pass
             # Turning ON
             if not stt_model_ready(state):
                 # Already-running guard so a frustrated user mashing
@@ -1582,7 +1603,64 @@ class ChatScreen(Screen):
                 log.append_info("Audio output: every assistant message.")
             return
 
-        log.append_info("Usage: /audio  (toggle)  ·  /audio off|final|always")
+        if sub == "voices":
+            # List available macOS voices, highlighting Premium / Enhanced
+            # ones that sound dramatically more natural than the default.
+            import subprocess as _sp
+            try:
+                out = _sp.run(["say", "-v", "?"], capture_output=True, text=True, timeout=3).stdout
+            except Exception as e:
+                log.append_error(f"Couldn't enumerate voices: {e}")
+                return
+            premium, enhanced, basic = [], [], []
+            for line in out.splitlines():
+                if "(Premium)" in line:
+                    premium.append(line)
+                elif "(Enhanced)" in line:
+                    enhanced.append(line)
+                elif "en_" in line.lower() or " en_" in line:
+                    basic.append(line)
+            lines = ["MOST NATURAL — best quality (download via System Settings → Accessibility → Spoken Content → System Voice):"]
+            lines += ["  " + v[:80] for v in premium[:8]] or ["  (none installed — go enable Premium voices in System Settings)"]
+            lines.append("")
+            lines.append("ENHANCED — still much better than default:")
+            lines += ["  " + v[:80] for v in enhanced[:8]] or ["  (none installed)"]
+            lines.append("")
+            lines.append("Pick one with `/audio voice <Name>` (e.g. /audio voice Ava).")
+            log.append_info("\n".join(lines))
+            return
+
+        if sub == "voice" and len(parts) >= 3:
+            voice_name = " ".join(parts[2:])
+            # `piper:<voice-id>` switches engine to Piper TTS (much more
+            # natural). First use of a piper voice triggers an automatic
+            # ~25-100 MB download of the .onnx voice model from
+            # huggingface.co/rhasspy/piper-voices.
+            if voice_name.startswith("piper:"):
+                voice_id = voice_name[len("piper:"):].strip()
+                if not voice_id:
+                    log.append_info("Usage: /audio voice piper:<voice-id>  e.g. piper:en_US-amy-medium")
+                    return
+                state.tts_engine = "piper"
+                state.tts_voice = voice_id
+                log.append_info(
+                    f"TTS engine: piper · voice: {voice_id}. "
+                    "First use will download the model (~25-100 MB) into "
+                    "~/.local/share/localcode/voice/piper/."
+                )
+            else:
+                state.tts_engine = "say"
+                state.tts_voice = voice_name
+                log.append_info(
+                    f"TTS voice: {voice_name} (macOS say). Next assistant "
+                    "message will use it."
+                )
+            return
+
+        log.append_info(
+            "Usage: /audio (toggle) · /audio off|final|always · "
+            "/audio voices · /audio voice <Name>"
+        )
 
     def _finish_voice_download(self, ok: bool, result: str) -> None:
         """Called on the UI thread when the background voice-model download
@@ -1724,6 +1802,15 @@ class ChatScreen(Screen):
                 f"{choice.name} doesn't support vision. Use a Gemma 4 or Qwen 3.6 model."
             )
             return
+        # Hardware capability gate
+        try:
+            from ...voice import detect_vision_capability
+            ok, hint = detect_vision_capability()
+            if not ok:
+                log.append_error(f"Vision unavailable: {hint}")
+                return
+        except Exception:
+            pass
         mmproj = choice.mmproj_path
         has = bool(mmproj and mmproj.is_file())
 

@@ -39,9 +39,10 @@ class VoiceVisualizer(Static):
     DEFAULT_CSS = """
     VoiceVisualizer {
         height: 1;
-        width: auto;
+        width: 1;                /* exactly one cell — no phantom column */
         background: ansi_default;
-        padding: 0 1;
+        padding: 0;
+        margin: 0 0 0 1;         /* one space gap from input, nothing else */
         display: none;          /* hidden when not recording */
     }
     VoiceVisualizer.active {
@@ -90,23 +91,32 @@ class VoiceVisualizer(Static):
             peak = float(getattr(self.recorder, "peak", 0.0) or 0.0)
         except Exception:
             peak = 0.0
-        # Typical mic peaks for normal speech sit at 0.05-0.3 of full
-        # scale. To make the bar actually fill the cell, we boost by 8×
-        # and clamp. EMA smoothing for stability but biased heavier
-        # toward the current sample (0.7) so the bar feels responsive.
         target = min(1.0, peak * 8.0)
         self._smoothed = 0.3 * self._smoothed + 0.7 * target
 
-        # 9-step vertical fill (empty → full block). Floor at index 2
-        # so silence still shows a small "I'm listening" baseline; ceil
-        # at len-1 (= █ = full cell height).
-        idx = max(2, int(self._smoothed * (len(_FILL) - 1)))
-        char = _FILL[idx]
-
-        # Color: rainbow cycle over time. When amplitude is high, jump
-        # ahead in the palette to give an extra "energy spike" feel.
+        # ALWAYS render the full-block char (█). The cell is fully
+        # filled — no "bottom gray" because we don't use partial-height
+        # fill chars anymore (they left the unfilled portion as the
+        # terminal background). Amplitude is shown by COLOR INTENSITY:
+        # quiet = dim, loud = bright. Color also cycles through the
+        # rainbow palette over time.
         t = time.time() - self._t0
-        color = _PALETTE[(int(t * 3) + int(self._smoothed * 4)) % len(_PALETTE)]
+        # Cycle through palette; amplitude jumps phase forward.
+        phase = int(t * 3) + int(self._smoothed * 4)
+        base_color = _PALETTE[phase % len(_PALETTE)]
 
-        bar = "".join(f"[{color}]{char}[/]" for _ in range(_BAR_WIDTH))
-        self.update(f"{bar}")
+        # Brightness modulation — at silence, mix toward dim grey; at
+        # peak, full saturation. Linear blend on RGB.
+        def _hex_to_rgb(h):
+            h = h.lstrip("#")
+            return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        r, g, b = _hex_to_rgb(base_color)
+        # Floor at 0.35 so silence still shows a visible glow (not pitch
+        # black, which would read as "off"). Loud peaks pull to 1.0.
+        intensity = 0.35 + 0.65 * self._smoothed
+        r = int(r * intensity)
+        g = int(g * intensity)
+        b = int(b * intensity)
+        color = f"#{r:02x}{g:02x}{b:02x}"
+
+        self.update(f"[{color}]█[/]")
