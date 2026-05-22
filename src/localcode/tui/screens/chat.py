@@ -164,21 +164,33 @@ class _NoTintInput(Input):
 
     def on_key(self, event) -> None:
         # ── Space → push-to-talk when voice mode is on ──
-        # Textual's screen-level priority bindings DON'T beat the focused
-        # widget's `on_key`, so this is the only place we can reliably
-        # intercept Space before Input's "type a space character" logic
-        # runs. When voice is off, we let Space fall through to normal
-        # typing.
+        # Three branches to handle the "user wants to keep typing
+        # spaces in their sentence" vs "user wants to record more"
+        # tension:
+        #   1. Already recording → ALWAYS PTT (treat as key-repeat).
+        #   2. Input ends with a space → user is mid-sentence → type
+        #      a space (don't hijack).
+        #   3. Otherwise (input empty OR ends in non-space char) →
+        #      PTT. After dictation, the transcript lands and the
+        #      user just hits Enter or starts editing — pressing
+        #      Space again at the end of "hello" would START a new
+        #      recording (appending dictation to the existing text).
         if event.key == "space":
             vs = getattr(self.app, "voice_state", None)
             if vs is not None and getattr(vs, "enabled", False):
-                screen = self.screen
-                ptt = getattr(screen, "action_ptt_space", None)
-                if callable(ptt):
-                    ptt()
-                    event.prevent_default()
-                    event.stop()
-                    return
+                already_recording = getattr(
+                    self.screen, "_ptt_recorder", None
+                ) is not None
+                cur = self.value or ""
+                ends_with_space = cur.endswith(" ")
+                if already_recording or not ends_with_space:
+                    screen = self.screen
+                    ptt = getattr(screen, "action_ptt_space", None)
+                    if callable(ptt):
+                        ptt()
+                        event.prevent_default()
+                        event.stop()
+                        return
 
         # ── Arrow-key history navigation ──
         # Only intercept when there's something to scroll; otherwise let
@@ -1981,12 +1993,22 @@ class ChatScreen(Screen):
             rec = Recorder(state)
             rec.start()
             self._ptt_recorder = rec
+            # Session counter — increments per recording so in-flight
+            # streaming workers from a PREVIOUS session can detect they
+            # were orphaned (and not overwrite the input box that the
+            # user is now typing into).
+            self._ptt_session = getattr(self, "_ptt_session", 0) + 1
             self._ptt_start_ts = now
             self._ptt_last_key_ts = now
-            # Save what the user already typed so streaming transcripts
-            # APPEND to it rather than overwrite their typed prefix.
+            # Save what's currently in the input — could be user-typed
+            # text, a previous transcription, or both. Streaming /
+            # final transcripts APPEND to this prefix so consecutive
+            # recordings stack ("hello" + hold-Space + "how are you"
+            # → "hello how are you") instead of overwriting.
             try:
-                self._ptt_input_prefix = self.query_one("#chat-input", Input).value or ""
+                existing = self.query_one("#chat-input", Input).value or ""
+                # Ensure exactly one trailing space so the join is clean.
+                self._ptt_input_prefix = existing.rstrip() + " " if existing.strip() else ""
             except Exception:
                 self._ptt_input_prefix = ""
             # Don't log "Recording — release Space" anymore — it spammed
@@ -2056,12 +2078,20 @@ class ChatScreen(Screen):
                 if snap is None:
                     return
                 self._ptt_streaming_busy = True
+                session_at_start = self._ptt_session
                 def _worker():
                     try:
                         from ...voice import transcribe as _trans
                         ok, text = _trans(state, snap)
                         if ok and text:
-                            self.app.call_from_thread(self._apply_partial_transcript, text)
+                            # Capture session at worker spawn; only apply
+                            # if the recording is still ours. Stops in-
+                            # flight workers from an old recording from
+                            # overwriting the input the user is now
+                            # typing into.
+                            self.app.call_from_thread(
+                                self._apply_partial_transcript, text, session_at_start
+                            )
                     finally:
                         try:
                             snap.unlink(missing_ok=True)
@@ -2078,9 +2108,19 @@ class ChatScreen(Screen):
         except Exception as e:
             log.append_error(f"Couldn't start mic: {e}")
 
-    def _apply_partial_transcript(self, text: str) -> None:
+    def _apply_partial_transcript(self, text: str, session: int = -1) -> None:
         """Push a partial (or final) transcript into the input field,
-        keeping whatever the user had typed before they started talking."""
+        keeping whatever the user had typed before they started talking.
+
+        `session` is the recording id this transcript was produced for.
+        Stale workers from a previous recording carry an old id; if it
+        doesn't match the current `_ptt_session`, we drop the update so
+        the user's freshly-edited input isn't overwritten.
+        """
+        # Default session=-1 path is the final-pass case which always
+        # applies (caller asserts the recording is still ours).
+        if session >= 0 and session != getattr(self, "_ptt_session", -1):
+            return
         try:
             inp = self.query_one("#chat-input", Input)
             prefix = getattr(self, "_ptt_input_prefix", "") or ""
@@ -2123,13 +2163,18 @@ class ChatScreen(Screen):
             return
         # Final transcription on the full audio (overrides any streaming
         # partial). Done on a worker so we don't block the UI thread.
+        # We pass the FINAL session (current session id) so the apply
+        # only lands if the user hasn't already started a new recording.
         state = self.tui.voice_state
+        session_final = getattr(self, "_ptt_session", 0)
         def _final_worker():
             try:
                 from ...voice import transcribe as _trans
                 ok, text = _trans(state, wav_path)
                 if ok and text:
-                    self.app.call_from_thread(self._apply_partial_transcript, text)
+                    self.app.call_from_thread(
+                        self._apply_partial_transcript, text, session_final
+                    )
             finally:
                 try:
                     from pathlib import Path as _P

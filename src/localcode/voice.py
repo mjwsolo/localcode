@@ -166,6 +166,23 @@ _CACHED_MODEL: object | None = None
 _CACHED_MODEL_PATH: Path | None = None
 
 
+import re as _re
+
+# Whisper emits bracketed annotations for non-speech audio
+# ("[BLANK_AUDIO]", "[NON-ENGLISH SPEECH]", "[MUSIC]", "[INAUDIBLE]",
+# etc.). These are model-internal artifacts that should never end up
+# in the user's input box. We strip any bracketed all-caps tag (with
+# spaces, underscores, hyphens allowed) — that catches every known
+# whisper annotation while leaving normal user text alone.
+_WHISPER_ANNOTATION_RE = _re.compile(r"\[[A-Z][A-Z0-9 _\-]*\]")
+
+
+def _clean_transcript(text: str) -> str:
+    """Remove Whisper's non-speech annotations + collapse whitespace."""
+    text = _WHISPER_ANNOTATION_RE.sub("", text or "")
+    return " ".join(text.split())
+
+
 def transcribe(state: VoiceState, audio_wav_path: Path) -> tuple[bool, str]:
     """Transcribe a WAV file with whisper.cpp via pywhispercpp.
 
@@ -205,6 +222,7 @@ def transcribe(state: VoiceState, audio_wav_path: Path) -> tuple[bool, str]:
                 _CACHED_MODEL_PATH = model_path
             segments = _CACHED_MODEL.transcribe(str(audio_wav_path))
         text = " ".join(s.text for s in segments).strip()
+        text = _clean_transcript(text)  # strip [NON-ENGLISH SPEECH] etc.
         return True, text
     except Exception as e:
         return False, f"Transcription failed: {e}"
