@@ -286,6 +286,7 @@ from ...autonomy import AutonomyLevel, apply_autonomy_to_permissions, get_policy
 _SLASH_COMMANDS = [
     ("/permissions", "Toggle ask/auto-approve for commands"),
     ("/status", "Show runtime: server health, current model, perf config"),
+    ("/restart", "Restart the model server (use when /status shows 'unreachable')"),
     ("/model", "List available models / switch (e.g. /model qwen)"),
     ("/thinking", "Show / set hidden reasoning policy (off|auto)"),
     ("/sounds", "Toggle completion + approval notification sounds"),
@@ -1204,6 +1205,10 @@ class ChatScreen(Screen):
             self._handle_thinking_command(text)
         elif text == "/status":
             self._handle_status_command()
+        elif text == "/restart":
+            log = self.query_one("#chat-log", ChatLog)
+            log.append_info("Restarting model server...")
+            self._restart_for_vision_change(reason="Server restarted")
         elif text == "/voice" or text.startswith("/voice "):
             self._handle_voice_command(text)
         elif text == "/audio" or text.startswith("/audio "):
