@@ -1668,10 +1668,23 @@ class ChatScreen(Screen):
             if ok:
                 self.app.call_from_thread(self._on_server_ready, reason)
             else:
-                self.app.call_from_thread(
-                    self._on_server_restart_failed,
-                    "Server didn't come back up after restart.",
-                )
+                # Show the user the LAST lines of server.log so they
+                # have a real reason instead of the generic "didn't come
+                # back". Empirically this surfaces jetsam OOMs, port-
+                # conflicts, and corrupt-config-flag errors directly to
+                # the chat log.
+                hint = "Server didn't come back up after restart."
+                try:
+                    from pathlib import Path as _P
+                    log_p = _P.home() / ".local" / "share" / "localcode" / "server.log"
+                    if log_p.is_file():
+                        tail = log_p.read_text(errors="replace").splitlines()[-6:]
+                        if tail:
+                            hint += "\nlast server.log lines:\n  " + "\n  ".join(tail)
+                except Exception:
+                    pass
+                hint += "\nType /restart to try again, or /status to inspect."
+                self.app.call_from_thread(self._on_server_restart_failed, hint)
 
         self.run_worker(_worker, thread=True, exclusive=False)
 
