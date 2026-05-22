@@ -265,10 +265,12 @@ class _NoTintInput(Input):
             ))
             return strip.apply_style(self.rich_style)
         # Non-empty: take the value, OVERWRITE one cell at cursor with
-        # the bar glyph (white, terminal-default background). Anything
-        # past end-of-input gets a single padded space we can overwrite.
-        # Cursor styling is always the default — the voice indicator
-        # is the VoiceVisualizer sibling widget, not a colored cursor.
+        # the cursor glyph. Then — IF recording — append an extra
+        # colored "█" block to the end of the rendered text so the user
+        # sees a pulsing bar right after the dictated text. We append
+        # the bar BEFORE rendering to segments so its color sticks
+        # (apply_style at the end only touches cells that don't already
+        # have a style — our explicit color span does).
         cursor_style = self.get_component_rich_style("input--cursor")
         result = self._value.copy()
         if not self.selection.is_empty:
@@ -287,12 +289,41 @@ class _NoTintInput(Input):
             plain = result.plain
             new_plain = plain[:cursor_pos] + self._active_cursor_glyph + plain[cursor_pos + 1:]
             new_text = _RichText(new_plain, end="", style=result.style)
-            # Preserve the value's original styling on non-cursor spans
             for span in result.spans:
-                # Spans don't change because we only swapped one char.
                 new_text.stylize(span.style, span.start, span.end)
             new_text.stylize(cursor_style, cursor_pos, cursor_pos + 1)
             result = new_text
+        # Voice recording? Append a colored █ to the end of the text
+        # as a sibling-cell with its own style. This puts the bar
+        # INLINE with the dictation (right after the cursor) and uses
+        # a Rich span style so apply_style at the end doesn't blow it
+        # away — apply_style only sets cells without an existing style.
+        try:
+            screen = self.screen
+            rec = getattr(screen, "_ptt_recorder", None)
+            if rec is not None:
+                from rich.style import Style as _RichStyle
+                import time as _t
+                _RAINBOW = (
+                    "#ff5470", "#ff8a5b", "#ffd166", "#9bff8a", "#5bffc1",
+                    "#5bd1ff", "#5b96ff", "#9b5bff", "#e75bff", "#ff5bd1",
+                )
+                peak = float(getattr(rec, "peak", 0.0) or 0.0)
+                phase = int(_t.time() * 4) + int(min(1.0, peak * 8.0) * 4)
+                base = _RAINBOW[phase % len(_RAINBOW)]
+                # Brightness modulation so the bar visibly pulses with
+                # amplitude — quiet = dim, loud = full saturation.
+                hb = base.lstrip("#")
+                r0, g0, b0 = int(hb[0:2], 16), int(hb[2:4], 16), int(hb[4:6], 16)
+                ity = 0.4 + 0.6 * min(1.0, peak * 8.0)
+                color = f"#{int(r0*ity):02x}{int(g0*ity):02x}{int(b0*ity):02x}"
+                # Append a space + the bar. The space is a separator so
+                # the bar doesn't visually merge with the cursor cell.
+                bar_text = _RichText(" █", end="")
+                bar_text.stylize(_RichStyle(color=color, bold=True), 1, 2)
+                result = result + bar_text
+        except Exception:
+            pass
         segments = list(console.render(
             result, console_options.update_width(self.content_width),
         ))
@@ -611,17 +642,17 @@ class ChatScreen(Screen):
         # render_line was getting overwritten by textual's base-style
         # application pipeline and showing up white. The sibling widget
         # has its own render path so color + glyph both stick.
-        from ..widgets.voice_visualizer import VoiceVisualizer
         # Wrap-preview: shows long input values across multiple wrapped
         # lines ABOVE the single-line input. Hidden when value is empty
-        # or fits in one line. Updated on input Changed events. Makes
-        # long voice transcripts visible without doing a full
-        # Input→TextArea refactor (which would touch 50+ callsites).
+        # or fits in one line. Updated on input Changed events.
         yield Static("", id="input-overflow")
+        # NOTE: voice indicator is rendered INLINE inside the Input —
+        # see _NoTintInput.render_line, which appends a colored █ to
+        # the end of the text while _ptt_recorder is set. No sibling
+        # widget on the right.
         with Horizontal(id="input-row"):
             yield Static("›", id="input-prompt")
             yield _NoTintInput(placeholder="", id="chat-input")
-            yield VoiceVisualizer(id="voice-visualizer")
         # Slash command palette appears BELOW the input (terminal coding tools style),
         # not above. Visually it reads as a dropdown extending downward from
         # the prompt the user is typing in.
@@ -2236,14 +2267,17 @@ class ChatScreen(Screen):
             # Don't log "Recording — release Space" anymore — it spammed
             # the chat log if the watchdog mis-fired. The visualizer bar
             # next to the input is now the only recording indicator.
-            # Visualizer widget — colored block right of the input,
-            # animated by its own 30 FPS timer.
-            try:
-                from ..widgets.voice_visualizer import VoiceVisualizer
-                vis = self.query_one("#voice-visualizer", VoiceVisualizer)
-                vis.activate(rec)
-            except Exception:
-                pass
+            # The voice indicator is rendered INLINE inside the Input
+            # — render_line appends a colored █ to the text while
+            # _ptt_recorder is set. We need a periodic refresh so the
+            # color + amplitude animation actually fires (textual only
+            # redraws on its own when content changes).
+            def _cursor_pulse() -> None:
+                try:
+                    self.query_one("#chat-input", Input).refresh()
+                except Exception:
+                    pass
+            self._ptt_cursor_timer = self.set_interval(0.05, _cursor_pulse)
 
             def _hold_watchdog() -> None:
                 """Detect Space release in a terminal that doesn't send key-up
@@ -2413,9 +2447,9 @@ class ChatScreen(Screen):
             setattr(self, attr, None)
         # Tear down visualizer widget.
         try:
-            from ..widgets.voice_visualizer import VoiceVisualizer
-            vis = self.query_one("#voice-visualizer", VoiceVisualizer)
-            vis.deactivate()
+            # Tear down the inline-cursor refresh timer + force one
+            # final repaint so the inline bar disappears immediately.
+            self.query_one("#chat-input", Input).refresh()
         except Exception:
             pass
         try:
@@ -2490,9 +2524,9 @@ class ChatScreen(Screen):
             setattr(self, attr, None)
         # Tear down visualizer widget.
         try:
-            from ..widgets.voice_visualizer import VoiceVisualizer
-            vis = self.query_one("#voice-visualizer", VoiceVisualizer)
-            vis.deactivate()
+            # Tear down the inline-cursor refresh timer + force one
+            # final repaint so the inline bar disappears immediately.
+            self.query_one("#chat-input", Input).refresh()
         except Exception:
             pass
         # Stop the recorder, discard the wav
