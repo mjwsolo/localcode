@@ -200,9 +200,14 @@ class ModelPickerScreen(Screen):
             lines.append(f" [dim]{chevron}[/] [bold]{i}.[/] {rec_marker}{name_style}")
             lines.append(f"       {status_line}")
         lines.append("")
+        # Single compact footer line. Drops the multi-line legend +
+        # full save-path display — the star is self-evident, and the
+        # user can press `d` to see+change the path when they care.
+        footer_bits = []
         if any_rec:
-            lines.append("[dim]★ = recommended for your machine[/]")
-        lines.append(f"[dim]Saves to {self._tildify(model_dir())}/  (press d to change)[/]")
+            footer_bits.append("★ recommended")
+        footer_bits.append(f"d → change save dir")
+        lines.append("[dim]" + "  ·  ".join(footer_bits) + "[/]")
         return "\n".join(lines)
 
     def _refresh_list(self) -> None:
