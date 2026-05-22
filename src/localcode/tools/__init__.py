@@ -115,7 +115,12 @@ def schemas_for_goal(
     return actionable errors and the loop may add at most two generic
     correction nudges.
     """
-    selected = {"read_file", "bash", "edit_file", "write_file", "append_file", "list_files"}
+    selected = {
+        "read_file", "bash", "edit_file", "write_file", "append_file", "list_files",
+        # Search/discovery — without these the model resorts to bash+grep / curl
+        # for everything and the user sees the "google scraped HTML" failure mode.
+        "grep", "glob", "web_search", "web_fetch", "skill",
+    }
     return schemas_for_names(selected)
 
 _MODULES = {
