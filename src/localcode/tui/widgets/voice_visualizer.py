@@ -30,8 +30,6 @@ _PALETTE = [
 ]
 
 # Bar is one cell wide — reads as a single thin pulsing bar at a glance.
-# Two cells looked chunky; one is the right amount of presence inline
-# with the input text.
 _BAR_WIDTH = 1
 
 

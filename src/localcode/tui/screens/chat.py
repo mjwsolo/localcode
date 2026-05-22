@@ -622,15 +622,17 @@ class ChatScreen(Screen):
         yield Static("", id="queue-line")
         yield Static("", id="search-bar")
         yield Input(placeholder="Search conversation...", id="search-input")
-        # Voice visualizer is no longer a separate widget. The Input's
-        # OWN cursor switches to a purple "█" block while recording —
-        # see _NoTintInput._active_cursor_glyph + the cursor_style
-        # override in render_line. That puts the bar exactly where the
-        # user expects: right at the end of the dictated text, inline
-        # with the typed content.
+        # Voice visualizer is a dedicated widget pinned to the right of
+        # the input. It's the most reliable way to show a colored,
+        # amplitude-cycling bar — coloring the Input's own cursor via
+        # render_line was getting overwritten by textual's base-style
+        # application pipeline and showing up white. The sibling widget
+        # has its own render path so color + glyph both stick.
+        from ..widgets.voice_visualizer import VoiceVisualizer
         with Horizontal(id="input-row"):
             yield Static("›", id="input-prompt")
             yield _NoTintInput(placeholder="", id="chat-input")
+            yield VoiceVisualizer(id="voice-visualizer")
         # Slash command palette appears BELOW the input (terminal coding tools style),
         # not above. Visually it reads as a dropdown extending downward from
         # the prompt the user is typing in.
@@ -2091,21 +2093,14 @@ class ChatScreen(Screen):
             # Don't log "Recording — release Space" anymore — it spammed
             # the chat log if the watchdog mis-fired. The visualizer bar
             # next to the input is now the only recording indicator.
-            # Recording indicator is the Input's own cursor (renders as
-            # a rainbow-cycling "█" block while _ptt_recorder is set).
-            # We need a periodic refresh to animate the color cycle +
-            # amplitude pulse, since textual only redraws on its own
-            # when content changes.
+            # Visualizer widget — colored block right of the input,
+            # animated by its own 30 FPS timer.
             try:
-                self.query_one("#chat-input", Input).refresh()
+                from ..widgets.voice_visualizer import VoiceVisualizer
+                vis = self.query_one("#voice-visualizer", VoiceVisualizer)
+                vis.activate(rec)
             except Exception:
                 pass
-            def _cursor_pulse() -> None:
-                try:
-                    self.query_one("#chat-input", Input).refresh()
-                except Exception:
-                    pass
-            self._ptt_cursor_timer = self.set_interval(0.05, _cursor_pulse)
 
             def _hold_watchdog() -> None:
                 """Detect Space release in a terminal that doesn't send key-up
@@ -2265,10 +2260,11 @@ class ChatScreen(Screen):
             except Exception:
                 pass
             setattr(self, attr, None)
-        # Recording indicator was the cursor; refresh so it reverts to
-        # the normal thin "▏" glyph now that _ptt_recorder is None.
+        # Tear down visualizer widget.
         try:
-            self.query_one("#chat-input", Input).refresh()
+            from ..widgets.voice_visualizer import VoiceVisualizer
+            vis = self.query_one("#voice-visualizer", VoiceVisualizer)
+            vis.deactivate()
         except Exception:
             pass
         try:
@@ -2320,10 +2316,11 @@ class ChatScreen(Screen):
             except Exception:
                 pass
             setattr(self, attr, None)
-        # Recording indicator was the cursor; refresh so it reverts to
-        # the normal thin "▏" glyph now that _ptt_recorder is None.
+        # Tear down visualizer widget.
         try:
-            self.query_one("#chat-input", Input).refresh()
+            from ..widgets.voice_visualizer import VoiceVisualizer
+            vis = self.query_one("#voice-visualizer", VoiceVisualizer)
+            vis.deactivate()
         except Exception:
             pass
         # Stop the recorder, discard the wav
