@@ -289,22 +289,44 @@ class Recorder:
         fd, tmp = tempfile.mkstemp(suffix=".wav", prefix="localcode-ptt-")
         os.close(fd)
         self._tmp_path = Path(tmp)
-        # Path A — sounddevice (in-process; cleanest)
+        # Path A — sounddevice (in-process; cleanest). PortAudio prints
+        # its CoreAudio errors to stderr fd=2 which corrupts textual's
+        # altscreen; silence it the same way we silence whisper.cpp.
+        self._sd_error: str | None = None
         try:
-            import sounddevice as sd
-            import numpy as np  # noqa: F401
-            self._sd_recording = []
-            self._stream = sd.InputStream(
-                samplerate=self.state.sample_rate_hz,
-                channels=1,
-                dtype="int16",
-                callback=self._sd_callback,
-            )
-            self._stream.start()
+            with _silence_native_stderr():
+                import sounddevice as sd
+                import numpy as np  # noqa: F401
+                self._sd_recording = []
+                self._stream = sd.InputStream(
+                    samplerate=self.state.sample_rate_hz,
+                    channels=1,
+                    dtype="int16",
+                    callback=self._sd_callback,
+                )
+                self._stream.start()
             return
-        except Exception:
+        except Exception as e:
             self._sd_recording = None
             self._stream = None
+            # Capture the real reason for the caller (chat handler)
+            # so it can show a useful message instead of the generic
+            # "no backend found".
+            err = str(e).lower()
+            if "permission" in err or "not permitted" in err or "denied" in err:
+                self._sd_error = (
+                    "macOS denied microphone access. Open System Settings → "
+                    "Privacy & Security → Microphone and enable it for your "
+                    "terminal (Terminal.app, iTerm, VS Code, etc.), then "
+                    "restart localcode."
+                )
+            elif "device unavailable" in err or "invalid device" in err or "not found" in err:
+                self._sd_error = (
+                    "No input device found. Plug in a mic or check that your "
+                    "system default input device is set in System Settings → Sound."
+                )
+            else:
+                self._sd_error = f"sounddevice/PortAudio error: {e}"
         # Path B — ffmpeg subprocess
         if shutil.which("ffmpeg"):
             self._proc = subprocess.Popen(
@@ -325,6 +347,11 @@ class Recorder:
                  "-c", "1", "-b", "16", str(self._tmp_path)],
             )
             return
+        # If sounddevice was importable but threw on init, surface
+        # THAT reason (mic permission / no device) instead of the
+        # generic "install one of" pitch — the deps ARE installed.
+        if self._sd_error:
+            raise RuntimeError(self._sd_error)
         raise RuntimeError(
             "No audio capture backend found. Install one of: "
             "`pip install sounddevice numpy`, or `brew install ffmpeg`, "

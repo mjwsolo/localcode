@@ -2107,6 +2107,15 @@ class ChatScreen(Screen):
             self._ptt_stream_timer = self.set_interval(0.35, _stream_tick)
         except Exception as e:
             log.append_error(f"Couldn't start mic: {e}")
+            # Disable voice mode so subsequent Space presses don't
+            # spam the same error 6 times in a row. User can /voice
+            # again to re-enable once they've fixed the underlying
+            # issue (granted permission, plugged in mic, etc.).
+            state.enabled = False
+            log.append_info(
+                "Voice mode turned OFF. Fix the issue above, then "
+                "type /voice to re-enable."
+            )
 
     def _apply_partial_transcript(self, text: str, session: int = -1) -> None:
         """Push a partial (or final) transcript into the input field,
