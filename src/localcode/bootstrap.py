@@ -272,6 +272,27 @@ def download_turboquant_binary(on_progress: Callable[[str], None] | None = None)
         return False, f"Download failed: {e}\nBuild from source instead: clone llama-cpp-turboquant and run cmake."
 
 
+def _is_complete_download(p: Path, catalog_entry) -> bool:
+    """Cheap completeness check: file must exist AND be within 1% of the
+    catalog's declared `size_gb`. A partial download from a failed attempt
+    will be far smaller (or in rare GGUF tail-buffer cases, slightly off).
+
+    If we have no catalog entry to compare against (user dropped a manual
+    GGUF), trust the file as long as it's at least 1 MiB — better than
+    rejecting legitimate user files.
+    """
+    try:
+        size = p.stat().st_size
+    except OSError:
+        return False
+    if catalog_entry is None:
+        return size > 1024 * 1024
+    expected = int(catalog_entry.size_gb * 1024 ** 3)
+    # Allow 1% tolerance — HF sometimes reports a slightly different
+    # rounded GB size than the actual bytes on disk.
+    return size >= int(expected * 0.99)
+
+
 def get_model_path(preferred_filename: str | None = None) -> Path | None:
     """Return path to a usable GGUF model, checking multiple locations.
 
@@ -299,21 +320,25 @@ def get_model_path(preferred_filename: str | None = None) -> Path | None:
     #    (Kept here as a comment because Ollama integrity-verifies the blob —
     #    if a caller wants it back, thread the tag through ModelChoice.)
 
-    # 2. Config model path (wins if file exists and matches preferred filename)
+    # 2. Config model path (wins if file exists, matches preferred filename,
+    # AND is the right size — a partial download from a failed attempt is
+    # NOT a usable model).
     from .config import load_config
     try:
         config = load_config()
         if config.runtime.model and Path(config.runtime.model).is_file():
             p = Path(config.runtime.model)
-            if preferred_filename is None or p.name == preferred_filename:
+            if (preferred_filename is None or p.name == preferred_filename) \
+                    and _is_complete_download(p, catalog_entry):
                 return p
     except Exception:
         pass
 
-    # 3. Canonical download directory
+    # 3. Canonical download directory (same size check — a half-written file
+    # in the canonical dir is a partial, not a usable model).
     if preferred_filename is not None:
         candidate = _model_dir() / preferred_filename
-        if candidate.is_file():
+        if candidate.is_file() and _is_complete_download(candidate, catalog_entry):
             return candidate
     else:
         # No preference — pick any catalog model that's already downloaded,
@@ -397,7 +422,7 @@ def _download_parallel(url: str, dest: Path, num_threads: int = 16,
             req = urllib.request.Request(url)
             req.add_header("Range", f"bytes={start}-{end}")
             with urllib.request.urlopen(req, context=ssl_ctx) as resp:
-                buf_size = 1024 * 1024  # 1MB read buffer
+                buf_size = 8 * 1024 * 1024  # 8MB read buffer — cuts syscall overhead vs 1MB
                 with open(dest, "r+b") as f:
                     f.seek(start)
                     while True:
@@ -481,13 +506,194 @@ def download_model(
     if on_progress:
         on_progress(f"Downloading {choice.filename} (~{choice.size_gb:.1f} GB)...")
 
+    # Retry with exponential backoff. Both hf_transfer and urllib paths
+    # support resume — we DO NOT delete the partial file between attempts
+    # so retries pick up where the last attempt left off.
+    last_err: Exception | None = None
+    last_err_category = "unknown"
+    backoffs = [0, 2, 5]  # seconds; 3 attempts total
+    for attempt, delay in enumerate(backoffs, start=1):
+        if delay:
+            if on_progress:
+                on_progress(f"Retry {attempt}/{len(backoffs)} in {delay}s...")
+            import time as _t
+            _t.sleep(delay)
+        # Fast path: hf_transfer (Rust). Resumes via huggingface_hub's
+        # built-in `.incomplete` partial file handling.
+        try:
+            if _try_hf_transfer_download(choice, model_file, on_progress):
+                return True, str(model_file)
+        except Exception as e:
+            last_err = e
+            last_err_category = _classify_download_error(e)
+            if last_err_category in ("disk_full", "auth", "not_found"):
+                # Non-retryable — fail fast so the UI can show the right message.
+                return False, _format_download_error(last_err_category, e)
+            if on_progress:
+                on_progress(
+                    f"hf_transfer failed ({last_err_category}); trying urllib fallback"
+                )
+        # Slow path: tuned urllib parallel downloader.
+        try:
+            _download_parallel(url, model_file, num_threads=32, on_progress=on_progress)
+            return True, str(model_file)
+        except Exception as e:
+            last_err = e
+            last_err_category = _classify_download_error(e)
+            if last_err_category in ("disk_full", "auth", "not_found"):
+                return False, _format_download_error(last_err_category, e)
+            # Keep the partial file for the next retry attempt.
+
+    # All retries exhausted. Leave the partial in place — user can restart
+    # localcode and the next download attempt will resume from where this
+    # one left off.
+    return False, _format_download_error(
+        last_err_category,
+        last_err or RuntimeError("unknown download error"),
+    )
+
+
+def _classify_download_error(e: Exception) -> str:
+    """Map a download exception to a stable category for UI + retry policy."""
+    msg = (str(e) or "").lower()
+    et = type(e).__name__
+    if "no space" in msg or "disk full" in msg or "enospc" in msg or et == "OSError" and "28" in msg:
+        return "disk_full"
+    if "401" in msg or "403" in msg or "gated" in msg or "permission" in msg:
+        return "auth"
+    if "404" in msg or "not found" in msg:
+        return "not_found"
+    if "timeout" in msg or "timed out" in msg:
+        return "timeout"
+    if "connection" in msg or "network" in msg or "dns" in msg or "resolve" in msg:
+        return "network"
+    if "ssl" in msg or "certificate" in msg:
+        return "ssl"
+    return "unknown"
+
+
+def _format_download_error(category: str, e: Exception) -> str:
+    """User-facing error string for a classified download failure."""
+    raw = str(e)[:200].replace("\n", " ").strip()
+    by_cat = {
+        "disk_full":  f"Not enough disk space to finish the download. Free up space and retry.\n[{raw}]",
+        "auth":       f"Hugging Face rejected the request — model may be gated or require a token.\n[{raw}]",
+        "not_found":  f"Model file not found on Hugging Face — the catalog entry's filename may be stale.\n[{raw}]",
+        "timeout":    f"Download timed out. Check your connection and retry.\n[{raw}]",
+        "network":    f"Network error during download. Check your connection and retry.\n[{raw}]",
+        "ssl":        f"SSL/TLS error during download — your system trust store may be out of date.\n[{raw}]",
+        "unknown":    f"Model download failed: {raw}",
+    }
+    return by_cat.get(category, by_cat["unknown"])
+
+
+def download_mmproj(
+    choice,
+    on_progress: Callable[[str], None] | None = None,
+) -> tuple[bool, str]:
+    """Download the vision projector (mmproj.gguf) for a catalog entry.
+
+    Returns (ok, path_or_error). Idempotent — short-circuits if the file
+    is already present. Reuses download_model's retry/backoff/fast-path
+    machinery via a proxy catalog entry that points at the mmproj file.
+    """
+    if not choice.supports_vision or not choice.mmproj_filename:
+        return False, "Model has no vision projector defined."
+    dest = choice.mmproj_path
+    if dest is None:
+        return False, "mmproj_path resolved to None."
+    if dest.is_file() and _is_mmproj_complete(dest, choice):
+        return True, str(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    from dataclasses import replace
+    # `mmproj_hf_filename` is what's actually in the HF repo (often
+    # just "mmproj-F16.gguf" — shared across model families). We download
+    # under THAT name, then rename to `mmproj_filename` (which is unique
+    # per model family) so the Gemma and Qwen projectors don't overwrite
+    # each other in the shared model_dir.
+    hf_name = choice.mmproj_hf_filename or choice.mmproj_filename
+    proxy = replace(
+        choice,
+        filename=hf_name,
+        size_gb=choice.mmproj_size_gb or 1.0,
+        mmproj_filename=None,
+        mmproj_size_gb=0.0,
+        mmproj_hf_filename=None,
+    )
+    ok, result = download_model(proxy, on_progress=on_progress)
+    if not ok:
+        return ok, result
+    # Rename to the catalog's local filename if it differs from the HF name.
+    from pathlib import Path as _P
+    downloaded = _P(result)
+    if downloaded.name != choice.mmproj_filename:
+        target = dest  # choice.mmproj_path resolved earlier
+        try:
+            if target.exists():
+                target.unlink()
+            downloaded.rename(target)
+            return True, str(target)
+        except Exception as e:
+            return False, f"Couldn't rename mmproj to {target.name}: {e}"
+    return ok, result
+
+
+def _is_mmproj_complete(p: Path, choice) -> bool:
+    """Cheap completeness check for the mmproj sidecar — like
+    `_is_complete_download` but with 10% slack since catalog mmproj
+    size estimates can be slightly off."""
     try:
-        _download_parallel(url, model_file, num_threads=16, on_progress=on_progress)
-        return True, str(model_file)
-    except Exception as e:
-        if model_file.exists():
-            model_file.unlink()
-        return False, f"Model download failed: {e}"
+        size = p.stat().st_size
+    except OSError:
+        return False
+    if not choice.mmproj_size_gb:
+        return size > 10 * 1024 * 1024  # >10 MB is presumably real
+    expected = int(choice.mmproj_size_gb * 1024 ** 3)
+    return size >= int(expected * 0.9)
+
+
+def _try_hf_transfer_download(choice, dest: Path, on_progress: Callable[[str], None] | None) -> bool:
+    """Try to download via huggingface_hub + hf_transfer (Rust-backed).
+
+    Returns True on success, raises on hard failure. Returns False if the
+    library is not available (caller should fall back).
+    """
+    try:
+        from huggingface_hub import hf_hub_download
+    except ImportError:
+        return False
+    # hf_transfer is opt-in via env var; huggingface_hub auto-uses it when
+    # available and HF_HUB_ENABLE_HF_TRANSFER=1.
+    try:
+        import hf_transfer  # noqa: F401  -- presence check
+        os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
+    except ImportError:
+        # huggingface_hub alone is still faster than urllib because it does
+        # connection reuse + better chunking, so we still use it without
+        # the Rust extension.
+        pass
+    if on_progress:
+        on_progress(f"Downloading {choice.filename} via hf_transfer (Rust)...")
+    downloaded_path = hf_hub_download(
+        repo_id=choice.hf_repo,
+        filename=choice.filename,
+        local_dir=str(dest.parent),
+        local_dir_use_symlinks=False,
+    )
+    # huggingface_hub may write to a slightly different filename inside
+    # local_dir; symlink/rename to our expected dest.
+    dp = Path(downloaded_path)
+    if dp.resolve() != dest.resolve():
+        try:
+            if dest.exists():
+                dest.unlink()
+            dp.rename(dest)
+        except Exception:
+            # Last resort: copy
+            import shutil as _sh
+            _sh.copyfile(dp, dest)
+    return dest.is_file()
 
 
 def _ensure_cmake() -> bool:

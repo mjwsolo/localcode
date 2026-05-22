@@ -713,6 +713,33 @@ def _normalize_repo_root_variants(cmd: str, repo: str) -> str:
 
 def execute(ctx: ToolContext, args: dict) -> str:
     cmd = _normalize_repo_root_variants(args["command"], str(ctx.repo))
+    # Block ANY use of process-attaching debuggers — lldb / dtrace /
+    # spindump / sample. The agent kept invoking these to debug perceived
+    # hangs, which:
+    #   - Triggers macOS Touch ID for "Developer Tools Access"
+    #   - SIGSTOPs the parent process (freezes the LocalCode TUI)
+    #   - On detach, often leaves the parent unrecoverable; user sees
+    #     "zsh: abort" when localcode dies
+    # No legitimate localcode workflow needs these — block unconditionally.
+    # Word-boundary regex so we don't false-positive on filenames like
+    # "sample.txt" or "spindump.log".
+    import re as _re
+    # Boundary class includes quote chars so `bash -c 'lldb -p 12345'`
+    # is also caught. Trailing `(?:\s|$|;|&|\||\)|`)` so we don't false-
+    # positive on `sample.txt` (period after the word) or `samples/`
+    # (slash after — actually `samples` is a different word, no match).
+    if _re.search(
+        r"(?:^|[\s;&|`('\"])(?:sudo\s+)?(?:/[^\s]*/)?(lldb|dtrace|spindump|sample)(?:\s|$|;|&|\||\)|'|\"|`)",
+        cmd,
+    ):
+        return (
+            "REJECTED: process-attaching debuggers (lldb / dtrace / spindump / "
+            "sample) are blocked. They trigger macOS Touch ID prompts, SIGSTOP "
+            "the LocalCode TUI, and leave it unrecoverable when they detach. "
+            "Use `~/.local/share/localcode/server.log`, "
+            "`~/.localcode/last_error.log`, or the `/status` slash command "
+            "to diagnose instead."
+        )
     app_session = getattr(ctx.app, "session", None)
     current_task = getattr(app_session, "current_task", None)
     current_task_port = int(getattr(current_task, "active_port", 0) or 0) if current_task is not None else 0

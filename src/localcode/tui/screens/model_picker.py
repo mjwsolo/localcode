@@ -32,6 +32,11 @@ class ModelPickerScreen(Screen):
         Binding("7", "pick(6)", "#7", show=False),
         Binding("8", "pick(7)", "#8", show=False),
         Binding("9", "pick(8)", "#9", show=False),
+        Binding("up", "move(-1)", "Previous model", show=False),
+        Binding("k", "move(-1)", "Previous model", show=False),
+        Binding("down", "move(1)", "Next model", show=False),
+        Binding("j", "move(1)", "Next model", show=False),
+        Binding("enter", "pick_focused", "Select focused model", show=False),
         Binding("d", "edit_dir", "Change save directory", show=False),
         Binding("x", "begin_delete", "Delete a downloaded model", show=False),
         Binding("y", "confirm_delete", "Confirm deletion", show=False),
@@ -51,19 +56,19 @@ class ModelPickerScreen(Screen):
     DEFAULT_CSS = """
     ModelPickerScreen {
         layout: vertical;
-        background: $surface;
+        background: ansi_default;
         padding: 1 0;
-        background: $surface;
+        background: ansi_default;
     }
     /* #picker-header removed (2026-04-25). Brand moved into footer. */
     #picker-center {
-        background: $surface;
+        background: ansi_default;
         height: 1fr;
         width: 100%;
         align: center middle;
     }
     #picker-box {
-        background: $surface;
+        background: ansi_default;
         width: 92%;
         max-width: 56;
         height: auto;
@@ -71,12 +76,12 @@ class ModelPickerScreen(Screen):
         border: round #5f87ff;
     }
     #picker-list {
-        background: $surface;
+        background: ansi_default;
         height: auto;
         width: 100%;
     }
     #dir-input {
-        background: $surface;
+        background: ansi_default;
         display: none;
         height: 3;
         margin-top: 1;
@@ -86,7 +91,7 @@ class ModelPickerScreen(Screen):
         display: block;
     }
     #picker-footer {
-        background: $surface;
+        background: ansi_default;
         dock: bottom;
         height: 1;
         padding: 0 2;
@@ -100,6 +105,15 @@ class ModelPickerScreen(Screen):
         self._show_current = show_current
         self._delete_state = self._DELETE_IDLE
         self._delete_target_idx: int | None = None
+        # Focused index for arrow-key navigation. Starts on the
+        # RAM-recommended entry so a user pressing Enter immediately
+        # picks something appropriate for their machine.
+        from ...models_catalog import CHOICES, recommend
+        rec = recommend()
+        self._focused_idx = next(
+            (i for i, c in enumerate(CHOICES) if c.key == rec.key), 0
+        )
+        self._recommended_key = rec.key
 
     def compose(self) -> ComposeResult:
         from ...models_catalog import current as current_choice
@@ -133,11 +147,11 @@ class ModelPickerScreen(Screen):
         from ...theme import C
         n = len(CHOICES)
         if n == 1:
-            keys_hint = "press 1 to select"
+            keys_hint = "Enter to select"
         elif n == 2:
-            keys_hint = "press 1 or 2 to select"
+            keys_hint = "↑/↓ + Enter, or press 1 or 2"
         else:
-            keys_hint = f"press 1-{n} to select"
+            keys_hint = f"↑/↓ + Enter, or press 1-{n}"
         return (
             f"🏠[{C.primary}]LocalCode[/]  │  "
             f"[dim]{keys_hint}   ·   d change save dir   ·   "
@@ -156,25 +170,49 @@ class ModelPickerScreen(Screen):
     def _render_list(self, cur) -> str:
         from ...models_catalog import CHOICES, model_dir
         lines = [f"[bold]{self._title}[/]", ""]
-        # Render each model as TWO intentional lines:
-        #   "  1. <name>   <size> GB"
-        #   "     ✓ downloaded   (current)"
-        # The status indent (5 spaces) lines up under the name (which
-        # starts after "  1. " = 5 cols). Previously the status was
-        # appended to the name line and wrapped to col 0 when the box
-        # was too narrow, producing the left-flush ✓ in the screenshot.
-        # Two intentional lines fix the alignment and survive any width.
+        # Three compact lines per entry, sized to fit the 56-col box
+        # without wrap:
+        #   " ▸ 4. ★ Qwen 3.6 35B-A3B (UD-Q8_K_XL)"
+        #   "       38.5 GB · ✓ downloaded · ● current"
+        #   "       [dim]unsloth/Qwen3.6-35B-A3B-GGUF[/]"
+        # Focused row gets a soft blue foreground (NOT `bold reverse` —
+        # that produced the white slab visible in earlier screenshots).
+        # Recommended → "★" single-char marker before the name.
+        # Current → "● current" appended to the status line.
+        HILITE = "#7aa2ff"  # softer than C.primary; reads as "highlighted"
+        any_rec = False
         for i, c in enumerate(CHOICES, start=1):
             downloaded = c.local_path.is_file()
-            status = f"[{C.success}]✓ downloaded[/]" if downloaded else "[yellow]↓ needs download[/]"
-            marker = f"   [{C.success}](current)[/]" if cur and cur.key == c.key else ""
-            lines.append(
-                f"  [bold]{i}.[/] [bold]{c.name}[/]   [dim]{c.size_gb:.1f} GB[/]"
+            status = (
+                f"[{C.success}]✓ downloaded[/]"
+                if downloaded else "[yellow]↓ needs download[/]"
             )
-            lines.append(f"     {status}{marker}")
+            is_rec = (c.key == self._recommended_key)
+            is_cur = bool(cur and cur.key == c.key)
+            if is_rec:
+                any_rec = True
+            rec_marker = f"[{C.primary}]★[/] " if is_rec else "  "
+
+            focused = (i - 1 == self._focused_idx)
+            chevron = f"[{C.primary}]▸[/]" if focused else " "
+            # Color-only highlight — no inverse-video.
+            name_style = (
+                f"[bold {HILITE}]{c.name}[/]" if focused else f"[bold]{c.name}[/]"
+            )
+
+            # Status bits joined by middle-dot so size/state/current
+            # all stay on ONE line inside the box.
+            status_bits = [f"[dim]{c.size_gb:.1f} GB[/]", status]
+            if is_cur:
+                status_bits.append(f"[{C.success}]● current[/]")
+            status_line = " [dim]·[/] ".join(status_bits)
+
+            lines.append(f" {chevron} [bold]{i}.[/] {rec_marker}{name_style}")
+            lines.append(f"       {status_line}")
+            lines.append(f"       [dim]{c.hf_repo}[/]")
         lines.append("")
-        # 'Saves to ...' on one line, hint on its own line so the
-        # 'd to change' phrase doesn't wrap into a half-broken sentence.
+        if any_rec:
+            lines.append(f"[dim][{C.primary}]★[/] = recommended for your machine[/]")
         lines.append(f"[dim]Saves to {self._tildify(model_dir())}/[/]")
         lines.append("[dim italic](press d to change)[/]")
         return "\n".join(lines)
@@ -203,6 +241,25 @@ class ModelPickerScreen(Screen):
         return
 
     # ── actions ─────────────────────────────────────────────────────
+
+    def action_move(self, delta: int) -> None:
+        """Arrow/j/k navigation — wraps around the catalog."""
+        inp = self.query_one("#dir-input", Input)
+        if inp.has_class("active"):
+            return
+        from ...models_catalog import CHOICES
+        n = len(CHOICES)
+        if n == 0:
+            return
+        self._focused_idx = (self._focused_idx + delta) % n
+        self._refresh_list()
+
+    def action_pick_focused(self) -> None:
+        """Enter — pick whichever row is currently focused."""
+        inp = self.query_one("#dir-input", Input)
+        if inp.has_class("active"):
+            return
+        self.action_pick(self._focused_idx)
 
     def action_pick(self, idx: int) -> None:
         # If the directory input is focused, number keys should type into it.
