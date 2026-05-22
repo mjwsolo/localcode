@@ -138,27 +138,49 @@ def ensure_stt_model(state: VoiceState,
 
 import contextlib
 import sys
+import threading as _threading
+
+
+# Single global lock around fd-2 redirection. Without it, two threads
+# (e.g. streaming-tick worker + final-transcribe worker) can BOTH enter
+# `_silence_native_stderr` concurrently — the second `dup(2)` would
+# capture the FIRST thread's already-swapped /dev/null fd as its
+# "original", and restoring it sends real stderr permanently to
+# /dev/null + leaks file descriptors. That's been the source of the
+# "second voice input crashes the TUI" failures.
+_STDERR_REDIRECT_LOCK = _threading.Lock()
+
+# Also serialize transcribe() calls — whisper.cpp Metal's cached
+# Model isn't designed for concurrent transcribe calls (the kv cache
+# inside the model is per-model, not per-call). Two concurrent calls
+# can crash the Metal backend on some buffer shapes. Locking here is
+# defense in depth on top of the fd-redirect lock.
+_TRANSCRIBE_LOCK = _threading.Lock()
 
 
 @contextlib.contextmanager
 def _silence_native_stderr():
-    """Redirect file descriptor 2 to /dev/null around a block so the
-    C/C++ libraries underneath us (whisper.cpp, ggml, Metal) can't
-    write directly to the terminal and corrupt textual's altscreen
-    rendering. Python's `sys.stderr` redirection won't catch native
-    writes — only an fd-level dup does.
+    """Redirect fd 2 to /dev/null around a block so C/C++ libraries
+    (whisper.cpp, ggml, Metal, PortAudio) can't write to the terminal
+    and corrupt textual's altscreen rendering.
+
+    Thread-safe: only one redirection at a time. Concurrent callers
+    block on the lock. Without the lock the dup2-pair races and we
+    end up with a permanently-redirected fd 2 + leaked file
+    descriptors — which manifests as voice-mode-second-press crashes.
     """
-    devnull = os.open(os.devnull, os.O_WRONLY)
-    saved = os.dup(2)
-    try:
-        os.dup2(devnull, 2)
-        yield
-    finally:
+    with _STDERR_REDIRECT_LOCK:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        saved = os.dup(2)
         try:
-            os.dup2(saved, 2)
+            os.dup2(devnull, 2)
+            yield
         finally:
-            os.close(devnull)
-            os.close(saved)
+            try:
+                os.dup2(saved, 2)
+            finally:
+                os.close(devnull)
+                os.close(saved)
 
 
 # Process-wide cached whisper.cpp Model. Loading the model is ~538 MB +
@@ -341,26 +363,29 @@ def transcribe(state: VoiceState, audio_wav_path: Path) -> tuple[bool, str]:
             "run: pip install pywhispercpp"
         )
     model_path = state.stt_model_path or (DEFAULT_STT_MODEL_DIR / DEFAULT_STT_MODEL_NAME)
-    try:
-        with _silence_native_stderr():
-            if _CACHED_MODEL is None or _CACHED_MODEL_PATH != model_path:
-                _CACHED_MODEL = Model(
-                    str(model_path),
-                    n_threads=max(2, (os.cpu_count() or 4) // 2),
-                    # pywhispercpp also accepts these decoder flags to
-                    # silence its per-segment progress prints — bools
-                    # default True in some builds.
-                    print_realtime=False,
-                    print_progress=False,
-                    print_timestamps=False,
-                )
-                _CACHED_MODEL_PATH = model_path
-            segments = _CACHED_MODEL.transcribe(str(audio_wav_path))
-        text = " ".join(s.text for s in segments).strip()
-        text = _clean_transcript(text)  # strip [NON-ENGLISH SPEECH] etc.
-        return True, text
-    except Exception as e:
-        return False, f"Transcription failed: {e}"
+    # Serialize transcribe calls. The cached Model holds per-instance
+    # state (Metal KV cache, decoder buffers); two concurrent calls
+    # can corrupt that state and crash the Metal backend. The lock
+    # makes the cost a bit higher when streaming + final overlap but
+    # eliminates the second-press crashes the user kept hitting.
+    with _TRANSCRIBE_LOCK:
+        try:
+            with _silence_native_stderr():
+                if _CACHED_MODEL is None or _CACHED_MODEL_PATH != model_path:
+                    _CACHED_MODEL = Model(
+                        str(model_path),
+                        n_threads=max(2, (os.cpu_count() or 4) // 2),
+                        print_realtime=False,
+                        print_progress=False,
+                        print_timestamps=False,
+                    )
+                    _CACHED_MODEL_PATH = model_path
+                segments = _CACHED_MODEL.transcribe(str(audio_wav_path))
+            text = " ".join(s.text for s in segments).strip()
+            text = _clean_transcript(text)
+            return True, text
+        except Exception as e:
+            return False, f"Transcription failed: {e}"
 
 
 # ─────────────────────────── Audio capture ───────────────────────────
