@@ -42,10 +42,10 @@ class _NoTintInput(Input):
     """
     DEFAULT_CSS = """
     _NoTintInput {
-        background: $surface;
+        background: ansi_default;
         &:focus {
             background-tint: transparent 0%;
-            background: $surface;
+            background: ansi_default;
         }
         /* Override Textual's global `*:disabled:can-focus { opacity: 0.7; }`
            rule (textual.app.App.DEFAULT_CSS). Without this, the chat input
@@ -434,7 +434,7 @@ class ChatScreen(Screen):
     DEFAULT_CSS = """
     ChatScreen {
         layout: vertical;
-        background: $surface;
+        background: ansi_default;
         /* Pad the screen itself so docked widgets (header at top,
            status at bottom) sit 1 row in from the terminal edges
            instead of kissing them. Textual ignores padding-top on
@@ -448,10 +448,10 @@ class ChatScreen(Screen):
         padding: 0 1;
         width: 1fr;
         color: #5f87ff;
-        background: $surface;
+        background: ansi_default;
     }
     #active-step {
-        background: $surface;
+        background: ansi_default;
         width: 100%;
         height: 1;
         padding: 0 1;
@@ -464,7 +464,7 @@ class ChatScreen(Screen):
         display: block;
     }
     #queue-line {
-        background: $surface;
+        background: ansi_default;
         height: 1;
         padding: 0 1 0 3;
         margin: 0;
@@ -475,7 +475,7 @@ class ChatScreen(Screen):
         display: block;
     }
     #slash-menu {
-        background: $surface;
+        background: ansi_default;
         height: auto;
         max-height: 10;
         padding: 0 1;
@@ -485,7 +485,7 @@ class ChatScreen(Screen):
         display: block;
     }
     #search-bar {
-        background: $surface;
+        background: ansi_default;
         height: 1;
         padding: 0 1;
         display: none;
@@ -497,7 +497,7 @@ class ChatScreen(Screen):
         height: 1;
         width: 1fr;
         border: none;
-        background: $surface;
+        background: ansi_default;
         display: none;
     }
     #search-input.active {
@@ -506,7 +506,7 @@ class ChatScreen(Screen):
     /* Input row and its children — explicit black so Textual's
        default surface color doesn't bleed through. */
     #input-row {
-        background: $surface;
+        background: ansi_default;
         height: 1;
     }
     /* Multi-line wrap preview ABOVE the input row. Hidden by default;
@@ -514,7 +514,7 @@ class ChatScreen(Screen):
        max-height caps growth at 8 visible lines (~640 chars at 80
        cols). Past that the preview itself scrolls. */
     #input-overflow {
-        background: $surface;
+        background: ansi_default;
         color: $text;
         padding: 0 1 0 3;
         height: auto;
@@ -525,12 +525,12 @@ class ChatScreen(Screen):
         display: block;
     }
     #input-prompt {
-        background: $surface;
+        background: ansi_default;
         color: #5f87ff;
         width: 2;
     }
     #chat-input {
-        background: $surface;
+        background: ansi_default;
     }
     #status-bar {
         dock: bottom;
@@ -539,7 +539,7 @@ class ChatScreen(Screen):
         height: 4;
         padding: 2 1 1 1;
         color: $text-muted;
-        background: $surface;
+        background: ansi_default;
     }
     /* When the slash palette is open, the status bar gets out of the
        way so the menu has its own row and doesn't visually collide
@@ -1712,6 +1712,24 @@ class ChatScreen(Screen):
                 log.append_info(
                     "Audio output ON. Final answer of each turn will be read aloud."
                 )
+                # Default engine is `say` (instant, no download). If the
+                # user explicitly picked a Piper voice via `/audio voice
+                # piper:<id>`, prefetch it now so the first spoken reply
+                # doesn't stall waiting for the download.
+                if state.tts_engine == "piper" and state.tts_voice:
+                    def _prefetch():
+                        try:
+                            from ...voice import _ensure_piper_voice
+                            _ensure_piper_voice(
+                                state.tts_voice,
+                                on_progress=lambda m: self.app.call_from_thread(
+                                    log.append_info, m
+                                ),
+                            )
+                        except Exception:
+                            pass
+                    import threading as _t
+                    _t.Thread(target=_prefetch, daemon=True).start()
             return
 
         if sub in ("off", "final", "always"):
