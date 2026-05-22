@@ -43,9 +43,10 @@ dependencies = [
 
 [project.optional-dependencies]
 voice = [
-  "pywhispercpp>=1.2.0",      # whisper.cpp wheel w/ prebuilt Metal binary
-  "sounddevice>=0.4.6",       # microphone capture
+  "pywhispercpp>=1.2.0",      # whisper.cpp wheel w/ prebuilt Metal binary (STT)
+  "sounddevice>=0.4.6",       # microphone capture + Piper audio output
   "numpy>=1.26.0",
+  "piper-tts>=1.2.0",         # natural neural TTS — default speaker
 ]
 
 
