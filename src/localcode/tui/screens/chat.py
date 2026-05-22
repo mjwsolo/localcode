@@ -305,38 +305,34 @@ class _NoTintInput(Input):
                 new_text.stylize(span.style, span.start, span.end)
             new_text.stylize(cursor_style, cursor_pos, cursor_pos + 1)
             result = new_text
-        # Voice recording? Append a colored block character DIRECTLY
-        # after the text (no separator space). Three things vary:
-        #   - FILL CHARACTER (▁ → █) based on mic peak — makes the bar
-        #     visibly grow up and down with voice volume.
-        #   - FOREGROUND COLOR cycles through the rainbow palette over
-        #     time (color phase jumps forward on loud peaks).
-        #   - BACKGROUND COLOR is a dim version of the same hue, so the
-        #     unfilled portion of the cell never shows as "gray" — it
-        #     looks like a colored glow with a brighter bar growing
-        #     inside it.
+        # Voice recording? Append a colored block character right after
+        # the text. NO background — the cell stays terminal-native so
+        # the bar character IS the visual (no "gray box" feel from a
+        # dim bg behind it). Amplitude uses a sqrt curve so quiet
+        # speech registers as ▂/▃ instead of stuck on ▁.
         try:
             screen = self.screen
             rec = getattr(screen, "_ptt_recorder", None)
             if rec is not None:
                 from rich.style import Style as _RichStyle
                 import time as _t
+                import math as _m
                 _RAINBOW = (
                     "#ff5470", "#ff8a5b", "#ffd166", "#9bff8a", "#5bffc1",
                     "#5bd1ff", "#5b96ff", "#9b5bff", "#e75bff", "#ff5bd1",
                 )
                 _FILL = ("▁", "▂", "▃", "▄", "▅", "▆", "▇", "█")
                 peak = float(getattr(rec, "peak", 0.0) or 0.0)
-                amp = min(1.0, peak * 8.0)
+                # sqrt curve + 14x boost makes the bar responsive at
+                # whisper volumes. Earlier linear * 8x sat on ▁ until
+                # the user nearly shouted.
+                amp = min(1.0, _m.sqrt(max(0.0, peak * 14.0)))
                 idx = max(1, min(len(_FILL) - 1, int(amp * len(_FILL))))
                 bar_char = _FILL[idx]
                 phase = int(_t.time() * 4) + int(amp * 4)
-                hb = _RAINBOW[phase % len(_RAINBOW)].lstrip("#")
-                r0, g0, b0 = int(hb[0:2], 16), int(hb[2:4], 16), int(hb[4:6], 16)
-                fg = f"#{r0:02x}{g0:02x}{b0:02x}"
-                bg = f"#{int(r0*0.25):02x}{int(g0*0.25):02x}{int(b0*0.25):02x}"
+                color = _RAINBOW[phase % len(_RAINBOW)]
                 bar_text = _RichText(bar_char, end="")
-                bar_text.stylize(_RichStyle(color=fg, bgcolor=bg, bold=True), 0, 1)
+                bar_text.stylize(_RichStyle(color=color, bold=True), 0, 1)
                 result = result + bar_text
         except Exception:
             pass
@@ -525,6 +521,10 @@ class ChatScreen(Screen):
         padding: 0 1 0 3;
         height: auto;
         max-height: 8;
+        /* Leave a row of breathing space below so the wrap-preview
+           doesn't visually crash into the bottom status bar when the
+           single-line input is hidden under it. */
+        margin: 0 0 1 0;
         display: none;
     }
     #input-overflow.active {
