@@ -167,23 +167,21 @@ class _NoTintInput(Input):
         # Three branches to handle the "user wants to keep typing
         # spaces in their sentence" vs "user wants to record more"
         # tension:
-        #   1. Already recording → ALWAYS PTT (treat as key-repeat).
-        #   2. Input ends with a space → user is mid-sentence → type
-        #      a space (don't hijack).
-        #   3. Otherwise (input empty OR ends in non-space char) →
-        #      PTT. After dictation, the transcript lands and the
-        #      user just hits Enter or starts editing — pressing
-        #      Space again at the end of "hello" would START a new
-        #      recording (appending dictation to the existing text).
+        # Simple rule: PTT only fires when input is EMPTY (or already
+        # recording — key-repeat case). Once the user has typed/
+        # dictated anything, Space types a space normally so they can
+        # add words between things without hijacking. Previous "ends
+        # with space" heuristic broke as soon as the user typed a word
+        # like "capital" — pressing Space then triggered recording
+        # instead of letting them continue the sentence.
         if event.key == "space":
             vs = getattr(self.app, "voice_state", None)
             if vs is not None and getattr(vs, "enabled", False):
                 already_recording = getattr(
                     self.screen, "_ptt_recorder", None
                 ) is not None
-                cur = self.value or ""
-                ends_with_space = cur.endswith(" ")
-                if already_recording or not ends_with_space:
+                input_empty = not (self.value or "").strip()
+                if already_recording or input_empty:
                     screen = self.screen
                     ptt = getattr(screen, "action_ptt_space", None)
                     if callable(ptt):
