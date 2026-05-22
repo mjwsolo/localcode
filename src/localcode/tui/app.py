@@ -93,7 +93,12 @@ class LocalCodeTUI(App):
     def __init__(self, show_mode_picker: bool = True) -> None:
         super().__init__()
         # Set theme so terminal palette decides every colour.
-        self.theme = "textual-ansi"
+        # Older textual versions shipped "textual-ansi"; newer ones renamed/dropped it.
+        # Fall back to a known-present theme instead of crashing on startup.
+        for _candidate in ("textual-ansi", "textual-dark"):
+            if _candidate in self.available_themes:
+                self.theme = _candidate
+                break
         self.show_mode_picker = show_mode_picker
         self.engine = None
         self.config = None
@@ -114,7 +119,7 @@ class LocalCodeTUI(App):
         def _sig_cleanup(signum, frame):
             try:
                 from ..server_manager import ServerManager
-                ServerManager.get().shutdown()
+                ServerManager.get().shutdown(force=True)
             except Exception:
                 pass
             try:
@@ -147,7 +152,9 @@ class LocalCodeTUI(App):
         # immediately, which lets Python actually reach the executor-join.
         try:
             from ..server_manager import ServerManager
-            ServerManager.get().shutdown()
+            # force=True — app is exiting, kernel reclaims Metal on
+            # process death so the 5-10 s graceful dealloc is wasted time.
+            ServerManager.get().shutdown(force=True)
         except Exception:
             pass
         # Reap any test/server apps the agent backgrounded via the bash
@@ -268,7 +275,17 @@ class LocalCodeTUI(App):
         from ..models_catalog import current as current_choice
 
         cur = current_choice(self.config)
-        need_picker = cur is None or not cur.local_path.is_file()
+        # need_picker fires when:
+        #   - no model is configured yet (first launch)
+        #   - the configured model file isn't on disk
+        #   - a partial download exists at the final filename (would
+        #     otherwise sneak past the picker and confuse setup/server)
+        from ..bootstrap import _is_complete_download
+        need_picker = (
+            cur is None
+            or not cur.local_path.is_file()
+            or not _is_complete_download(cur.local_path, cur)
+        )
 
         if need_picker:
             def _after_pick(choice) -> None:
@@ -298,10 +315,47 @@ class LocalCodeTUI(App):
             self.engine = LocalCodeApp(self.config)
             self.engine.out.set_event_callback(self.bridge.on_event)
             self.engine.out.set_approval_callback(self.bridge.request_approval)
+            # `--resume` flag: load prior session messages BEFORE the
+            # chat screen starts streaming events. We resolve "last"
+            # to the most recently modified session file. Failures here
+            # are non-fatal — the user just starts fresh.
+            resume_id = getattr(self, "_resume_session_id", None)
+            if resume_id:
+                self._apply_resume(resume_id)
             return True
         except Exception as e:
             self.notify(f"Backend error: {e}", severity="error")
             return False
+
+    def _apply_resume(self, resume_id: str) -> None:
+        """Restore a prior session: load messages + replay into chat log."""
+        try:
+            from ..session import SessionStore
+            store = SessionStore()
+            if resume_id == "last":
+                files = sorted(
+                    store.sessions_dir.glob("*.json"),
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True,
+                )
+                if not files:
+                    self.notify("No previous sessions to resume.", severity="warning")
+                    return
+                resume_id = files[0].stem
+            session = store.load(resume_id)
+        except Exception as e:
+            self.notify(f"Couldn't resume {resume_id}: {e}", severity="error")
+            return
+        # Hand the loaded messages to the engine + emit a hydrate event
+        # so the chat-screen renders them on mount.
+        try:
+            self.engine.session = session
+        except Exception:
+            pass
+        try:
+            self._pending_resume_messages = list(session.messages or [])
+        except Exception:
+            self._pending_resume_messages = []
 
     def action_copy_or_quit(self) -> None:
         """Ctrl+C: always quit.
