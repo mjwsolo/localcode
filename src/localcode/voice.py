@@ -51,10 +51,13 @@ class VoiceState:
     enabled: bool = False
     stt_model_path: Path | None = None
     # Default engine is Piper — high-quality neural voice, free, fully
-    # local, auto-downloads ~70 MB voice file on first use. macOS `say`
-    # is kept as a fallback when Piper deps aren't installed.
+    # local. Voice = en_US-lessac-high (professional actor recording,
+    # "high" quality tier = more parameters = more natural prosody;
+    # widely regarded as the most natural English voice in the Piper
+    # catalog). Auto-downloads ~110 MB on first use. macOS `say` is
+    # kept as a fallback when Piper deps aren't installed.
     tts_engine: str = "piper"          # "piper" | "say" | "off"
-    tts_voice: str | None = "en_US-amy-medium"  # default Piper voice id
+    tts_voice: str | None = "en_US-lessac-high"
     # Default "off" so audio doesn't auto-play just because the user
     # enabled voice mode — TTS is a separate /audio toggle now.
     tts_speak_mode: str = "off"        # "off" | "final" | "always"
