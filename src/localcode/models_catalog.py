@@ -52,6 +52,21 @@ class ModelChoice:
     # was misleading.
     humaneval_pass_at_1: float | None
     notes: str             # honest caveats / fit info
+    # Optional vision sidecar. When set, llama-server can be launched
+    # with `--mmproj <path>` to enable image input. The mmproj is a
+    # separate file from the text-decoder GGUF; it lives in the same
+    # HF repo and the same model_dir on disk. Identical for all quants
+    # of the same model family (the projector quality is independent
+    # of the text-decoder quant).
+    #
+    # `mmproj_filename` is the LOCAL filename — must be unique across
+    # model families so Gemma's mmproj and Qwen's mmproj don't overwrite
+    # each other on download. `mmproj_hf_filename` is what HF calls it
+    # in the repo (commonly just `mmproj-F16.gguf` for both families,
+    # which is why we need the separate local name).
+    mmproj_filename: str | None = None
+    mmproj_size_gb: float = 0.0  # download size of the mmproj sidecar
+    mmproj_hf_filename: str | None = None  # HF-side filename; defaults to mmproj_filename
 
     @property
     def hf_url(self) -> str:
@@ -60,6 +75,18 @@ class ModelChoice:
     @property
     def local_path(self) -> Path:
         return model_dir() / self.filename
+
+    @property
+    def mmproj_path(self) -> Path | None:
+        """Where the vision projector lives on disk (None if model has no
+        vision sidecar)."""
+        if not self.mmproj_filename:
+            return None
+        return model_dir() / self.mmproj_filename
+
+    @property
+    def supports_vision(self) -> bool:
+        return self.mmproj_filename is not None
 
 
 CHOICES: list[ModelChoice] = [
@@ -74,6 +101,9 @@ CHOICES: list[ModelChoice] = [
         license="Gemma (Google) — research + commercial w/ attribution",
         humaneval_pass_at_1=0.951,  # 156/164 measured on this stack 2026-04-22
         notes="Comfortable fit on 16 GB Mac. Has Apr-11 chat template + Apr-8 tokenizer fixes. Tool calling via Gemma 4 native format. Measured 95.1% HumanEval pass@1 at IQ3_S + TurboQuant KV on our harness.",
+        mmproj_filename="mmproj-gemma-4-26B-A4B-F16.gguf",
+        mmproj_size_gb=1.2,
+        mmproj_hf_filename="mmproj-F16.gguf",
     ),
     ModelChoice(
         key="qwen",
@@ -86,8 +116,85 @@ CHOICES: list[ModelChoice] = [
         license="Apache 2.0",
         humaneval_pass_at_1=0.947,  # 126/133 measured on this stack 2026-04-22 (stopped early at 81%)
         notes="Full GPU offload on 16 GB M4. Hybrid attn + Mamba-2 SSM. Native 262K context. Requires the multi-region mmap patch (llama-cpp-turboquant commit 3d66675b8).",
+        mmproj_filename="mmproj-Qwen3.6-35B-A3B-F16.gguf",
+        mmproj_size_gb=0.9,
+        mmproj_hf_filename="mmproj-F16.gguf",
+    ),
+    ModelChoice(
+        key="gemma-q8",
+        name="Gemma 4 26B-A4B (UD-Q8_K_XL)",
+        hf_repo="unsloth/gemma-4-26B-A4B-it-GGUF",
+        filename="gemma-4-26B-A4B-it-UD-Q8_K_XL.gguf",
+        size_gb=28.0,
+        active_params="3.8B (top-8 of 128 experts)",
+        architecture="gemma4-iswa",
+        license="Gemma (Google) — research + commercial w/ attribution",
+        humaneval_pass_at_1=None,
+        notes="High-RAM workstation pick — same MoE architecture as the small Gemma entry, just near-lossless Q8 quant instead of IQ3_S. 3.8B active params = same decode speed class as the IQ3 version (~95 tok/s on M5 Max) at ~99% of BF16 quality vs ~80% on IQ3. Native multimodal — pair with the F16 mmproj for image input. Requires ≥48 GB unified memory; sweet spot on 128 GB Apple Silicon.",
+        mmproj_filename="mmproj-gemma-4-26B-A4B-F16.gguf",
+        mmproj_size_gb=1.2,
+        mmproj_hf_filename="mmproj-F16.gguf",
+    ),
+    ModelChoice(
+        key="qwen-q8",
+        name="Qwen 3.6 35B-A3B (UD-Q8_K_XL)",
+        hf_repo="unsloth/Qwen3.6-35B-A3B-GGUF",
+        filename="Qwen3.6-35B-A3B-UD-Q8_K_XL.gguf",
+        size_gb=38.5,
+        active_params="3.0B (top-8 + 1 shared of 256 experts)",
+        architecture="qwen35moe",
+        license="Apache 2.0",
+        humaneval_pass_at_1=None,
+        notes="High-RAM workstation pick (≥64 GB unified memory; sweet spot on 128 GB Apple Silicon). UD-Q8_K_XL keeps attention/router/embedding layers above 8-bit while bulk experts stay at Q8 → ~99.3% of BF16 quality vs ~75-80% on IQ2_M. Same 3B active params → same decode speed class as the IQ2 entry. Native 262K context. Requires the multi-region mmap patch (llama-cpp-turboquant commit 3d66675b8).",
+        mmproj_filename="mmproj-Qwen3.6-35B-A3B-F16.gguf",
+        mmproj_size_gb=0.9,
+        mmproj_hf_filename="mmproj-F16.gguf",
     ),
 ]
+
+
+def _system_ram_gb() -> int:
+    """Standalone RAM probe — mirrors LocalCodeRuntimeGateway._system_ram_gb so
+    the picker doesn't need a runtime instance. Falls back to 16 on any failure
+    (conservative — favors the lightweight model)."""
+    try:
+        import platform, subprocess
+        if platform.system() == "Darwin":
+            mem_bytes = int(subprocess.run(
+                ["sysctl", "-n", "hw.memsize"],
+                capture_output=True, text=True, timeout=2,
+            ).stdout.strip())
+            return max(1, mem_bytes // (1024 ** 3))
+        # Linux / others: read /proc/meminfo
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    kb = int(line.split()[1])
+                    return max(1, kb // (1024 * 1024))
+    except Exception:
+        pass
+    return 16
+
+
+def recommend(ram_gb: int | None = None) -> ModelChoice:
+    """Pick the catalog entry best suited to the host's RAM.
+
+    Rule of thumb: model weights + KV + OS headroom should fit in ~70% of
+    unified memory. We bias conservatively — being slightly under-quantized
+    is worse than crashing on load. Falls back to the first entry if nothing
+    matches (shouldn't happen with the current catalog).
+    """
+    if ram_gb is None:
+        ram_gb = _system_ram_gb()
+    # Sort candidates by size_gb; pick the biggest whose weights fit
+    # in ~55% of RAM (leaves room for KV cache, activations, OS).
+    budget = ram_gb * 0.55
+    fits = [c for c in CHOICES if c.size_gb <= budget]
+    if fits:
+        return max(fits, key=lambda c: c.size_gb)
+    # Nothing fits the budget — return the smallest entry so at least
+    # something is suggested rather than a recommendation the user can't run.
+    return min(CHOICES, key=lambda c: c.size_gb)
 
 
 def by_key(key: str) -> ModelChoice | None:
