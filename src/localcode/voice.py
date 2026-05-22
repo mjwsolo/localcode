@@ -168,18 +168,21 @@ _CACHED_MODEL_PATH: Path | None = None
 
 import re as _re
 
-# Whisper emits bracketed annotations for non-speech audio
-# ("[BLANK_AUDIO]", "[NON-ENGLISH SPEECH]", "[MUSIC]", "[INAUDIBLE]",
-# etc.). These are model-internal artifacts that should never end up
-# in the user's input box. We strip any bracketed all-caps tag (with
-# spaces, underscores, hyphens allowed) — that catches every known
-# whisper annotation while leaving normal user text alone.
-_WHISPER_ANNOTATION_RE = _re.compile(r"\[[A-Z][A-Z0-9 _\-]*\]")
+# Whisper emits non-speech annotations in TWO syntaxes:
+#   - [BLANK_AUDIO]  [NON-ENGLISH SPEECH]  [MUSIC]  [INAUDIBLE]  [SILENCE]
+#   - *Singing*  *Music playing*  *Applause*  *whispers*  *laughter*
+# Both are model-internal artifacts and should never reach the input box.
+# We strip every bracketed [TAG] (caps + spaces + underscores) AND every
+# starred *Tag* (any word starting with a letter, followed by letters/
+# spaces, between asterisks).
+_WHISPER_ANNOTATION_BRACKETS = _re.compile(r"\[[A-Z][A-Z0-9 _\-]*\]")
+_WHISPER_ANNOTATION_STARS = _re.compile(r"\*[A-Za-z][A-Za-z _\-]*\*")
 
 
 def _clean_transcript(text: str) -> str:
     """Remove Whisper's non-speech annotations + collapse whitespace."""
-    text = _WHISPER_ANNOTATION_RE.sub("", text or "")
+    text = _WHISPER_ANNOTATION_BRACKETS.sub("", text or "")
+    text = _WHISPER_ANNOTATION_STARS.sub("", text)
     return " ".join(text.split())
 
 
