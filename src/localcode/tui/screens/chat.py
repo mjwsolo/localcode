@@ -1057,29 +1057,25 @@ class ChatScreen(Screen):
             status_bar.remove_class("hidden")
 
     def _render_slash_menu(self) -> None:
-        """Render the slash palette below the input, terminal coding tools style.
+        """Render the slash palette below the input.
 
-        Selection is whole-row weight: selected row is bold across both
-        columns, idle rows are dim across both columns. Earlier version
-        kept the command column bold on every row (so the LHS read as
-        "always highlighted") — user feedback was that only the active
-        row should look highlighted, not the whole left column.
+        Each row stays on exactly ONE line. If the description doesn't
+        fit, truncate with `…` instead of wrapping (wrapping made it
+        look like there were extra options below). Width is computed
+        from the actual screen width minus the fixed command column.
         """
         menu = self.query_one("#slash-menu", Static)
+        try:
+            avail = max(20, (self.size.width or 80) - 18)
+        except Exception:
+            avail = 60
         lines = []
         for i, (cmd, desc) in enumerate(self._slash_matches):
+            d = desc if len(desc) <= avail else desc[: max(0, avail - 1)].rstrip() + "…"
             if i == self._slash_selected:
-                # Selected row — bold across cmd + desc.
-                lines.append(
-                    f"[bold]{cmd:<14}[/]  [bold]{desc}[/]"
-                )
+                lines.append(f"[bold]{cmd:<14}[/]  [bold]{d}[/]")
             else:
-                # Idle row — dim across cmd + desc. Same weight on
-                # both columns means the LHS no longer pretends every
-                # row is selected.
-                lines.append(
-                    f"[dim]{cmd:<14}[/]  [dim]{desc}[/]"
-                )
+                lines.append(f"[dim]{cmd:<14}[/]  [dim]{d}[/]")
         menu.update("\n".join(lines))
 
     # Screen-level on_paste was removed 2026-04-26: `_NoTintInput._on_paste`
@@ -1307,28 +1303,31 @@ class ChatScreen(Screen):
             if (vs is not None and vs.enabled) else "off"
         )
 
+        # Plain text only — append_info uses `Text(line, style="dim")`
+        # which does NOT parse [bold]/[/] markup. We section the output
+        # with ALL-CAPS labels + leading blank lines instead.
         lines = [
-            "[bold]Runtime[/]",
-            f"  server         {status_str}",
-            f"  url            {config.runtime.base_url}",
-            f"  provider       {config.runtime.provider}",
-            f"  model file     {_P(config.runtime.model or '').name or '—'}",
-            f"  model name     {model_disp}",
-            f"  profile        {config.runtime.profile}",
+            "RUNTIME",
+            f"  server          {status_str}",
+            f"  url             {config.runtime.base_url}",
+            f"  provider        {config.runtime.provider}",
+            f"  model file      {_P(config.runtime.model or '').name or '—'}",
+            f"  model name      {model_disp}",
+            f"  profile         {config.runtime.profile}",
             f"  vision (mmproj) {mmproj_on}",
-            f"  voice          {voice_disp}",
+            f"  voice           {voice_disp}",
             "",
-            "[bold]Performance[/]",
-            f"  gpu_layers     {getattr(config.runtime, 'llama_cpp_gpu_layers', '—')}",
-            f"  threads        {getattr(config.runtime, 'llama_cpp_threads', '—')}",
-            f"  kv_cache       {config.runtime.kv_cache_type_k} / {config.runtime.kv_cache_type_v}",
-            f"  context        {getattr(config.runtime, 'cache_policy', '—')}",
+            "PERFORMANCE",
+            f"  gpu_layers      {getattr(config.runtime, 'llama_cpp_gpu_layers', '—')}",
+            f"  threads         {getattr(config.runtime, 'llama_cpp_threads', '—')}",
+            f"  kv_cache        {config.runtime.kv_cache_type_k} / {config.runtime.kv_cache_type_v}",
+            f"  context         {getattr(config.runtime, 'cache_policy', '—')}",
             "",
-            "[bold]Paths[/]",
-            f"  config         ~/.localcode/config.toml",
-            f"  models dir     ~/.local/share/localcode/models/",
-            f"  voice dir      ~/.local/share/localcode/voice/",
-            f"  server log     ~/.local/share/localcode/server.log",
+            "PATHS",
+            "  config          ~/.localcode/config.toml",
+            "  models dir      ~/.local/share/localcode/models/",
+            "  voice dir       ~/.local/share/localcode/voice/",
+            "  server log      ~/.local/share/localcode/server.log",
         ]
         log.append_info("\n".join(lines))
 

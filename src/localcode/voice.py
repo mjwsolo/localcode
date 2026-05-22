@@ -231,10 +231,14 @@ class Recorder:
 
     # If the running RMS stays below this for `silence_window_s` seconds,
     # `silence_seconds` will surpass that window and callers can choose
-    # to stop the recording. Tuned for typical built-in laptop mics —
-    # ~0.005 of full-scale is the noise floor with the lid closed in a
-    # quiet room.
+    # to stop the recording.
     silence_threshold: float = 0.012
+
+    # Hard cap on recording length so a forgotten Space-hold can't
+    # grow the in-memory PCM buffer indefinitely. At 16 kHz mono int16
+    # this is ~9.6 MB per minute; 5 min = ~48 MB which we'll reclaim
+    # on the next stop().
+    MAX_RECORDING_SECONDS: float = 300.0
 
     def __init__(self, state: VoiceState):
         self.state = state
@@ -314,6 +318,16 @@ class Recorder:
             return  # surface later if needed
         if self._sd_recording is not None:
             self._sd_recording.append(indata.copy())
+            # Hard cap so a forgotten hold can't OOM the process. Drop
+            # the OLDEST chunks once we exceed MAX_RECORDING_SECONDS.
+            max_chunks = int(
+                self.MAX_RECORDING_SECONDS
+                * self.state.sample_rate_hz
+                / max(1, frames)
+            )
+            if len(self._sd_recording) > max_chunks:
+                # Trim from the front (ring-buffer behavior).
+                self._sd_recording = self._sd_recording[-max_chunks:]
         # Update live levels for the visualizer + silence detector.
         # indata is int16; convert to abs floats in [0,1].
         try:
