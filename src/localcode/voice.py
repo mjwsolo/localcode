@@ -50,8 +50,11 @@ class VoiceState:
     this dataclass is the in-memory shape."""
     enabled: bool = False
     stt_model_path: Path | None = None
-    tts_engine: str = "say"            # "say" | "piper" | "off"
-    tts_voice: str | None = None       # macOS voice name (`say -v ?`) when engine="say"
+    # Default engine is Piper — high-quality neural voice, free, fully
+    # local, auto-downloads ~70 MB voice file on first use. macOS `say`
+    # is kept as a fallback when Piper deps aren't installed.
+    tts_engine: str = "piper"          # "piper" | "say" | "off"
+    tts_voice: str | None = "en_US-amy-medium"  # default Piper voice id
     # Default "off" so audio doesn't auto-play just because the user
     # enabled voice mode — TTS is a separate /audio toggle now.
     tts_speak_mode: str = "off"        # "off" | "final" | "always"
@@ -602,47 +605,103 @@ def speak(text: str, state: VoiceState) -> None:
     engine = state.tts_engine
 
     def _runner():
+        # Piper-first: try the natural neural voice. If anything goes
+        # wrong (deps missing, voice file unreachable, audio I/O fails),
+        # fall back to macOS `say` so the user still hears something
+        # rather than silent failure.
         try:
-            if engine == "say" and platform.system() == "Darwin":
+            if engine == "piper":
+                ok = _speak_piper(text, state)
+                if ok:
+                    return
+            # macOS `say` fallback (also the explicit engine="say" path)
+            if platform.system() == "Darwin":
                 cmd = ["say"]
-                if state.tts_voice:
-                    cmd.extend(["-v", state.tts_voice])
+                # Only forward a voice arg if it looks like a `say`-style
+                # voice name (Piper IDs contain ":" or "-" patterns that
+                # would confuse say). Leave it unset for default Samantha.
+                v = state.tts_voice or ""
+                if v and "-" not in v.split("_", 1)[-1]:
+                    cmd.extend(["-v", v])
                 cmd.append(text)
                 subprocess.run(cmd, check=False)
-            elif engine == "piper":
-                _speak_piper(text, state)
-            # Unknown engines silently no-op (treat like "off") — this is
-            # voice OUTPUT and shouldn't crash the conversation.
         except Exception:
             pass
 
     threading.Thread(target=_runner, daemon=True).start()
 
 
-def _speak_piper(text: str, state: VoiceState) -> None:
-    """Optional upgrade path. Requires `pip install piper-tts` and a
-    downloaded voice model. See https://github.com/rhasspy/piper."""
+PIPER_VOICE_DIR = Path.home() / ".local" / "share" / "localcode" / "voice" / "piper"
+
+
+def _ensure_piper_voice(voice_id: str) -> Path | None:
+    """Download a Piper voice model (.onnx + .json) on first use.
+
+    `voice_id` examples: "en_US-amy-medium", "en_US-libritts_r-medium",
+    "en_GB-alan-medium". Full catalog at
+    https://github.com/rhasspy/piper/blob/master/VOICES.md
+    """
+    PIPER_VOICE_DIR.mkdir(parents=True, exist_ok=True)
+    onnx = PIPER_VOICE_DIR / f"{voice_id}.onnx"
+    cfg = PIPER_VOICE_DIR / f"{voice_id}.onnx.json"
+    if onnx.is_file() and cfg.is_file():
+        return onnx
+    # Parse e.g. "en_US-amy-medium" → lang "en", country "US", voice "amy", quality "medium"
+    try:
+        lang_country, voice, quality = voice_id.split("-", 2)
+        lang, country = lang_country.split("_", 1)
+    except ValueError:
+        return None
+    base = (
+        f"https://huggingface.co/rhasspy/piper-voices/resolve/main/"
+        f"{lang}/{lang_country}/{voice}/{quality}"
+    )
+    import urllib.request
+    try:
+        if not onnx.is_file():
+            urllib.request.urlretrieve(f"{base}/{voice_id}.onnx", str(onnx))
+        if not cfg.is_file():
+            urllib.request.urlretrieve(f"{base}/{voice_id}.onnx.json", str(cfg))
+        return onnx
+    except Exception:
+        # Clean up partial files so next attempt is fresh.
+        for p in (onnx, cfg):
+            try:
+                if p.is_file() and p.stat().st_size < 1024 * 1024:
+                    p.unlink()
+            except Exception:
+                pass
+        return None
+
+
+def _speak_piper(text: str, state: VoiceState) -> bool:
+    """Piper TTS — natural neural voice, free, fully local.
+
+    Returns True if playback started, False on any failure (so the
+    caller can fall back to macOS `say`). Auto-downloads the .onnx +
+    .json voice file on first use into the piper voice cache.
+    """
     try:
         from piper import PiperVoice  # type: ignore
     except ImportError:
-        return  # silently fall back to no-op; user can switch via /voice
-    # Voice file is whatever the user configured via tts_voice (full path
-    # to a .onnx voice model + sibling .json). Piper does its own audio
-    # output via sounddevice or aplay.
+        return False
     if not state.tts_voice:
-        return
+        return False
+    onnx_path = _ensure_piper_voice(state.tts_voice)
+    if onnx_path is None:
+        return False
     try:
-        voice = PiperVoice.load(state.tts_voice)
-        # Stream audio to default output
+        voice = PiperVoice.load(str(onnx_path))
         import sounddevice as sd
+        import numpy as np
         sample_rate = voice.config.sample_rate
         with sd.OutputStream(samplerate=sample_rate, channels=1, dtype="int16") as out:
             for chunk in voice.synthesize_stream_raw(text):
-                import numpy as np
                 arr = np.frombuffer(chunk, dtype="int16")
                 out.write(arr)
+        return True
     except Exception:
-        pass
+        return False
 
 
 def stop_speaking() -> None:

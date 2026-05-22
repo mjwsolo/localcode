@@ -1632,10 +1632,29 @@ class ChatScreen(Screen):
 
         if sub == "voice" and len(parts) >= 3:
             voice_name = " ".join(parts[2:])
-            state.tts_voice = voice_name
-            log.append_info(
-                f"TTS voice: {voice_name}. Next assistant message will use it."
-            )
+            # `piper:<voice-id>` switches engine to Piper TTS (much more
+            # natural). First use of a piper voice triggers an automatic
+            # ~25-100 MB download of the .onnx voice model from
+            # huggingface.co/rhasspy/piper-voices.
+            if voice_name.startswith("piper:"):
+                voice_id = voice_name[len("piper:"):].strip()
+                if not voice_id:
+                    log.append_info("Usage: /audio voice piper:<voice-id>  e.g. piper:en_US-amy-medium")
+                    return
+                state.tts_engine = "piper"
+                state.tts_voice = voice_id
+                log.append_info(
+                    f"TTS engine: piper · voice: {voice_id}. "
+                    "First use will download the model (~25-100 MB) into "
+                    "~/.local/share/localcode/voice/piper/."
+                )
+            else:
+                state.tts_engine = "say"
+                state.tts_voice = voice_name
+                log.append_info(
+                    f"TTS voice: {voice_name} (macOS say). Next assistant "
+                    "message will use it."
+                )
             return
 
         log.append_info(
