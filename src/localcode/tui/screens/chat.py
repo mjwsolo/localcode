@@ -236,7 +236,7 @@ class _NoTintInput(Input):
                 return self._VOICE_CURSOR_GLYPH
         except Exception:
             pass
-        return self._active_cursor_glyph
+        return self._CURSOR_GLYPH
 
     def render_line(self, y):  # type: ignore[override]
         from rich.text import Text as _RichText
