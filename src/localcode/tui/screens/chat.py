@@ -279,7 +279,19 @@ class _NoTintInput(Input):
             result.stylize_before(
                 self.get_component_rich_style("input--selection"), start, end,
             )
-        if cursor_pos >= len(result.plain):
+        # While recording, SUPPRESS the cursor glyph entirely. The
+        # colored bar appended right after the text is the only
+        # indicator. Otherwise users see "text + ▏ + colored bar" —
+        # the thin cursor floats awkwardly between the dictation and
+        # the bar. With this branch, layout is just "text + colored bar".
+        recording_now = False
+        try:
+            recording_now = getattr(self.screen, "_ptt_recorder", None) is not None
+        except Exception:
+            pass
+        if recording_now:
+            pass  # no cursor cell — let the colored bar serve as caret
+        elif cursor_pos >= len(result.plain):
             result.append(self._active_cursor_glyph, style=cursor_style)
         else:
             # Replace the character at cursor position with the bar
@@ -1216,16 +1228,34 @@ class ChatScreen(Screen):
         if hasattr(event.input, "history_push") and not text.startswith("/"):
             event.input.history_push(text)
         event.input.clear()
-        # Invalidate any in-flight voice transcription so a worker that
-        # finishes AFTER this submit doesn't write the just-submitted
-        # text back into the now-empty input. Bumping the session
-        # counter makes the worker's captured `session_at_start` mismatch
-        # `_ptt_session`, so `_apply_partial_transcript` silently drops
-        # the update. Also clear the prefix so the next voice session
-        # starts fresh.
+        # Belt + suspenders for the "submitted text reappears in the
+        # input" bug. Three layers:
+        #   1. Bump session counter — stale workers' apply call sees
+        #      mismatched session and drops their update.
+        #   2. Clear prefix + last_transcript so next voice session
+        #      starts from a clean slate.
+        #   3. Record submit_ts; _apply_partial_transcript refuses to
+        #      write within 2 seconds of submit_ts (catches races
+        #      I might have missed).
+        #   4. Also force inp.value = "" again on a 100ms tick — if
+        #      anything writes it back in that window, this overrides.
+        import time as _t
         self._ptt_session = getattr(self, "_ptt_session", 0) + 1
         self._ptt_input_prefix = ""
         self._ptt_last_transcript = ""
+        self._ptt_last_submit_ts = _t.time()
+        # Defensive second clear after a tick in case anything wrote
+        # the value back between clear() and now.
+        def _double_clear() -> None:
+            try:
+                inp = self.query_one("#chat-input", Input)
+                if inp.value:
+                    inp.value = ""
+            except Exception:
+                pass
+        self.set_timer(0.1, _double_clear)
+        self.set_timer(0.5, _double_clear)
+        self.set_timer(1.5, _double_clear)
 
         if text.startswith("/"):
             self._handle_command(text)
