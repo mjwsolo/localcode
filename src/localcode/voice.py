@@ -50,14 +50,13 @@ class VoiceState:
     this dataclass is the in-memory shape."""
     enabled: bool = False
     stt_model_path: Path | None = None
-    # Default engine is Piper — high-quality neural voice, free, fully
-    # local. Voice = en_US-lessac-high (professional actor recording,
-    # "high" quality tier = more parameters = more natural prosody;
-    # widely regarded as the most natural English voice in the Piper
-    # catalog). Auto-downloads ~110 MB on first use. macOS `say` is
-    # kept as a fallback when Piper deps aren't installed.
-    tts_engine: str = "piper"          # "piper" | "say" | "off"
-    tts_voice: str | None = "en_US-lessac-high"
+    # Default engine is macOS `say` — instant, zero-download, ships
+    # with the OS. Piper voices were tried as the default but the
+    # user judged them no more natural than `say` for the size cost
+    # (~100 MB per voice). Users who want Piper can opt in via
+    # `/audio voice piper:<voice-id>` and the download happens then.
+    tts_engine: str = "say"            # "say" | "piper" | "off"
+    tts_voice: str | None = None       # let `say` pick the system default voice
     # Default "off" so audio doesn't auto-play just because the user
     # enabled voice mode — TTS is a separate /audio toggle now.
     tts_speak_mode: str = "off"        # "off" | "final" | "always"
@@ -662,19 +661,24 @@ def speak(text: str, state: VoiceState) -> None:
 PIPER_VOICE_DIR = Path.home() / ".local" / "share" / "localcode" / "voice" / "piper"
 
 
-def _ensure_piper_voice(voice_id: str) -> Path | None:
+def _ensure_piper_voice(
+    voice_id: str,
+    on_progress: Callable[[str], None] | None = None,
+) -> Path | None:
     """Download a Piper voice model (.onnx + .json) on first use.
 
     `voice_id` examples: "en_US-amy-medium", "en_US-libritts_r-medium",
-    "en_GB-alan-medium". Full catalog at
+    "en_US-lessac-high". Full catalog at
     https://github.com/rhasspy/piper/blob/master/VOICES.md
+
+    `on_progress` (optional) is called with human-readable status
+    strings like "Downloading en_US-lessac-high.onnx (12/110 MB · 11%)".
     """
     PIPER_VOICE_DIR.mkdir(parents=True, exist_ok=True)
     onnx = PIPER_VOICE_DIR / f"{voice_id}.onnx"
     cfg = PIPER_VOICE_DIR / f"{voice_id}.onnx.json"
     if onnx.is_file() and cfg.is_file():
         return onnx
-    # Parse e.g. "en_US-amy-medium" → lang "en", country "US", voice "amy", quality "medium"
     try:
         lang_country, voice, quality = voice_id.split("-", 2)
         lang, country = lang_country.split("_", 1)
@@ -685,13 +689,42 @@ def _ensure_piper_voice(voice_id: str) -> Path | None:
         f"{lang}/{lang_country}/{voice}/{quality}"
     )
     import urllib.request
+
+    def _make_hook(filename: str):
+        """urlretrieve reporthook → on_progress callback. Throttled to
+        whole-percent changes so we don't spam the UI."""
+        last_pct = [-1]
+        def hook(block_num: int, block_size: int, total_size: int) -> None:
+            if not on_progress or total_size <= 0:
+                return
+            done = min(block_num * block_size, total_size)
+            pct = int(done * 100 / total_size)
+            if pct == last_pct[0]:
+                return
+            last_pct[0] = pct
+            mb_done = done // (1024 * 1024)
+            mb_total = total_size // (1024 * 1024)
+            on_progress(
+                f"Downloading {filename} ({mb_done}/{mb_total} MB · {pct}%)"
+            )
+        return hook
+
     try:
         if not onnx.is_file():
-            urllib.request.urlretrieve(f"{base}/{voice_id}.onnx", str(onnx))
+            urllib.request.urlretrieve(
+                f"{base}/{voice_id}.onnx", str(onnx),
+                reporthook=_make_hook(f"{voice_id}.onnx"),
+            )
         if not cfg.is_file():
-            urllib.request.urlretrieve(f"{base}/{voice_id}.onnx.json", str(cfg))
+            urllib.request.urlretrieve(
+                f"{base}/{voice_id}.onnx.json", str(cfg),
+            )
+        if on_progress:
+            on_progress(f"Voice {voice_id} ready.")
         return onnx
-    except Exception:
+    except Exception as e:
+        if on_progress:
+            on_progress(f"Voice download failed: {e}")
         # Clean up partial files so next attempt is fresh.
         for p in (onnx, cfg):
             try:
