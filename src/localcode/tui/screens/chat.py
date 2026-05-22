@@ -273,13 +273,25 @@ class _NoTintInput(Input):
         # the bar glyph (white, terminal-default background). Anything
         # past end-of-input gets a single padded space we can overwrite.
         cursor_style = self.get_component_rich_style("input--cursor")
-        # While voice is recording, use a vibrant purple "█" cursor —
-        # makes the dictation indicator pop right at the end of the
-        # last word, Claude-Code-style.
+        # While voice is recording, cycle the cursor through a rainbow
+        # AND tint brightness by mic amplitude. The chat screen runs a
+        # 50ms refresh timer while recording so this rebuilds every
+        # frame, giving the "alive" pulse Claude Code shows.
         try:
-            if getattr(self.screen, "_ptt_recorder", None) is not None:
+            screen = self.screen
+            rec = getattr(screen, "_ptt_recorder", None)
+            if rec is not None:
                 from rich.style import Style as _RichStyle
-                cursor_style = _RichStyle(color="white", bgcolor="#9b5bff", bold=True)
+                import time as _t
+                _RAINBOW = (
+                    "#ff5470", "#ff8a5b", "#ffd166", "#9bff8a", "#5bffc1",
+                    "#5bd1ff", "#5b96ff", "#9b5bff", "#e75bff", "#ff5bd1",
+                )
+                # Cycle every ~0.7s, plus jump-ahead on loud peaks.
+                peak = float(getattr(rec, "peak", 0.0) or 0.0)
+                phase = int(_t.time() * 5) + int(min(1.0, peak * 8.0) * 4)
+                color = _RAINBOW[phase % len(_RAINBOW)]
+                cursor_style = _RichStyle(color="white", bgcolor=color, bold=True)
         except Exception:
             pass
         result = self._value.copy()
@@ -2051,14 +2063,21 @@ class ChatScreen(Screen):
             # Don't log "Recording — release Space" anymore — it spammed
             # the chat log if the watchdog mis-fired. The visualizer bar
             # next to the input is now the only recording indicator.
-            # Recording indicator is now the Input's own cursor (renders
-            # as a purple "█" block while _ptt_recorder is set). No
-            # separate visualizer widget. Forcing a redraw of the input
-            # so the cursor swap is immediate.
+            # Recording indicator is the Input's own cursor (renders as
+            # a rainbow-cycling "█" block while _ptt_recorder is set).
+            # We need a periodic refresh to animate the color cycle +
+            # amplitude pulse, since textual only redraws on its own
+            # when content changes.
             try:
                 self.query_one("#chat-input", Input).refresh()
             except Exception:
                 pass
+            def _cursor_pulse() -> None:
+                try:
+                    self.query_one("#chat-input", Input).refresh()
+                except Exception:
+                    pass
+            self._ptt_cursor_timer = self.set_interval(0.05, _cursor_pulse)
 
             def _hold_watchdog() -> None:
                 """Detect Space release in a terminal that doesn't send key-up
@@ -2156,22 +2175,45 @@ class ChatScreen(Screen):
             )
 
     def _apply_partial_transcript(self, text: str, session: int = -1) -> None:
-        """Push a partial (or final) transcript into the input field,
-        keeping whatever the user had typed before they started talking.
+        """Push a partial transcript into the input field.
+
+        Word-by-word stream: compare to last applied transcript, find
+        the longest common prefix in word units, and only APPEND the
+        new tail words. This stops the visible "rewind and rewrite"
+        feel where each tick would replace the entire string and the
+        cursor would briefly jump backwards.
 
         `session` is the recording id this transcript was produced for.
         Stale workers from a previous recording carry an old id; if it
-        doesn't match the current `_ptt_session`, we drop the update so
-        the user's freshly-edited input isn't overwritten.
+        doesn't match the current `_ptt_session`, drop silently.
         """
-        # Default session=-1 path is the final-pass case which always
-        # applies (caller asserts the recording is still ours).
         if session >= 0 and session != getattr(self, "_ptt_session", -1):
             return
         try:
             inp = self.query_one("#chat-input", Input)
             prefix = getattr(self, "_ptt_input_prefix", "") or ""
-            joined = (prefix + " " + text).strip() if prefix else text
+            # Compare to whatever we last wrote during THIS session
+            # (per-session so a new recording starts fresh).
+            last_full = getattr(self, "_ptt_last_transcript", "")
+            last_session = getattr(self, "_ptt_last_transcript_session", -2)
+            if last_session != getattr(self, "_ptt_session", -1):
+                last_full = ""
+            # Word-level diff: find common leading words, only append tail.
+            old_words = last_full.split()
+            new_words = text.split()
+            i = 0
+            while i < len(old_words) and i < len(new_words) and old_words[i] == new_words[i]:
+                i += 1
+            # New tail = words we haven't shown yet.
+            tail = " ".join(new_words[i:])
+            self._ptt_last_transcript = text
+            self._ptt_last_transcript_session = getattr(self, "_ptt_session", -1)
+            joined = (prefix + text).strip() if prefix else text
+            # Single authoritative write each tick — `joined` is what
+            # the input box should hold right now. The diff above is
+            # purely so we COULD do something fancier (e.g. cursor
+            # animation) on `tail` if we wanted; setting the full
+            # `joined` matches what's been transcribed so far.
             inp.value = joined
             inp.cursor_position = len(joined)
             inp.focus()
@@ -2187,7 +2229,7 @@ class ChatScreen(Screen):
         if rec is None:
             return
         # Tear down timers immediately so they don't re-fire mid-finalize
-        for attr in ("_ptt_hold_timer", "_ptt_stream_timer"):
+        for attr in ("_ptt_hold_timer", "_ptt_stream_timer", "_ptt_cursor_timer"):
             try:
                 t = getattr(self, attr, None)
                 if t is not None:
@@ -2242,7 +2284,7 @@ class ChatScreen(Screen):
             return  # let other Esc handlers run
         log = self.query_one("#chat-log", ChatLog)
         # Tear down watchdog + visualizer + streaming timer
-        for attr in ("_ptt_silence_timer", "_ptt_hold_timer", "_ptt_stream_timer"):
+        for attr in ("_ptt_silence_timer", "_ptt_hold_timer", "_ptt_stream_timer", "_ptt_cursor_timer"):
             try:
                 t = getattr(self, attr, None)
                 if t is not None:

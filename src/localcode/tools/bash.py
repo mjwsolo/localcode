@@ -713,6 +713,26 @@ def _normalize_repo_root_variants(cmd: str, repo: str) -> str:
 
 def execute(ctx: ToolContext, args: dict) -> str:
     cmd = _normalize_repo_root_variants(args["command"], str(ctx.repo))
+    # Block lldb / dtrace / spindump attaches to the LocalCode parent
+    # process. The agent kept invoking `lldb --batch -o bt -o quit -p
+    # <localcode-pid>` to debug perceived hangs, which:
+    #   - Triggers macOS Touch ID for "Developer Tools Access"
+    #   - Sends SIGSTOP to the parent (freezing the entire TUI)
+    #   - On detach, often leaves the parent in an unrecoverable state
+    #     and zsh prints "abort" when localcode dies
+    # Hard-deny these commands; show a clear message to the model so
+    # it picks a different debugging strategy (logs, /status, etc.).
+    _lower = cmd.lower()
+    if any(tok in _lower for tok in ("lldb ", "lldb\t", "dtrace ", "spindump ", "sample ")) and (
+        "-p " in cmd or "--pid" in cmd or "attach" in _lower
+    ):
+        return (
+            "REJECTED: attaching debuggers (lldb / dtrace / spindump / sample) "
+            "to running processes is blocked. It triggers macOS Touch ID prompts "
+            "and SIGSTOPs the LocalCode TUI, killing the user's session. "
+            "Use `~/.local/share/localcode/server.log`, `~/.localcode/last_error.log`, "
+            "or the `/status` slash command to diagnose instead."
+        )
     app_session = getattr(ctx.app, "session", None)
     current_task = getattr(app_session, "current_task", None)
     current_task_port = int(getattr(current_task, "active_port", 0) or 0) if current_task is not None else 0
