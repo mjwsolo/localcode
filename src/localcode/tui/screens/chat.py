@@ -2342,8 +2342,15 @@ class ChatScreen(Screen):
                 session_at_start = self._ptt_session
                 def _worker():
                     try:
-                        # Defensive size guard — pywhispercpp's Metal
-                        # backend can segfault on < 0.3 s of audio.
+                        # Bail early if the recording is already over.
+                        # Without this guard a worker that started just
+                        # before release runs the full whisper pipeline
+                        # against stale audio, races with the final
+                        # worker, and can corrupt fd 2 / the Metal KV
+                        # cache. Both manifest as second-press crashes.
+                        if (getattr(self, "_ptt_session", -1) != session_at_start
+                                or getattr(self, "_ptt_recorder", None) is None):
+                            return
                         try:
                             size = snap.stat().st_size
                         except OSError:
@@ -2358,8 +2365,8 @@ class ChatScreen(Screen):
                             )
                     except Exception:
                         # Whisper can raise on malformed WAV / Metal
-                        # buffer mismatch. Swallowing here keeps the
-                        # daemon thread from killing the TUI process.
+                        # buffer mismatch. Swallowing keeps the daemon
+                        # thread from killing the TUI process.
                         pass
                     finally:
                         try:
