@@ -170,51 +170,39 @@ class ModelPickerScreen(Screen):
     def _render_list(self, cur) -> str:
         from ...models_catalog import CHOICES, model_dir
         lines = [f"[bold]{self._title}[/]", ""]
-        # Three compact lines per entry, sized to fit the 56-col box
-        # without wrap:
-        #   " ▸ 4. ★ Qwen 3.6 35B-A3B (UD-Q8_K_XL)"
-        #   "       38.5 GB · ✓ downloaded · ● current"
-        #   "       [dim]unsloth/Qwen3.6-35B-A3B-GGUF[/]"
-        # Focused row gets a soft blue foreground (NOT `bold reverse` —
-        # that produced the white slab visible in earlier screenshots).
-        # Recommended → "★" single-char marker before the name.
-        # Current → "● current" appended to the status line.
-        HILITE = "#7aa2ff"  # softer than C.primary; reads as "highlighted"
+        # Two compact lines per entry — name + status. No source URL
+        # line anymore (that was visual noise; users can find the HF
+        # repo elsewhere). All accent colors use the same muted dim
+        # style — no bright greens / yellows / blues — so the screen
+        # reads as a calm list instead of a busy multicolor block.
         any_rec = False
         for i, c in enumerate(CHOICES, start=1):
             downloaded = c.local_path.is_file()
-            status = (
-                f"[{C.success}]✓ downloaded[/]"
-                if downloaded else "[yellow]↓ needs download[/]"
-            )
+            status_word = "downloaded" if downloaded else "not downloaded"
             is_rec = (c.key == self._recommended_key)
             is_cur = bool(cur and cur.key == c.key)
             if is_rec:
                 any_rec = True
-            rec_marker = f"[{C.primary}]★[/] " if is_rec else "  "
+            rec_marker = "★ " if is_rec else "  "
 
             focused = (i - 1 == self._focused_idx)
-            chevron = f"[{C.primary}]▸[/]" if focused else " "
-            # Color-only highlight — no inverse-video.
-            name_style = (
-                f"[bold {HILITE}]{c.name}[/]" if focused else f"[bold]{c.name}[/]"
-            )
+            chevron = "▸" if focused else " "
+            # Focused row: just bold. No reverse, no special color —
+            # the chevron is enough indication of focus.
+            name_style = f"[bold]{c.name}[/]"
 
-            # Status bits joined by middle-dot so size/state/current
-            # all stay on ONE line inside the box.
-            status_bits = [f"[dim]{c.size_gb:.1f} GB[/]", status]
+            # Status line — all dim, one row, middle-dot separators.
+            status_bits = [f"{c.size_gb:.1f} GB", status_word]
             if is_cur:
-                status_bits.append(f"[{C.success}]● current[/]")
-            status_line = " [dim]·[/] ".join(status_bits)
+                status_bits.append("current")
+            status_line = "[dim]" + " · ".join(status_bits) + "[/]"
 
-            lines.append(f" {chevron} [bold]{i}.[/] {rec_marker}{name_style}")
+            lines.append(f" [dim]{chevron}[/] [bold]{i}.[/] {rec_marker}{name_style}")
             lines.append(f"       {status_line}")
-            lines.append(f"       [dim]{c.hf_repo}[/]")
         lines.append("")
         if any_rec:
-            lines.append(f"[dim][{C.primary}]★[/] = recommended for your machine[/]")
-        lines.append(f"[dim]Saves to {self._tildify(model_dir())}/[/]")
-        lines.append("[dim italic](press d to change)[/]")
+            lines.append("[dim]★ = recommended for your machine[/]")
+        lines.append(f"[dim]Saves to {self._tildify(model_dir())}/  (press d to change)[/]")
         return "\n".join(lines)
 
     def _refresh_list(self) -> None:

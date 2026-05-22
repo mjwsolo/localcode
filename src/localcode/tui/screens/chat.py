@@ -509,6 +509,12 @@ class ChatScreen(Screen):
         background: ansi_default;
         height: 1;
     }
+    /* When the wrap-preview is showing the full multi-line text,
+       hide the single-line input row to stop the "looks like text
+       was auto-typed twice" effect. */
+    #input-row.hidden-by-overflow {
+        display: none;
+    }
     /* Multi-line wrap preview ABOVE the input row. Hidden by default;
        Static.update() fills it when input value exceeds visible width.
        max-height caps growth at 8 visible lines (~640 chars at 80
@@ -1132,12 +1138,17 @@ class ChatScreen(Screen):
             self._do_search(event.value)
             return
         text = event.value
-        # Wrap-preview: when value is long enough to overflow visible
-        # width, render it wrapped in the #input-overflow Static above
-        # the input row. Otherwise hide. This is the "input grows
-        # vertically" feature for long voice transcripts.
+        # Wrap-preview: when value overflows the visible width, render
+        # the FULL value wrapped in #input-overflow above the input
+        # row AND hide the single-line input row entirely. Otherwise
+        # the user sees the same text twice — once wrapped above, once
+        # scrolled below — and the bottom row looks like "auto-typed"
+        # input they can't get rid of. Enter still submits (the Input
+        # widget receives the keypress even when display: none isn't
+        # technically applied to focus).
         try:
             overflow = self.query_one("#input-overflow", Static)
+            input_row = self.query_one("#input-row")
             try:
                 avail = max(20, (self.size.width or 80) - 4)
             except Exception:
@@ -1151,9 +1162,11 @@ class ChatScreen(Screen):
                 )
                 overflow.update(wrapped)
                 overflow.add_class("active")
+                input_row.add_class("hidden-by-overflow")
             else:
                 overflow.update("")
                 overflow.remove_class("active")
+                input_row.remove_class("hidden-by-overflow")
         except Exception:
             pass
         menu = self.query_one("#slash-menu", Static)

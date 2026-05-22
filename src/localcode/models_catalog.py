@@ -92,7 +92,7 @@ class ModelChoice:
 CHOICES: list[ModelChoice] = [
     ModelChoice(
         key="gemma",
-        name="Gemma 4 26B-A4B (Unsloth UD-IQ3_S)",
+        name="Gemma 4 26B-A4B (Q3)",
         hf_repo="unsloth/gemma-4-26B-A4B-it-GGUF",
         filename="gemma-4-26B-A4B-it-UD-IQ3_S.gguf",
         size_gb=11.2,
@@ -107,7 +107,7 @@ CHOICES: list[ModelChoice] = [
     ),
     ModelChoice(
         key="qwen",
-        name="Qwen 3.6 35B-A3B (Unsloth UD-IQ2_M)",
+        name="Qwen 3.6 35B-A3B (Q2)",
         hf_repo="unsloth/Qwen3.6-35B-A3B-GGUF",
         filename="Qwen3.6-35B-A3B-UD-IQ2_M.gguf",
         size_gb=10.7,
@@ -122,7 +122,7 @@ CHOICES: list[ModelChoice] = [
     ),
     ModelChoice(
         key="gemma-q8",
-        name="Gemma 4 26B-A4B (UD-Q8_K_XL)",
+        name="Gemma 4 26B-A4B (Q8)",
         hf_repo="unsloth/gemma-4-26B-A4B-it-GGUF",
         filename="gemma-4-26B-A4B-it-UD-Q8_K_XL.gguf",
         size_gb=28.0,
@@ -137,7 +137,7 @@ CHOICES: list[ModelChoice] = [
     ),
     ModelChoice(
         key="qwen-q8",
-        name="Qwen 3.6 35B-A3B (UD-Q8_K_XL)",
+        name="Qwen 3.6 35B-A3B (Q8)",
         hf_repo="unsloth/Qwen3.6-35B-A3B-GGUF",
         filename="Qwen3.6-35B-A3B-UD-Q8_K_XL.gguf",
         size_gb=38.5,
