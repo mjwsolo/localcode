@@ -700,15 +700,24 @@ def _strip_for_tts(text: str) -> str:
     return text
 
 
+# Module-level speak state — used so a new speak() can interrupt the
+# previous one (otherwise two consecutive replies talk over each other).
+_active_say_proc: "subprocess.Popen | None" = None
+_active_speak_abort = _threading.Event()
+
+
 def speak(text: str, state: VoiceState) -> None:
     """Speak `text` according to the current TTS engine config.
 
-    Non-blocking — spawns the speaker process in a background thread so
-    the agent doesn't pause while audio plays. Safe to call concurrently;
-    each call queues its own subprocess.
+    Non-blocking. CRITICAL: every call interrupts any in-flight speak
+    (kills the `say` subprocess and signals Piper to stop streaming).
+    Without this, sending two messages quickly produces overlapping
+    audio that talks over itself.
     """
     if not text or state.tts_engine == "off":
         return
+    # Interrupt the previous speech first.
+    stop_speaking()
     raw_text = text
     text = _strip_for_tts(text)
     # Diagnostic log so when the user hears something weird, we can
@@ -732,26 +741,31 @@ def speak(text: str, state: VoiceState) -> None:
     engine = state.tts_engine
 
     def _runner():
-        # Piper-first: try the natural neural voice. If anything goes
-        # wrong (deps missing, voice file unreachable, audio I/O fails),
-        # fall back to macOS `say` so the user still hears something
-        # rather than silent failure.
+        global _active_say_proc
+        # Fresh abort token for this speak. stop_speaking() sets the
+        # event to abort, but we want a clean state per utterance.
+        _active_speak_abort.clear()
         try:
             if engine == "piper":
                 ok = _speak_piper(text, state)
                 if ok:
                     return
-            # macOS `say` fallback (also the explicit engine="say" path)
             if platform.system() == "Darwin":
                 cmd = ["say"]
-                # Only forward a voice arg if it looks like a `say`-style
-                # voice name (Piper IDs contain ":" or "-" patterns that
-                # would confuse say). Leave it unset for default Samantha.
                 v = state.tts_voice or ""
                 if v and "-" not in v.split("_", 1)[-1]:
                     cmd.extend(["-v", v])
                 cmd.append(text)
-                subprocess.run(cmd, check=False)
+                # Track the Popen so stop_speaking() can terminate it
+                # mid-utterance (subprocess.run blocks; Popen lets us
+                # signal-kill from another thread).
+                try:
+                    _active_say_proc = subprocess.Popen(cmd)
+                    _active_say_proc.wait()
+                except Exception:
+                    pass
+                finally:
+                    _active_say_proc = None
         except Exception:
             pass
 
@@ -865,7 +879,11 @@ def _speak_piper(text: str, state: VoiceState) -> bool:
         with sd.OutputStream(samplerate=sample_rate, channels=1, dtype="int16") as out:
             wrote_anything = False
             for chunk in voice.synthesize(text):
-                # AudioChunk → int16 bytes → sounddevice
+                # Bail mid-stream when another speak() interrupts us
+                # (sets _active_speak_abort). Without this, two
+                # consecutive replies overlap audibly.
+                if _active_speak_abort.is_set():
+                    break
                 arr = np.frombuffer(chunk.audio_int16_bytes, dtype="int16")
                 if arr.size:
                     out.write(arr)
@@ -876,7 +894,26 @@ def _speak_piper(text: str, state: VoiceState) -> bool:
 
 
 def stop_speaking() -> None:
-    """Best-effort interrupt of any in-flight TTS playback. macOS `say`
-    can be killed via pkill; piper streams die when we close their thread."""
+    """Interrupt any in-flight TTS playback.
+
+    Three vectors so nothing slips through:
+      1. Signal the Piper streaming loop to bail at next chunk boundary
+         (via the module-level abort event).
+      2. Terminate the tracked `say` subprocess Popen if one is running.
+      3. Belt + suspenders pkill -9 say so any untracked `say` from a
+         prior session/process also dies.
+    """
+    _active_speak_abort.set()
+    global _active_say_proc
+    proc = _active_say_proc
+    if proc is not None:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
     if platform.system() == "Darwin":
-        subprocess.run(["pkill", "-9", "say"], check=False, capture_output=True)
+        try:
+            subprocess.run(["pkill", "-9", "say"],
+                           check=False, capture_output=True)
+        except Exception:
+            pass
