@@ -293,11 +293,16 @@ class _NoTintInput(Input):
                 new_text.stylize(span.style, span.start, span.end)
             new_text.stylize(cursor_style, cursor_pos, cursor_pos + 1)
             result = new_text
-        # Voice recording? Append a colored █ to the end of the text
-        # as a sibling-cell with its own style. This puts the bar
-        # INLINE with the dictation (right after the cursor) and uses
-        # a Rich span style so apply_style at the end doesn't blow it
-        # away — apply_style only sets cells without an existing style.
+        # Voice recording? Append a colored block character DIRECTLY
+        # after the text (no separator space). Three things vary:
+        #   - FILL CHARACTER (▁ → █) based on mic peak — makes the bar
+        #     visibly grow up and down with voice volume.
+        #   - FOREGROUND COLOR cycles through the rainbow palette over
+        #     time (color phase jumps forward on loud peaks).
+        #   - BACKGROUND COLOR is a dim version of the same hue, so the
+        #     unfilled portion of the cell never shows as "gray" — it
+        #     looks like a colored glow with a brighter bar growing
+        #     inside it.
         try:
             screen = self.screen
             rec = getattr(screen, "_ptt_recorder", None)
@@ -308,19 +313,18 @@ class _NoTintInput(Input):
                     "#ff5470", "#ff8a5b", "#ffd166", "#9bff8a", "#5bffc1",
                     "#5bd1ff", "#5b96ff", "#9b5bff", "#e75bff", "#ff5bd1",
                 )
+                _FILL = ("▁", "▂", "▃", "▄", "▅", "▆", "▇", "█")
                 peak = float(getattr(rec, "peak", 0.0) or 0.0)
-                phase = int(_t.time() * 4) + int(min(1.0, peak * 8.0) * 4)
-                base = _RAINBOW[phase % len(_RAINBOW)]
-                # Brightness modulation so the bar visibly pulses with
-                # amplitude — quiet = dim, loud = full saturation.
-                hb = base.lstrip("#")
+                amp = min(1.0, peak * 8.0)
+                idx = max(1, min(len(_FILL) - 1, int(amp * len(_FILL))))
+                bar_char = _FILL[idx]
+                phase = int(_t.time() * 4) + int(amp * 4)
+                hb = _RAINBOW[phase % len(_RAINBOW)].lstrip("#")
                 r0, g0, b0 = int(hb[0:2], 16), int(hb[2:4], 16), int(hb[4:6], 16)
-                ity = 0.4 + 0.6 * min(1.0, peak * 8.0)
-                color = f"#{int(r0*ity):02x}{int(g0*ity):02x}{int(b0*ity):02x}"
-                # Append a space + the bar. The space is a separator so
-                # the bar doesn't visually merge with the cursor cell.
-                bar_text = _RichText(" █", end="")
-                bar_text.stylize(_RichStyle(color=color, bold=True), 1, 2)
+                fg = f"#{r0:02x}{g0:02x}{b0:02x}"
+                bg = f"#{int(r0*0.25):02x}{int(g0*0.25):02x}{int(b0*0.25):02x}"
+                bar_text = _RichText(bar_char, end="")
+                bar_text.stylize(_RichStyle(color=fg, bgcolor=bg, bold=True), 0, 1)
                 result = result + bar_text
         except Exception:
             pass
