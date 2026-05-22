@@ -620,6 +620,38 @@ class Recorder:
 
 # ─────────────────────────── TTS ───────────────────────────
 
+def _strip_for_tts(text: str) -> str:
+    """Strip code blocks, inline code, and noisy punctuation before TTS.
+
+    macOS `say` reads code blocks literally — including announcing
+    every capital letter ("print capital H e l l o") and every
+    punctuation symbol ("quote", "exclamation", "open paren"). The
+    output sounds like gibberish. Strip fenced code, inline code,
+    markdown markers, and URLs so the assistant speaks the prose
+    explanation only.
+    """
+    if not text:
+        return ""
+    import re as _re
+    # Fenced code blocks (```...```)
+    text = _re.sub(r"```[\s\S]*?```", " (code) ", text)
+    # Inline code (`...`)
+    text = _re.sub(r"`[^`\n]*`", " (code) ", text)
+    # Strip markdown emphasis markers (* and _) but keep the words
+    text = _re.sub(r"[*_]{1,3}([^*_\n]+)[*_]{1,3}", r"\1", text)
+    # URLs — say reads "h t t p colon slash slash..." which is awful
+    text = _re.sub(r"https?://\S+", " (link) ", text)
+    # Headings — drop the # markers
+    text = _re.sub(r"^#{1,6}\s+", "", text, flags=_re.MULTILINE)
+    # Bullet markers
+    text = _re.sub(r"^[\s]*[-*•]\s+", "", text, flags=_re.MULTILINE)
+    # Collapse multiple "(code)" placeholders into one
+    text = _re.sub(r"(\s*\(code\)\s*){2,}", " (code) ", text)
+    # Squeeze whitespace
+    text = " ".join(text.split())
+    return text
+
+
 def speak(text: str, state: VoiceState) -> None:
     """Speak `text` according to the current TTS engine config.
 
@@ -628,6 +660,12 @@ def speak(text: str, state: VoiceState) -> None:
     each call queues its own subprocess.
     """
     if not text or state.tts_engine == "off":
+        return
+    # Strip code blocks / URLs / markdown markers — TTS sounds like
+    # gibberish when reading them aloud ("print capital H quote
+    # Hello exclamation quote close paren").
+    text = _strip_for_tts(text)
+    if not text:
         return
     engine = state.tts_engine
 
