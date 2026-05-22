@@ -647,6 +647,16 @@ def _strip_for_tts(text: str) -> str:
     text = _re.sub(r"^[\s]*[-*•]\s+", "", text, flags=_re.MULTILINE)
     # Collapse multiple "(code)" placeholders into one
     text = _re.sub(r"(\s*\(code\)\s*){2,}", " (code) ", text)
+    # Strip box-drawing chars (▏ █ ▁ etc), emoji, and other symbols
+    # that macOS `say` reads as words (sometimes "capital T" for a
+    # specific glyph). Anything outside basic ASCII letters/numbers/
+    # common punctuation gets dropped. Keep apostrophes + dashes for
+    # natural speech.
+    text = _re.sub(r"[^\x20-\x7E]", " ", text)
+    # Strip standalone single capital letters at word boundaries —
+    # `say` announces these as "capital T" / "capital X". Common in
+    # bullet markers, math notation, list labels.
+    text = _re.sub(r"\b[A-Z]\b(?!\.)", " ", text)
     # Squeeze whitespace
     text = " ".join(text.split())
     return text
