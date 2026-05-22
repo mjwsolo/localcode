@@ -122,6 +122,13 @@ class LocalCodeTUI(App):
                 ServerManager.get().shutdown(force=True)
             except Exception:
                 pass
+            # Stop any in-flight TTS playback (`say` subprocess) — without
+            # this the voice keeps talking after the TUI is gone.
+            try:
+                from ..voice import stop_speaking as _stop
+                _stop()
+            except Exception:
+                pass
             try:
                 from ..tools.bash import reap_background_processes
                 reap_background_processes()
@@ -155,6 +162,13 @@ class LocalCodeTUI(App):
             # force=True — app is exiting, kernel reclaims Metal on
             # process death so the 5-10 s graceful dealloc is wasted time.
             ServerManager.get().shutdown(force=True)
+        except Exception:
+            pass
+        # Same for any in-flight TTS — kill it now so the assistant
+        # voice doesn't keep talking after the user closed the TUI.
+        try:
+            from ..voice import stop_speaking as _stop
+            _stop()
         except Exception:
             pass
         # Reap any test/server apps the agent backgrounded via the bash
