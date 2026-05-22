@@ -29,9 +29,10 @@ _PALETTE = [
     "#5bd1ff", "#5b96ff", "#9b5bff", "#e75bff", "#ff5bd1",
 ]
 
-# How many cells wide the bar itself is. Three full-block columns of
-# the same height read as one "wide |" bar at a glance.
-_BAR_WIDTH = 3
+# Bar is one cell wide — reads as a single thin pulsing bar at a glance.
+# Two cells looked chunky; one is the right amount of presence inline
+# with the input text.
+_BAR_WIDTH = 1
 
 
 class VoiceVisualizer(Static):
@@ -107,6 +108,8 @@ class VoiceVisualizer(Static):
         t = time.time() - self._t0
         color = _PALETTE[int(t * 3) % len(_PALETTE)]
 
+        # Just the bar — no REC timer, no elapsed seconds. The bar IS
+        # the indicator. Trailing space keeps it visually separated
+        # from whatever sits to its right.
         bar = "".join(f"[{color}]{char}[/]" for _ in range(_BAR_WIDTH))
-        elapsed = t
-        self.update(f"{bar} [dim]REC {elapsed:.1f}s[/]")
+        self.update(f"{bar}")

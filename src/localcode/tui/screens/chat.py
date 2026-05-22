@@ -565,13 +565,15 @@ class ChatScreen(Screen):
         yield Static("", id="queue-line")
         yield Static("", id="search-bar")
         yield Input(placeholder="Search conversation...", id="search-input")
-        # Voice visualizer sits directly above the input row; hidden when
-        # not recording (display:none) so it costs zero render budget.
+        # Voice visualizer sits INLINE inside the input row, to the right
+        # of the text being dictated. Hidden when not recording. Pulses
+        # with mic volume so the user has live feedback at the cursor
+        # rather than as a separate bar above the input.
         from ..widgets.voice_visualizer import VoiceVisualizer
-        yield VoiceVisualizer(id="voice-visualizer")
         with Horizontal(id="input-row"):
             yield Static("›", id="input-prompt")
             yield _NoTintInput(placeholder="", id="chat-input")
+            yield VoiceVisualizer(id="voice-visualizer")
         # Slash command palette appears BELOW the input (terminal coding tools style),
         # not above. Visually it reads as a dropdown extending downward from
         # the prompt the user is typing in.
@@ -1983,7 +1985,9 @@ class ChatScreen(Screen):
                 self._ptt_input_prefix = self.query_one("#chat-input", Input).value or ""
             except Exception:
                 self._ptt_input_prefix = ""
-            log.append_info("Recording — release Space to stop, Esc to cancel.")
+            # Don't log "Recording — release Space" anymore — it spammed
+            # the chat log if the watchdog mis-fired. The visualizer bar
+            # next to the input is now the only recording indicator.
             # Visualizer + key-repeat watchdog + streaming loop
             try:
                 from ..widgets.voice_visualizer import VoiceVisualizer
@@ -1993,17 +1997,45 @@ class ChatScreen(Screen):
                 pass
 
             def _hold_watchdog() -> None:
-                """Stop recording when no Space event arrives for 350 ms
-                AFTER the 500 ms grace window (terminals delay key-repeat
-                by ~500 ms, so a too-eager check would false-stop on hold).
+                """Detect Space release in a terminal that doesn't send key-up
+                events. We watch the gap between consecutive Space events.
+
+                Three-phase logic to avoid the false-stop bug where the
+                watchdog fired BEFORE the first key-repeat could arrive:
+
+                1. WAIT_FOR_FIRST_REPEAT (0 to ~1.2 s): hold open. macOS
+                   default initial-key-repeat delay is 500 ms but it's
+                   user-configurable up to 2 s. We give it 1.2 s of grace.
+                   During this window, EITHER a repeat lands (→ phase 2)
+                   OR no repeat lands (→ user tapped, fall back to
+                   silence-auto-stop, phase 3).
+                2. STEADY_HOLD: repeats arriving regularly (every ~33 ms
+                   after initial). Stop when gap > 350 ms.
+                3. TAP_FALLBACK: no repeat arrived — user tapped Space.
+                   Stop on 1.5 s of silence (from the Recorder).
                 """
                 r = self._ptt_recorder
                 if r is None:
                     return
-                elapsed = _t.time() - self._ptt_start_ts
-                if elapsed < 0.5:
-                    return  # grace window
-                gap = _t.time() - self._ptt_last_key_ts
+                now = _t.time()
+                elapsed = now - self._ptt_start_ts
+                # We learn the user is HOLDING when last_key_ts advances
+                # past start_ts (a key-repeat arrived).
+                got_repeat = self._ptt_last_key_ts > self._ptt_start_ts + 0.01
+
+                # Phase 1: wait up to 1.2 s for the first repeat
+                if not got_repeat and elapsed < 1.2:
+                    return
+                # Phase 3: user tapped, no hold → use silence as stop
+                if not got_repeat:
+                    try:
+                        if r.silence_seconds > 1.5:
+                            self._ptt_stop_and_finalize()
+                    except Exception:
+                        pass
+                    return
+                # Phase 2: steady hold — release when gap > 350 ms
+                gap = now - self._ptt_last_key_ts
                 if gap > 0.35:
                     self._ptt_stop_and_finalize()
             self._ptt_hold_timer = self.set_interval(0.08, _hold_watchdog)
@@ -2034,7 +2066,11 @@ class ChatScreen(Screen):
                         self._ptt_streaming_busy = False
                 import threading as _t2
                 _t2.Thread(target=_worker, daemon=True).start()
-            self._ptt_stream_timer = self.set_interval(1.5, _stream_tick)
+            # Faster than 1.5 s feels word-by-word; whisper distil-medium.en
+            # runs ~15× realtime on M5 Max so re-decoding every 0.6 s on
+            # 1-10 s of audio fits with margin. Concurrency-guarded so
+            # we don't overlap if a chunk takes longer than the interval.
+            self._ptt_stream_timer = self.set_interval(0.6, _stream_tick)
         except Exception as e:
             log.append_error(f"Couldn't start mic: {e}")
 
