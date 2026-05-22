@@ -23,6 +23,7 @@ from __future__ import annotations
 from typing import Callable
 
 from . import (
+    agent,
     append_file,
     bash,
     edit_diff,
@@ -59,6 +60,7 @@ _TOOLS: dict[str, tuple[dict, Callable[[ToolContext, dict], str]]] = {
     "web_search":     (web_search.SCHEMA,     web_search.execute),
     "web_fetch":      (web_fetch.SCHEMA,      web_fetch.execute),
     "skill":          (skill_tool.SCHEMA,     skill_tool.execute),
+    "agent":          (agent.SCHEMA,          agent.execute),
     "enter_plan_mode": (plan_mode.ENTER_SCHEMA, plan_mode.execute_enter),
     "exit_plan_mode":  (plan_mode.EXIT_SCHEMA,  plan_mode.execute_exit),
 }
@@ -78,6 +80,7 @@ _PUBLIC_TOOL_NAMES = [
     "web_search",
     "web_fetch",
     "skill",
+    "agent",
 ]
 
 ALL_SCHEMAS: list[dict] = [
@@ -120,8 +123,21 @@ def schemas_for_goal(
         # Search/discovery — without these the model resorts to bash+grep / curl
         # for everything and the user sees the "google scraped HTML" failure mode.
         "grep", "glob", "web_search", "web_fetch", "skill",
+        # Sub-agent — lets the model spawn focused sub-tasks (explore/plan/verify
+        # /general-purpose) so it doesn't burn its own context on long searches.
+        "agent",
     }
-    return schemas_for_names(selected)
+    schemas = schemas_for_names(selected)
+    # MCP tools — any tools exposed by user-configured MCP servers in
+    # ~/.localcode/mcp.json. Names are prefixed `mcp_<server>_<tool>`
+    # so they don't collide with built-ins. Best-effort: if no servers
+    # are configured or any fail to connect, we just return built-ins.
+    try:
+        from ..mcp import mcp_tool_schemas
+        schemas = schemas + mcp_tool_schemas()
+    except Exception:
+        pass
+    return schemas
 
 _MODULES = {
     "read_file": read_file,
@@ -208,6 +224,20 @@ def dispatch_result(name: str, ctx: ToolContext, args: dict) -> ToolResult:
     # — `'list_files '` instead of `'list_files'` — which would cause an
     # otherwise-valid call to fail.
     clean = (name or "").strip()
+    # MCP tool? Dispatch to the right server and return its text content.
+    # These tool names have the form mcp_<server>_<tool> and don't appear
+    # in _TOOLS — they're added dynamically by mcp_tool_schemas().
+    if clean.startswith("mcp_"):
+        try:
+            from ..mcp import dispatch_mcp_tool
+            text = dispatch_mcp_tool(clean, args if isinstance(args, dict) else {})
+            if text is not None:
+                ok = not str(text).startswith("REJECTED:") and not str(text).startswith("MCP call ")
+                return ToolResult(text=str(text), ok=ok,
+                                  facts={"tool": clean, "ok": ok})
+        except Exception as e:
+            return ToolResult(text=f"MCP dispatch error: {e}", ok=False,
+                              facts={"tool": clean, "ok": False})
     pair = _TOOLS.get(clean)
     if pair is None:
         # Use the error-code system so the user gets a documented [Eccc]

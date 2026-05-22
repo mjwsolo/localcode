@@ -171,6 +171,12 @@ class LocalCodeTUI(App):
             _stop()
         except Exception:
             pass
+        # Tear down MCP server subprocesses so they don't outlive us.
+        try:
+            from ..mcp import shutdown_all as _mcp_down
+            _mcp_down()
+        except Exception:
+            pass
         # Reap any test/server apps the agent backgrounded via the bash
         # tool (e.g. `python3 app.py &` to verify a build). Without this,
         # those interpreters spin at 100 % CPU forever after the user
