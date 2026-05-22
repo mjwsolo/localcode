@@ -183,6 +183,63 @@ def _clean_transcript(text: str) -> str:
     return " ".join(text.split())
 
 
+def host_terminal_supports_mic() -> tuple[bool, str]:
+    """Detect if the terminal hosting localcode can request mic access.
+
+    macOS shows the native "Allow Mic?" dialog only if the parent app
+    (the terminal) declares NSMicrophoneUsageDescription in its
+    Info.plist. Terminal.app + iTerm + Ghostty + Alacritty have it;
+    VS Code's integrated terminal historically does NOT — so PortAudio
+    fails silently with "permission denied" and the user never sees a
+    system prompt.
+
+    Returns (ok, hint). When `ok=False`, hint explains the issue.
+    """
+    import platform
+    if platform.system() != "Darwin":
+        return True, ""
+    # Walk up the process tree looking for a terminal app bundle.
+    try:
+        import subprocess as _sp
+        pid = os.getppid()
+        for _ in range(8):  # don't loop forever
+            out = _sp.run(
+                ["ps", "-o", "comm=,ppid=", "-p", str(pid)],
+                capture_output=True, text=True, timeout=2,
+            ).stdout.strip()
+            if not out:
+                break
+            parts = out.rsplit(None, 1)
+            if len(parts) != 2:
+                break
+            comm, ppid_str = parts[0], parts[1]
+            lower = comm.lower()
+            if "code helper" in lower or "code.app" in lower:
+                return False, (
+                    "Running inside VS Code's integrated terminal. VS Code's "
+                    "Info.plist doesn't declare microphone usage, so macOS "
+                    "won't show the permission dialog and PortAudio will fail "
+                    "silently. Open Terminal.app or iTerm instead, run "
+                    "`localcode`, and the system will ask for mic access on "
+                    "first /voice."
+                )
+            if (
+                "terminal.app" in lower or "iterm" in lower
+                or "ghostty" in lower or "alacritty" in lower
+                or "kitty" in lower or "warp" in lower
+            ):
+                return True, ""
+            if ppid_str == "1" or ppid_str == "0":
+                break
+            try:
+                pid = int(ppid_str)
+            except ValueError:
+                break
+    except Exception:
+        pass
+    return True, ""  # unknown — let the OS prompt or PortAudio surface real error
+
+
 def transcribe(state: VoiceState, audio_wav_path: Path) -> tuple[bool, str]:
     """Transcribe a WAV file with whisper.cpp via pywhispercpp.
 

@@ -223,6 +223,20 @@ class _NoTintInput(Input):
     # is over it (same trade-off as block / underline cursors). When the
     # caret is past end-of-input there's nothing to hide.
     _CURSOR_GLYPH = "▏"
+    # When voice mode is recording, swap the thin "▏" cursor for a
+    # full-cell "█" colored block — that's the chunky bar Claude Code
+    # shows at the end of the dictated text while listening.
+    _VOICE_CURSOR_GLYPH = "█"
+
+    @property
+    def _active_cursor_glyph(self) -> str:
+        try:
+            screen = self.screen
+            if getattr(screen, "_ptt_recorder", None) is not None:
+                return self._VOICE_CURSOR_GLYPH
+        except Exception:
+            pass
+        return self._active_cursor_glyph
 
     def render_line(self, y):  # type: ignore[override]
         from rich.text import Text as _RichText
@@ -244,10 +258,10 @@ class _NoTintInput(Input):
                 style=self.get_component_rich_style("input--placeholder"),
             )
             if len(placeholder) == 0:
-                placeholder = _RichText(self._CURSOR_GLYPH, end="")
+                placeholder = _RichText(self._active_cursor_glyph, end="")
             else:
                 placeholder = _RichText(
-                    self._CURSOR_GLYPH + str(placeholder)[1:],
+                    self._active_cursor_glyph + str(placeholder)[1:],
                     end="",
                     style=placeholder.style,
                 )
@@ -259,6 +273,15 @@ class _NoTintInput(Input):
         # the bar glyph (white, terminal-default background). Anything
         # past end-of-input gets a single padded space we can overwrite.
         cursor_style = self.get_component_rich_style("input--cursor")
+        # While voice is recording, use a vibrant purple "█" cursor —
+        # makes the dictation indicator pop right at the end of the
+        # last word, Claude-Code-style.
+        try:
+            if getattr(self.screen, "_ptt_recorder", None) is not None:
+                from rich.style import Style as _RichStyle
+                cursor_style = _RichStyle(color="white", bgcolor="#9b5bff", bold=True)
+        except Exception:
+            pass
         result = self._value.copy()
         if not self.selection.is_empty:
             start, end = self.selection
@@ -267,14 +290,14 @@ class _NoTintInput(Input):
                 self.get_component_rich_style("input--selection"), start, end,
             )
         if cursor_pos >= len(result.plain):
-            result.append(self._CURSOR_GLYPH, style=cursor_style)
+            result.append(self._active_cursor_glyph, style=cursor_style)
         else:
             # Replace the character at cursor position with the bar
             # glyph. Rich's Text doesn't have a direct "replace at
             # index" — rebuild the plain string with substitution and
             # reapply the cursor style on that cell.
             plain = result.plain
-            new_plain = plain[:cursor_pos] + self._CURSOR_GLYPH + plain[cursor_pos + 1:]
+            new_plain = plain[:cursor_pos] + self._active_cursor_glyph + plain[cursor_pos + 1:]
             new_text = _RichText(new_plain, end="", style=result.style)
             # Preserve the value's original styling on non-cursor spans
             for span in result.spans:
@@ -578,15 +601,15 @@ class ChatScreen(Screen):
         yield Static("", id="queue-line")
         yield Static("", id="search-bar")
         yield Input(placeholder="Search conversation...", id="search-input")
-        # Voice visualizer sits INLINE inside the input row, to the right
-        # of the text being dictated. Hidden when not recording. Pulses
-        # with mic volume so the user has live feedback at the cursor
-        # rather than as a separate bar above the input.
-        from ..widgets.voice_visualizer import VoiceVisualizer
+        # Voice visualizer is no longer a separate widget. The Input's
+        # OWN cursor switches to a purple "█" block while recording —
+        # see _NoTintInput._active_cursor_glyph + the cursor_style
+        # override in render_line. That puts the bar exactly where the
+        # user expects: right at the end of the dictated text, inline
+        # with the typed content.
         with Horizontal(id="input-row"):
             yield Static("›", id="input-prompt")
             yield _NoTintInput(placeholder="", id="chat-input")
-            yield VoiceVisualizer(id="voice-visualizer")
         # Slash command palette appears BELOW the input (terminal coding tools style),
         # not above. Visually it reads as a dropdown extending downward from
         # the prompt the user is typing in.
@@ -1418,6 +1441,7 @@ class ChatScreen(Screen):
             log.append_info(
                 f"Voice mode ON. Hold {state.ptt_key.upper()} to talk."
             )
+            self._maybe_warn_terminal_mic_access(log)
             return
 
         # ── explicit subcommands (power users) ─────────────────────
@@ -1552,6 +1576,19 @@ class ChatScreen(Screen):
         log.append_info(
             f"Voice mode ON. Hold {state.ptt_key.upper()} to talk."
         )
+        self._maybe_warn_terminal_mic_access(log)
+
+    def _maybe_warn_terminal_mic_access(self, log) -> None:
+        """If the host terminal can't request mic access (e.g. VS Code's
+        integrated terminal), warn the user upfront so they don't waste
+        time wondering why Space-hold does nothing."""
+        try:
+            from ...voice import host_terminal_supports_mic
+            ok, hint = host_terminal_supports_mic()
+            if not ok and hint:
+                log.append_info(hint)
+        except Exception:
+            pass
 
     def _finish_vision_download(self, ok: bool, result: str, choice_key: str) -> None:
         """Called on the UI thread when the background mmproj download
@@ -2014,11 +2051,12 @@ class ChatScreen(Screen):
             # Don't log "Recording — release Space" anymore — it spammed
             # the chat log if the watchdog mis-fired. The visualizer bar
             # next to the input is now the only recording indicator.
-            # Visualizer + key-repeat watchdog + streaming loop
+            # Recording indicator is now the Input's own cursor (renders
+            # as a purple "█" block while _ptt_recorder is set). No
+            # separate visualizer widget. Forcing a redraw of the input
+            # so the cursor swap is immediate.
             try:
-                from ..widgets.voice_visualizer import VoiceVisualizer
-                vis = self.query_one("#voice-visualizer", VoiceVisualizer)
-                vis.activate(rec)
+                self.query_one("#chat-input", Input).refresh()
             except Exception:
                 pass
 
@@ -2157,10 +2195,10 @@ class ChatScreen(Screen):
             except Exception:
                 pass
             setattr(self, attr, None)
+        # Recording indicator was the cursor; refresh so it reverts to
+        # the normal thin "▏" glyph now that _ptt_recorder is None.
         try:
-            from ..widgets.voice_visualizer import VoiceVisualizer
-            vis = self.query_one("#voice-visualizer", VoiceVisualizer)
-            vis.deactivate()
+            self.query_one("#chat-input", Input).refresh()
         except Exception:
             pass
         try:
@@ -2212,10 +2250,10 @@ class ChatScreen(Screen):
             except Exception:
                 pass
             setattr(self, attr, None)
+        # Recording indicator was the cursor; refresh so it reverts to
+        # the normal thin "▏" glyph now that _ptt_recorder is None.
         try:
-            from ..widgets.voice_visualizer import VoiceVisualizer
-            vis = self.query_one("#voice-visualizer", VoiceVisualizer)
-            vis.deactivate()
+            self.query_one("#chat-input", Input).refresh()
         except Exception:
             pass
         # Stop the recorder, discard the wav
