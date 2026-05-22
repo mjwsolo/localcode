@@ -223,28 +223,14 @@ class _NoTintInput(Input):
     # is over it (same trade-off as block / underline cursors). When the
     # caret is past end-of-input there's nothing to hide.
     _CURSOR_GLYPH = "▏"
-    # While recording, the cursor cycles through these 8 vertical fill
-    # levels based on mic amplitude — visually "moves up and down" with
-    # voice volume. Plus the rainbow palette in render_line tints it.
-    _VOICE_FILL_LEVELS = ("▁", "▂", "▃", "▄", "▅", "▆", "▇", "█")
 
     @property
     def _active_cursor_glyph(self) -> str:
-        try:
-            screen = self.screen
-            rec = getattr(screen, "_ptt_recorder", None)
-            if rec is not None:
-                # Map mic peak [0,1] → one of the 8 fill chars. Boost
-                # by 8× so typical speech (peak ~0.05-0.3) actually
-                # reaches the top of the bar. Floor at index 1 (▁) so
-                # even silence shows a visible "I'm listening" baseline
-                # instead of a blank cell.
-                peak = float(getattr(rec, "peak", 0.0) or 0.0)
-                idx = max(1, min(len(self._VOICE_FILL_LEVELS) - 1,
-                                  int(peak * 8.0 * len(self._VOICE_FILL_LEVELS))))
-                return self._VOICE_FILL_LEVELS[idx]
-        except Exception:
-            pass
+        # Cursor is ALWAYS the thin "▏" bar. The voice indicator is the
+        # VoiceVisualizer sibling widget on the right of the input row —
+        # NOT the Input's own cursor. Keeping the cursor thin removes
+        # the "bottom-gray" artifact from partial-fill chars and avoids
+        # a confusing second bar appearing in the middle of the text.
         return self._CURSOR_GLYPH
 
     def render_line(self, y):  # type: ignore[override]
@@ -281,28 +267,9 @@ class _NoTintInput(Input):
         # Non-empty: take the value, OVERWRITE one cell at cursor with
         # the bar glyph (white, terminal-default background). Anything
         # past end-of-input gets a single padded space we can overwrite.
+        # Cursor styling is always the default — the voice indicator
+        # is the VoiceVisualizer sibling widget, not a colored cursor.
         cursor_style = self.get_component_rich_style("input--cursor")
-        # While voice is recording, cycle the cursor through a rainbow
-        # AND tint brightness by mic amplitude. The chat screen runs a
-        # 50ms refresh timer while recording so this rebuilds every
-        # frame, giving the "alive" pulse Claude Code shows.
-        try:
-            screen = self.screen
-            rec = getattr(screen, "_ptt_recorder", None)
-            if rec is not None:
-                from rich.style import Style as _RichStyle
-                import time as _t
-                _RAINBOW = (
-                    "#ff5470", "#ff8a5b", "#ffd166", "#9bff8a", "#5bffc1",
-                    "#5bd1ff", "#5b96ff", "#9b5bff", "#e75bff", "#ff5bd1",
-                )
-                # Cycle every ~0.7s, plus jump-ahead on loud peaks.
-                peak = float(getattr(rec, "peak", 0.0) or 0.0)
-                phase = int(_t.time() * 5) + int(min(1.0, peak * 8.0) * 4)
-                color = _RAINBOW[phase % len(_RAINBOW)]
-                cursor_style = _RichStyle(color="white", bgcolor=color, bold=True)
-        except Exception:
-            pass
         result = self._value.copy()
         if not self.selection.is_empty:
             start, end = self.selection
@@ -2337,17 +2304,25 @@ class ChatScreen(Screen):
                 session_at_start = self._ptt_session
                 def _worker():
                     try:
+                        # Defensive size guard — pywhispercpp's Metal
+                        # backend can segfault on < 0.3 s of audio.
+                        try:
+                            size = snap.stat().st_size
+                        except OSError:
+                            size = 0
+                        if size < 10_000:
+                            return
                         from ...voice import transcribe as _trans
                         ok, text = _trans(state, snap)
                         if ok and text:
-                            # Capture session at worker spawn; only apply
-                            # if the recording is still ours. Stops in-
-                            # flight workers from an old recording from
-                            # overwriting the input the user is now
-                            # typing into.
                             self.app.call_from_thread(
                                 self._apply_partial_transcript, text, session_at_start
                             )
+                    except Exception:
+                        # Whisper can raise on malformed WAV / Metal
+                        # buffer mismatch. Swallowing here keeps the
+                        # daemon thread from killing the TUI process.
+                        pass
                     finally:
                         try:
                             snap.unlink(missing_ok=True)
@@ -2458,12 +2433,33 @@ class ChatScreen(Screen):
         session_final = getattr(self, "_ptt_session", 0)
         def _final_worker():
             try:
+                # Defensive: skip whisper entirely for extremely short
+                # audio. pywhispercpp's Metal backend has crashed on
+                # < 0.3 s WAVs (16 kHz mono = < ~10 KB). Tap-release
+                # mishaps would deliver a few hundred ms; better to
+                # show no transcript than to segfault the TUI.
+                from pathlib import Path as _P
+                try:
+                    size = _P(wav_path).stat().st_size
+                except OSError:
+                    size = 0
+                # 16-bit mono PCM at 16 kHz: 32 KB/sec. 0.3 s ≈ 10 KB.
+                # WAV header is 44 bytes, so the threshold below covers
+                # both "no audio captured" and "milliseconds of audio".
+                if size < 10_000:
+                    return
                 from ...voice import transcribe as _trans
                 ok, text = _trans(state, wav_path)
                 if ok and text:
                     self.app.call_from_thread(
                         self._apply_partial_transcript, text, session_final
                     )
+            except Exception:
+                # Whisper occasionally raises on malformed WAVs or
+                # Metal-backend buffer mismatches. Swallow rather than
+                # crash the daemon thread (which on macOS terminates
+                # the whole process).
+                pass
             finally:
                 try:
                     from pathlib import Path as _P
