@@ -80,7 +80,43 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _harden_against_debugger_attach() -> None:
+    """Refuse all debugger attachments at the kernel level.
+
+    macOS ptrace(PT_DENY_ATTACH=31, 0, 0, 0) tells the kernel that this
+    process will NEVER be a debug target. Any subsequent
+    `lldb -p <our-pid>`, `dtrace -p <our-pid>`, etc. fails with
+    "Operation not permitted" — they can't reach in to SIGSTOP us, can't
+    dump backtraces, can't trigger the Touch ID prompt.
+
+    This is the bulletproof complement to the bash-tool regex block.
+    The bash regex stops the AGENT from spawning lldb in the first place;
+    PT_DENY_ATTACH stops ANY OTHER process (a stray terminal, a misclick,
+    Activity Monitor's "Sample Process", a wrapper script) from doing it
+    either. Both layers — defense in depth.
+
+    Side effect: legitimate `lldb -p $(pgrep localcode)` from a developer
+    also fails. Acceptable trade-off given the user-impact of accidental
+    SIGSTOPs killing the TUI mid-session. To debug, use logs in
+    ~/.localcode/ or set LOCALCODE_ALLOW_DEBUGGER=1 to skip this.
+    """
+    import os, platform
+    if platform.system() != "Darwin":
+        return
+    if os.environ.get("LOCALCODE_ALLOW_DEBUGGER") == "1":
+        return
+    try:
+        import ctypes
+        libc = ctypes.CDLL("/usr/lib/libc.dylib")
+        PT_DENY_ATTACH = 31
+        libc.ptrace(PT_DENY_ATTACH, 0, 0, 0)
+    except Exception:
+        # Silent — worst case is the bash-tool guard still works.
+        pass
+
+
 def main(argv: list[str] | None = None) -> None:
+    _harden_against_debugger_attach()
     import os
     import signal
     import warnings
