@@ -186,6 +186,78 @@ def _clean_transcript(text: str) -> str:
     return " ".join(text.split())
 
 
+def detect_voice_capability() -> tuple[bool, str]:
+    """Return (ok, hint) — can this machine actually use voice mode?
+
+    Checks, in order:
+      1. macOS-only (Whisper.cpp via Metal is Mac-only in our build)
+      2. At least one audio input device present (no mic = no voice)
+      3. Terminal capability (Info.plist mic usage descriptor)
+      4. Free disk for the ~514 MB Whisper download
+
+    Returns (False, "human-readable reason") when voice cannot work.
+    The chat handler shows the reason in the log before downloading.
+    """
+    import platform, shutil
+    if platform.system() != "Darwin":
+        return False, "Voice mode is currently macOS-only (Whisper.cpp Metal build)."
+    # Mic check via sounddevice
+    try:
+        with _silence_native_stderr():
+            import sounddevice as _sd
+            devs = _sd.query_devices()
+            inputs = [d for d in devs if d.get("max_input_channels", 0) > 0]
+        if not inputs:
+            return False, (
+                "No audio input device found. Plug in a mic or set a default "
+                "input in System Settings → Sound."
+            )
+    except Exception as e:
+        return False, f"Audio backend (PortAudio) couldn't enumerate devices: {e}"
+    # Disk
+    try:
+        free_bytes = shutil.disk_usage(str(DEFAULT_STT_MODEL_DIR.parent)).free
+        if free_bytes < 700 * 1024 * 1024:  # 700 MB safety margin over 514 MB
+            return False, (
+                f"Less than 700 MB free disk — Whisper model needs ~514 MB. "
+                f"Currently {free_bytes // (1024*1024)} MB free."
+            )
+    except Exception:
+        pass
+    # Terminal capability
+    ok, hint = host_terminal_supports_mic()
+    if not ok:
+        return False, hint
+    return True, ""
+
+
+def detect_vision_capability() -> tuple[bool, str]:
+    """Return (ok, hint) — can this machine load a vision projector?
+
+    Checks free unified memory — mmproj sidecars are ~600 MB to 1.2 GB
+    and load alongside the text decoder. If the machine is already
+    tight on RAM, refusing here is friendlier than letting llama-server
+    OOM-kill mid-load.
+    """
+    import subprocess, platform
+    if platform.system() != "Darwin":
+        return False, "Vision mode is currently Apple-Silicon-only (Metal mmproj)."
+    try:
+        out = subprocess.run(
+            ["sysctl", "-n", "hw.memsize"],
+            capture_output=True, text=True, timeout=2,
+        ).stdout.strip()
+        ram_gb = int(out) // (1024 ** 3)
+        if ram_gb < 16:
+            return False, (
+                f"Vision needs ~16 GB unified memory; this Mac has {ram_gb} GB. "
+                "Stick to text-only mode."
+            )
+    except Exception:
+        pass
+    return True, ""
+
+
 def host_terminal_supports_mic() -> tuple[bool, str]:
     """Detect if the terminal hosting localcode can request mic access.
 
