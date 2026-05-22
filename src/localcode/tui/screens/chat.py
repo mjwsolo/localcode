@@ -343,6 +343,7 @@ _SLASH_COMMANDS = [
     ("/permissions", "Toggle ask/auto-approve for commands"),
     ("/status", "Show runtime: server health, current model, perf config"),
     ("/restart", "Restart the model server (use when /status shows 'unreachable')"),
+    ("/mcp", "List or reload MCP servers from ~/.localcode/mcp.json"),
     ("/model", "List available models / switch (e.g. /model qwen)"),
     ("/thinking", "Show / set hidden reasoning policy (off|auto)"),
     ("/sounds", "Toggle completion + approval notification sounds"),
@@ -494,6 +495,21 @@ class ChatScreen(Screen):
         background: $surface;
         height: 1;
     }
+    /* Multi-line wrap preview ABOVE the input row. Hidden by default;
+       Static.update() fills it when input value exceeds visible width.
+       max-height caps growth at 8 visible lines (~640 chars at 80
+       cols). Past that the preview itself scrolls. */
+    #input-overflow {
+        background: $surface;
+        color: $text;
+        padding: 0 1 0 3;
+        height: auto;
+        max-height: 8;
+        display: none;
+    }
+    #input-overflow.active {
+        display: block;
+    }
     #input-prompt {
         background: $surface;
         color: #5f87ff;
@@ -629,6 +645,12 @@ class ChatScreen(Screen):
         # application pipeline and showing up white. The sibling widget
         # has its own render path so color + glyph both stick.
         from ..widgets.voice_visualizer import VoiceVisualizer
+        # Wrap-preview: shows long input values across multiple wrapped
+        # lines ABOVE the single-line input. Hidden when value is empty
+        # or fits in one line. Updated on input Changed events. Makes
+        # long voice transcripts visible without doing a full
+        # Input→TextArea refactor (which would touch 50+ callsites).
+        yield Static("", id="input-overflow")
         with Horizontal(id="input-row"):
             yield Static("›", id="input-prompt")
             yield _NoTintInput(placeholder="", id="chat-input")
@@ -1096,6 +1118,30 @@ class ChatScreen(Screen):
             self._do_search(event.value)
             return
         text = event.value
+        # Wrap-preview: when value is long enough to overflow visible
+        # width, render it wrapped in the #input-overflow Static above
+        # the input row. Otherwise hide. This is the "input grows
+        # vertically" feature for long voice transcripts.
+        try:
+            overflow = self.query_one("#input-overflow", Static)
+            try:
+                avail = max(20, (self.size.width or 80) - 4)
+            except Exception:
+                avail = 76
+            if len(text) > avail:
+                import textwrap
+                wrapped = textwrap.fill(
+                    text, width=avail,
+                    initial_indent="› ", subsequent_indent="  ",
+                    break_long_words=False, break_on_hyphens=False,
+                )
+                overflow.update(wrapped)
+                overflow.add_class("active")
+            else:
+                overflow.update("")
+                overflow.remove_class("active")
+        except Exception:
+            pass
         menu = self.query_one("#slash-menu", Static)
         # Also toggle the status bar in lockstep with the slash menu —
         # when the menu is open it pushes content downward and visually
@@ -1283,6 +1329,8 @@ class ChatScreen(Screen):
             log = self.query_one("#chat-log", ChatLog)
             log.append_info("Restarting model server...")
             self._restart_for_vision_change(reason="Server restarted")
+        elif text == "/mcp" or text.startswith("/mcp "):
+            self._handle_mcp_command(text)
         elif text == "/voice" or text.startswith("/voice "):
             self._handle_voice_command(text)
         elif text == "/audio" or text.startswith("/audio "):
@@ -1557,6 +1605,47 @@ class ChatScreen(Screen):
             self.query_one("#active-step", Static).update("")
         except Exception:
             pass
+
+    def _handle_mcp_command(self, text: str) -> None:
+        """List + reload MCP servers configured in ~/.localcode/mcp.json.
+
+        Subcommands:
+          /mcp           — list connected servers + their tools
+          /mcp reload    — disconnect all + re-spawn from config
+        """
+        from ...mcp import (
+            load_mcp_config, connect_all, list_connected, shutdown_all,
+            MCP_CONFIG_PATH,
+        )
+        log = self.query_one("#chat-log", ChatLog)
+        parts = text.strip().split()
+        sub = parts[1] if len(parts) >= 2 else None
+
+        if sub == "reload":
+            shutdown_all()
+            count, errors = connect_all()
+            log.append_info(f"MCP reloaded: {count} server(s) connected.")
+            for e in errors:
+                log.append_error(f"  {e}")
+            return
+
+        config = load_mcp_config()
+        if not config:
+            log.append_info(
+                f"No MCP servers configured. Create {MCP_CONFIG_PATH} with:\n"
+                '  {"mcpServers": {"myserver": {"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/path"]}}}'
+            )
+            return
+        connected = list_connected()
+        if not connected:
+            count, errors = connect_all()
+            log.append_info(f"Connected {count} MCP server(s).")
+            for e in errors:
+                log.append_error(f"  {e}")
+            connected = list_connected()
+        for name, tools in connected:
+            tool_names = ", ".join(t.get("name", "?") for t in tools) or "(no tools)"
+            log.append_info(f"  {name}: {tool_names}")
 
     def _handle_audio_command(self, text: str) -> None:
         """`/audio` toggles spoken responses (TTS) on/off.
