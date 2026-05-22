@@ -92,24 +92,23 @@ class VoiceVisualizer(Static):
             peak = float(getattr(self.recorder, "peak", 0.0) or 0.0)
         except Exception:
             peak = 0.0
-        # Boost low signal a touch + clamp to 1.0 so quiet speech still
-        # moves the bar. Then EMA-smooth for stable rendering.
-        target = min(1.0, peak * 1.8)
-        self._smoothed = 0.4 * self._smoothed + 0.6 * target
+        # Typical mic peaks for normal speech sit at 0.05-0.3 of full
+        # scale. To make the bar actually fill the cell, we boost by 8×
+        # and clamp. EMA smoothing for stability but biased heavier
+        # toward the current sample (0.7) so the bar feels responsive.
+        target = min(1.0, peak * 8.0)
+        self._smoothed = 0.3 * self._smoothed + 0.7 * target
 
-        # Pick a fill level from the 9-step ramp based on smoothed
-        # amplitude. We bias so even tiny signal shows the smallest
-        # fill — gives clear "I'm listening" feedback at idle silence.
-        idx = max(1, int(self._smoothed * (len(_FILL) - 1)))
+        # 9-step vertical fill (empty → full block). Floor at index 2
+        # so silence still shows a small "I'm listening" baseline; ceil
+        # at len-1 (= █ = full cell height).
+        idx = max(2, int(self._smoothed * (len(_FILL) - 1)))
         char = _FILL[idx]
 
-        # Rainbow scroll — color cycles ~1 Hz regardless of volume,
-        # so silence still has a visible heartbeat.
+        # Color: rainbow cycle over time. When amplitude is high, jump
+        # ahead in the palette to give an extra "energy spike" feel.
         t = time.time() - self._t0
-        color = _PALETTE[int(t * 3) % len(_PALETTE)]
+        color = _PALETTE[(int(t * 3) + int(self._smoothed * 4)) % len(_PALETTE)]
 
-        # Just the bar — no REC timer, no elapsed seconds. The bar IS
-        # the indicator. Trailing space keeps it visually separated
-        # from whatever sits to its right.
         bar = "".join(f"[{color}]{char}[/]" for _ in range(_BAR_WIDTH))
         self.update(f"{bar}")

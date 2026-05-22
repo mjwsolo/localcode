@@ -2100,11 +2100,11 @@ class ChatScreen(Screen):
                         self._ptt_streaming_busy = False
                 import threading as _t2
                 _t2.Thread(target=_worker, daemon=True).start()
-            # Faster than 1.5 s feels word-by-word; whisper distil-medium.en
-            # runs ~15× realtime on M5 Max so re-decoding every 0.6 s on
-            # 1-10 s of audio fits with margin. Concurrency-guarded so
-            # we don't overlap if a chunk takes longer than the interval.
-            self._ptt_stream_timer = self.set_interval(0.6, _stream_tick)
+            # 0.35 s re-decode for true word-by-word feel. Whisper
+            # distil-medium.en runs ~15× realtime on M5 Max so re-decoding
+            # ≤10 s of audio takes ~700 ms — still under the next tick
+            # because of the busy guard.
+            self._ptt_stream_timer = self.set_interval(0.35, _stream_tick)
         except Exception as e:
             log.append_error(f"Couldn't start mic: {e}")
 
