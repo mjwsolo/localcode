@@ -223,17 +223,26 @@ class _NoTintInput(Input):
     # is over it (same trade-off as block / underline cursors). When the
     # caret is past end-of-input there's nothing to hide.
     _CURSOR_GLYPH = "▏"
-    # When voice mode is recording, swap the thin "▏" cursor for a
-    # full-cell "█" colored block — that's the chunky bar Claude Code
-    # shows at the end of the dictated text while listening.
-    _VOICE_CURSOR_GLYPH = "█"
+    # While recording, the cursor cycles through these 8 vertical fill
+    # levels based on mic amplitude — visually "moves up and down" with
+    # voice volume. Plus the rainbow palette in render_line tints it.
+    _VOICE_FILL_LEVELS = ("▁", "▂", "▃", "▄", "▅", "▆", "▇", "█")
 
     @property
     def _active_cursor_glyph(self) -> str:
         try:
             screen = self.screen
-            if getattr(screen, "_ptt_recorder", None) is not None:
-                return self._VOICE_CURSOR_GLYPH
+            rec = getattr(screen, "_ptt_recorder", None)
+            if rec is not None:
+                # Map mic peak [0,1] → one of the 8 fill chars. Boost
+                # by 8× so typical speech (peak ~0.05-0.3) actually
+                # reaches the top of the bar. Floor at index 1 (▁) so
+                # even silence shows a visible "I'm listening" baseline
+                # instead of a blank cell.
+                peak = float(getattr(rec, "peak", 0.0) or 0.0)
+                idx = max(1, min(len(self._VOICE_FILL_LEVELS) - 1,
+                                  int(peak * 8.0 * len(self._VOICE_FILL_LEVELS))))
+                return self._VOICE_FILL_LEVELS[idx]
         except Exception:
             pass
         return self._CURSOR_GLYPH
