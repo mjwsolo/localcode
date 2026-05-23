@@ -1188,22 +1188,28 @@ class ChatScreen(Screen):
         try:
             overflow = self.query_one("#input-overflow", Static)
             input_row = self.query_one("#input-row")
+            # Width source priority:
+            #   1. App-level size (always measured before the screen
+            #      mounts), minus padding/scrollbar reserve.
+            #   2. Screen size as a backup.
+            #   3. Conservative fallback (80 cols).
+            # Floor of 60 prevents over-eager wrap during early
+            # on_input_changed calls before layout settles. The
+            # 2026-05-23 bug was a 32-char "show me where to find
+            # the songg" wrapping at column 17 in a 95-col terminal
+            # because avail was being computed as ~17 cells.
+            _app_w = 0
             try:
-                # The overflow Static itself has padding: 0 1 0 3 (4 cells)
-                # AND lives inside the screen which has its own padding
-                # plus an optional vertical scrollbar (~2 cells). Older
-                # math (`- 4`) was right for the static but ignored
-                # everything outside it, so long lines clipped on the
-                # right edge. Use the overflow widget's actual content
-                # width when we can read it, else conservative fallback.
-                try:
-                    avail = max(20, (overflow.content_size.width or 0))
-                    if avail < 20:
-                        raise ValueError
-                except Exception:
-                    avail = max(20, (self.size.width or 80) - 8)
+                _app_w = int(getattr(self.app.size, "width", 0) or 0)
             except Exception:
-                avail = 72
+                pass
+            _screen_w = 0
+            try:
+                _screen_w = int(getattr(self.size, "width", 0) or 0)
+            except Exception:
+                pass
+            raw = _app_w or _screen_w or 80
+            avail = max(60, raw - 8)
             if len(text) > avail:
                 import textwrap
                 wrapped = textwrap.fill(
