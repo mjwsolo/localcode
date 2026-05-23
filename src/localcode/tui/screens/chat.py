@@ -2432,13 +2432,18 @@ class ChatScreen(Screen):
                 # Phase 1: wait up to 1.2 s for the first repeat
                 if not got_repeat and elapsed < 1.2:
                     return
-                # Phase 3: user tapped, no hold → use silence as stop
+                # No repeat after 1.2 s → user tapped instead of holding.
+                # We used to fall into a silence-detection mode that kept
+                # the mic open until the room went quiet for 1.5 s. In
+                # practice ANY ambient noise (typing, fan, breath) kept
+                # recording alive indefinitely, which the user reported
+                # as "audio recording randomly even though I'm not
+                # holding space" — Whisper then transcribed the noise
+                # as [Inaudible]/(muffled speaking) and leaked those
+                # into the input box. Push-to-talk means HOLD; if you
+                # don't hold, you tapped, and we stop now.
                 if not got_repeat:
-                    try:
-                        if r.silence_seconds > 1.5:
-                            self._ptt_stop_and_finalize()
-                    except Exception:
-                        pass
+                    self._ptt_stop_and_finalize()
                     return
                 # Phase 2: steady hold — release when gap > 350 ms
                 gap = now - self._ptt_last_key_ts
