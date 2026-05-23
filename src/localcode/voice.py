@@ -207,7 +207,19 @@ import re as _re
 # because the old regex required ALL-CAPS interiors and missed the
 # Title-Case variant Whisper emits for music/humming input.
 _WHISPER_ANNOTATION_BRACKETS = _re.compile(r"\[[A-Z][A-Za-z0-9 _\-]{0,38}\]")
-_WHISPER_ANNOTATION_PARENS = _re.compile(r"\(\s*(?:Singing|Music|Applause|Laughter|Humming|Whispers?|Inaudible|Silence|Non-English\s+Speech|Blank\s+Audio)[A-Za-z _\-]*\s*\)", _re.IGNORECASE)
+_WHISPER_ANNOTATION_PARENS = _re.compile(
+    # Match SHORT parenthetical descriptions Whisper emits for
+    # non-speech input. The whitelist approach (2026-05-23) missed
+    # "(muffled speaking)" because Muffled wasn't enumerated; the
+    # broader rule below catches any 1-4 word parenthetical that is
+    # all lowercase OR Title-Case-ish words separated by spaces,
+    # contains NO sentence punctuation (.,!?;:'"), and is ≤40 chars.
+    # That's the shape of Whisper artifacts (singing, music playing,
+    # applause, muffled speaking, no audio, faint laughter) and not
+    # the shape of legitimate parenthetical prose ("(2024 edition,
+    # see appendix)") which has punctuation.
+    r"\(\s*[A-Za-z][A-Za-z \-]{1,38}\)",
+)
 _WHISPER_ANNOTATION_STARS = _re.compile(r"\*[A-Za-z][A-Za-z _\-]*\*")
 
 
