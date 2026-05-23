@@ -363,22 +363,47 @@ class SetupScreen(Screen):
         self.app.config = load_config()
         config = self.app.config
 
-        # Check if server is already running AND can actually serve requests
+        # Check if server is already running AND serving the model the user
+        # just picked. Healthcheck-alone was the bug (2026-05-23): an
+        # orphaned llama-server from a previous session (Qwen) stayed alive
+        # on port 8081 across TUI restarts; the new TUI then saw `ok=True`
+        # and reused the OLD server even though the user had just picked
+        # Gemma. The user's selection silently did nothing.
         from ...runtime import LocalCodeRuntimeGateway
         gw = LocalCodeRuntimeGateway(config.runtime)
+        chosen_basename = Path(config.runtime.model).name if config.runtime.model else ""
         try:
             ok, _ = gw.healthcheck()
             if ok:
-                # Healthcheck is enough for setup. Do not run an inference
-                # probe here: on large local GGUFs the first prefill can
-                # temporarily 500/OOM even though the server is alive, which
-                # makes startup look broken before the user sends a message.
-                self._current_step = 3
-                self._status_text = "Ready!"
-                import asyncio
-                await asyncio.sleep(0.3)
-                self.app.call_from_thread(self._finish)
-                return
+                # ALSO verify the running server is serving the chosen model.
+                # llama-server's /v1/models endpoint returns the loaded
+                # model path under data[0].id. If it doesn't match the
+                # chosen file's basename, fall through to the shutdown +
+                # restart path below.
+                running_model_ok = False
+                try:
+                    import httpx as _hx
+                    r = _hx.get(
+                        config.runtime.base_url.rstrip("/") + "/v1/models",
+                        timeout=3.0,
+                    )
+                    if r.status_code == 200:
+                        data = r.json() or {}
+                        loaded = ((data.get("data") or [{}])[0]).get("id") or ""
+                        # `id` is usually the full GGUF path; compare basename.
+                        if chosen_basename and Path(loaded).name == chosen_basename:
+                            running_model_ok = True
+                except Exception:
+                    # Couldn't verify — be safe, force restart.
+                    running_model_ok = False
+                if running_model_ok:
+                    # Healthcheck OK AND model matches — reuse.
+                    self._current_step = 3
+                    self._status_text = "Ready!"
+                    import asyncio
+                    await asyncio.sleep(0.3)
+                    self.app.call_from_thread(self._finish)
+                    return
         except Exception:
             pass
 
