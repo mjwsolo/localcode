@@ -181,7 +181,21 @@ class _NoTintInput(Input):
                     self.screen, "_ptt_recorder", None
                 ) is not None
                 input_empty = not (self.value or "").strip()
-                if already_recording or input_empty:
+                # Voice-filled but untouched: user dictated, the
+                # transcript landed in the input, and they haven't
+                # typed since. Pressing Space again starts a new
+                # recording that APPENDS — the alternative (typing
+                # a literal space) wastes the only natural way to
+                # continue a voice-only session without going to the
+                # keyboard. Tracked via _ptt_last_input_value, which
+                # is set in _apply_voice_transcript and cleared the
+                # moment on_input_changed sees a divergence.
+                last_voice_fill = getattr(self.screen, "_ptt_last_input_value", None)
+                voice_filled_untouched = (
+                    last_voice_fill is not None
+                    and (self.value or "") == last_voice_fill
+                )
+                if already_recording or input_empty or voice_filled_untouched:
                     screen = self.screen
                     ptt = getattr(screen, "action_ptt_space", None)
                     if callable(ptt):
@@ -504,10 +518,17 @@ class ChatScreen(Screen):
         height: 1;
     }
     /* When the wrap-preview is showing the full multi-line text,
-       hide the single-line input row to stop the "looks like text
-       was auto-typed twice" effect. */
-    #input-row.hidden-by-overflow {
-        display: none;
+       we used to set `display: none` on the input row. That stopped
+       the "double text" effect but ALSO removed the Input from the
+       layout tree — Textual then stopped routing keystrokes to it,
+       so the user could not type, backspace, or submit. ("More than
+       one line of text breaks everything.") Instead, KEEP the row
+       in the tree (so it stays focused + interactive), just hide
+       its rendered text by painting #chat-input text the same as
+       the background. Cursor is still visible because we draw it
+       as a styled glyph in _NoTintInput.render_line. */
+    #input-row.hidden-by-overflow #chat-input {
+        color: ansi_default;
     }
     /* Multi-line wrap preview ABOVE the input row. Hidden by default;
        Static.update() fills it when input value exceeds visible width.
@@ -1136,6 +1157,13 @@ class ChatScreen(Screen):
             self._do_search(event.value)
             return
         text = event.value
+        # Invalidate the "voice-filled but untouched" snapshot the
+        # moment the value diverges from what we last wrote — past
+        # that point Space should type a literal space, not re-trigger
+        # PTT, because the user is actively editing.
+        last_voice = getattr(self, "_ptt_last_input_value", None)
+        if last_voice is not None and text != last_voice:
+            self._ptt_last_input_value = None
         # Wrap-preview: when value overflows the visible width, render
         # the FULL value wrapped in #input-overflow above the input
         # row AND hide the single-line input row entirely. Otherwise
@@ -1148,9 +1176,21 @@ class ChatScreen(Screen):
             overflow = self.query_one("#input-overflow", Static)
             input_row = self.query_one("#input-row")
             try:
-                avail = max(20, (self.size.width or 80) - 4)
+                # The overflow Static itself has padding: 0 1 0 3 (4 cells)
+                # AND lives inside the screen which has its own padding
+                # plus an optional vertical scrollbar (~2 cells). Older
+                # math (`- 4`) was right for the static but ignored
+                # everything outside it, so long lines clipped on the
+                # right edge. Use the overflow widget's actual content
+                # width when we can read it, else conservative fallback.
+                try:
+                    avail = max(20, (overflow.content_size.width or 0))
+                    if avail < 20:
+                        raise ValueError
+                except Exception:
+                    avail = max(20, (self.size.width or 80) - 8)
             except Exception:
-                avail = 76
+                avail = 72
             if len(text) > avail:
                 import textwrap
                 wrapped = textwrap.fill(
@@ -1254,6 +1294,7 @@ class ChatScreen(Screen):
         self._ptt_session = getattr(self, "_ptt_session", 0) + 1
         self._ptt_input_prefix = ""
         self._ptt_last_transcript = ""
+        self._ptt_last_input_value = None
         self._ptt_last_submit_ts = _t.time()
         # Defensive second clear after a tick in case anything wrote
         # the value back between clear() and now.
@@ -2495,6 +2536,13 @@ class ChatScreen(Screen):
             inp.value = joined
             inp.cursor_position = len(joined)
             inp.focus()
+            # Snapshot what we just wrote so the space-PTT gate can tell
+            # whether the user has typed anything since. If the input
+            # value still equals this snapshot when Space is pressed,
+            # we treat the input as "voice-filled but untouched" and
+            # start a NEW recording (appending) instead of typing a
+            # space. Cleared in on_input_changed when user edits.
+            self._ptt_last_input_value = joined
         except Exception:
             pass
 
