@@ -23,20 +23,20 @@ class SetupScreen(Screen):
     DEFAULT_CSS = """
     SetupScreen {
         layout: vertical;
-        background: ansi_default;
+        background: transparent;
         padding: 1 0;
     }
     /* Centered on both axes. Previous version had the CSS selector
        (#setup-center) not match the compose id (#setup-top) so the
        alignment silently did nothing — box ended up top-left. */
     #setup-center {
-        background: ansi_default;
+        background: transparent;
         height: 1fr;
         width: 100%;
         align: center middle;
     }
     #setup-box {
-        background: ansi_default;
+        background: transparent;
         width: 92%;
         max-width: 56;
         height: auto;
@@ -44,7 +44,7 @@ class SetupScreen(Screen):
         border: round #5f87ff;
     }
     #setup-status {
-        background: ansi_default;
+        background: transparent;
         width: 100%;
         color: ansi_default;
         margin: 1 0 0 0;
@@ -54,7 +54,7 @@ class SetupScreen(Screen):
        error + retry hints) and the dimmed one-time-download note so
        the note doesn't visually crowd the error. */
     #setup-onetime-note {
-        background: ansi_default;
+        background: transparent;
         width: 100%;
         margin: 2 0 0 0;
         text-align: center;

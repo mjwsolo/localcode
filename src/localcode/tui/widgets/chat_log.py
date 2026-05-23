@@ -104,7 +104,7 @@ class ChatLog(RichLog):
     DEFAULT_CSS = """
     ChatLog {
         height: 1fr;
-        background: ansi_default;
+        background: transparent;
         overflow-y: scroll;
         overflow-x: hidden;
         padding: 0 1;

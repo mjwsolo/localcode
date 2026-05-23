@@ -42,10 +42,10 @@ class _NoTintInput(Input):
     """
     DEFAULT_CSS = """
     _NoTintInput {
-        background: ansi_default;
+        background: transparent;
         &:focus {
             background-tint: transparent 0%;
-            background: ansi_default;
+            background: transparent;
         }
         /* Override Textual's global `*:disabled:can-focus { opacity: 0.7; }`
            rule (textual.app.App.DEFAULT_CSS). Without this, the chat input
@@ -55,7 +55,7 @@ class _NoTintInput(Input):
            pinned to ansi_default so the row stays terminal-coloured. */
         &:disabled, &:disabled:can-focus {
             opacity: 1;
-            background: ansi_default;
+            background: transparent;
             background-tint: transparent 0%;
         }
     }
@@ -446,7 +446,7 @@ class ChatScreen(Screen):
     DEFAULT_CSS = """
     ChatScreen {
         layout: vertical;
-        background: ansi_default;
+        background: transparent;
         /* Pad the screen itself so docked widgets (header at top,
            status at bottom) sit 1 row in from the terminal edges
            instead of kissing them. Textual ignores padding-top on
@@ -460,10 +460,10 @@ class ChatScreen(Screen):
         padding: 0 1;
         width: 1fr;
         color: #5f87ff;
-        background: ansi_default;
+        background: transparent;
     }
     #active-step {
-        background: ansi_default;
+        background: transparent;
         width: 100%;
         height: 1;
         padding: 0 1;
@@ -476,7 +476,7 @@ class ChatScreen(Screen):
         display: block;
     }
     #queue-line {
-        background: ansi_default;
+        background: transparent;
         height: 1;
         padding: 0 1 0 3;
         margin: 0;
@@ -487,7 +487,7 @@ class ChatScreen(Screen):
         display: block;
     }
     #slash-menu {
-        background: ansi_default;
+        background: transparent;
         height: auto;
         max-height: 10;
         padding: 0 1;
@@ -497,7 +497,7 @@ class ChatScreen(Screen):
         display: block;
     }
     #search-bar {
-        background: ansi_default;
+        background: transparent;
         height: 1;
         padding: 0 1;
         display: none;
@@ -509,7 +509,7 @@ class ChatScreen(Screen):
         height: 1;
         width: 1fr;
         border: none;
-        background: ansi_default;
+        background: transparent;
         display: none;
     }
     #search-input.active {
@@ -518,7 +518,7 @@ class ChatScreen(Screen):
     /* Input row and its children — explicit black so Textual's
        default surface color doesn't bleed through. */
     #input-row {
-        background: ansi_default;
+        background: transparent;
         height: 1;
     }
     /* When the wrap-preview is showing the full multi-line text,
@@ -548,7 +548,7 @@ class ChatScreen(Screen):
        max-height caps growth at 8 visible lines (~640 chars at 80
        cols). Past that the preview itself scrolls. */
     #input-overflow {
-        background: ansi_default;
+        background: transparent;
         color: $text;
         padding: 0 1 0 3;
         height: auto;
@@ -563,12 +563,12 @@ class ChatScreen(Screen):
         display: block;
     }
     #input-prompt {
-        background: ansi_default;
+        background: transparent;
         color: #5f87ff;
         width: 2;
     }
     #chat-input {
-        background: ansi_default;
+        background: transparent;
     }
     #status-bar {
         dock: bottom;
@@ -577,7 +577,7 @@ class ChatScreen(Screen):
         height: 4;
         padding: 2 1 1 1;
         color: $text-muted;
-        background: ansi_default;
+        background: transparent;
     }
     /* When the slash palette is open, the status bar gets out of the
        way so the menu has its own row and doesn't visually collide
