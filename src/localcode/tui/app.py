@@ -105,37 +105,19 @@ class LocalCodeTUI(App):
             ansi_theme = _Theme(
                 name="localcode-ansi",
                 primary="#5f87ff",
-                # Theme bg/surface go to "transparent" (alpha=0) NOT
-                # "ansi_default". The latter resolves to Color(0,0,0,
-                # ansi=-1); the ansi=-1 sentinel is supposed to emit
-                # SGR-49 (terminal default bg), but in practice the
-                # compositor often paints it as RGB-black, which
-                # OVERWRITES whatever the user's terminal background
-                # actually is (dark blue, transparent-over-wallpaper,
-                # light cream, etc). "transparent" tells the compositor
-                # to skip painting the cell entirely so the terminal's
-                # true background shines through every layer — works
-                # regardless of which terminal the user is in.
-                background="transparent",
-                surface="transparent",
-                panel="transparent",
+                # All ANSI-driven so terminal palette wins. "ansi_default"
+                # isn't a hex Theme accepts directly — use the SGR-49
+                # equivalents: bg/foreground both inherit terminal.
+                background="ansi_default",
+                surface="ansi_default",
+                panel="ansi_default",
                 foreground="ansi_default",
-                boost="transparent",
+                boost="ansi_default",
                 dark=True,
                 accent="#5f87ff",
             )
             self.register_theme(ansi_theme)
             self.theme = "localcode-ansi"
-            # Belt-and-braces: also force the App's own root style to
-            # transparent. Even with the theme's $background=transparent,
-            # older Textual versions hard-wire the App surface to its
-            # theme background variable at mount time; setting the
-            # style directly here guarantees the root surface never
-            # paints over the terminal.
-            try:
-                self.styles.background = "transparent"
-            except Exception:
-                pass
         except Exception:
             # If the custom-theme path fails on this textual version,
             # fall back to whatever's available — better dark gray than
