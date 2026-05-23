@@ -92,13 +92,40 @@ class LocalCodeTUI(App):
 
     def __init__(self, show_mode_picker: bool = True) -> None:
         super().__init__()
-        # Set theme so terminal palette decides every colour.
-        # Older textual versions shipped "textual-ansi"; newer ones renamed/dropped it.
-        # Fall back to a known-present theme instead of crashing on startup.
-        for _candidate in ("textual-ansi", "textual-dark"):
-            if _candidate in self.available_themes:
-                self.theme = _candidate
-                break
+        # Register and activate a custom theme where ALL of textual's
+        # CSS variables ($background, $surface, $boost, $panel, etc.)
+        # are pinned to the terminal's default ANSI colors. Without
+        # this the fallback "textual-dark" theme paints $surface as
+        # a dark gray, which is the "dodgy dark color" the user
+        # reported even though our own CSS uses ansi_default — any
+        # widget that didn't have an explicit background still picked
+        # up the theme's dark gray.
+        try:
+            from textual.theme import Theme as _Theme
+            ansi_theme = _Theme(
+                name="localcode-ansi",
+                primary="#5f87ff",
+                # All ANSI-driven so terminal palette wins. "ansi_default"
+                # isn't a hex Theme accepts directly — use the SGR-49
+                # equivalents: bg/foreground both inherit terminal.
+                background="ansi_default",
+                surface="ansi_default",
+                panel="ansi_default",
+                foreground="ansi_default",
+                boost="ansi_default",
+                dark=True,
+                accent="#5f87ff",
+            )
+            self.register_theme(ansi_theme)
+            self.theme = "localcode-ansi"
+        except Exception:
+            # If the custom-theme path fails on this textual version,
+            # fall back to whatever's available — better dark gray than
+            # an unhandled exception at TUI startup.
+            for _candidate in ("textual-ansi", "textual-dark"):
+                if _candidate in self.available_themes:
+                    self.theme = _candidate
+                    break
         self.show_mode_picker = show_mode_picker
         self.engine = None
         self.config = None

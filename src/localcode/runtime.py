@@ -773,6 +773,12 @@ class LocalCodeRuntimeGateway:
                     return {"message": {"content": parsed.content, "tool_calls": parsed.to_ollama_format()}}
             return {"message": {"content": content, "tool_calls": []}}
 
+        # Reset idle-suspend countdown — a chat is incoming.
+        try:
+            from .server_manager import ServerManager as _SM
+            _SM.get().mark_activity()
+        except Exception:
+            pass
         payload = self._payload(messages, stream=False, tools=tools, think=think, num_predict=num_predict)
         # Structured output: Ollama grammar-constrains output to match this schema
         if format is not None:

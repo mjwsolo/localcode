@@ -195,14 +195,19 @@ _CACHED_MODEL_PATH: Path | None = None
 
 import re as _re
 
-# Whisper emits non-speech annotations in TWO syntaxes:
+# Whisper emits non-speech annotations in MULTIPLE syntaxes/casings:
 #   - [BLANK_AUDIO]  [NON-ENGLISH SPEECH]  [MUSIC]  [INAUDIBLE]  [SILENCE]
+#   - [Singing]  [Music]  [Applause]  [Laughter]  (Title-Case variant)
 #   - *Singing*  *Music playing*  *Applause*  *whispers*  *laughter*
-# Both are model-internal artifacts and should never reach the input box.
-# We strip every bracketed [TAG] (caps + spaces + underscores) AND every
-# starred *Tag* (any word starting with a letter, followed by letters/
-# spaces, between asterisks).
-_WHISPER_ANNOTATION_BRACKETS = _re.compile(r"\[[A-Z][A-Z0-9 _\-]*\]")
+#   - (singing)  (music playing)  (applause)
+# All are model-internal artifacts and should never reach the input box.
+# Bracket/paren rule: capitalised first letter, alphanumerics + spaces/
+# underscores/hyphens inside, no real punctuation, max ~40 chars long.
+# The user-reported bug (2026-05-23) was `[Singing]` slipping through
+# because the old regex required ALL-CAPS interiors and missed the
+# Title-Case variant Whisper emits for music/humming input.
+_WHISPER_ANNOTATION_BRACKETS = _re.compile(r"\[[A-Z][A-Za-z0-9 _\-]{0,38}\]")
+_WHISPER_ANNOTATION_PARENS = _re.compile(r"\(\s*(?:Singing|Music|Applause|Laughter|Humming|Whispers?|Inaudible|Silence|Non-English\s+Speech|Blank\s+Audio)[A-Za-z _\-]*\s*\)", _re.IGNORECASE)
 _WHISPER_ANNOTATION_STARS = _re.compile(r"\*[A-Za-z][A-Za-z _\-]*\*")
 
 
@@ -224,6 +229,7 @@ def _clean_transcript(text: str) -> str:
       - "capital X" → "X" (capitalized form of the named letter)
     """
     text = _WHISPER_ANNOTATION_BRACKETS.sub("", text or "")
+    text = _WHISPER_ANNOTATION_PARENS.sub("", text)
     text = _WHISPER_ANNOTATION_STARS.sub("", text)
     if not text:
         return ""

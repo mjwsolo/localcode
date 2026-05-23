@@ -724,14 +724,22 @@ def execute(ctx: ToolContext, args: dict) -> str:
     # Word-boundary regex so we don't false-positive on filenames like
     # "sample.txt" or "spindump.log".
     import re as _re
-    # Boundary class includes quote chars so `bash -c 'lldb -p 12345'`
-    # is also caught. Trailing `(?:\s|$|;|&|\||\)|`)` so we don't false-
-    # positive on `sample.txt` (period after the word) or `samples/`
-    # (slash after — actually `samples` is a different word, no match).
-    if _re.search(
-        r"(?:^|[\s;&|`('\"])(?:sudo\s+)?(?:/[^\s]*/)?(lldb|dtrace|spindump|sample)(?:\s|$|;|&|\||\)|'|\"|`)",
-        cmd,
-    ):
+    # ONLY match when one of the debugger names is the COMMAND being
+    # executed — the first token at start-of-string OR right after a
+    # pipe / && / ; / `bash -c '` / `sh -c "` etc. Previous version
+    # false-positived on the word "sample" appearing inside a quoted
+    # Python string (e.g. `python3 -c "...sample_rate..."`). The new
+    # pattern requires the word to be followed by either whitespace
+    # plus a non-alphanumeric (an argument start) or end-of-segment
+    # — which `sample_rate` and `samples/` and `sample.txt` all
+    # naturally avoid.
+    _DEBUGGER_RE = _re.compile(
+        r"""(?:^|(?<=[\s;&|`])|(?<=bash\s-c\s')|(?<=sh\s-c\s')|(?<=bash\s-c\s")|(?<=sh\s-c\s"))"""
+        r"""(?:sudo\s+)?(?:/[^\s'"]*/)?"""
+        r"""(?P<dbg>lldb|dtrace|spindump|sample)"""
+        r"""(?=\s+-|\s+[0-9]|\s*$|\s*[;&|`])""",
+    )
+    if _DEBUGGER_RE.search(cmd):
         return (
             "REJECTED: process-attaching debuggers (lldb / dtrace / spindump / "
             "sample) are blocked. They trigger macOS Touch ID prompts, SIGSTOP "

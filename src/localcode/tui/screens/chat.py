@@ -181,7 +181,21 @@ class _NoTintInput(Input):
                     self.screen, "_ptt_recorder", None
                 ) is not None
                 input_empty = not (self.value or "").strip()
-                if already_recording or input_empty:
+                # Voice-filled but untouched: user dictated, the
+                # transcript landed in the input, and they haven't
+                # typed since. Pressing Space again starts a new
+                # recording that APPENDS — the alternative (typing
+                # a literal space) wastes the only natural way to
+                # continue a voice-only session without going to the
+                # keyboard. Tracked via _ptt_last_input_value, which
+                # is set in _apply_voice_transcript and cleared the
+                # moment on_input_changed sees a divergence.
+                last_voice_fill = getattr(self.screen, "_ptt_last_input_value", None)
+                voice_filled_untouched = (
+                    last_voice_fill is not None
+                    and (self.value or "") == last_voice_fill
+                )
+                if already_recording or input_empty or voice_filled_untouched:
                     screen = self.screen
                     ptt = getattr(screen, "action_ptt_space", None)
                     if callable(ptt):
@@ -290,19 +304,23 @@ class _NoTintInput(Input):
         if recording_now:
             pass  # no cursor cell — let the colored bar serve as caret
         elif cursor_pos >= len(result.plain):
+            # Cursor past the last char — there's no glyph to highlight,
+            # so append the thin bar caret to mark insertion point.
             result.append(self._active_cursor_glyph, style=cursor_style)
         else:
-            # Replace the character at cursor position with the bar
-            # glyph. Rich's Text doesn't have a direct "replace at
-            # index" — rebuild the plain string with substitution and
-            # reapply the cursor style on that cell.
-            plain = result.plain
-            new_plain = plain[:cursor_pos] + self._active_cursor_glyph + plain[cursor_pos + 1:]
-            new_text = _RichText(new_plain, end="", style=result.style)
-            for span in result.spans:
-                new_text.stylize(span.style, span.start, span.end)
-            new_text.stylize(cursor_style, cursor_pos, cursor_pos + 1)
-            result = new_text
+            # Cursor over an existing character. Previously we REPLACED
+            # the character with the bar glyph (▏) so the cell read as
+            # a caret — but Textual's blink toggle alternates between
+            # this render path (glyph-replaced) and the stock render
+            # path (original char). The user perceived the swap as
+            # "cursor deletes the letter" because on every blink the
+            # 'b' in 'alombasi' alternately vanished and reappeared.
+            # Instead, KEEP the character visible and apply the cursor
+            # style (usually reverse-video) to that cell — the cell
+            # now reads as a block cursor that doesn't erase the glyph,
+            # and the blink-off path renders the same char unchanged
+            # so there's no visual jump.
+            result.stylize(cursor_style, cursor_pos, cursor_pos + 1)
         # Voice recording? Append a colored block character right after
         # the text. NO background — the cell stays terminal-native so
         # the bar character IS the visual (no "gray box" feel from a
@@ -504,10 +522,26 @@ class ChatScreen(Screen):
         height: 1;
     }
     /* When the wrap-preview is showing the full multi-line text,
-       hide the single-line input row to stop the "looks like text
-       was auto-typed twice" effect. */
-    #input-row.hidden-by-overflow {
-        display: none;
+       we used to set `display: none` on the input row. That stopped
+       the "double text" effect but ALSO removed the Input from the
+       layout tree — Textual then stopped routing keystrokes to it,
+       so the user could not type, backspace, or submit. ("More than
+       one line of text breaks everything.") Instead, KEEP the row
+       in the tree (so it stays focused + interactive), just hide
+       its rendered text by painting #chat-input text the same as
+       the background. Cursor is still visible because we draw it
+       as a styled glyph in _NoTintInput.render_line. */
+    #input-row.hidden-by-overflow #chat-input {
+        /* text-opacity 0 actually makes the rendered glyphs invisible
+           (color: ansi_default merely set the fg to the terminal's
+           DEFAULT FOREGROUND colour, i.e. white-ish, which is the
+           same colour user text normally is — so the duplication
+           the user reported persisted). The widget itself stays in
+           the layout so Textual keeps routing keystrokes to it. */
+        text-opacity: 0%;
+    }
+    #input-row.hidden-by-overflow #input-prompt {
+        text-opacity: 0%;
     }
     /* Multi-line wrap preview ABOVE the input row. Hidden by default;
        Static.update() fills it when input value exceeds visible width.
@@ -1136,6 +1170,13 @@ class ChatScreen(Screen):
             self._do_search(event.value)
             return
         text = event.value
+        # Invalidate the "voice-filled but untouched" snapshot the
+        # moment the value diverges from what we last wrote — past
+        # that point Space should type a literal space, not re-trigger
+        # PTT, because the user is actively editing.
+        last_voice = getattr(self, "_ptt_last_input_value", None)
+        if last_voice is not None and text != last_voice:
+            self._ptt_last_input_value = None
         # Wrap-preview: when value overflows the visible width, render
         # the FULL value wrapped in #input-overflow above the input
         # row AND hide the single-line input row entirely. Otherwise
@@ -1147,10 +1188,28 @@ class ChatScreen(Screen):
         try:
             overflow = self.query_one("#input-overflow", Static)
             input_row = self.query_one("#input-row")
+            # Width source priority:
+            #   1. App-level size (always measured before the screen
+            #      mounts), minus padding/scrollbar reserve.
+            #   2. Screen size as a backup.
+            #   3. Conservative fallback (80 cols).
+            # Floor of 60 prevents over-eager wrap during early
+            # on_input_changed calls before layout settles. The
+            # 2026-05-23 bug was a 32-char "show me where to find
+            # the songg" wrapping at column 17 in a 95-col terminal
+            # because avail was being computed as ~17 cells.
+            _app_w = 0
             try:
-                avail = max(20, (self.size.width or 80) - 4)
+                _app_w = int(getattr(self.app.size, "width", 0) or 0)
             except Exception:
-                avail = 76
+                pass
+            _screen_w = 0
+            try:
+                _screen_w = int(getattr(self.size, "width", 0) or 0)
+            except Exception:
+                pass
+            raw = _app_w or _screen_w or 80
+            avail = max(60, raw - 8)
             if len(text) > avail:
                 import textwrap
                 wrapped = textwrap.fill(
@@ -1254,6 +1313,7 @@ class ChatScreen(Screen):
         self._ptt_session = getattr(self, "_ptt_session", 0) + 1
         self._ptt_input_prefix = ""
         self._ptt_last_transcript = ""
+        self._ptt_last_input_value = None
         self._ptt_last_submit_ts = _t.time()
         # Defensive second clear after a tick in case anything wrote
         # the value back between clear() and now.
@@ -2495,6 +2555,13 @@ class ChatScreen(Screen):
             inp.value = joined
             inp.cursor_position = len(joined)
             inp.focus()
+            # Snapshot what we just wrote so the space-PTT gate can tell
+            # whether the user has typed anything since. If the input
+            # value still equals this snapshot when Space is pressed,
+            # we treat the input as "voice-filled but untouched" and
+            # start a NEW recording (appending) instead of typing a
+            # space. Cleared in on_input_changed when user edits.
+            self._ptt_last_input_value = joined
         except Exception:
             pass
 
