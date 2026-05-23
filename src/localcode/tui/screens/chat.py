@@ -304,19 +304,23 @@ class _NoTintInput(Input):
         if recording_now:
             pass  # no cursor cell — let the colored bar serve as caret
         elif cursor_pos >= len(result.plain):
+            # Cursor past the last char — there's no glyph to highlight,
+            # so append the thin bar caret to mark insertion point.
             result.append(self._active_cursor_glyph, style=cursor_style)
         else:
-            # Replace the character at cursor position with the bar
-            # glyph. Rich's Text doesn't have a direct "replace at
-            # index" — rebuild the plain string with substitution and
-            # reapply the cursor style on that cell.
-            plain = result.plain
-            new_plain = plain[:cursor_pos] + self._active_cursor_glyph + plain[cursor_pos + 1:]
-            new_text = _RichText(new_plain, end="", style=result.style)
-            for span in result.spans:
-                new_text.stylize(span.style, span.start, span.end)
-            new_text.stylize(cursor_style, cursor_pos, cursor_pos + 1)
-            result = new_text
+            # Cursor over an existing character. Previously we REPLACED
+            # the character with the bar glyph (▏) so the cell read as
+            # a caret — but Textual's blink toggle alternates between
+            # this render path (glyph-replaced) and the stock render
+            # path (original char). The user perceived the swap as
+            # "cursor deletes the letter" because on every blink the
+            # 'b' in 'alombasi' alternately vanished and reappeared.
+            # Instead, KEEP the character visible and apply the cursor
+            # style (usually reverse-video) to that cell — the cell
+            # now reads as a block cursor that doesn't erase the glyph,
+            # and the blink-off path renders the same char unchanged
+            # so there's no visual jump.
+            result.stylize(cursor_style, cursor_pos, cursor_pos + 1)
         # Voice recording? Append a colored block character right after
         # the text. NO background — the cell stays terminal-native so
         # the bar character IS the visual (no "gray box" feel from a
@@ -528,7 +532,16 @@ class ChatScreen(Screen):
        the background. Cursor is still visible because we draw it
        as a styled glyph in _NoTintInput.render_line. */
     #input-row.hidden-by-overflow #chat-input {
-        color: ansi_default;
+        /* text-opacity 0 actually makes the rendered glyphs invisible
+           (color: ansi_default merely set the fg to the terminal's
+           DEFAULT FOREGROUND colour, i.e. white-ish, which is the
+           same colour user text normally is — so the duplication
+           the user reported persisted). The widget itself stays in
+           the layout so Textual keeps routing keystrokes to it. */
+        text-opacity: 0%;
+    }
+    #input-row.hidden-by-overflow #input-prompt {
+        text-opacity: 0%;
     }
     /* Multi-line wrap preview ABOVE the input row. Hidden by default;
        Static.update() fills it when input value exceeds visible width.
