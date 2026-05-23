@@ -75,6 +75,15 @@ def _looks_like_markdown(text: str) -> bool:
     # Bold **like this** — must be paired, not just an accidental **.
     if text.count("**") >= 2:
         return True
+    # Italic *like this* — paired single asterisks with non-space
+    # inside and word/punct outside. Excludes math (`5 * 3`, both
+    # sides have whitespace) and stray `*` bullets at line start
+    # (already handled by the list-marker branch below). Without
+    # this, replies like "What *does* it mean?" rendered the
+    # literal asterisks because the markdown pass never fired.
+    import re as _re
+    if _re.search(r"(?<![\w*])\*(?!\s)[^*\n]+?(?<!\s)\*(?![\w*])", text):
+        return True
     # Line-leading markers for lists and headers. Checking at line
     # start avoids false positives like "5 - 3 = 2" inside prose.
     for line in text.splitlines():
