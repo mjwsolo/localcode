@@ -19,17 +19,17 @@ class ModePickerScreen(Screen):
     DEFAULT_CSS = """
     ModePickerScreen {
         layout: vertical;
-        background: transparent;
+        background: ansi_default;
         padding: 1 0;
     }
     #picker-center {
-        background: transparent;
+        background: ansi_default;
         height: 1fr;
         width: 100%;
         align: center middle;
     }
     #picker-box {
-        background: transparent;
+        background: ansi_default;
         width: 92%;
         max-width: 56;
         height: auto;
