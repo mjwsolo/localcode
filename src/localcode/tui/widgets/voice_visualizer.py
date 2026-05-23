@@ -40,7 +40,7 @@ class VoiceVisualizer(Static):
     VoiceVisualizer {
         height: 1;
         width: 1;                /* exactly one cell — no phantom column */
-        background: ansi_default;
+        background: transparent;
         padding: 0;
         margin: 0 0 0 1;         /* one space gap from input, nothing else */
         display: none;          /* hidden when not recording */
