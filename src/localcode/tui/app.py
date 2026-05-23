@@ -90,24 +90,33 @@ class LocalCodeTUI(App):
         "setup": SetupScreen,
     }
 
+    # Textual-documented switch: when True, Textual does NOT convert
+    # ANSI colors into RGB before painting. The cells go out as raw
+    # SGR escape codes that EVERY terminal renders using ITS OWN
+    # palette — black on a black terminal, cream on a Solarized Light
+    # terminal, transparent over wallpaper on a translucent iTerm2,
+    # whatever the user has configured. This is the right answer for
+    # an app shipped to many users with different terminals: never
+    # assume what their bg is, defer entirely to their terminal
+    # settings. (Trade-off: hex colors in CSS lose their alpha-blend
+    # passes, but localcode doesn't rely on those.)
+    ansi_color = True
+
     def __init__(self, show_mode_picker: bool = True) -> None:
         super().__init__()
-        # Register and activate a custom theme where ALL of textual's
-        # CSS variables ($background, $surface, $boost, $panel, etc.)
-        # are pinned to the terminal's default ANSI colors. Without
-        # this the fallback "textual-dark" theme paints $surface as
-        # a dark gray, which is the "dodgy dark color" the user
-        # reported even though our own CSS uses ansi_default — any
-        # widget that didn't have an explicit background still picked
-        # up the theme's dark gray.
+        # With ansi_color=True the theme variables are pass-through:
+        # any color value we set propagates as the ANSI code, not as
+        # blended RGB. Register a minimal custom theme so $background,
+        # $surface, $panel, $boost, $foreground all map to the SGR
+        # default (ansi_default) — which Textual now emits as the
+        # actual escape code rather than RGB-black. Brand accents
+        # (primary/accent) stay as hex because they MUST be a specific
+        # blue on every terminal, not "whatever your blue is".
         try:
             from textual.theme import Theme as _Theme
             ansi_theme = _Theme(
                 name="localcode-ansi",
                 primary="#5f87ff",
-                # All ANSI-driven so terminal palette wins. "ansi_default"
-                # isn't a hex Theme accepts directly — use the SGR-49
-                # equivalents: bg/foreground both inherit terminal.
                 background="ansi_default",
                 surface="ansi_default",
                 panel="ansi_default",
