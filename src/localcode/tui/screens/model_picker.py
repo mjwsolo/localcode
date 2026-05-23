@@ -56,19 +56,19 @@ class ModelPickerScreen(Screen):
     DEFAULT_CSS = """
     ModelPickerScreen {
         layout: vertical;
-        background: ansi_default;
+        background: transparent;
         padding: 1 0;
-        background: ansi_default;
+        background: transparent;
     }
     /* #picker-header removed (2026-04-25). Brand moved into footer. */
     #picker-center {
-        background: ansi_default;
+        background: transparent;
         height: 1fr;
         width: 100%;
         align: center middle;
     }
     #picker-box {
-        background: ansi_default;
+        background: transparent;
         width: 92%;
         max-width: 56;
         height: auto;
@@ -76,12 +76,12 @@ class ModelPickerScreen(Screen):
         border: round #5f87ff;
     }
     #picker-list {
-        background: ansi_default;
+        background: transparent;
         height: auto;
         width: 100%;
     }
     #dir-input {
-        background: ansi_default;
+        background: transparent;
         display: none;
         height: 3;
         margin-top: 1;
@@ -91,7 +91,7 @@ class ModelPickerScreen(Screen):
         display: block;
     }
     #picker-footer {
-        background: ansi_default;
+        background: transparent;
         dock: bottom;
         height: 1;
         padding: 0 2;
