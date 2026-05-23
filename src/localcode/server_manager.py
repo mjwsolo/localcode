@@ -312,8 +312,66 @@ class ServerManager:
         self._port: int = DEFAULT_PORT
         self._pressure_thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
+        # Idle auto-suspend: track wall-clock of the most recent chat
+        # activity. A background watchdog thread shuts the server down
+        # after `_idle_timeout_s` seconds of inactivity to stop the GPU
+        # from cooking the laptop while the user is reading replies.
+        # The next chat call transparently respawns via _restart_server.
+        # 0 disables; default 10 min. Override with env LOCALCODE_IDLE_SUSPEND_S.
+        import os as _os
+        try:
+            self._idle_timeout_s: float = float(
+                _os.environ.get("LOCALCODE_IDLE_SUSPEND_S", "600"),
+            )
+        except ValueError:
+            self._idle_timeout_s = 600.0
+        self._last_activity_ts: float = 0.0
+        self._idle_thread: Optional[threading.Thread] = None
         # On construction, clean up any stale PID file from a prior crash.
         self._reap_stale_pid_file()
+
+    def mark_activity(self) -> None:
+        """Record that the server just handled (or is about to handle)
+        a request. Resets the idle-suspend countdown."""
+        import time as _t
+        self._last_activity_ts = _t.time()
+
+    def set_idle_timeout(self, seconds: float) -> None:
+        """Update the idle auto-suspend window. 0 disables suspend."""
+        self._idle_timeout_s = max(0.0, float(seconds))
+
+    def _idle_watchdog(self) -> None:
+        import time as _t
+        while True:
+            _t.sleep(30)
+            try:
+                if self._idle_timeout_s <= 0:
+                    continue
+                if self._process is None or self._process.poll() is not None:
+                    continue
+                if self._last_activity_ts == 0.0:
+                    continue
+                idle = _t.time() - self._last_activity_ts
+                if idle >= self._idle_timeout_s:
+                    _lifecycle_log(
+                        "idle_suspend",
+                        idle_s=round(idle, 1),
+                        threshold_s=self._idle_timeout_s,
+                    )
+                    self.shutdown()
+            except Exception:
+                # Never let the watchdog crash the process.
+                pass
+
+    def _ensure_idle_thread(self) -> None:
+        if self._idle_thread is not None and self._idle_thread.is_alive():
+            return
+        self._idle_thread = threading.Thread(
+            target=self._idle_watchdog,
+            name="lc-idle-suspend",
+            daemon=True,
+        )
+        self._idle_thread.start()
 
     @property
     def port(self) -> int:
@@ -434,6 +492,9 @@ class ServerManager:
         ok = self._wait_healthy(port, timeout_s)
         _lifecycle_log("server_health_result", port=port, healthy=ok,
                        free_mb=_system_free_memory_mb())
+        if ok:
+            self.mark_activity()
+            self._ensure_idle_thread()
         return ok
 
     def restart(self, cmd: list[str], model_path: str, port: int = DEFAULT_PORT,
