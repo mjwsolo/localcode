@@ -4,6 +4,7 @@ from __future__ import annotations
 from ..._subproc_env import clean_env
 
 import subprocess
+from pathlib import Path
 
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -282,7 +283,6 @@ class SetupScreen(Screen):
 
         binary_path = _turboquant_binary_path()
         if not binary_path and config.runtime.llama_cpp_binary:
-            from pathlib import Path
             p = Path(config.runtime.llama_cpp_binary)
             if p.exists():
                 binary_path = p
@@ -417,7 +417,6 @@ class SetupScreen(Screen):
         time.sleep(1)
 
         # Actually launch llama-server — try GPU first, fall back to CPU on OOM
-        from pathlib import Path
         from ...runtime import LocalCodeRuntimeGateway
 
         log_dir = Path.home() / ".local" / "share" / "localcode"
