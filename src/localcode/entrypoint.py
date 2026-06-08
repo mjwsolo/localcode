@@ -70,6 +70,17 @@ def build_parser() -> argparse.ArgumentParser:
     # `status` / `doctor` were CLI subcommands; replaced with the
     # in-TUI `/status` slash command. Run localcode and type `/status`
     # in the chat input.
+    run = subparsers.add_parser(
+        "run",
+        help="run a single coding goal headlessly (no TUI) and exit — "
+             "for scripting, CI, and the benchmark harness",
+    )
+    run.add_argument("--goal", required=True, help="the task for the agent to perform")
+    run.add_argument("--timeout", type=int, default=0,
+                     help="abort after N seconds (0 = no limit)")
+    run.add_argument("--quiet", action="store_true",
+                     help="suppress streamed agent output; print only the final answer")
+
     subparsers.add_parser("models", help="list Gemma profiles and installed local models")
     subparsers.add_parser(
         "unstick",
@@ -134,6 +145,93 @@ def _harden_against_debugger_attach() -> None:
                 _f.write(f"[startup] PT_DENY_ATTACH FAILED: {e}\n")
         except Exception:
             pass
+
+
+def _run_headless(config, args, console) -> int:
+    """Run one goal through the agent loop with no TUI, then exit.
+
+    Same backend the TUI drives (LocalCodeApp + .ask), minus the Textual
+    screen: events stream to stdout and we return a process exit code.
+    This is what the eval harness and CI benchmark invoke. Approvals are
+    forced to full-auto — there's no human to answer prompts.
+
+    Exit codes: 0 ok · 1 error · 124 timeout · 130 interrupted.
+    """
+    import os
+    from pathlib import Path as _Path
+    os.environ["LOCALCODE_AUTONOMY"] = "full_auto"  # no human to approve tools
+
+    from .app import LocalCodeApp
+    from .server_manager import _probe_health
+    from .bootstrap import get_model_path
+    from .models_catalog import CHOICES
+
+    # Resolve the model to a concrete downloaded GGUF. The config often
+    # holds a TAG (e.g. "gemma26b-iq3"), not a filename, so the server's
+    # by-name lookup would miss. Order: explicit --model GGUF → configured
+    # filename → smallest downloaded catalog model (fastest to load).
+    resolved: _Path | None = None
+    for candidate in (args.model, config.runtime.model):
+        name = _Path(candidate).name if candidate else None
+        if name and name.endswith(".gguf"):
+            resolved = get_model_path(name)
+            if resolved:
+                break
+    if resolved is None:
+        downloaded = [c for c in CHOICES if c.local_path.exists()]
+        if downloaded:
+            resolved = min(downloaded, key=lambda c: c.size_gb).local_path
+    if resolved is None:
+        console.print(
+            "[red]error:[/] no model found on disk. Download one first "
+            "(`localcode setup`) or pass --model <downloaded.gguf>."
+        )
+        return 1
+    config.runtime.model = str(resolved)
+    console.print(f"[dim]model: {resolved.name}[/]")
+
+    app = LocalCodeApp(config, profile_name=args.profile)
+
+    # Ensure the inference server is up — same path the agent uses on a
+    # cold turn: probe the usual port range, restart if nothing answers.
+    if not any(_probe_health(p, timeout=1.0) for p in range(8081, 8100)):
+        console.print("[dim]starting model server…[/]")
+        if not app.engine._restart_server():
+            console.print(
+                "[red]error:[/] could not start the model server "
+                "(model downloaded? llama-server binary present?)"
+            )
+            return 1
+
+    # Optional hard timeout so a stuck run can't hang CI forever.
+    if args.timeout and args.timeout > 0:
+        import signal
+
+        def _on_timeout(_sig, _frame):
+            raise TimeoutError(f"run exceeded {args.timeout}s")
+
+        signal.signal(signal.SIGALRM, _on_timeout)
+        signal.alarm(args.timeout)
+
+    try:
+        result = app.ask(args.goal, stream=not args.quiet)
+    except TimeoutError as e:
+        console.print(f"[red]timeout:[/] {e}")
+        return 124
+    except KeyboardInterrupt:
+        console.print("[yellow]interrupted[/]")
+        return 130
+    except Exception as e:  # noqa: BLE001 — headless: surface any failure as exit 1
+        console.print(f"[red]run failed:[/] {type(e).__name__}: {e}")
+        return 1
+    finally:
+        if args.timeout and args.timeout > 0:
+            import signal
+            signal.alarm(0)
+
+    if args.quiet:
+        console.print(result or "")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -208,6 +306,8 @@ def main(argv: list[str] | None = None) -> None:
         if preset.notes:
             console.print(Panel("\n".join(preset.notes), title="Recommendations"))
         return
+    if args.command == "run":
+        sys.exit(_run_headless(config, args, console))
     if args.command == "models":
         from .models import GEMMA_PROFILES
         from rich.table import Table

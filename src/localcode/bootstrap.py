@@ -287,10 +287,14 @@ def _is_complete_download(p: Path, catalog_entry) -> bool:
         return False
     if catalog_entry is None:
         return size > 1024 * 1024
-    expected = int(catalog_entry.size_gb * 1024 ** 3)
-    # Allow 1% tolerance — HF sometimes reports a slightly different
-    # rounded GB size than the actual bytes on disk.
-    return size >= int(expected * 0.99)
+    # Catalog `size_gb` is DECIMAL GB (HF's convention, e.g. 11.2 GB =
+    # 11.2e9 bytes), so compare in 1000**3 — NOT 1024**3. Using binary
+    # GiB here over-estimated the expected bytes by ~7% and wrongly
+    # rejected complete files (a real 11.29e9-byte model "failed" an
+    # expected-12.0e9 check), so the server never started.
+    expected = int(catalog_entry.size_gb * 1000 ** 3)
+    # Allow 3% tolerance for rounding in the catalog's GB figure.
+    return size >= int(expected * 0.97)
 
 
 def get_model_path(preferred_filename: str | None = None) -> Path | None:
