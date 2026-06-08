@@ -63,6 +63,25 @@ GEMMA_PROFILES: dict[str, ModelProfile] = {
         retrieval_budget=4,
         context_strategy="balanced",
     ),
+    "gemma4-12b": ModelProfile(
+        key="gemma4-12b",
+        display_name="Gemma 4 12B",
+        default_model="gemma4:12b",
+        family="gemma4",
+        feature_variant="balanced",
+        recommended_context_chars=24000,
+        advertised_context_window=128000,
+        summary="Mid-sized dense Gemma 4 for 16 GB Apple Silicon: stronger than E4B, native vision + audio.",
+        supports_vision=True,
+        supports_audio=True,
+        supports_native_system=True,
+        tool_strategy="native",
+        agent_steps=3,
+        approval_style="balanced",
+        verification_bias="balanced",
+        retrieval_budget=5,
+        context_strategy="balanced",
+    ),
     "gemma4-26b-moe": ModelProfile(
         key="gemma4-26b-moe",
         display_name="Gemma 4 26B MoE",
@@ -124,6 +143,7 @@ GEMMA_PROFILES: dict[str, ModelProfile] = {
 MLX_MODEL_IDS: dict[str, str] = {
     "gemma4-e2b": "mlx-community/gemma-4-e4b-it-8bit",       # no e2b MLX exists, use e4b
     "gemma4-e4b": "mlx-community/gemma-4-e4b-it-8bit",
+    "gemma4-12b": "mlx-community/gemma-4-12b-it-4bit",
     "gemma4-26b-moe": "mlx-community/gemma-4-26b-a4b-it-4bit",
     "gemma4-26b-laptop": "mlx-community/gemma-4-26b-a4b-it-4bit",
     "gemma4-31b": "mlx-community/gemma-4-31b-it-4bit",
@@ -133,6 +153,7 @@ MLX_MODEL_IDS: dict[str, str] = {
 ALIASES = {
     "e2b": "gemma4-e2b",
     "e4b": "gemma4-e4b",
+    "12b": "gemma4-12b",
     "26b": "gemma4-26b-moe",
     "26b-laptop": "gemma4-26b-laptop",
     "26blaptop": "gemma4-26b-laptop",
@@ -140,6 +161,7 @@ ALIASES = {
     "31b": "gemma4-31b",
     "gemma4:e2b": "gemma4-e2b",
     "gemma4:e4b": "gemma4-e4b",
+    "gemma4:12b": "gemma4-12b",
     "gemma4:26b": "gemma4-26b-moe",
     "gemma4:26b-moe": "gemma4-26b-moe",
     "gemma4:26b-laptop": "gemma4-26b-laptop",
@@ -156,6 +178,8 @@ def infer_profile_from_model(model_name: str) -> ModelProfile | None:
             return profile
     if "31b" in name:
         return GEMMA_PROFILES["gemma4-31b"]
+    if "12b" in name:
+        return GEMMA_PROFILES["gemma4-12b"]
     if "26b-laptop" in name:
         return GEMMA_PROFILES["gemma4-26b-laptop"]
     if "26b" in name:

@@ -1,0 +1,141 @@
+"""Live TUI driver tests — drive the REAL Textual app with simulated
+keystrokes via Textual's headless test driver.
+
+`App.run_test()` runs the app on an in-memory (headless) driver — no real
+terminal, fully awaitable — so unlike `--preview-screen` in a subprocess
+(which attaches a real TTY and never exits), this does NOT hang. We land
+directly on the chat screen (the app's `_preview_screen` short-circuit),
+swap in a scripted FakeRuntime backend, type a prompt, press Enter, and
+assert the response renders in the chat log.
+
+Each test wraps an async scenario in `asyncio.run(...)` so it needs no
+pytest-asyncio/anyio plugin configuration.
+"""
+from __future__ import annotations
+
+import asyncio
+import os
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+from tests.e2e.fake_runtime import build_test_app, say, tool_round
+
+
+def _chat_log_text(app) -> str:
+    """Flatten the visible chat log to plain text for assertions."""
+    log = app.screen.query_one("#chat-log")
+    return "\n".join(s.text for s in log.lines)
+
+
+async def _drive(tmp_path, project, script, keystrokes_text):
+    """Boot the TUI on the chat screen with a fake backend, type a line,
+    press Enter, wait for the agent worker to finish, and return a plain
+    snapshot of what happened.
+
+    All UI reads happen INSIDE the `run_test()` context — once it exits
+    the screen stack is torn down, so we must not hand the live app back
+    to the caller. Returns a dict: {log_text, input_value, model_calls}.
+    """
+    from localcode.tui.app import LocalCodeTUI
+
+    os.environ["LOCALCODE_AUTONOMY"] = "full_auto"
+    app = LocalCodeTUI()
+    app._preview_screen = "chat"  # skip health/server/model-picker → chat
+
+    async with app.run_test() as pilot:
+        await pilot.pause()  # let on_mount push the chat screen
+        # Replace the (uninitialised) backend with a scripted one bound to
+        # a throwaway repo, and rewire its output to the live TUI bridge.
+        backend = build_test_app(tmp_path, script=script, cwd=project)
+        app.engine = backend
+        backend.out.set_event_callback(app.bridge.on_event)
+        backend.out.set_approval_callback(app.bridge.request_approval)
+
+        chat_input = app.screen.query_one("#chat-input")
+        chat_input.value = keystrokes_text
+        await pilot.press("enter")
+
+        # Agent runs on a background thread worker; pump the event loop
+        # until it finishes (or time out so a hang can't wedge the suite).
+        for _ in range(200):  # ~10s ceiling
+            await pilot.pause(0.05)
+            if not getattr(app.screen, "_agent_busy", False):
+                break
+
+        return {
+            "log_text": _chat_log_text(app),
+            "input_value": app.screen.query_one("#chat-input").value,
+            "model_calls": len(backend.engine.calls),
+        }
+
+
+@pytest.fixture
+def project(tmp_path):
+    repo = tmp_path / "project"
+    repo.mkdir()
+    (repo / "main.py").write_text("print('hi')\n")
+    return repo
+
+
+def test_tui_prompt_renders_model_response(tmp_path, project):
+    async def scenario():
+        snap = await _drive(
+            tmp_path, project, [say("Hello from the model.")], "hi there"
+        )
+        # The keystroke went through the real Input → submit → worker → loop.
+        assert snap["model_calls"] >= 1, "model was never called"
+        # The user's line and the model's reply both rendered in the log.
+        assert "hi there" in snap["log_text"]
+        assert "Hello from the model." in snap["log_text"]
+        # Input box cleared after submit.
+        assert snap["input_value"] == ""
+
+    asyncio.run(scenario())
+
+
+def test_tui_tool_call_turn_executes_through_ui(tmp_path, project):
+    """A scripted tool round driven entirely from a keystroke: the model
+    'calls' write_file, the real tool runs, the file appears on disk, and
+    the final answer renders."""
+    async def scenario():
+        script = [
+            tool_round(("write_file", {"path": "made_by_tui.py", "content": "X = 1\n"})),
+            say("Created the file."),
+        ]
+        snap = await _drive(tmp_path, project, script, "create a file")
+        assert (project / "made_by_tui.py").read_text() == "X = 1\n"
+        assert "Created the file." in snap["log_text"]
+
+    asyncio.run(scenario())
+
+
+def test_tui_slash_clear_command(tmp_path, project):
+    """A slash command typed at the prompt is handled (not sent to model)
+    and doesn't crash the app."""
+    async def scenario():
+        from localcode.tui.app import LocalCodeTUI
+
+        os.environ["LOCALCODE_AUTONOMY"] = "full_auto"
+        app = LocalCodeTUI()
+        app._preview_screen = "chat"
+        async with app.run_test() as pilot:
+            await pilot.pause()  # let on_mount push the chat screen
+            backend = build_test_app(tmp_path, script=[say("hi")], cwd=project)
+            app.engine = backend
+            backend.out.set_event_callback(app.bridge.on_event)
+
+            chat_input = app.screen.query_one("#chat-input")
+            chat_input.value = "/clear"
+            await pilot.press("enter")
+            await pilot.pause(0.1)
+
+            # Slash command must NOT have been routed to the model.
+            assert backend.engine.calls == []
+            # App is still alive and input is clear.
+            assert app.screen.query_one("#chat-input").value == ""
+
+    asyncio.run(scenario())

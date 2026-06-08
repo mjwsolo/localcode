@@ -106,6 +106,49 @@ CHOICES: list[ModelChoice] = [
         mmproj_hf_filename="mmproj-F16.gguf",
     ),
     ModelChoice(
+        key="gemma-12b",
+        name="Gemma 4 12B (Q4)",
+        hf_repo="unsloth/gemma-4-12b-it-GGUF",
+        filename="gemma-4-12b-it-UD-Q4_K_XL.gguf",
+        size_gb=7.37,
+        active_params="12B (dense)",
+        architecture="gemma4-iswa",
+        license="Apache 2.0",
+        humaneval_pass_at_1=None,
+        notes=(
+            "Mid-sized dense Gemma 4 — sits between E4B and the 26B MoE. "
+            "UD-Q4_K_XL fits 16 GB unified memory (~7.4 GB weights + KV + mmproj). "
+            "Native multimodal (vision + audio per Google's Gemma 4 announcement). "
+            "Apache 2.0 licensed. Untested on this stack — no HumanEval number yet. "
+            "TODO: confirm exact GGUF filename, arch enum, and mmproj filename/size against the repo before release."
+        ),
+        mmproj_filename="mmproj-gemma-4-12b-F16.gguf",
+        mmproj_size_gb=0.86,  # 862 MB; repo offers BF16 + F16, both 862 MB
+        mmproj_hf_filename="mmproj-F16.gguf",
+    ),
+    ModelChoice(
+        key="gemma-12b-bf16",
+        name="Gemma 4 12B (BF16, full)",
+        hf_repo="unsloth/gemma-4-12b-it-GGUF",
+        filename="gemma-4-12b-it-BF16.gguf",
+        size_gb=23.8,
+        active_params="12B (dense)",
+        architecture="gemma4-iswa",
+        license="Apache 2.0",
+        humaneval_pass_at_1=None,
+        notes=(
+            "Full-precision BF16 — reference quality, zero quantization loss (this is the 100% "
+            "baseline every quant's '% of BF16' is measured against). ~24 GB weights → needs "
+            "≥48 GB unified memory (sweet spot 64-128 GB Apple Silicon). 16/24 GB Macs CANNOT run "
+            "this — use the [gemma-12b] Q4 entry instead. Same dense 12B as the Q4 entry, just "
+            "unquantized. Untested on this stack. TODO: confirm exact BF16 filename (may be split into "
+            "shards) + mmproj filename/size against the repo before release."
+        ),
+        mmproj_filename="mmproj-gemma-4-12b-F16.gguf",
+        mmproj_size_gb=0.86,  # 862 MB; repo offers BF16 + F16, both 862 MB
+        mmproj_hf_filename="mmproj-F16.gguf",
+    ),
+    ModelChoice(
         key="qwen",
         name="Qwen 3.6 35B-A3B (Q2)",
         hf_repo="unsloth/Qwen3.6-35B-A3B-GGUF",
