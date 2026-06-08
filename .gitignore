@@ -12,6 +12,7 @@ build/
 .venv/
 venv/
 env/
+localcodevenv/
 
 # Secrets & local config
 .env
@@ -29,6 +30,7 @@ tests/test_results.json
 
 # Local agent/dev-only state
 .claude/
+CLAUDE.local.md
 
 # Research archives (not shipped)
 .research-archive/
@@ -80,3 +82,4 @@ app.log
 backend.log
 *.log
 nohup.out
+eval/results/

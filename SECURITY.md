@@ -4,9 +4,7 @@
 
 If you find a security issue in LocalCode, please do not open a public GitHub issue first.
 
-Report it privately to:
-
-- `the maintainers (see SECURITY.md)`
+Report it privately via [GitHub Security Advisories](https://github.com/mjwsolo/localcode/security/advisories/new).
 
 Include:
 

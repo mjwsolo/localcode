@@ -1637,6 +1637,8 @@ class LocalCodeApp:
         if self.profile.key == "gemma4-e2b":
             target = GEMMA_PROFILES["gemma4-e4b"]
         elif self.profile.key == "gemma4-e4b":
+            target = GEMMA_PROFILES["gemma4-12b"]
+        elif self.profile.key == "gemma4-12b":
             target = GEMMA_PROFILES["gemma4-26b-moe"]
         else:
             return

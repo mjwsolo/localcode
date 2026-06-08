@@ -1,7 +1,6 @@
 """agent — spawn a sub-agent to handle a focused multi-step task.
 
-Internal sub-agent pattern (src/tools/
-AgentTool/runAgent.ts). A sub-agent is a fresh model session with:
+A sub-agent is a fresh model session with:
   - its own system prompt (specialized for the agent type)
   - a tool subset (so e.g. an "explore" agent only gets read tools)
   - the same model + runtime as the parent
