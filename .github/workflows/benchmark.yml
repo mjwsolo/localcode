@@ -1,0 +1,69 @@
+name: Benchmark (smallest model, free CI)
+
+# Runs the eval harness against the SMALLEST shipped model on a free
+# GitHub Linux runner — CPU-only, so it's slow. This is a *functional*
+# benchmark ("can a real local model complete a real coding task end to
+# end?"), NOT a perf number — CPU timings on a shared runner mean nothing
+# next to Apple Silicon. It's its own workflow (never gates pushes) and
+# runs nightly or on demand.
+#
+# KNOWN UNKNOWN: LocalCode's inference server is an Apple-Silicon/Metal
+# fork. This job depends on a `linux-x86_64` llama-server build existing
+# in Releases (bootstrap.py downloads it). If that build isn't published,
+# this job will fail at server start — which is itself useful signal.
+
+on:
+  schedule:
+    - cron: "0 7 * * *"      # ~07:00 UTC nightly
+  workflow_dispatch:
+
+jobs:
+  benchmark:
+    name: smallest-model functional smoke (CPU)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Reclaim disk (free runners ship ~14 GB free; model needs ~8 GB)
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Install LocalCode
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Download the smallest catalog model
+        id: model
+        run: |
+          python - <<'PY' | tee model.txt
+          from localcode import models_catalog as c, bootstrap as b
+          m = min(c.CHOICES, key=lambda x: x.size_gb)
+          print(f"::notice::downloading {m.filename} ({m.size_gb} GB)")
+          ok, path = b.download_model(m)
+          if not ok:
+              raise SystemExit(f"download failed: {path}")
+          print(f"MODEL_FILE={m.filename}")
+          PY
+          echo "file=$(grep MODEL_FILE model.txt | cut -d= -f2)" >> "$GITHUB_OUTPUT"
+
+      - name: Run the trivial task headless (fizzbuzz)
+        run: |
+          python eval/runner.py \
+            --task 01-fizzbuzz \
+            --model "${{ steps.model.outputs.file }}" \
+            --mode headless
+
+      - name: Upload result JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: eval/results/*.json
+          if-no-files-found: ignore
