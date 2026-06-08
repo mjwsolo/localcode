@@ -73,6 +73,9 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = [
+  "slow: heavyweight tests (real venv install, network) — opt-in, skipped by default",
+]
 
 [tool.ruff]
 line-length = 100
