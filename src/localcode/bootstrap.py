@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import os
 import platform
 import shutil
 import subprocess
@@ -1277,9 +1278,8 @@ def run_setup(
 
     if config.runtime.provider == "llama_cpp":
         validate_provider(console, config)
-        browser_ok, browser_voice_messages = browser_voice_readiness(config)
-        for message in browser_voice_messages:
-            console.print(message)
+        # browser_voice_readiness call removed during T0.9 purge (the
+        # function is gone; this dangling call was a latent NameError).
         launch_cmd = runtime_command(config.runtime) or f"{detect_llama_cpp_server_command() or 'llama-server'} -m {resolved_model} --port 8080"
         console.print(f"Start a local llama.cpp server, for example: {launch_cmd}")
         console.print("Or use: localcode runtime-up")
