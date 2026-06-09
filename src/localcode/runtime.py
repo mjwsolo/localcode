@@ -264,6 +264,27 @@ class LocalCodeRuntimeGateway:
             threads = self.config.llama_cpp_threads
         if mode == "context":
             threads = max(threads, 10)  # context mode benefits from all cores
+
+        # ── Vanilla / stock llama.cpp compatibility (Linux CI, no Metal) ──
+        # The bundled server is a TurboQuant fork whose flags (turbo4 KV,
+        # -fit, --ctx-checkpoints, --spec-type) stock llama.cpp rejects.
+        # When LOCALCODE_SERVER_FLAVOR=vanilla, emit a minimal stock-
+        # compatible CPU command and return early. This is a FUNCTIONAL
+        # path (does the agent run against a real model?) — NOT the
+        # Apple-Silicon TurboQuant perf path.
+        if os.environ.get("LOCALCODE_SERVER_FLAVOR", "").strip().lower() == "vanilla":
+            ctx = min(8192, self._target_num_ctx(model_path=model_path))
+            return [
+                binary,
+                "--model", model_path,
+                "--port", str(port),
+                "--ctx-size", str(ctx),
+                "--threads", str(threads),
+                "-ngl", "0",            # CPU only
+                "--jinja",
+                "-b", "256", "-ub", "256",
+            ]
+
         # Flash attention helps on GPU (Metal/CUDA) but hurts on CPU —
         # the kernel does more arithmetic to save memory, which is
         # backwards when memory is plentiful and arithmetic is the

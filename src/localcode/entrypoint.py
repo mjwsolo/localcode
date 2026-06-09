@@ -76,6 +76,9 @@ def build_parser() -> argparse.ArgumentParser:
              "for scripting, CI, and the benchmark harness",
     )
     run.add_argument("--goal", required=True, help="the task for the agent to perform")
+    run.add_argument("--binary", default=None,
+                     help="path to a llama-server binary (e.g. stock llama.cpp on Linux CI; "
+                          "pair with LOCALCODE_SERVER_FLAVOR=vanilla)")
     run.add_argument("--timeout", type=int, default=0,
                      help="abort after N seconds (0 = no limit)")
     run.add_argument("--quiet", action="store_true",
@@ -189,6 +192,9 @@ def _run_headless(config, args, console) -> int:
         return 1
     config.runtime.model = str(resolved)
     console.print(f"[dim]model: {resolved.name}[/]")
+    if args.binary:
+        config.runtime.llama_cpp_binary = args.binary
+        console.print(f"[dim]server binary: {args.binary}[/]")
 
     app = LocalCodeApp(config, profile_name=args.profile)
 

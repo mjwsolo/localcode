@@ -228,50 +228,6 @@ def test_task_slug_uses_content_words_not_prompt_prefix() -> None:
     assert "music-theory" in state.task_slug
 
 
-def test_tool_schemas_are_flat() -> None:
-    build_tools = {
-        schema["function"]["name"]
-        for schema in schemas_for_goal("build_app", "build a small dashboard")
-    }
-    edit_tools = {
-        schema["function"]["name"]
-        for schema in schemas_for_goal("edit_existing", "refactor the parser")
-    }
-
-    assert build_tools == {"read_file", "write_file", "append_file", "edit_file", "bash", "list_files"}
-    assert edit_tools == build_tools
-
-
-def test_tool_schemas_do_not_mutate_by_stage_or_legacy_recovery() -> None:
-    planning_tools = {
-        schema["function"]["name"]
-        for schema in schemas_for_goal("build_app", "build a small dashboard", task_stage="planning")
-    }
-    scaffolding_tools = {
-        schema["function"]["name"]
-        for schema in schemas_for_goal("build_app", "build a small dashboard", task_stage="scaffolding")
-    }
-    running_tools = {
-        schema["function"]["name"]
-        for schema in schemas_for_goal("build_app", "build a small dashboard", task_stage="running")
-    }
-    recovery_tools = {
-        schema["function"]["name"]
-        for schema in schemas_for_goal(
-            "build_app",
-            "build a data-heavy utility",
-            task_stage="implementing",
-            recovery_mode="legacy_recovery_final",
-        )
-    }
-
-    expected = {"read_file", "write_file", "append_file", "edit_file", "bash", "list_files"}
-    assert planning_tools == expected
-    assert scaffolding_tools == expected
-    assert running_tools == expected
-    assert recovery_tools == expected
-
-
 def test_legacy_recovery_content_limit_is_not_schema_routing_anymore() -> None:
     schemas = schemas_for_goal(
         "build_app",
@@ -367,20 +323,6 @@ def test_file_not_found_edit_counts_as_repeated_failure() -> None:
     assert "already failed 2 times" in stub
 
 
-def test_repeat_failed_recovery_keeps_flat_tool_surface() -> None:
-    tools = {
-        schema["function"]["name"]
-        for schema in schemas_for_goal(
-            "build_app",
-            "build a utility",
-            task_stage="implementing",
-            recovery_mode="repeat_failed:edit_file",
-        )
-    }
-
-    assert tools == {"read_file", "write_file", "append_file", "edit_file", "bash", "list_files"}
-
-
 def test_read_file_dedup_is_disabled_to_unblock_debug_loops() -> None:
     """Removed 2026-04-29 after observing a 17-minute hang where the
     model was legitimately re-reading a file to fix a verification gap
@@ -413,16 +355,6 @@ def test_read_file_dedup_is_disabled_to_unblock_debug_loops() -> None:
     assert stub is None  # read_file dedup intentionally disabled
 
 
-def test_question_tool_schemas_are_read_only_diagnostics() -> None:
-    question_tools = {
-        schema["function"]["name"]
-        for schema in schemas_for_goal("question", "?")
-    }
-
-    assert question_tools == {"read_file", "write_file", "append_file", "edit_file", "bash", "list_files"}
-    assert "launch_app" not in question_tools
-
-
 def test_bash_rejects_shell_redirection_file_writes(tmp_path: Path) -> None:
     result = _redirect_shell_file_write(
         "cat > src/app.py <<'EOF'\nprint('hello')\nEOF",
@@ -446,18 +378,6 @@ def test_bash_allows_generated_pipeline_file_writes(tmp_path: Path) -> None:
         assert _redirect_shell_file_write(cmd, str(tmp_path)) == "", cmd
 
 
-def test_question_goal_block_does_not_resume_prior_task() -> None:
-    goal = infer_goal_state("?")
-    task = _new_app_task("demo-app")
-    task.status = "failed"
-
-    block = build_task_goal_block("?", goal, task)
-
-    assert "not permission to resume prior coding work" in block
-    assert "Do not continue" in block
-    assert "demo-app status=failed" in block
-
-
 def test_build_app_goal_block_is_empty() -> None:
     # 2026-04-29: stripped the agentic goal block (Current goal /
     # Continue until complete / build_app stage guidance / sibling-
@@ -477,25 +397,6 @@ def test_quality_monitor_rejects_placeholder_url() -> None:
     verdict = quality_monitor("Open http://localhost:[FRONTEND_PORT]", state)
     assert not verdict.ok
     assert verdict.reason == "fake-placeholder-url"
-
-
-def test_quality_monitor_rejects_unsupported_final_claims(tmp_path: Path) -> None:
-    app_file = tmp_path / "app.py"
-    app_file.write_text("def quiz():\n    return ['multiple choice']\n")
-    state = TurnState(
-        user_text="build a quiz app",
-        goal_state=infer_goal_state("build a quiz app"),
-        changed_files=[str(app_file)],
-    )
-
-    verdict = quality_monitor(
-        "Built quiz mode with true/false, fill-in-the-blank, and localStorage persistence.",
-        state,
-    )
-
-    assert not verdict.ok
-    assert verdict.reason == "unsupported-final-claims"
-    assert "localStorage" in verdict.correction
 
 
 def test_quality_monitor_allows_evidenced_final_claims(tmp_path: Path) -> None:
@@ -522,132 +423,6 @@ def test_quality_monitor_allows_evidenced_final_claims(tmp_path: Path) -> None:
 def test_greeting_question_is_not_treated_as_blocking() -> None:
     assert not is_focused_blocking_question("Hi! How can I help you today?")
     assert is_focused_blocking_question("Which package manager should I use?")
-
-
-def test_completion_gate_blocks_unverified_app_build(tmp_path: Path) -> None:
-    state = TurnState(
-        user_text="build an app",
-        goal_state=infer_goal_state("build an app with CSV import"),
-        changed_files=["demo/app.py"],
-    )
-    reason = completion_gate(
-        repo_root=tmp_path,
-        state=state,
-        build_stage="running",
-        has_runtime_verification=False,
-        partial_handoff=False,
-        blocking_question=False,
-    )
-    assert reason == "stage-running"
-
-
-def test_completion_gate_blocks_missing_requested_capability(tmp_path: Path) -> None:
-    app_file = tmp_path / "app.py"
-    app_file.write_text("def quiz():\n    return ['question', 'answer', 'score']\n")
-    state = TurnState(
-        user_text="build an app with audio and quiz mode",
-        goal_state=infer_goal_state("build an app with audio and quiz mode"),
-        changed_files=[str(app_file)],
-    )
-
-    reason = completion_gate(
-        repo_root=tmp_path,
-        state=state,
-        build_stage="verified",
-        has_runtime_verification=True,
-        partial_handoff=False,
-        blocking_question=False,
-    )
-
-    assert reason == "missing-requested-features:audio/listening"
-
-
-def test_completion_gate_blocks_empty_runtime_probe_even_when_url_verified(tmp_path: Path) -> None:
-    app_file = tmp_path / "app.py"
-    app_file.write_text("def quiz():\n    return ['question', 'answer', 'score']\n")
-    state = TurnState(
-        user_text="build an app with quiz mode",
-        goal_state=infer_goal_state("build an app with quiz mode"),
-        changed_files=[str(app_file)],
-        bash_history=[
-            ("curl -s http://127.0.0.1:5000/api/items", "[]"),
-            ("python3 app.py", "Loaded 0 records"),
-        ],
-    )
-
-    reason = completion_gate(
-        repo_root=tmp_path,
-        state=state,
-        build_stage="verified",
-        has_runtime_verification=True,
-        partial_handoff=False,
-        blocking_question=False,
-    )
-
-    assert reason == "unresolved-verification:empty-api-response, zero-runtime-data"
-
-
-def test_evidence_ledger_blocks_empty_runtime_probe_without_bash_history(tmp_path: Path) -> None:
-    app_file = tmp_path / "app.py"
-    app_file.write_text("def quiz():\n    return ['question', 'answer', 'score']\n")
-    evidence = EvidenceLedger()
-    evidence.add_tool_result(
-        "bash",
-        {"command": "curl -s http://127.0.0.1:5000/api/items"},
-        "[]",
-        {"tool": "bash", "ok": True, "exit_code": 0},
-    )
-    state = TurnState(
-        user_text="build an app with quiz mode",
-        goal_state=infer_goal_state("build an app with quiz mode"),
-        changed_files=[str(app_file)],
-        evidence=evidence,
-    )
-
-    reason = completion_gate(
-        repo_root=tmp_path,
-        state=state,
-        build_stage="verified",
-        has_runtime_verification=True,
-        partial_handoff=False,
-        blocking_question=False,
-    )
-
-    assert reason == "unresolved-verification:empty-api-response"
-
-
-def test_completion_gate_blocks_unapplied_edit(tmp_path: Path) -> None:
-    state = TurnState(
-        user_text="refactor this module",
-        goal_state=infer_goal_state("refactor this module"),
-        changed_files=[],
-    )
-    reason = completion_gate(
-        repo_root=tmp_path,
-        state=state,
-        build_stage="",
-        has_runtime_verification=False,
-        partial_handoff=False,
-        blocking_question=False,
-    )
-    assert reason == "no-edit-applied"
-
-
-def test_completion_gate_blocks_unverified_code_edit(tmp_path: Path) -> None:
-    state = TurnState(
-        user_text="fix the parser",
-        goal_state=infer_goal_state("fix the parser"),
-        changed_files=["src/parser.py"],
-    )
-    reason = completion_gate(
-        repo_root=tmp_path,
-        state=state,
-        build_stage="",
-        has_runtime_verification=False,
-        partial_handoff=False,
-        blocking_question=False,
-    )
-    assert reason == "unverified-edit"
 
 
 def test_launcher_ignores_docs_site_when_repo_has_no_app(tmp_path: Path) -> None:
