@@ -62,9 +62,9 @@ jobs:
         run: |
           mkdir -p /tmp/smoke
           MODEL="$(cat model_file.txt)"
-          python -m localcode --cwd /tmp/smoke run \
+          # NOTE: --model is a GLOBAL flag → must come BEFORE the `run` subcommand.
+          python -m localcode --model "$MODEL" --cwd /tmp/smoke run \
             --goal "Create a file named hello.txt whose entire contents are exactly: banana" \
-            --model "$MODEL" \
             --binary "$PWD/llama.cpp/build/bin/llama-server" \
             --timeout 1500
 
