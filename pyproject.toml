@@ -73,6 +73,10 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+# Put repo root + src on sys.path so `from tests.e2e...` and `from
+# localcode...` resolve under a bare `pytest` invocation (CI), not just
+# `python -m pytest` (which adds CWD itself).
+pythonpath = [".", "src"]
 markers = [
   "slow: heavyweight tests (real venv install, network) — opt-in, skipped by default",
 ]
