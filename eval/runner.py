@@ -178,6 +178,12 @@ def main() -> None:
             status = "PASS" if r["verify_exit"] == 0 else "FAIL"
             print(f"  {r['task']:25s}  {status}  {r['wall_clock_s']}s")
 
+    # Non-interactive runs must propagate failure so CI goes red on a
+    # broken run (server didn't start, agent failed, verify failed) —
+    # otherwise the harness silently exits 0 and the workflow looks green.
+    if args.mode == "headless" and any(r["verify_exit"] != 0 for r in results):
+        sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import subprocess
 import time
+from typing import Callable
 
 from .health import find_stuck_servers
 from ._subproc_env import clean_env
