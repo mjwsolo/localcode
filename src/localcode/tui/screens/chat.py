@@ -385,6 +385,7 @@ _SLASH_COMMANDS = [
 
 if TYPE_CHECKING:
     from ..app import LocalCodeTUI
+    from ...telemetry import TurnTrace
 
 # Cycling thinking indicator — icons + labels rotate per tick.
 _THINK_ICONS = ["·", "•", "●"]

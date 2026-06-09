@@ -7,14 +7,18 @@ name: Benchmark (smallest model, free CI)
 # next to Apple Silicon. It's its own workflow (never gates pushes) and
 # runs nightly or on demand.
 #
-# KNOWN UNKNOWN: LocalCode's inference server is an Apple-Silicon/Metal
-# fork. This job depends on a `linux-x86_64` llama-server build existing
-# in Releases (bootstrap.py downloads it). If that build isn't published,
-# this job will fail at server start — which is itself useful signal.
+# CONFIRMED LIMITATION (2026-06): this CANNOT pass on free GitHub runners.
+#   - Free Linux runner: the bundled llama-server is a macOS-arm64 binary →
+#     "OSError: [Errno 8] Exec format error" (no Linux build of the
+#     TurboQuant fork exists).
+#   - Free macOS runner (macos-14, M1): only ~7 GB RAM, < the 7.37 GB
+#     smallest model — won't load.
+# A real model benchmark needs Apple Silicon with enough RAM: your Mac, or
+# a paid cloud-Mac / larger macOS runner registered as a self-hosted runner.
+# Kept as MANUAL-ONLY (no nightly schedule) so it doesn't fail red on a
+# timer. Point `runs-on` at a self-hosted Apple-Silicon runner to use it.
 
 on:
-  schedule:
-    - cron: "0 7 * * *"      # ~07:00 UTC nightly
   workflow_dispatch:
 
 jobs:
