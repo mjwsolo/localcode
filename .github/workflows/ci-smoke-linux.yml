@@ -1,0 +1,75 @@
+name: Linux model smoke (vanilla llama.cpp, free CI)
+
+# A genuinely-free, no-Mac CI check that a REAL local model runs end to end:
+# build stock llama.cpp (CPU), download the smallest shipped model, and have
+# the agent complete a trivial goal. This uses LocalCode's `vanilla` server
+# flavor (stock llama.cpp flags) instead of the Apple-Silicon TurboQuant
+# fork — so it proves the agent loop + tools + a real model work on Linux,
+# NOT the Metal/TurboQuant perf path (that still needs Apple Silicon).
+#
+# Free Linux runners have 16 GB RAM, so the 7.4 GB 12B model fits on CPU.
+# CPU inference is slow, so this is manual + nightly, never gates pushes.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 8 * * *"
+
+jobs:
+  smoke:
+    name: real-model smoke (CPU, stock llama.cpp)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Reclaim disk (model + build need room)
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Build stock llama.cpp (CPU-only)
+        run: |
+          sudo apt-get update && sudo apt-get install -y cmake build-essential
+          git clone --depth 1 https://github.com/ggml-org/llama.cpp
+          cmake -S llama.cpp -B llama.cpp/build -DCMAKE_BUILD_TYPE=Release -DLLAMA_CURL=OFF
+          cmake --build llama.cpp/build --target llama-server -j"$(nproc)"
+          ls -la llama.cpp/build/bin/llama-server
+
+      - name: Install LocalCode
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Download the smallest shipped model
+        run: |
+          python - <<'PY'
+          from localcode import models_catalog as c, bootstrap as b
+          m = min(c.CHOICES, key=lambda x: x.size_gb)
+          print(f"::notice::downloading {m.filename} ({m.size_gb} GB)")
+          ok, path = b.download_model(m)
+          assert ok, f"download failed: {path}"
+          open("model_file.txt", "w").write(m.filename)
+          PY
+
+      - name: Run a trivial goal against the real model (CPU, vanilla)
+        env:
+          LOCALCODE_SERVER_FLAVOR: vanilla
+        run: |
+          mkdir -p /tmp/smoke
+          MODEL="$(cat model_file.txt)"
+          python -m localcode --cwd /tmp/smoke run \
+            --goal "Create a file named hello.txt whose entire contents are exactly: banana" \
+            --model "$MODEL" \
+            --binary "$PWD/llama.cpp/build/bin/llama-server" \
+            --timeout 1500
+
+      - name: Assert the agent actually created the file
+        run: |
+          test -f /tmp/smoke/hello.txt
+          grep -q "banana" /tmp/smoke/hello.txt
+          echo "✓ a real local model completed a real task on free Linux CI"

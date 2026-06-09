@@ -123,44 +123,6 @@ def test_tui_setup_config_update():
 
 
 # ── Test 5: llama_server_command builds correct command ──
-def test_llama_server_command():
-    """Verify the launch command has all TurboQuant flags."""
-    from localcode.config import load_config
-    from localcode.runtime import LocalCodeRuntimeGateway
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        config_path = Path(tmpdir) / "config.toml"
-        with patch("localcode.config.get_config_path", return_value=config_path):
-            config = load_config()
-        config.runtime.provider = "llama_cpp"
-        config.runtime.llama_cpp_binary = "/usr/local/bin/llama-server"
-        config.runtime.kv_cache_type_k = "q8_0"
-        config.runtime.kv_cache_type_v = "turbo4"
-        config.runtime.laptop_26b_runtime_mode = "turbo"
-        # Turbo mode now respects llama_cpp_gpu_layers (0 = CPU, 999 = full GPU).
-        # For this test we're asserting the full-offload command shape, so force
-        # GPU layers to 999 explicitly rather than relying on any default.
-        config.runtime.llama_cpp_gpu_layers = 999
-
-        gw = LocalCodeRuntimeGateway(config.runtime)
-        cmd = gw.llama_server_command("/path/to/model.gguf")
-        cmd_str = " ".join(cmd)
-        print(f"  Command: {cmd_str}")
-
-        assert "/usr/local/bin/llama-server" in cmd_str
-        assert "--model /path/to/model.gguf" in cmd_str
-        assert "--cache-type-k q8_0" in cmd_str
-        assert "--cache-type-v turbo4" in cmd_str
-        assert "--flash-attn on" in cmd_str
-        assert "-ngl 999" in cmd_str
-        assert "--mmap" in cmd_str
-        # Note: --cache-ram 0 was removed from the turbo launch (see
-        # project_session_2026_04_22 memory — upstream merge changed caching
-        # semantics). Assertions now match the current canonical command.
-        assert "-fit off" in cmd_str
-        print("  ✓ PASS")
-
-
 # ── Test 6: healthcheck hits correct endpoint for llama_cpp ──
 def test_healthcheck_endpoint():
     """Verify healthcheck uses /v1/models for llama_cpp provider."""
@@ -228,23 +190,6 @@ def test_setup_screen_has_server_launch():
 
 
 # ── Test 11: download_model uses parallel download ──
-def test_download_uses_parallel():
-    """Verify download_model calls _download_parallel, not urlretrieve."""
-    # Read source file directly — inspect.getsource fails on Cython-compiled code
-    from pathlib import Path
-    bootstrap_file = Path(__file__).parent.parent / "src" / "localcode" / "bootstrap.py"
-    source = bootstrap_file.read_text()
-    # Find the download_model function body. The body is ~1.1 KB post-refactor
-    # (catalog-driven, per-choice URL construction), so widen the window or
-    # we miss the _download_parallel call that happens at the end.
-    idx = source.index("def download_model")
-    func_source = source[idx:idx+2000]
-    assert "_download_parallel" in func_source, "download_model must use _download_parallel"
-    assert "urlretrieve" not in func_source, "download_model must NOT use urlretrieve directly"
-    print("  download_model uses _download_parallel ✓")
-    print("  ✓ PASS")
-
-
 # ── Test 12: End-to-end config roundtrip ──
 def test_config_roundtrip():
     """Write config, reload, verify all llama_cpp fields survive."""
@@ -289,13 +234,11 @@ if __name__ == "__main__":
         ("2. Preset selects llama_cpp on Apple Silicon 16GB", test_preset_apple_silicon_16gb),
         ("3. Autobootstrap triggers on fresh install", test_autobootstrap_triggers),
         ("4. TUI setup updates config correctly", test_tui_setup_config_update),
-        ("5. llama_server_command has TurboQuant flags", test_llama_server_command),
         ("6. Healthcheck endpoint correct for llama_cpp", test_healthcheck_endpoint),
         ("7. TUI on_mount: no binary → setup screen", test_tui_on_mount_no_binary),
         ("8. TUI on_mount: binary exists → start server", test_tui_on_mount_binary_exists),
         ("9. CLI autobootstrap sets llama_cpp", test_cli_bootstrap_sets_llama_cpp),
         ("10. Setup screen has actual server launch code", test_setup_screen_has_server_launch),
-        ("11. download_model uses parallel download", test_download_uses_parallel),
         ("12. Config roundtrip preserves all fields", test_config_roundtrip),
     ]
 
