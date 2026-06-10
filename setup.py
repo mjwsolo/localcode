@@ -37,11 +37,6 @@ if os.environ.get("LOCALCODE_WITH_CYTHON"):
         pass
 
 
-class StripSourceBuildWheel:
-    """Remove .py and .c source files from the wheel, keeping only .so"""
-    pass
-
-
 from setuptools.command.build_py import build_py
 
 class CustomBuildPy(build_py):
