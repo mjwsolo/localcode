@@ -136,6 +136,38 @@ GEMMA_PROFILES: dict[str, ModelProfile] = {
         retrieval_budget=8,
         context_strategy="broad",
     ),
+    "diffusiongemma-26b-moe": ModelProfile(
+        key="diffusiongemma-26b-moe",
+        display_name="DiffusionGemma 26B-A4B",
+        default_model="diffusiongemma26b-q4",
+        family="diffusiongemma",
+        feature_variant="experimental",
+        recommended_context_chars=24000,
+        advertised_context_window=256000,
+        summary="Experimental diffusion-generation Gemma model; faster block-wise decode potential, unmeasured locally.",
+        tool_strategy="prompt",
+        agent_steps=3,
+        approval_style="balanced",
+        verification_bias="thorough",
+        retrieval_budget=5,
+        context_strategy="balanced",
+    ),
+    "north-mini-code-30b-moe": ModelProfile(
+        key="north-mini-code-30b-moe",
+        display_name="North Mini Code 30B-A3B",
+        default_model="north-mini-code-q4",
+        family="cohere2_moe",
+        feature_variant="coding",
+        recommended_context_chars=32000,
+        advertised_context_window=256000,
+        summary="Cohere's open agentic coding MoE: 30B total, ~3B active, Apache 2.0.",
+        tool_strategy="prompt",
+        agent_steps=4,
+        approval_style="balanced",
+        verification_bias="thorough",
+        retrieval_budget=6,
+        context_strategy="broad",
+    ),
 }
 
 
@@ -147,6 +179,8 @@ MLX_MODEL_IDS: dict[str, str] = {
     "gemma4-26b-moe": "mlx-community/gemma-4-26b-a4b-it-4bit",
     "gemma4-26b-laptop": "mlx-community/gemma-4-26b-a4b-it-4bit",
     "gemma4-31b": "mlx-community/gemma-4-31b-it-4bit",
+    "diffusiongemma-26b-moe": "mlx-community/diffusiongemma-26B-A4B-it-4bit",
+    "north-mini-code-30b-moe": "mlx-community/North-Mini-Code-1.0-4bit",
 }
 
 
@@ -159,6 +193,14 @@ ALIASES = {
     "26blaptop": "gemma4-26b-laptop",
     "26b-moe": "gemma4-26b-moe",
     "31b": "gemma4-31b",
+    "diffusiongemma": "diffusiongemma-26b-moe",
+    "diffusion-gemma": "diffusiongemma-26b-moe",
+    "diffusiongemma26b": "diffusiongemma-26b-moe",
+    "diffusiongemma:26b": "diffusiongemma-26b-moe",
+    "north-mini-code": "north-mini-code-30b-moe",
+    "north-mini": "north-mini-code-30b-moe",
+    "northminicode": "north-mini-code-30b-moe",
+    "north-mini-code:30b": "north-mini-code-30b-moe",
     "gemma4:e2b": "gemma4-e2b",
     "gemma4:e4b": "gemma4-e4b",
     "gemma4:12b": "gemma4-12b",
@@ -176,6 +218,10 @@ def infer_profile_from_model(model_name: str) -> ModelProfile | None:
     for profile in GEMMA_PROFILES.values():
         if profile.default_model in name or name in profile.default_model:
             return profile
+    if "diffusiongemma" in name or "diffusion-gemma" in name:
+        return GEMMA_PROFILES["diffusiongemma-26b-moe"]
+    if "north-mini-code" in name or "north mini code" in name or "northminicode" in name:
+        return GEMMA_PROFILES["north-mini-code-30b-moe"]
     if "31b" in name:
         return GEMMA_PROFILES["gemma4-31b"]
     if "12b" in name:
