@@ -164,6 +164,39 @@ CHOICES: list[ModelChoice] = [
         mmproj_hf_filename="mmproj-F16.gguf",
     ),
     ModelChoice(
+        key="diffusiongemma",
+        name="DiffusionGemma 26B-A4B (Q4)",
+        hf_repo="unsloth/diffusiongemma-26B-A4B-it-GGUF",
+        filename="diffusiongemma-26B-A4B-it-Q4_K_M.gguf",
+        size_gb=15.7,
+        active_params="4B (adaptive diffusion MoE)",
+        architecture="diffusion_gemma",
+        license="Apache 2.0",
+        humaneval_pass_at_1=None,
+        notes=(
+            "Google DiffusionGemma 26B-A4B instruction model — experimental diffusion/denoising "
+            "text generation that can generate blocks in parallel instead of strictly token-by-token. "
+            "Apache 2.0. GGUF Q4_K_M is ~15.7 GiB, so treat as a 32 GB+ unified-memory pick until "
+            "this stack has measured load/runtime behavior. No LocalCode HumanEval number yet."
+        ),
+    ),
+    ModelChoice(
+        key="north-mini-code",
+        name="North Mini Code 30B-A3B (Q4)",
+        hf_repo="unsloth/North-Mini-Code-1.0-GGUF",
+        filename="North-Mini-Code-1.0-UD-Q4_K_M.gguf",
+        size_gb=17.9,
+        active_params="3B active (30B total MoE)",
+        architecture="cohere2_moe",
+        license="Apache 2.0",
+        humaneval_pass_at_1=None,
+        notes=(
+            "Cohere North Mini Code 1.0 — agentic coding model; 30B total parameters with ~3B "
+            "active. Cohere reports 33.4 on the Artificial Analysis Coding Index. Apache 2.0. "
+            "UD-Q4_K_M is ~17.9 GiB, so recommend 32 GB+ unified memory. Untested on this stack."
+        ),
+    ),
+    ModelChoice(
         key="gemma-q8",
         name="Gemma 4 26B-A4B (Q8)",
         hf_repo="unsloth/gemma-4-26B-A4B-it-GGUF",
