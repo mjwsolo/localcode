@@ -286,6 +286,48 @@ def _run_capture(command: list[str]) -> str:
     return (result.stdout or result.stderr or "").strip()
 
 
+def apple_silicon_bandwidth_gbps() -> float:
+    """Approx peak unified-memory bandwidth (GB/s) for THIS Mac's chip.
+
+    Decode speed on Apple Silicon is memory-bandwidth bound (every token
+    re-reads the active weights from RAM), so this — not RAM size — is what
+    sets tokens/sec. Parsed from the CPU brand string ("Apple M5 Max") so
+    the estimate tracks the user's actual machine: a base M1 (~68 GB/s) vs
+    an M-Max (~400-600 GB/s) is a ~6-9x speed difference on the same model.
+    Official numbers are sparse for the newest gens, so values are
+    approximate — only the relative ordering needs to hold. Conservative
+    150 GB/s fallback for non-Apple / unparseable.
+    """
+    if platform.system().lower() != "darwin":
+        return 150.0
+    try:
+        brand = subprocess.run(
+            ["sysctl", "-n", "machdep.cpu.brand_string"],
+            capture_output=True, text=True, timeout=2,
+        ).stdout.strip().lower()
+    except Exception:
+        return 150.0
+    if not brand:
+        return 150.0
+    # Tier base (≈ M1/M2/M3-era GB/s); generation multiplier lifts M4/M5,
+    # which raised bandwidth markedly (e.g. M4 Max ≈ 546 GB/s).
+    if "ultra" in brand:
+        base = 800.0
+    elif "max" in brand:
+        base = 400.0
+    elif "pro" in brand:
+        base = 200.0
+    else:
+        base = 100.0
+    if "m5" in brand:
+        base *= 1.5
+    elif "m4" in brand:
+        base *= 1.35
+    elif "m1" in brand and "max" not in brand and "pro" not in brand and "ultra" not in brand:
+        base = 68.0  # base M1 is the notable low outlier
+    return base
+
+
 def detect_machine_profile() -> MachineProfile:
     system = platform.system().lower()
     cpu_cores = os.cpu_count() or 4

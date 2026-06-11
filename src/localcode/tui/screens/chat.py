@@ -626,6 +626,10 @@ class ChatScreen(Screen):
         # without those messages racing the still-loading model and
         # getting 503 "Loading model" back as E3102.
         self._server_restarting: bool = False
+        # model_keys for background downloads we've already surfaced a
+        # terminal (done/failed) toast for, so the periodic poller fires
+        # App.notify exactly once per finished/failed download.
+        self._dl_notified: set[str] = set()
         self._pending_messages: list[str] = []
         self._stream_buf: list[str] = []
         self._last_assistant_text: str = ""
@@ -761,6 +765,54 @@ class ChatScreen(Screen):
         # responsive enough that "server: ready" disappears within a
         # couple seconds of the actual process going down.
         self.set_interval(2.0, self._update_status)
+        # Watch background model downloads (kicked off elsewhere, e.g. the
+        # model picker / a prior /model switch). When one finishes we toast
+        # the user once so they know they can /model to it; on failure we
+        # surface the error once. 1 s is responsive without being chatty.
+        self.set_interval(1.0, self._poll_active_downloads)
+
+    def _poll_active_downloads(self) -> None:
+        """Surface terminal background-download outcomes as one-shot toasts.
+
+        Runs on the UI thread (1 s interval). Walks every in-flight entry
+        from `bootstrap.list_active_downloads()`; once a key we've seen
+        leaves the active set, we look it up via `bootstrap.download_status`
+        and, if it reached a terminal state we haven't announced yet,
+        `App.notify` exactly once (tracked in `_dl_notified`).
+        """
+        from ... import bootstrap
+        # Keys currently active (downloading/queued) this tick.
+        try:
+            active = {e["model_key"] for e in bootstrap.list_active_downloads()}
+        except Exception:
+            return
+        # Remember active keys so we know which ones to check once they
+        # drop out of the active set.
+        self._dl_active_seen = getattr(self, "_dl_active_seen", set()) | active
+        for key in list(self._dl_active_seen):
+            if key in active:
+                continue  # still in flight — nothing to announce yet
+            if key in self._dl_notified:
+                self._dl_active_seen.discard(key)
+                continue
+            entry = bootstrap.download_status(key)
+            if entry is None:
+                self._dl_active_seen.discard(key)
+                continue
+            status = entry.get("status")
+            if status == "done":
+                self._dl_notified.add(key)
+                self._dl_active_seen.discard(key)
+                name = entry.get("name") or key
+                self.app.notify(f"Ready: {name}, type /model to switch")
+            elif status == "failed":
+                self._dl_notified.add(key)
+                self._dl_active_seen.discard(key)
+                name = entry.get("name") or key
+                err = entry.get("error") or "download failed"
+                self.app.notify(
+                    f"Download failed: {name} — {err}", severity="error"
+                )
 
     def _start_status_probe(self) -> None:
         """Start the daemon thread that feeds `_update_status` its slow data.
@@ -2303,13 +2355,38 @@ class ChatScreen(Screen):
         """
         from ...models_catalog import current
         from ...config import save_config
+        from ... import bootstrap
         log = self.query_one("#chat-log", ChatLog)
         config = self.tui.config
         cur = current(config)
         if cur is not None and cur.key == choice.key:
             log.append_info(f"Already using {choice.name}.")
             return
-        needs_download = not choice.local_path.is_file()
+        # The hot-swap below restarts llama-server against the new GGUF, so
+        # the file must be fully on disk first. If it isn't complete, BLOCK
+        # the switch: ensure a background download is running (respecting
+        # bootstrap's slot cap) and tell the user how far along it is. The
+        # periodic `_poll_active_downloads` toast will let them know when it
+        # finishes so they can re-run /model. We do NOT persist config or
+        # touch `_server_restarting` here — the current model keeps serving.
+        if not bootstrap.is_download_complete(choice):
+            bootstrap.start_background_download(choice)
+            entry = bootstrap.download_status(bootstrap.model_key_for(choice))
+            if entry is not None and entry.get("status") == "queued":
+                ahead = max(
+                    0, len(bootstrap.list_active_downloads()) - 1
+                )
+                log.append_info(
+                    f"{choice.name} is queued ({ahead} ahead) — "
+                    f"run /model again once it finishes."
+                )
+            else:
+                pct = entry.get("progress_pct", 0) if entry is not None else 0
+                log.append_info(
+                    f"{choice.name} is still downloading ({pct} percent) — "
+                    f"run /model again once it finishes."
+                )
+            return
         config.runtime.model = str(choice.local_path)
         try:
             save_config(config)
@@ -2326,12 +2403,10 @@ class ChatScreen(Screen):
                 self.tui.engine.engine.config.model = str(choice.local_path)
             except Exception:
                 pass
-        if needs_download:
-            log.append_info(
-                f"Downloading {choice.name} ({choice.size_gb:.1f} GB), then restarting server..."
-            )
-        else:
-            log.append_info(f"Switching to {choice.name} — restarting server...")
+        # The GGUF is fully on disk by this point (the not-complete case
+        # returned early after kicking off / observing the background
+        # download), so this is a pure server hot-swap.
+        log.append_info(f"Switching to {choice.name} — restarting server...")
         # Block input submission until the new server is fully loaded.
         # Anything the user types during the restart window is queued
         # (see on_input_submitted) and drained by `_on_server_ready`
@@ -2342,32 +2417,6 @@ class ChatScreen(Screen):
         self._update_status()
 
         def _worker() -> None:
-            if needs_download:
-                try:
-                    from ...bootstrap import download_model
-
-                    # Live progress into the transient #active-step line
-                    # ("Downloading: 1234/33200 MB (3%)", ~2 Hz). Without
-                    # the callback the user stares at a static "then
-                    # restarting server..." line for a 30+ GB download.
-                    def _progress(msg: str) -> None:
-                        self.app.call_from_thread(self._set_download_line, msg)
-
-                    ok, result = download_model(choice, on_progress=_progress)
-                    self.app.call_from_thread(self._clear_download_line)
-                except Exception as e:
-                    self.app.call_from_thread(self._clear_download_line)
-                    self.app.call_from_thread(
-                        self._on_server_restart_failed,
-                        f"Model download failed: {e}",
-                    )
-                    return
-                if not ok:
-                    self.app.call_from_thread(
-                        self._on_server_restart_failed,
-                        str(result),
-                    )
-                    return
             engine = self.tui.engine.engine if self.tui.engine is not None else None
             if engine is None:
                 self.app.call_from_thread(

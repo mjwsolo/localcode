@@ -334,7 +334,9 @@ class LocalCodeRuntimeGateway:
             cmd.extend(["--cache-type-k", ctk])
         if ctv and ctv != "f16":
             cmd.extend(["--cache-type-v", ctv])
-        # Speculative decoding (mutual exclusion: draft model > lookup > ngram)
+        # Speculative decoding (mutual exclusion: draft model > lookup > ngram).
+        # Speculative decoding is LOSSLESS — every drafted token is verified
+        # against the real model, so output is identical, just faster.
         if self.config.llama_cpp_draft_model:
             draft_path = self.config.llama_cpp_draft_model
             # Support Ollama blob paths (sha256-...)
@@ -345,8 +347,18 @@ class LocalCodeRuntimeGateway:
         elif self.config.llama_cpp_lookup_cache:
             # Prompt lookup decoding: matches n-grams from input in output (2-4x on edits)
             cmd.extend(["--lookup-cache-dynamic", "/tmp/localcode-lookup.bin"])
-        elif self.config.llama_cpp_spec_type:
+        elif self.config.llama_cpp_spec_type and self.config.llama_cpp_spec_type != "none":
             cmd.extend(["--spec-type", self.config.llama_cpp_spec_type,
+                        "--draft-max", str(self.config.llama_cpp_draft_max)])
+        elif self.config.llama_cpp_spec_type != "none":
+            # DEFAULT (nothing configured): in-context n-gram speculative
+            # decoding. Free and safe — no draft model (so none of the
+            # vocab-mismatch / double-bandwidth problems of --model-draft),
+            # no extra RAM, stateless (unlike lookup-cache's /tmp file).
+            # It accelerates the repetitive token runs that dominate coding
+            # output — identifiers, syntax, and re-emitted file content
+            # during edits. Opt out with llama_cpp_spec_type = "none".
+            cmd.extend(["--spec-type", "ngram-mod",
                         "--draft-max", str(self.config.llama_cpp_draft_max)])
         # Batch sizes — GPU benefits from bigger batches for prompt eval,
         # but large hybrid/MoE GGUFs on 16 GB Macs can OOM during prefill
@@ -1039,8 +1051,14 @@ class LocalCodeRuntimeGateway:
             binary,
             "-m", model_path,
             "-p", prompt,
+            "-no-cnv",          # CRITICAL: the GGUF ships a chat template, so the
+                                # CLI auto-enables conversation mode and would apply
+                                # the template AGAIN on top of the one we built in
+                                # _format_diffusion_prompt — double-templating that
+                                # produced empty output. -no-cnv treats -p as the
+                                # already-formatted raw prompt and runs one-shot.
             "-ngl", "99",
-            "-n", str(num_predict or 2048),
+            "-n", str(min(int(num_predict or 512), 512)),
         ]
         deadline = _time.monotonic() + max(60, int(self.config.request_timeout_seconds or 600))
         proc = subprocess.Popen(
@@ -1071,8 +1089,13 @@ class LocalCodeRuntimeGateway:
 
         _threading.Thread(target=_drain_stderr, daemon=True,
                           name="diffusion-stderr").start()
+        # Block-diffusion isn't token-streamed — the runner denoises a whole
+        # canvas and prints it in one go — so we COLLECT the full stdout, then
+        # clean it once. Streaming 512-byte chunks straight through leaked the
+        # prompt echo, the runner's "total time:/throughput:" stats lines (it
+        # prints those to stdout, not stderr), and canvas padding after the
+        # answer. We still read in a loop to honour the timeout.
         raw_parts: list[str] = []
-        emitted_any = False
         try:
             assert proc.stdout is not None
             while True:
@@ -1082,25 +1105,10 @@ class LocalCodeRuntimeGateway:
                         "diffusion generation timed out "
                         f"({self.config.request_timeout_seconds}s)"
                     )
-                chunk = proc.stdout.read(512)
+                chunk = proc.stdout.read(4096)
                 if not chunk:
                     break
                 raw_parts.append(chunk)
-                cleaned = chunk
-                # The runner may echo the prompt before the generation —
-                # suppress everything until the prompt has fully streamed by.
-                if not emitted_any:
-                    so_far = "".join(raw_parts)
-                    if prompt.startswith(so_far):
-                        continue  # still inside a prompt echo
-                    if so_far.startswith(prompt):
-                        cleaned = so_far[len(prompt):]
-                    else:
-                        cleaned = so_far
-                cleaned = cleaned.replace("<end_of_turn>", "")
-                if cleaned:
-                    emitted_any = True
-                    yield {"type": "content", "content": cleaned}
             rc = proc.wait(timeout=30)
             if rc != 0:
                 err_tail = "".join(stderr_tail[-6:]).strip()
@@ -1111,14 +1119,54 @@ class LocalCodeRuntimeGateway:
             if proc.poll() is None:
                 proc.kill()
 
+        text = self._clean_diffusion_output("".join(raw_parts), prompt)
+        if text:
+            # Emit in modest chunks so the chat log renders progressively
+            # rather than in one jump.
+            for i in range(0, len(text), 160):
+                yield {"type": "content", "content": text[i:i + 160]}
+
         if tools:
-            # Parse the GENERATION only — if the runner echoed the prompt,
-            # the injected tool spec inside it would false-match as calls.
-            full = "".join(raw_parts)
-            generation = full[len(prompt):] if full.startswith(prompt) else full
-            parsed = parse_tool_calls(generation)
+            parsed = parse_tool_calls(text)
             if parsed.has_tools:
                 yield {"type": "tool_calls", "tool_calls": parsed.to_ollama_format()}
+
+        # Terminal event — the agent/streaming consumer needs this to record
+        # token counts and finish the round. The HTTP path emits it from the
+        # server's usage; diffusion-cli gives none, so estimate from chars
+        # (chars/4). Without this the UI showed "14.4s" with NO token count.
+        _ct = max(1, len(text) // 4)
+        yield {
+            "type": "stream_done",
+            "finish_reason": "stop",
+            "content_chars": len(text),
+            "completion_tokens": _ct,
+            "total_tokens": _ct,
+            "usage_estimated": True,
+        }
+
+    @staticmethod
+    def _clean_diffusion_output(raw: str, prompt: str) -> str:
+        """Turn raw llama-diffusion-cli stdout into a clean assistant reply.
+
+        Strips: the echoed prompt, the runner's own stats lines (which print
+        to stdout), Gemma turn markers, and any canvas padding the model
+        emits after `<end_of_turn>`.
+        """
+        import re as _re
+        text = raw
+        if text.startswith(prompt):
+            text = text[len(prompt):]
+        # The model marks end-of-reply with <end_of_turn>; everything after is
+        # canvas padding / repeats.
+        text = text.split("<end_of_turn>", 1)[0]
+        # Drop the runner's stdout stats/progress lines.
+        text = _re.sub(
+            r"(?m)^\s*(total time:|throughput:|time per step:|diffusion step:|diffusion_).*$",
+            "", text,
+        )
+        text = text.replace("<start_of_turn>model", "").replace("<start_of_turn>", "")
+        return text.strip()
 
     def stream_chat_events(
         self,
