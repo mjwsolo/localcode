@@ -43,7 +43,7 @@ class ModePickerScreen(Screen):
         from textual.containers import Container
         # Brand at bottom-left, same `#brand-bar` shared across screens.
         from ...theme import C as _C
-        yield Static(f"🏠[{_C.primary}]LocalCode[/]", id="brand-bar")
+        yield Static(f"[{_C.primary}]LocalCode[/]", id="brand-bar")
         with Container(id="picker-center"):
             yield Static(
                     "Select a mode:\n\n"

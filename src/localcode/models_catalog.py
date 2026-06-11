@@ -7,6 +7,7 @@ so users see exactly what they're choosing.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 
@@ -284,6 +285,47 @@ def by_filename(filename: str) -> ModelChoice | None:
     for c in CHOICES:
         if c.filename == filename:
             return c
+    # Not one of the curated CHOICES — maybe a quant the user browsed via
+    # the HF-style picker (which can select ANY quant of a MODEL_GROUPS
+    # repo). Unsloth GGUF filenames are `<repo-stem>-<QUANT>.gguf`, so a
+    # prefix match on the repo stem identifies the group; mint a choice so
+    # downstream consumers (status bar, fit checks, and CRITICALLY the
+    # runtime's architecture dispatch for diffusion models) see correct
+    # metadata instead of None.
+    return _minted_for_filename(filename)
+
+
+@lru_cache(maxsize=64)
+def _minted_for_filename(filename: str) -> ModelChoice | None:
+    g = group_for_filename(filename)
+    if g is None:
+        return None
+    # Fill the real size from the picker's 24h quant-listing cache when
+    # available (cache-only — by_filename runs on the status bar's 2 s
+    # tick, so NO network here). With a real size, completeness checks
+    # treat partial downloads correctly.
+    size_gb = 0.0
+    try:
+        from .hf_quants import _read_cache
+        cached = _read_cache(g.hf_repo)
+        if cached:
+            for q in cached[0]:
+                if q.filename == filename and not q.is_mmproj:
+                    size_gb = q.size_gb
+                    break
+    except Exception:
+        size_gb = 0.0
+    return choice_for_quant(g, filename, size_gb)
+
+
+def group_for_filename(filename: str) -> ModelGroup | None:
+    """Match a GGUF filename to the MODEL_GROUPS repo it came from."""
+    for g in MODEL_GROUPS:
+        stem = g.hf_repo.rsplit("/", 1)[-1]
+        if stem.endswith("-GGUF"):
+            stem = stem[: -len("-GGUF")]
+        if stem and filename.startswith(stem):
+            return g
     return None
 
 
@@ -437,6 +479,25 @@ MODEL_GROUPS: list[ModelGroup] = [
             "(\"cohere2_moe\") — verify your llama.cpp/TurboQuant fork is new "
             "enough to load it. Tool calls use Cohere's command-R style parser. "
             "Text-only — no vision/mmproj."
+        ),
+        # Text-only: no vision sidecar.
+    ),
+    ModelGroup(
+        key="diffusiongemma-26b-a4b",
+        display_name="DiffusionGemma 26B-A4B",
+        maker="Google",
+        hf_repo="unsloth/diffusiongemma-26B-A4B-it-GGUF",
+        family="gemma4",
+        architecture="diffusion_gemma",
+        license="Apache 2.0",
+        notes=(
+            "EXPERIMENTAL block-diffusion model — denoises whole blocks in "
+            "parallel instead of decoding token-by-token. Runs through the "
+            "one-shot llama-diffusion-cli runner (llama.cpp PR #24423, built "
+            "automatically on first setup, ~3-6 min) — NOT llama-server: "
+            "output arrives in coarse chunks and weights re-map each turn "
+            "(first turn slow, later turns page-cache fast). Unsloth "
+            "recommends the UD-Q4_K_XL quant (~18 GB RAM). Text-only."
         ),
         # Text-only: no vision sidecar.
     ),

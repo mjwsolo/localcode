@@ -55,12 +55,23 @@ Screen {
 
 /* ── Input area ── */
 
+/* Rounded thin border — the input is the one boxed element on screen,
+   which makes it read as "type here" without any label. `round` +
+   a dim grey is the quiet, modern look (cf. current CLI agents);
+   the previous `heavy` top+bottom rules read as two solid walls.
+   The border lives on #input-box (preview + input row together) so a
+   long value that wraps to multiple lines GROWS INSIDE the field
+   instead of spilling above it into the chat area. */
+#input-box {
+    height: auto;
+    border: round #444444;
+    background: ansi_default;
+    background-tint: transparent 0%;
+}
+
 #input-row {
-    height: 3;
-    border-top: heavy #444444;
-    border-bottom: heavy #444444;
-    border-left: none;
-    border-right: none;
+    height: 1;
+    border: none;
     background: ansi_default;
     background-tint: transparent 0%;
 }
