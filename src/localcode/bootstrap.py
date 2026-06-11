@@ -29,6 +29,28 @@ from typing import Callable, TypeVar
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 
+# ── Background model-download manager ────────────────────────────────
+#
+# Guards _DOWNLOADS and _DOWNLOAD_QUEUE together. Every read/mutation of
+# either structure happens inside this lock. Callers NEVER hold the lock
+# while doing I/O — copies are returned, not live references.
+_DOWNLOAD_LOCK = threading.Lock()
+
+# model_key -> status dict (the EXACT shape in the contract).
+_DOWNLOADS: dict[str, dict] = {}
+
+# model_keys waiting for a free slot, FIFO. Each also has a "queued"
+# entry in _DOWNLOADS.
+_DOWNLOAD_QUEUE: list[str] = []
+
+# model_key -> choice, captured at enqueue so the worker still has its
+# ModelChoice after waiting in the queue.
+_DOWNLOAD_CHOICES: dict[str, object] = {}
+
+# Max concurrent ACTIVE downloads (status == "downloading"). The rest sit
+# in _DOWNLOAD_QUEUE with status "queued" until a slot frees.
+_MAX_ACTIVE_DOWNLOADS = 2
+
 from rich.console import Console
 from rich.live import Live
 from rich.panel import Panel
@@ -652,6 +674,195 @@ def _format_download_error(category: str, e: Exception) -> str:
         "unknown":    f"Model download failed: {raw}",
     }
     return by_cat.get(category, by_cat["unknown"])
+
+
+# ── Background model-download public API ─────────────────────────────
+#
+# Built ON TOP of download_model() — its resume / disk-preflight /
+# retry / progress behaviour is reused unchanged. These functions only
+# manage a thread-safe registry of in-flight downloads and a 2-slot
+# scheduler; the actual byte-moving is still download_model().
+
+
+def model_key_for(choice) -> str:
+    """Stable registry key for a catalog choice — its unique filename."""
+    return choice.filename
+
+
+def is_download_complete(choice) -> bool:
+    """True iff a fully-downloaded, correctly-sized file exists on disk.
+
+    Reuses get_model_path's existing completeness logic (which runs
+    _is_complete_download against the catalog entry) — no new size math.
+    """
+    return get_model_path(choice.filename) is not None
+
+
+def _parse_progress(line: str) -> tuple[int | None, int | None, int | None]:
+    """Parse a download_model progress line into (downloaded_mb, total_mb, pct).
+
+    Recognises the `_make_progress_tqdm` / `_download_parallel` format:
+        "Downloading: <done>/<total> MB (<pct>%)"
+    Any field that fails to parse is returned as None (callers leave the
+    corresponding registry field unchanged). Non-MB lines
+    ("Downloading…", "Retry 1/3 in 2s...") parse to (None, None, None).
+    """
+    if not isinstance(line, str):
+        return (None, None, None)
+    s = line.strip()
+    if "MB" not in s or "/" not in s:
+        return (None, None, None)
+    downloaded_mb: int | None = None
+    total_mb: int | None = None
+    pct: int | None = None
+    # Carve out the "<done>/<total> MB" segment.
+    try:
+        before_mb = s.split("MB", 1)[0]  # e.g. "Downloading: 1200/11200 "
+        frac = before_mb.split(":", 1)[-1].strip()  # "1200/11200"
+        if "/" in frac:
+            d_str, t_str = frac.split("/", 1)
+            d_str, t_str = d_str.strip(), t_str.strip()
+            if d_str.isdigit():
+                downloaded_mb = int(d_str)
+            if t_str.isdigit():
+                total_mb = int(t_str)
+    except Exception:
+        pass
+    # Carve out "(<pct>%)".
+    try:
+        if "(" in s and "%" in s:
+            pct_str = s.split("(", 1)[1].split("%", 1)[0].strip()
+            if pct_str.isdigit():
+                pct = int(pct_str)
+    except Exception:
+        pass
+    return (downloaded_mb, total_mb, pct)
+
+
+def _apply_progress(key: str, line: str) -> None:
+    """Parse a progress line and update the registry entry under the lock."""
+    downloaded_mb, total_mb, pct = _parse_progress(line)
+    if downloaded_mb is None and total_mb is None and pct is None:
+        return
+    with _DOWNLOAD_LOCK:
+        entry = _DOWNLOADS.get(key)
+        if entry is None:
+            return
+        if downloaded_mb is not None:
+            entry["downloaded_mb"] = downloaded_mb
+        if total_mb is not None:
+            entry["total_mb"] = total_mb
+        if pct is not None:
+            entry["progress_pct"] = pct
+
+
+def _maybe_start_next() -> None:
+    """Promote queued downloads into running threads up to the slot cap.
+
+    MUST be called while holding _DOWNLOAD_LOCK.
+    """
+    active = sum(1 for e in _DOWNLOADS.values() if e["status"] == "downloading")
+    while active < _MAX_ACTIVE_DOWNLOADS and _DOWNLOAD_QUEUE:
+        key = _DOWNLOAD_QUEUE.pop(0)
+        entry = _DOWNLOADS.get(key)
+        choice = _DOWNLOAD_CHOICES.get(key)
+        if entry is None or choice is None:
+            continue
+        entry["status"] = "downloading"
+        threading.Thread(
+            target=_run_download, args=(key, choice), daemon=True
+        ).start()
+        active += 1
+
+
+def _run_download(key: str, choice) -> None:
+    """Daemon worker — runs download_model OUTSIDE the lock during I/O."""
+    on_progress = lambda line: _apply_progress(key, line)
+    try:
+        ok, result = download_model(choice, on_progress=on_progress)
+    except Exception as exc:  # pragma: no cover - defensive; download_model traps its own
+        ok, result = False, str(exc)
+    try:
+        with _DOWNLOAD_LOCK:
+            entry = _DOWNLOADS.get(key)
+            if entry is not None:
+                if ok:
+                    entry["status"] = "done"
+                    entry["progress_pct"] = 100
+                    entry["error"] = None
+                else:
+                    entry["status"] = "failed"
+                    entry["error"] = result
+    finally:
+        with _DOWNLOAD_LOCK:
+            _maybe_start_next()
+
+
+def start_background_download(choice) -> str:
+    """Enqueue a background download for `choice`; return its model_key.
+
+    Returns immediately. The actual download runs on a daemon thread via
+    download_model(), respecting the _MAX_ACTIVE_DOWNLOADS slot cap.
+    Idempotent: an already-complete model registers as "done" with no
+    thread, and a second caller for an in-flight key joins the existing
+    download rather than starting a parallel one.
+    """
+    key = model_key_for(choice)
+    seeded_total = int(choice.size_gb * 1000)
+    with _DOWNLOAD_LOCK:
+        if is_download_complete(choice):
+            _DOWNLOADS[key] = {
+                "model_key": key,
+                "name": choice.name,
+                "progress_pct": 100,
+                "downloaded_mb": seeded_total,
+                "total_mb": seeded_total,
+                "status": "done",
+                "error": None,
+            }
+            return key
+        existing = _DOWNLOADS.get(key)
+        if existing is not None and existing["status"] in ("queued", "downloading"):
+            return key
+        _DOWNLOADS[key] = {
+            "model_key": key,
+            "name": choice.name,
+            "progress_pct": 0,
+            "downloaded_mb": 0,
+            "total_mb": seeded_total,
+            "status": "queued",
+            "error": None,
+        }
+        _DOWNLOAD_CHOICES[key] = choice
+        _DOWNLOAD_QUEUE.append(key)
+        _maybe_start_next()
+    return key
+
+
+def download_status(key: str) -> dict | None:
+    """Return a shallow copy of the registry entry for `key`, or None."""
+    with _DOWNLOAD_LOCK:
+        entry = _DOWNLOADS.get(key)
+        return dict(entry) if entry is not None else None
+
+
+def list_active_downloads() -> list[dict]:
+    """Return copies of all in-flight entries: downloading first, then queued.
+
+    Terminal (done/failed) entries are excluded — query those via
+    download_status. "queued" entries are ordered by their position in
+    the FIFO _DOWNLOAD_QUEUE.
+    """
+    with _DOWNLOAD_LOCK:
+        downloading = [
+            dict(e) for e in _DOWNLOADS.values() if e["status"] == "downloading"
+        ]
+        queued = [
+            dict(_DOWNLOADS[k])
+            for k in _DOWNLOAD_QUEUE
+            if k in _DOWNLOADS and _DOWNLOADS[k]["status"] == "queued"
+        ]
+        return downloading + queued
 
 
 def download_mmproj(

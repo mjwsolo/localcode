@@ -4,6 +4,8 @@ from __future__ import annotations
 from ..._subproc_env import clean_env
 
 import subprocess
+import threading
+import time
 from pathlib import Path
 
 from textual.app import ComposeResult
@@ -17,6 +19,11 @@ class SetupScreen(Screen):
     BINDINGS = [
         # `r` retries only in the failed state (action_retry gates on it).
         Binding("r", "retry", "Retry", show=False),
+        # `c` / `w` only do anything while the "chat now vs wait here"
+        # prompt is up (action_* gate on _awaiting_choice). At any other
+        # time they're inert.
+        Binding("c", "chat_now", "Chat now", show=False),
+        Binding("w", "wait_here", "Wait here", show=False),
         # `q` / Esc / Ctrl+C quit ANY time — including mid-download. This
         # used to be gated to the failed state only, which left a user
         # watching a 33 GB download with no visible way out (it looked
@@ -89,6 +96,14 @@ class SetupScreen(Screen):
         self._spin_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
         self._failed_step = -1  # which step failed (-1 = none)
         self._status_text = ""
+        # Coordination for the non-blocking "chat now vs wait here" prompt.
+        # When a target model is downloading in the background but another
+        # catalog model is already on disk, the setup worker parks on a
+        # threading.Event and lets `c`/`w` (or quit) resolve it.
+        self._awaiting_choice = False
+        self._choice_event = threading.Event()
+        self._choice = ""  # "" until resolved → "chat" | "wait"
+        self._quitting = False  # set by action_quit so workers can bail
 
     def compose(self) -> ComposeResult:
         from textual.containers import Vertical, Container
@@ -231,6 +246,33 @@ class SetupScreen(Screen):
             pass
         self.run_worker(self._run_setup, thread=True)
 
+    def action_chat_now(self) -> None:
+        """Resolve the "chat now vs wait here" prompt → start chatting.
+
+        Only meaningful while `_awaiting_choice` is set (the prompt is up).
+        Unblocks the setup worker, which then starts the server against the
+        already-downloaded fallback model while the target model keeps
+        downloading on bootstrap's daemon thread.
+        """
+        if not self._awaiting_choice:
+            return
+        self._choice = "chat"
+        self._awaiting_choice = False
+        self._choice_event.set()
+
+    def action_wait_here(self) -> None:
+        """Resolve the "chat now vs wait here" prompt → keep waiting here.
+
+        Only meaningful while `_awaiting_choice` is set. Unblocks the
+        worker, which then polls the background download to completion
+        (still quit-and-resume safe) before starting the target model.
+        """
+        if not self._awaiting_choice:
+            return
+        self._choice = "wait"
+        self._awaiting_choice = False
+        self._choice_event.set()
+
     def action_quit(self) -> None:
         """Quit from any setup state, including mid-download.
 
@@ -241,6 +283,13 @@ class SetupScreen(Screen):
         partial file is preserved and the next launch picks up where this
         left off.
         """
+        # If the worker is parked on the choice prompt, release it so the
+        # daemon thread isn't left blocked behind a never-set Event during
+        # teardown. The background download (bootstrap daemon thread +
+        # on-disk resume) survives the quit and continues next launch.
+        self._quitting = True
+        self._awaiting_choice = False
+        self._choice_event.set()
         self.app.exit()
 
     def on_mount(self) -> None:
@@ -259,6 +308,14 @@ class SetupScreen(Screen):
             return  # stop animating on error
         self._spin_idx += 1
         try:
+            # While the "chat now vs wait here" prompt is up, render the
+            # status text verbatim — it carries its own markup and must not
+            # be dimmed or clobbered by the per-tick refresh.
+            if self._awaiting_choice:
+                self.query_one("#setup-status", Static).update(self._status_text)
+                self.query_one("#setup-steps", Static).update(self._render_steps())
+                self.refresh()
+                return
             # Update status text (countdown) and spinner together
             status = f"[dim]{self._status_text}[/]" if self._status_text else ""
             spin = self._spin_chars[self._spin_idx % len(self._spin_chars)]
@@ -275,7 +332,8 @@ class SetupScreen(Screen):
         from ...bootstrap import (
             _turboquant_binary_path, _find_turboquant_source,
             build_turboquant, download_turboquant_binary,
-            download_model, get_model_path,
+            get_model_path,
+            start_background_download, is_download_complete,
         )
         from ...models_catalog import CHOICES, current as current_choice
 
@@ -363,21 +421,74 @@ class SetupScreen(Screen):
                     return
             except Exception:
                 pass
-            self._status_text = f"Downloading {chosen.name} (~{chosen.size_gb:.1f}GB)..."
-            ok, result = download_model(
-                chosen,
-                on_progress=lambda msg: setattr(self, '_status_text', msg),
-            )
-            if not ok:
-                err = str(result).replace("\n", " ").strip()[:80]
-                self.app.call_from_thread(lambda e=err: self._show_error(
-                    f"Model download failed:\n{e}\n\n"
-                    f"Check your internet connection and try again."
-                ))
-                return
-            model_path = result
-            config.runtime.model = str(result)
-            save_config(config)
+
+            # Route the target download through the background API so it
+            # survives quit/navigate-away and resumes next launch (the
+            # daemon thread + on-disk `.incomplete`/`.part` resume do the
+            # heavy lifting; we never reimplement download_model). Returns
+            # immediately with a registry key we then watch.
+            key = start_background_download(chosen)
+
+            # Is some OTHER catalog model already fully on disk? If so we
+            # can let the user start chatting with it RIGHT NOW while the
+            # target downloads in the background — setup no longer has to
+            # block on a 10–35 GB download.
+            ready_fallback = None
+            for c in CHOICES:
+                if c.filename == chosen.filename:
+                    continue
+                try:
+                    if is_download_complete(c):
+                        ready_fallback = c
+                        break
+                except Exception:
+                    continue
+
+            if ready_fallback is not None:
+                # ── Non-blocking path: offer "chat now" vs "wait here" ──
+                self._choice = ""
+                self._choice_event.clear()
+                self._awaiting_choice = True
+                self.app.call_from_thread(
+                    lambda f=ready_fallback, t=chosen: self._show_download_choice(f, t)
+                )
+                # Park until the user (or quit) resolves the prompt. The
+                # prompt body (set via _status_text) stays on screen; the
+                # download keeps running on bootstrap's daemon thread.
+                self._choice_event.wait()
+                if self._quitting:
+                    return  # app exited while waiting
+
+                if self._choice == "chat":
+                    # Start the server against the already-downloaded model;
+                    # the target keeps downloading on bootstrap's daemon
+                    # thread. The user can switch to it later via /model.
+                    chosen = ready_fallback
+                    model_path = ready_fallback.local_path
+                    config.runtime.model = str(model_path)
+                    save_config(config)
+                    self._awaiting_choice = False
+                    # Fall through to Step 2 with the fallback model.
+                else:
+                    # "wait" — block here on the background download to
+                    # completion (still quit-and-resume safe), then start
+                    # the originally-chosen model.
+                    self._awaiting_choice = False
+                    ok, model_path = self._wait_for_background(key, chosen)
+                    if not ok:
+                        return  # _show_error already surfaced
+                    config.runtime.model = str(model_path)
+                    save_config(config)
+            else:
+                # ── Blocking path: nothing downloaded yet — cannot chat
+                # with no model. Wait here on the background download
+                # (quit/resume safe via the daemon thread + on-disk
+                # resume), then start the chosen model.
+                ok, model_path = self._wait_for_background(key, chosen)
+                if not ok:
+                    return  # _show_error already surfaced
+                config.runtime.model = str(model_path)
+                save_config(config)
 
         # ── Step 2: Start server ──
         self._current_step = 2
@@ -714,6 +825,97 @@ class SetupScreen(Screen):
         import asyncio
         await asyncio.sleep(0.5)
         self.app.call_from_thread(self._finish)
+
+    def _show_download_choice(self, fallback, target) -> None:
+        """Render the "chat now vs wait here" prompt (UI thread only).
+
+        `fallback` is an already-downloaded catalog model the user can chat
+        with immediately; `target` is the model still downloading in the
+        background. Wired to the `c` / `w` bindings.
+        """
+        body = (
+            f"[bold yellow]{target.name}[/] is downloading in the background "
+            f"(~{target.size_gb:.1f} GB).\n\n"
+            f"You can start chatting with [bold]{fallback.name}[/] now — the "
+            f"download keeps going and you can switch to it later with "
+            f"[bold]/model[/].\n\n"
+            f"[bold]c[/] chat now with {fallback.name}   ·   "
+            f"[bold]w[/] wait here for {target.name}\n"
+            f"[dim]q / Esc / Ctrl+C to quit — the download resumes next launch.[/]"
+        )
+        # Stored as the live status text; `_tick` renders it verbatim while
+        # `_awaiting_choice` is set (no [dim] wrap, no clobber).
+        self._status_text = body
+
+    def _refresh_download_progress(self, key: str, choice) -> None:
+        """Pull the latest background-download progress into the status line.
+
+        Runs on the setup worker thread while it's parked on a prompt or
+        polling. Reads parsed registry fields straight from bootstrap — no
+        MB/pct is re-derived here.
+        """
+        try:
+            from ...bootstrap import download_status, list_active_downloads
+            entry = download_status(key)
+            if entry is None:
+                return
+            status = entry.get("status")
+            if status == "queued":
+                ahead = 0
+                try:
+                    active = list_active_downloads()
+                    for i, e in enumerate(active):
+                        if e.get("model_key") == key:
+                            ahead = sum(
+                                1 for j, x in enumerate(active)
+                                if j < i and x.get("status") in ("downloading", "queued")
+                            )
+                            break
+                except Exception:
+                    ahead = 0
+                self._status_text = f"Queued ({ahead} ahead) — {choice.name}"
+            elif status == "downloading":
+                self._status_text = (
+                    f"Downloading {choice.name}: "
+                    f"{entry.get('downloaded_mb', 0)}/{entry.get('total_mb', 0)} MB "
+                    f"({entry.get('progress_pct', 0)}%)"
+                )
+        except Exception:
+            pass
+
+    def _wait_for_background(self, key: str, choice):
+        """Block the worker on a background download until it terminates.
+
+        Polls bootstrap's registry every 0.5s, forwarding live progress to
+        the status line. Returns (True, model_path) on success or
+        (False, None) after surfacing the failure via _show_error. Honors
+        quit at any time — the daemon download + on-disk resume persist, so
+        the next launch picks up where this left off.
+        """
+        from ...bootstrap import download_status, get_model_path
+        while True:
+            if self._quitting:
+                return (False, None)
+            entry = download_status(key)
+            if entry is None:
+                # Shouldn't happen — entry persists for the session. Treat
+                # as transient and re-poll.
+                time.sleep(0.5)
+                continue
+            status = entry.get("status")
+            if status == "done":
+                path = get_model_path(choice.filename) or choice.local_path
+                return (True, path)
+            if status == "failed":
+                err = str(entry.get("error") or "").replace("\n", " ").strip()[:80]
+                self.app.call_from_thread(lambda e=err: self._show_error(
+                    f"Model download failed:\n{e}\n\n"
+                    f"Check your internet connection and try again."
+                ))
+                return (False, None)
+            # queued / downloading — update the line and keep polling.
+            self._refresh_download_progress(key, choice)
+            time.sleep(0.5)
 
     def _finish(self) -> None:
         self.app.switch_screen("chat")

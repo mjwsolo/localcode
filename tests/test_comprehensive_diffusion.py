@@ -87,7 +87,9 @@ def test_diffusion_stream_yields_content(tmp_path):
     text = "".join(e["content"] for e in events if e["type"] == "content")
     assert text == "Hello from diffusion!"
     # Never went anywhere near HTTP / tool machinery.
-    assert all(e["type"] in ("content", "stage") for e in events)
+    assert all(e["type"] in ("content", "stage", "stream_done") for e in events)
+    # Terminal event is emitted so the UI can record token counts.
+    assert any(e["type"] == "stream_done" for e in events)
 
 
 def test_diffusion_strips_prompt_echo(tmp_path):
