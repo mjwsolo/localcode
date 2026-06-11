@@ -212,29 +212,6 @@ CHOICES: list[ModelChoice] = [
         mmproj_hf_filename="mmproj-F16.gguf",
     ),
     ModelChoice(
-        key="north-mini-code",
-        name="North-Mini-Code 1.0 (30B-A3B MoE)",
-        hf_repo="unsloth/North-Mini-Code-1.0-GGUF",
-        filename="North-Mini-Code-1.0-UD-IQ1_M.gguf",
-        size_gb=9.38,
-        active_params="3B active / 30B total (MoE, 128 experts, 8 active per token)",
-        architecture="cohere2_moe",
-        license="Apache 2.0",
-        humaneval_pass_at_1=None,
-        notes=(
-            "Cohere Labs' code-specialized sparse MoE — 30B total / ~3B active (128 experts, "
-            "top-8), interleaved sliding-window + global (NoPE) attention 3:1, 256K context. "
-            "DOES NOT fit a 16 GB Mac's ~8.8 GB budget: smallest published Unsloth quant is "
-            "UD-IQ1_M at 9.38 GB (~0.6 GB over), and IQ1-level quant degrades code quality "
-            "noticeably — do not auto-select for 16 GB Macs without warning the user. Wants a "
-            "24 GB+ Mac (UD-Q3_K_XL ~14.3 GB or UD-IQ4_XS ~15.2 GB). Architecture is "
-            "Cohere2MoeForCausalLM / model_type \"cohere2_moe\", a NEW MoE variant of cohere2 "
-            "(Command R7B) — verify your llama.cpp/TurboQuant fork is new enough to load it. "
-            "Tool calls use Cohere's command-R style parser, not gemma/qwen/llama. Text-only, "
-            "no vision/mmproj. Untested on this stack — no HumanEval number yet."
-        ),
-    ),
-    ModelChoice(
         key="qwen-q8",
         name="Qwen 3.6 35B-A3B (Q8)",
         hf_repo="unsloth/Qwen3.6-35B-A3B-GGUF",
