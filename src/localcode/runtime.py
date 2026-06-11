@@ -772,6 +772,19 @@ class LocalCodeRuntimeGateway:
         format: dict[str, Any] | str | None = None,
         num_predict: int | None = None,
     ) -> dict[str, Any]:
+        if self._diffusion_choice() is not None:
+            # Same one-shot CLI backend as stream_chat_events, collected
+            # into the non-streaming response shape.
+            content_parts: list[str] = []
+            tool_calls: list[Any] = []
+            for ev in self._stream_diffusion_events(
+                messages, tools=tools, num_predict=num_predict
+            ):
+                if ev.get("type") == "content":
+                    content_parts.append(str(ev.get("content") or ""))
+                elif ev.get("type") == "tool_calls":
+                    tool_calls = ev.get("tool_calls") or []
+            return {"message": {"content": "".join(content_parts), "tool_calls": tool_calls}}
         if self.config.provider == "mlx-local":
             # Inject tool schemas into system prompt for MLX
             effective_messages = messages
@@ -922,6 +935,191 @@ class LocalCodeRuntimeGateway:
         except Exception:
             return False
 
+    # ── DiffusionGemma backend (experimental) ───────────────────────
+    #
+    # Block-diffusion models denoise a whole block of tokens in parallel
+    # instead of decoding token-by-token, so llama-server (and its HTTP
+    # streaming API) can't drive them. Generation goes through the
+    # one-shot `llama-diffusion-cli` runner from llama.cpp PR #24423
+    # (built once by `bootstrap.ensure_diffusion_cli`). Consequences:
+    #   - the model weights are (re)mapped per turn — first turn is slow,
+    #     later turns are faster via the OS page cache;
+    #   - output arrives in coarse chunks (denoised blocks), not tokens;
+    #   - we apply the Gemma chat template ourselves (-p takes raw text).
+
+    def _diffusion_choice(self):
+        """Catalog entry for the configured model IF it's a diffusion arch."""
+        try:
+            from pathlib import Path as _Path
+
+            from .models_catalog import by_filename
+            c = by_filename(_Path(self.config.model or "").name)
+        except Exception:
+            return None
+        if c is not None and str(getattr(c, "architecture", "")).startswith("diffusion"):
+            return c
+        return None
+
+    @staticmethod
+    def _format_diffusion_prompt(messages: list[dict[str, Any]]) -> str:
+        """Gemma chat template, applied by hand.
+
+        llama-diffusion-cli's `-p` is a raw prompt — unlike llama-server
+        there is no /v1/chat/completions layer to apply the GGUF's
+        embedded Jinja template. Gemma's convention: system text is
+        folded into the first user turn; roles are `user` / `model`.
+        """
+        system_bits = [
+            str(m.get("content") or "").strip()
+            for m in messages
+            if m.get("role") == "system" and str(m.get("content") or "").strip()
+        ]
+        pending_system = "\n\n".join(system_bits)
+        parts: list[str] = []
+        for m in messages:
+            role = m.get("role")
+            text = str(m.get("content") or "").strip()
+            if role == "system" or not text:
+                continue
+            if role == "user" and pending_system:
+                text = f"{pending_system}\n\n{text}"
+                pending_system = ""
+            gemma_role = "model" if role == "assistant" else "user"
+            parts.append(f"<start_of_turn>{gemma_role}\n{text}<end_of_turn>\n")
+        if pending_system:
+            # System-only conversations (rare): emit it as a user turn so
+            # the instructions reach the model at all.
+            parts.append(f"<start_of_turn>user\n{pending_system}<end_of_turn>\n")
+        parts.append("<start_of_turn>model\n")
+        return "".join(parts)
+
+    def _diffusion_cli_binary(self) -> str | None:
+        p = (getattr(self.config, "diffusion_cli_binary", "") or "").strip()
+        from pathlib import Path as _Path
+        if p and _Path(p).is_file():
+            return p
+        from .bootstrap import diffusion_cli_path
+        found = diffusion_cli_path()
+        return str(found) if found is not None else None
+
+    def _stream_diffusion_events(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        num_predict: int | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        import subprocess
+        import time as _time
+        from pathlib import Path as _Path
+
+        binary = self._diffusion_cli_binary()
+        if binary is None:
+            # Setup normally builds the runner before the first turn; this
+            # is the headless / edge path. Build now (one-time, minutes).
+            yield {
+                "type": "stage",
+                "name": "diffusion_build",
+                "message": "Building the diffusion runner (one-time, a few minutes)...",
+            }
+            from .bootstrap import ensure_diffusion_cli
+            ok, result = ensure_diffusion_cli()
+            if not ok:
+                raise RuntimeErrorWithContext(
+                    f"DiffusionGemma needs the llama-diffusion-cli runner and the build failed: {result}"
+                )
+            binary = result
+
+        model_path = str(_Path(self.config.model or "").expanduser())
+        effective_messages = messages
+        if tools:
+            effective_messages = self._inject_tools_into_messages(messages, tools)
+        prompt = self._format_diffusion_prompt(effective_messages)
+
+        cmd = [
+            binary,
+            "-m", model_path,
+            "-p", prompt,
+            "-ngl", "99",
+            "-n", str(num_predict or 2048),
+        ]
+        deadline = _time.monotonic() + max(60, int(self.config.request_timeout_seconds or 600))
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            errors="replace",
+        )
+        # Drain stderr CONCURRENTLY. Reading only stdout while stderr is a
+        # PIPE deadlocks the moment the runner writes >64 KB of logs to
+        # stderr (pipe buffer fills → child blocks on write → stdout goes
+        # silent → we block on read forever). llama.cpp binaries are
+        # chatty on stderr during model load, so this is the common case,
+        # not the edge case.
+        import threading as _threading
+        stderr_tail: list[str] = []
+
+        def _drain_stderr() -> None:
+            try:
+                assert proc.stderr is not None
+                for line in proc.stderr:
+                    stderr_tail.append(line)
+                    if len(stderr_tail) > 50:
+                        stderr_tail.pop(0)
+            except Exception:
+                pass
+
+        _threading.Thread(target=_drain_stderr, daemon=True,
+                          name="diffusion-stderr").start()
+        raw_parts: list[str] = []
+        emitted_any = False
+        try:
+            assert proc.stdout is not None
+            while True:
+                if _time.monotonic() > deadline:
+                    proc.kill()
+                    raise RuntimeErrorWithContext(
+                        "diffusion generation timed out "
+                        f"({self.config.request_timeout_seconds}s)"
+                    )
+                chunk = proc.stdout.read(512)
+                if not chunk:
+                    break
+                raw_parts.append(chunk)
+                cleaned = chunk
+                # The runner may echo the prompt before the generation —
+                # suppress everything until the prompt has fully streamed by.
+                if not emitted_any:
+                    so_far = "".join(raw_parts)
+                    if prompt.startswith(so_far):
+                        continue  # still inside a prompt echo
+                    if so_far.startswith(prompt):
+                        cleaned = so_far[len(prompt):]
+                    else:
+                        cleaned = so_far
+                cleaned = cleaned.replace("<end_of_turn>", "")
+                if cleaned:
+                    emitted_any = True
+                    yield {"type": "content", "content": cleaned}
+            rc = proc.wait(timeout=30)
+            if rc != 0:
+                err_tail = "".join(stderr_tail[-6:]).strip()
+                raise RuntimeErrorWithContext(
+                    f"llama-diffusion-cli exited with code {rc}:\n{err_tail}"
+                )
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+
+        if tools:
+            # Parse the GENERATION only — if the runner echoed the prompt,
+            # the injected tool spec inside it would false-match as calls.
+            full = "".join(raw_parts)
+            generation = full[len(prompt):] if full.startswith(prompt) else full
+            parsed = parse_tool_calls(generation)
+            if parsed.has_tools:
+                yield {"type": "tool_calls", "tool_calls": parsed.to_ollama_format()}
+
     def stream_chat_events(
         self,
         messages: list[dict[str, Any]],
@@ -932,6 +1130,15 @@ class LocalCodeRuntimeGateway:
         recovery_mode: str = "",
         stream_policy: str = "",
     ) -> Iterator[dict[str, Any]]:
+        # Diffusion models (architecture="diffusion_gemma") cannot be
+        # served by llama-server — they generate via the one-shot
+        # llama-diffusion-cli runner. Dispatch on the catalog's
+        # architecture field BEFORE any HTTP machinery runs.
+        if self._diffusion_choice() is not None:
+            yield from self._stream_diffusion_events(
+                messages, tools=tools, num_predict=num_predict
+            )
+            return
         if self.config.provider == "mlx-local":
             effective_messages = messages
             if tools:
@@ -1000,9 +1207,19 @@ class LocalCodeRuntimeGateway:
 
         payload = self._payload(messages, stream=True, tools=tools, think=think, num_ctx=num_ctx, num_predict=num_predict)
         last_error: Exception | None = None
+        # Cap server restarts across the WHOLE stream, not per-attempt.
+        # Bringing up a ~10 GB server costs seconds + a GPU-memory spike;
+        # without a cap, a server that dies on every reconnect turned the
+        # retry loop into a restart storm (each of N attempts fired its
+        # own restart). One restart per stream is enough to recover from
+        # a pressure-kill/OOM; if that doesn't bring it back, surface the
+        # error instead of thrashing.
+        _MAX_STREAM_RESTARTS = 1
+        _restarts_done = 0
         for attempt in range(max(1, self.config.max_retries + 1)):
             try:
-                if attempt == 0 and not self._quick_server_probe():
+                if attempt == 0 and _restarts_done < _MAX_STREAM_RESTARTS and not self._quick_server_probe():
+                    _restarts_done += 1
                     yield {
                         "type": "stage",
                         "name": "server_reconnect",
@@ -1398,7 +1615,8 @@ class LocalCodeRuntimeGateway:
                 # e2e run 2026-04-23T23:54, long_coding_session failed
                 # 25/25 turns at 0.5 s each on a dead server).
                 _pressure_related = _pressure_kill_recent()
-                if is_conn_err and attempt < self.config.max_retries:
+                if is_conn_err and attempt < self.config.max_retries and _restarts_done < _MAX_STREAM_RESTARTS:
+                    _restarts_done += 1
                     recovery_label = (
                         "memory_pressure_recovery"
                         if _pressure_related

@@ -205,8 +205,8 @@ class ModelPickerScreen(Screen):
     def _footer_markup(self) -> str:
         if self._level == self._LEVEL_QUANTS:
             return (
-                f"🏠[{C.primary}]LocalCode[/]  │  "
-                "[dim]↑/↓ + Enter to select a quant   ·   "
+                f"[{C.primary}]LocalCode[/] · "
+                "[dim]↑/↓ + Enter to select a quant · "
                 "Esc/← back to models[/]"
             )
         return self._default_footer_markup()
@@ -221,9 +221,9 @@ class ModelPickerScreen(Screen):
         else:
             keys_hint = f"↑/↓ + Enter, or press 1-{n}"
         return (
-            f"🏠[{C.primary}]LocalCode[/]  │  "
-            f"[dim]{keys_hint}   ·   d change save dir   ·   "
-            f"x delete model   ·   Esc cancel[/]"
+            f"[{C.primary}]LocalCode[/] · "
+            f"[dim]{keys_hint} · d change save dir · "
+            f"x delete model · Esc cancel[/]"
         )
 
     # ── helpers ─────────────────────────────────────────────────────

@@ -92,7 +92,7 @@ def ensure_stt_model(state: VoiceState,
 
     Routes through the same `download_model` machinery as LLM downloads,
     so we automatically get:
-      - hf_transfer fast path with urllib fallback
+      - huggingface_hub fast path (hf_xet) with urllib fallback
       - 3-attempt retry with exponential backoff (0/2/5 s)
       - partial-file preservation between attempts (resume)
       - error categorization (disk_full / auth / not_found / network / ssl)

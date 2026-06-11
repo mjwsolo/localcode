@@ -149,6 +149,15 @@ def run_agent_loop(
     # about prompts while eval can inject a variant per run.
     if system_prompt is None:
         system_prompt = SYSTEM_PROMPT
+    # Clear any leftover cancel from a PRIOR turn. The flag is set by the
+    # TUI when the user types "stop"; it's consumed at the round/tool
+    # boundaries below. If a previous turn broke out via an exception
+    # path between "set" and the TUI's own reset, the flag stayed True
+    # and poisoned THIS turn — the loop saw cancel_requested on round 0
+    # and bailed before a single model call. Resetting at entry makes
+    # each turn start from a clean slate regardless of how the last one
+    # ended.
+    app.cancel_requested = False
     # Per-turn telemetry. Captures FULL user input so the events log
     # is a complete record of "what was asked + what was done." The
     # log is per-project, gitignored, never shipped to users — it's

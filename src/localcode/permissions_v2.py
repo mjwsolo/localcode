@@ -134,7 +134,7 @@ ALWAYS_ALLOW = {
 # Tools that need permission on first use, then cached
 NEEDS_APPROVAL = {
     "bash", "write_file", "append_file", "edit_file", "multi_edit",
-    "git_commit", "codemod", "delegate", "security_scan",
+    "git_commit", "codemod", "security_scan",
     "run_tests",
 }
 
@@ -261,8 +261,13 @@ class PermissionManager:
             args_preview = str(args)[:60]
             return self._ask_user(tool_name, args_preview)
 
-        # Unknown tool — allow by default (might be MCP/plugin)
-        return True, "allowed (unknown tool)"
+        # Unknown tool (e.g. a freshly-registered MCP/plugin tool the
+        # safe-lists don't know yet). Default-ASK, not default-allow —
+        # auto-approving an unrecognized tool is exactly the gap an
+        # injected/compromised tool would slip through. Once the user
+        # approves it this session it's cached in _session_approved
+        # above, so the prompt appears at most once per tool per session.
+        return self._ask_user(tool_name, f"{tool_name} {str(args)[:50]}")
 
     def _ask_user(self, tool_name: str, detail: str) -> tuple[bool, str]:
         """Single-keypress permission prompt.
