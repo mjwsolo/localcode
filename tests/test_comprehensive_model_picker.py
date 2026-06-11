@@ -80,6 +80,8 @@ def test_picker_level2_shows_quants_with_fit_badges(monkeypatch):
             assert "mmproj" not in body.lower()
             # at least one fit badge glyph rendered
             assert any(g in body for g in ("✓", "⚠", "✗"))
+            # exactly one quant is starred as "recommended for this machine"
+            assert body.count("★") == 1
     asyncio.run(scenario())
 
 
