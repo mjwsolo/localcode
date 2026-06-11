@@ -175,7 +175,7 @@ class ModelPickerScreen(Screen):
     def compose(self) -> ComposeResult:
         with Container(id="picker-center"):
             with Vertical(id="picker-box"):
-                yield Static(self._render(), id="picker-list")
+                yield Static(self._render_body(), id="picker-list")
                 # can_focus=False while inactive so number keys (1, 2, ...) reach
                 # the Screen's BINDINGS dispatcher instead of being captured by
                 # this widget. Flipped to True when the user presses `d`.
@@ -195,7 +195,7 @@ class ModelPickerScreen(Screen):
 
     # ── render dispatch ─────────────────────────────────────────────
 
-    def _render(self) -> str:
+    def _render_body(self) -> str:
         if self._level == self._LEVEL_QUANTS:
             return self._render_quants()
         return self._render_groups()
@@ -352,7 +352,7 @@ class ModelPickerScreen(Screen):
 
     def _refresh(self) -> None:
         try:
-            self.query_one("#picker-list", Static).update(self._render())
+            self.query_one("#picker-list", Static).update(self._render_body())
         except Exception:
             pass
         # Reset footer to the level's default hint (unless mid-delete-flow,
