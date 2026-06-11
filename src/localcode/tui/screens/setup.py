@@ -15,10 +15,16 @@ class SetupScreen(Screen):
     """Shows bootstrap progress during first launch."""
 
     BINDINGS = [
-        # Only fire while the screen is in the failed state — see
-        # action_retry / action_quit which gate on self._failed_step.
+        # `r` retries only in the failed state (action_retry gates on it).
         Binding("r", "retry", "Retry", show=False),
+        # `q` / Esc / Ctrl+C quit ANY time — including mid-download. This
+        # used to be gated to the failed state only, which left a user
+        # watching a 33 GB download with no visible way out (it looked
+        # frozen). Quitting mid-download is now safe: the partial is kept
+        # on disk and the next launch resumes from where it stopped.
         Binding("q", "quit", "Quit", show=False),
+        Binding("escape", "quit", "Quit", show=False),
+        Binding("ctrl+c", "quit", "Quit", show=False),
     ]
 
     DEFAULT_CSS = """
@@ -60,6 +66,12 @@ class SetupScreen(Screen):
         margin: 2 0 0 0;
         text-align: center;
     }
+    #setup-quit-hint {
+        background: ansi_default;
+        width: 100%;
+        margin: 1 0 0 0;
+        text-align: center;
+    }
     /* Brand at bottom-left — `#brand-bar` styled in tui/styles/app.tcss. */
     """
 
@@ -83,7 +95,7 @@ class SetupScreen(Screen):
         # Brand at bottom-left (agent/Gemini-style). Same `#brand-bar`
         # widget identity used across every LocalCode screen.
         from ...theme import C as _C
-        yield Static(f"🏠[{_C.primary}]LocalCode[/]", id="brand-bar")
+        yield Static(f"[{_C.primary}]LocalCode[/]", id="brand-bar")
         with Container(id="setup-center"):
             with Vertical(id="setup-box"):
                 yield Static(self._render_steps(), id="setup-steps")
@@ -92,6 +104,11 @@ class SetupScreen(Screen):
                     "[dim italic]Note: one-time download — cached locally so future "
                     "launches start in seconds without re-downloading.[/]",
                     id="setup-onetime-note",
+                )
+                yield Static(
+                    "[dim]q / Esc / Ctrl+C to quit — the download resumes "
+                    "where it left off next launch.[/]",
+                    id="setup-quit-hint",
                 )
 
     def on_resize(self) -> None:
@@ -215,10 +232,15 @@ class SetupScreen(Screen):
         self.run_worker(self._run_setup, thread=True)
 
     def action_quit(self) -> None:
-        """Quit only when in the failed state — otherwise the user might
-        kill an in-flight setup by accidentally hitting q."""
-        if self._failed_step < 0:
-            return
+        """Quit from any setup state, including mid-download.
+
+        Previously gated to the failed state so an accidental `q`
+        couldn't kill an in-flight setup — but that left no escape from a
+        long download, which reads as a frozen app. Now that downloads
+        resume across restarts, quitting just means "continue later": the
+        partial file is preserved and the next launch picks up where this
+        left off.
+        """
         self.app.exit()
 
     def on_mount(self) -> None:
@@ -494,6 +516,43 @@ class SetupScreen(Screen):
         except Exception:
             pass
         save_config(config)
+
+        # DiffusionGemma: there is no llama-server for block-diffusion
+        # models — generation runs through the one-shot
+        # llama-diffusion-cli runner (see runtime._stream_diffusion_events).
+        # Build the runner now (one-time, a few minutes; cached in
+        # ~/.local/share/localcode afterwards) and skip the server
+        # launch + health gate entirely.
+        _arch_choice = None
+        try:
+            from ...models_catalog import by_filename as _by_fn
+            _arch_choice = _by_fn(Path(str(model_path)).name)
+        except Exception:
+            _arch_choice = None
+        if _arch_choice is not None and str(
+            getattr(_arch_choice, "architecture", "")
+        ).startswith("diffusion"):
+            from ...bootstrap import ensure_diffusion_cli
+
+            def _build_progress(msg: str) -> None:
+                self._status_text = msg
+
+            ok, result = ensure_diffusion_cli(on_progress=_build_progress)
+            if not ok:
+                self.app.call_from_thread(lambda e=result: self._show_error(
+                    msg="Couldn't build the diffusion runner.",
+                    code="E1002",
+                    details=e,
+                ))
+                return
+            config.runtime.diffusion_cli_binary = result
+            save_config(config)
+            self._current_step = 3
+            self._status_text = "Ready (diffusion runner)!"
+            import asyncio
+            await asyncio.sleep(0.5)
+            self.app.call_from_thread(self._finish)
+            return
 
         # Launch server
         gw = LocalCodeRuntimeGateway(config.runtime)

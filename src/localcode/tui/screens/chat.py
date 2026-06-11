@@ -24,7 +24,7 @@ from rich.text import Text as RichText
 from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal
+from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Input, Static
 from textual.worker import Worker, WorkerState
@@ -74,14 +74,13 @@ class _NoTintInput(Input):
         if not text:
             event.stop()
             return
-        # Collapse to a single line so Input's single-line nature
-        # doesn't truncate at the first newline. Whitespace runs are
-        # squeezed via " ".join(splitlines()) so pasted JSON / code
-        # arrives readable rather than as a wall of double-spaces.
-        if "\n" in text or "\r" in text:
-            joined = " ".join(line for line in text.splitlines() if line is not None)
-        else:
-            joined = text
+        # Preserve newlines so pasted code / JSON keeps its structure when
+        # submitted (previously they were squashed to single spaces, which
+        # destroyed any block the user pasted). The Input renders on one
+        # line, but the screen's #input-overflow preview shows the full
+        # multi-line value wrapped, and the submitted value carries the
+        # real newlines through to the model. Normalize CRLF/CR → LF only.
+        joined = text.replace("\r\n", "\n").replace("\r", "\n")
         selection = self.selection
         if selection.is_empty:
             self.insert_text_at_cursor(joined)
@@ -376,6 +375,7 @@ _SLASH_COMMANDS = [
     ("/voice", "Toggle voice mode (push-to-talk dictation into the input box)"),
     ("/audio", "Toggle audio output (assistant reads replies aloud via macOS say)"),
     ("/vision", "Toggle vision mode (let the model see images)"),
+    ("/undo", "Revert the last file change the agent made (/undo all for every change)"),
     ("/clear", "Clear conversation history"),
     ("/exit", "Exit LocalCode"),
 ]
@@ -516,8 +516,12 @@ class ChatScreen(Screen):
     #search-input.active {
         display: block;
     }
-    /* Input row and its children — explicit black so Textual's
-       default surface color doesn't bleed through. */
+    /* Input box + row and children — explicit terminal-default so
+       Textual's surface color doesn't bleed through. */
+    #input-box {
+        background: ansi_default;
+        height: auto;
+    }
     #input-row {
         background: ansi_default;
         height: 1;
@@ -544,20 +548,21 @@ class ChatScreen(Screen):
     #input-row.hidden-by-overflow #input-prompt {
         text-opacity: 0%;
     }
-    /* Multi-line wrap preview ABOVE the input row. Hidden by default;
+    /* Multi-line wrap preview — first child INSIDE #input-box, above
+       the input line, so long values grow within the bordered field
+       (no more text "falling out" above the box). Hidden by default;
        Static.update() fills it when input value exceeds visible width.
        max-height caps growth at 8 visible lines (~640 chars at 80
        cols). Past that the preview itself scrolls. */
     #input-overflow {
         background: ansi_default;
         color: $text;
-        padding: 0 1 0 3;
+        /* Left pad 1 lines the wrapped text's `› ` up with the prompt
+           glyph on the input line below it. */
+        padding: 0 1 0 1;
         height: auto;
         max-height: 8;
-        /* Leave a row of breathing space below so the wrap-preview
-           doesn't visually crash into the bottom status bar when the
-           single-line input is hidden under it. */
-        margin: 0 0 1 0;
+        margin: 0;
         display: none;
     }
     #input-overflow.active {
@@ -697,17 +702,23 @@ class ChatScreen(Screen):
         # render_line was getting overwritten by textual's base-style
         # application pipeline and showing up white. The sibling widget
         # has its own render path so color + glyph both stick.
-        # Wrap-preview: shows long input values across multiple wrapped
-        # lines ABOVE the single-line input. Hidden when value is empty
-        # or fits in one line. Updated on input Changed events.
-        yield Static("", id="input-overflow")
-        # NOTE: voice indicator is rendered INLINE inside the Input —
-        # see _NoTintInput.render_line, which appends a colored █ to
-        # the end of the text while _ptt_recorder is set. No sibling
-        # widget on the right.
-        with Horizontal(id="input-row"):
-            yield Static("›", id="input-prompt")
-            yield _NoTintInput(placeholder="", id="chat-input")
+        # One bordered input BOX containing the wrap-preview + the input
+        # row. The preview (full multi-line text for long values) used to
+        # be a free-floating Static ABOVE the bordered row — long input
+        # visually "fell out" of the field and read as chat content.
+        # Inside the same rounded border it reads as one multiline field.
+        with Vertical(id="input-box"):
+            # Wrap-preview: shows long input values across multiple
+            # wrapped lines above the input line. Hidden when the value
+            # is empty or fits in one line. Updated on input Changed.
+            yield Static("", id="input-overflow")
+            # NOTE: voice indicator is rendered INLINE inside the Input —
+            # see _NoTintInput.render_line, which appends a colored █ to
+            # the end of the text while _ptt_recorder is set. No sibling
+            # widget on the right.
+            with Horizontal(id="input-row"):
+                yield Static("›", id="input-prompt")
+                yield _NoTintInput(placeholder="", id="chat-input")
         # Slash command palette appears BELOW the input (terminal coding tools style),
         # not above. Visually it reads as a dropdown extending downward from
         # the prompt the user is typing in.
@@ -715,6 +726,7 @@ class ChatScreen(Screen):
         yield Static("", id="status-bar")
 
     def on_mount(self) -> None:
+        self._start_status_probe()
         self._update_status()
         self.query_one("#chat-input", Input).focus()
         log = self.query_one("#chat-log", ChatLog)
@@ -750,6 +762,66 @@ class ChatScreen(Screen):
         # couple seconds of the actual process going down.
         self.set_interval(2.0, self._update_status)
 
+    def _start_status_probe(self) -> None:
+        """Start the daemon thread that feeds `_update_status` its slow data.
+
+        `_update_status` runs ON THE UI THREAD (2 s interval, plus every
+        resize and turn boundary), so it must never block. The two slow
+        inputs it needs — the llama-server liveness probe (an HTTP health
+        check with a 1 s timeout when the process isn't ours) and the
+        one-time `git rev-parse` for the build tag (up to ~1 s on a cold
+        disk) — are computed here and cached on plain attributes the UI
+        thread just reads. Before this, a loaded/hung server froze the
+        whole TUI for up to 1 s out of every 2.
+        """
+        import threading
+        # Optimistic default — matches the old behaviour when the probe
+        # couldn't run.
+        self._server_alive = True
+        self._status_probe_stop = threading.Event()
+        t = threading.Thread(target=self._status_probe_loop, daemon=True,
+                             name="status-probe")
+        t.start()
+
+    def _status_probe_loop(self) -> None:
+        # One-time build info (version is cheap; git subprocess is not).
+        try:
+            from importlib.metadata import version as _pkgver
+            self._build_version = _pkgver("localcode")
+        except Exception:
+            self._build_version = ""
+        try:
+            import subprocess as _sp
+            from pathlib import Path as _Path
+            # Best-effort — dev installs have git metadata, installed
+            # builds usually don't; either branch is fine.
+            r = _sp.run(["git", "rev-parse", "--short", "HEAD"],
+                        capture_output=True, text=True, timeout=2,
+                        cwd=str(_Path(__file__).resolve().parent))
+            self._build_commit = r.stdout.strip() if r.returncode == 0 else ""
+        except Exception:
+            self._build_commit = ""
+        # Liveness loop. Probe IMMEDIATELY, then every 2 s — same cadence
+        # the status bar refreshes at.
+        stop = self._status_probe_stop
+        while True:
+            try:
+                from ...server_manager import ServerManager as _SM
+                _mgr = _SM.get()
+                # `is_running()` only knows about processes we spawned; a
+                # llama-server launched by the user (or a prior session) on
+                # the same port is serving fine, hence the HTTP fallback.
+                self._server_alive = _mgr.is_running() or _mgr.is_healthy()
+            except Exception:
+                self._server_alive = True  # can't probe → don't cry wolf
+            if stop.wait(2.0):
+                return
+
+    def on_unmount(self) -> None:
+        ev = getattr(self, "_status_probe_stop", None)
+        if ev is not None:
+            ev.set()
+
     def on_resize(self, event) -> None:
         # The status bar's left/right padding is computed from the
         # terminal width — recompute when the user resizes. Cheap (no
@@ -760,8 +832,7 @@ class ChatScreen(Screen):
             pass
         try:
             log = self.query_one("#chat-log", ChatLog)
-            if getattr(log, "_history", None) and not getattr(log, "_stream_started", False):
-                log._rerender()
+            log.reflow_if_needed()
         except Exception:
             pass
 
@@ -1011,25 +1082,25 @@ class ChatScreen(Screen):
         # would be decoration. Same shape as the other status fields.
         if self._server_restarting:
             server_label = "server: loading model"
+        elif cur is not None and str(
+            getattr(cur, "architecture", "")
+        ).startswith("diffusion"):
+            # Block-diffusion models have no llama-server — each turn
+            # spawns the one-shot diffusion runner. Probing the HTTP
+            # port would always say "stopped", which reads as broken.
+            server_label = "server: diffusion runner"
         elif provider == "llama_cpp":
-            # Actually probe ServerManager rather than hardcoding "ready"
-            # whenever the provider config is llama_cpp. Prior bug
-             # (2026-04-27): after pressure_kill SIGTERM'd llama-server,
-            # the status bar still showed "ready" because nothing in
-            # this branch checked liveness — user typed a message, got
-            # "Backend not ready" from the gateway, and saw a status
-            # bar that contradicted the error.
-            try:
-                from ...server_manager import ServerManager as _SM
-                _mgr = _SM.get()
-                # ALSO probe the live port — `is_running()` only knows
-                # about processes we spawned, but a llama-server launched
-                # by the user (or a prior session) on the same port is
-                # serving fine and our HTTP requests would succeed.
-                # Don't claim "stopped" when the agent can clearly reach it.
-                _alive = _mgr.is_running() or _mgr.is_healthy()
-            except Exception:
-                _alive = True  # if we can't probe, fall through to old behaviour
+            # Liveness rather than hardcoded "ready" whenever the provider
+            # config is llama_cpp. Prior bug (2026-04-27): after
+            # pressure_kill SIGTERM'd llama-server, the status bar still
+            # showed "ready" because nothing in this branch checked
+            # liveness — user typed a message, got "Backend not ready"
+            # from the gateway, and saw a status bar that contradicted
+            # the error. The probe itself (process check + HTTP health
+            # check with a 1 s timeout) runs in the `_status_probe_loop`
+            # daemon thread — reading it here keeps this UI-thread method
+            # non-blocking.
+            _alive = getattr(self, "_server_alive", True)
             server_label = "server: ready" if _alive else "server: stopped"
         elif provider == "ollama":
             server_label = "server: degraded (restart to fix)"
@@ -1044,43 +1115,11 @@ class ChatScreen(Screen):
         # the latest build without `git log` in another terminal.
         # Shows `app_version + short git commit` when both are available;
         # falls back to "dev" if running from an uninstalled source
-        # checkout with no git info. Computed once per session —
-        # cached on self to avoid spawning `git` every status update.
-        if not hasattr(self, "_build_tag"):
-            try:
-                from importlib.metadata import version as _pkgver
-                app_ver = _pkgver("localcode")
-            except Exception:
-                app_ver = ""
-            commit = ""
-            try:
-                import subprocess as _sp
-                from pathlib import Path as _Path
-                # Best-effort — dev installs have git metadata, installed
-                # builds usually don't; either branch is fine.
-                r = _sp.run(["git", "rev-parse", "--short", "HEAD"],
-                            capture_output=True, text=True, timeout=1,
-                            cwd=str(_Path(__file__).resolve().parent))
-                if r.returncode == 0:
-                    commit = r.stdout.strip()
-            except Exception:
-                pass
-            # Cache the components separately so we can render the
-            # version adaptively per terminal width below — full
-            # `v0.2.12·c0def7a` on wide terminals, ellipsis-truncated
-            # `v0.2.12…` on medium, dropped entirely on narrow.
-            self._build_version = app_ver
-            self._build_commit = commit
-            # Default fallback used if width-aware rendering can't run
-            # (e.g. very early paint before bar.size is populated).
-            if app_ver and commit:
-                self._build_tag = f"v{app_ver}…"
-            elif app_ver:
-                self._build_tag = f"v{app_ver}"
-            elif commit:
-                self._build_tag = f"dev…"
-            else:
-                self._build_tag = "dev"
+        # checkout with no git info. Computed once per session by the
+        # `_status_probe_loop` daemon thread (the `git rev-parse`
+        # subprocess can take ~1 s on a cold disk — too slow for this
+        # UI-thread method); until the thread delivers, the getattr
+        # defaults below render a plain "dev" tag for a tick or two.
         # Adaptive version display. Recomputed each tick because the
         # user can resize the terminal mid-session.
         try:
@@ -1111,22 +1150,34 @@ class ChatScreen(Screen):
         # context" was the first thing to disappear off-screen.
         # Also shorten the model label — full Unsloth quant names
         # like "Qwen 3.6 35B-A3B (Unsloth UD-IQ2_M)" eat 35 chars.
-        short_model = (
-            model.replace(" (Unsloth UD-", " ")
-                 .replace(")", "")
-                 .replace("-A3B", "")
-        )
+        # Compact the parenthetical quant tag: keep the part that
+        # disambiguates ("Q4", "BF16", "IQ2_M"), drop the filler. The
+        # earlier string-replace version only handled the
+        # "(Unsloth UD-…)" shape — on "Gemma 4 12B (BF16, full)" it
+        # stripped just the CLOSING paren and the bar showed the
+        # broken "Gemma 4 12B (BF16, full".
+        _m = re.match(r"^(.*?)\s*\((.*)\)\s*$", model)
+        if _m:
+            _tag = _m.group(2).replace("Unsloth UD-", "").split(",")[0].strip()
+            short_model = f"{_m.group(1)} {_tag}".strip()
+        else:
+            short_model = model
+        short_model = short_model.replace("-A3B", "")
         # Brand prefix + status (LEFT) | version (RIGHT). Like a tmux /
         # vim statusline — left content pinned to the left edge, right
         # content pinned to the right edge, padded with spaces to fill
         # the terminal width. Without this the version sat awkwardly
         # mid-row on wide terminals with empty space trailing it.
+        # One quiet line, uniform ` · ` separators. The earlier version
+        # opened with an emoji + box-drawing divider and double-spaced
+        # separators — decoration that ate ~10 columns and made the bar
+        # the loudest thing on screen. Brand color on the name is enough.
         left = RichText.from_markup(
-            f"🏠[{C.primary}]LocalCode[/]  │  "
-            f"{server_label}  ·  context: {pct_remaining}% free  ·  "
+            f"[{C.primary}]LocalCode[/] · "
+            f"{server_label} · context: {pct_remaining}% free · "
             f"mode: {mode_label}"
-            + (f"  ·  task: {task_stage}" if task_stage else "")
-            + f"  ·  model: {short_model}"
+            + (f" · task: {task_stage}" if task_stage else "")
+            + f" · model: {short_model}"
         )
         # Use the adaptive `build_tag` chosen above; honour the
         # narrow-terminal "drop entirely" policy by emitting an empty
@@ -1150,6 +1201,12 @@ class ChatScreen(Screen):
         else:
             # Narrow terminal — drop the right side rather than wrap.
             # Server / context / mode / model matter more than version.
+            # If even the left side overflows, end it with an ellipsis
+            # instead of letting the renderer hard-clip mid-word —
+            # "…model: Gemma 4 12B (BF16, fu" reads as a bug, "…" reads
+            # as intentional.
+            if bar_width and left.cell_len > bar_width:
+                left.truncate(bar_width, overflow="ellipsis")
             bar.update(left)
 
     def _update_queue(self) -> None:
@@ -1211,14 +1268,26 @@ class ChatScreen(Screen):
                 pass
             raw = _app_w or _screen_w or 80
             avail = max(60, raw - 8)
-            if len(text) > avail:
+            # Show the wrapped preview when the value is too long for one
+            # line OR contains explicit newlines (multi-line paste) — a
+            # single-line Input can't render the latter, so without this
+            # the user sees a one-line jumble while the real value has
+            # structure. Wrap each logical line separately so pasted code
+            # keeps its line breaks instead of being reflowed into prose.
+            if len(text) > avail or "\n" in text:
                 import textwrap
-                wrapped = textwrap.fill(
-                    text, width=avail,
-                    initial_indent="› ", subsequent_indent="  ",
-                    break_long_words=False, break_on_hyphens=False,
-                )
-                overflow.update(wrapped)
+                out_lines: list[str] = []
+                for i, logical in enumerate(text.split("\n")):
+                    lead = "› " if i == 0 else "  "
+                    if not logical:
+                        out_lines.append("  ")
+                        continue
+                    out_lines.append(textwrap.fill(
+                        logical, width=avail,
+                        initial_indent=lead, subsequent_indent="  ",
+                        break_long_words=False, break_on_hyphens=False,
+                    ))
+                overflow.update("\n".join(out_lines))
                 overflow.add_class("active")
                 input_row.add_class("hidden-by-overflow")
             else:
@@ -1316,12 +1385,17 @@ class ChatScreen(Screen):
         self._ptt_last_transcript = ""
         self._ptt_last_input_value = None
         self._ptt_last_submit_ts = _t.time()
-        # Defensive second clear after a tick in case anything wrote
-        # the value back between clear() and now.
-        def _double_clear() -> None:
+        # Defensive second clear after a tick in case anything wrote the
+        # value back between clear() and now. ONLY clear if the field
+        # still holds the exact text we just submitted — the bug this
+        # guards against re-inserts the SAME string, whereas a user who
+        # starts typing a NEW message within 1.5 s produces different
+        # text, which we must not wipe (that was eating fast follow-ups).
+        _submitted = text
+        def _double_clear(expected=_submitted) -> None:
             try:
                 inp = self.query_one("#chat-input", Input)
-                if inp.value:
+                if inp.value and inp.value == expected:
                     inp.value = ""
             except Exception:
                 pass
@@ -1331,6 +1405,13 @@ class ChatScreen(Screen):
 
         if text.startswith("/"):
             self._handle_command(text)
+            return
+
+        # Bash mode — `!command` runs through the user's shell and the
+        # output lands in the chat log, no model involved. Mirrors the
+        # `!` convention of the leading CLI agents.
+        if text.startswith("!"):
+            self._run_bash(text[1:].strip())
             return
 
         log = self.query_one("#chat-log", ChatLog)
@@ -1354,6 +1435,63 @@ class ChatScreen(Screen):
             log.append_user(text)
             log.scroll_end(animate=False)
             self._start_turn(text)
+
+    def _run_bash(self, cmd: str) -> None:
+        """Run a user-typed `!command` and append its output to the log.
+
+        Executes in a thread worker so a slow command never blocks the
+        UI; output is appended via call_from_thread when it finishes.
+        The command is the USER'S OWN — typed by hand at their prompt —
+        so no approval gate applies (same trust level as their normal
+        terminal). Output is capped so `!cat bigfile` can't flood the
+        log.
+        """
+        log = self.query_one("#chat-log", ChatLog)
+        if not cmd:
+            log.append_info(
+                "[dim]bash mode — type ! followed by a command, e.g. !git status[/]"
+            )
+            return
+        log.append_user(f"! {cmd}")
+        log.scroll_end(animate=False)
+
+        def _work() -> None:
+            import subprocess as _sp
+            shell = os.environ.get("SHELL") or "/bin/sh"
+            try:
+                r = _sp.run(
+                    [shell, "-c", cmd],
+                    capture_output=True, text=True, errors="replace",
+                    timeout=120,
+                )
+                out = r.stdout or ""
+                if r.stderr:
+                    if out and not out.endswith("\n"):
+                        out += "\n"
+                    out += r.stderr
+                out = out.rstrip("\n")
+                code = r.returncode
+            except _sp.TimeoutExpired:
+                out, code = "(timed out after 120s)", 124
+            except Exception as e:
+                out, code = f"({e})", 1
+            cap = 8000
+            if len(out) > cap:
+                out = out[:cap] + f"\n… (+{len(out) - cap:,} more chars)"
+
+            def _render(out=out, code=code) -> None:
+                lg = self.query_one("#chat-log", ChatLog)
+                if out:
+                    lg.append_tool_result(out, error=(code != 0))
+                elif code != 0:
+                    lg.append_tool_result(f"(exit {code}, no output)", error=True)
+                else:
+                    lg.append_tool_result("(no output)")
+                lg.scroll_end(animate=False)
+
+            self.app.call_from_thread(_render)
+
+        self.run_worker(_work, thread=True, exclusive=False)
 
     def _request_cancel(self, text: str) -> None:
         """Mark the current turn for cancellation and drop any queue."""
@@ -1390,10 +1528,22 @@ class ChatScreen(Screen):
             self._context_used = 0
             self._total_tokens = 0
             self._update_status()
-        elif text == "/undo":
-            if self.tui.engine:
-                result = self.tui.engine._handle_command("/undo")
-                log.append_info("Reverted last change" if result else "Nothing to undo")
+        elif text == "/undo" or text == "/undo all":
+            engine = self.tui.engine
+            changes = getattr(getattr(engine, "toolkit", None), "changes", None)
+            if changes is None:
+                log.append_info("Nothing to undo yet.")
+            elif text == "/undo all":
+                msgs = changes.undo_all()
+                if msgs:
+                    for m in msgs:
+                        log.append_info(f"  └ {m}")
+                    log.append_info(f"Reverted {len(msgs)} change(s).")
+                else:
+                    log.append_info("Nothing to undo.")
+            else:
+                ok, msg = changes.undo_last()
+                (log.append_info if ok else log.append_error)(msg)
         elif text == "/copy":
             # Copy last assistant response to clipboard
             last_text = ""
@@ -1698,15 +1848,28 @@ class ChatScreen(Screen):
 
     def _set_download_line(self, msg: str) -> None:
         """Update the single-line transient status widget with a download
-        progress message. Called on the UI thread only."""
+        progress message. Called on the UI thread only.
+
+        Must ALSO toggle the `active` class: #active-step is
+        `display: none` at rest, so a bare .update() painted text into
+        an invisible widget — the reason download progress never showed
+        up in the chat UI.
+        """
         try:
-            self.query_one("#active-step", Static).update(f"[dim]{msg}[/]")
+            step = self.query_one("#active-step", Static)
+            step.update(f"[dim]{msg}[/]")
+            step.add_class("active")
         except Exception:
             pass
 
     def _clear_download_line(self) -> None:
         try:
-            self.query_one("#active-step", Static).update("")
+            step = self.query_one("#active-step", Static)
+            step.update("")
+            # Only hide it when no agent turn owns the widget — mid-turn
+            # the tool/thinking ticker is rendering into it.
+            if not self._agent_busy:
+                step.remove_class("active")
         except Exception:
             pass
 
@@ -2183,8 +2346,17 @@ class ChatScreen(Screen):
                 try:
                     from ...bootstrap import download_model
 
-                    ok, result = download_model(choice)
+                    # Live progress into the transient #active-step line
+                    # ("Downloading: 1234/33200 MB (3%)", ~2 Hz). Without
+                    # the callback the user stares at a static "then
+                    # restarting server..." line for a 30+ GB download.
+                    def _progress(msg: str) -> None:
+                        self.app.call_from_thread(self._set_download_line, msg)
+
+                    ok, result = download_model(choice, on_progress=_progress)
+                    self.app.call_from_thread(self._clear_download_line)
                 except Exception as e:
+                    self.app.call_from_thread(self._clear_download_line)
                     self.app.call_from_thread(
                         self._on_server_restart_failed,
                         f"Model download failed: {e}",
@@ -2243,12 +2415,7 @@ class ChatScreen(Screen):
         log = self.query_one("#chat-log", ChatLog)
         log.append_info(f"Server ready with {model_name}.")
         self._update_status()
-        if self._pending_messages:
-            next_msg = self._pending_messages.pop(0)
-            self._update_queue()
-            log.append_user(next_msg)
-            log.scroll_end(animate=False)
-            self._start_turn(next_msg)
+        self._drain_next_queued()
 
     def _on_server_restart_failed(self, error_msg: str) -> None:
         """UI-thread handler: restart timed out or blew up.
@@ -2852,7 +3019,42 @@ class ChatScreen(Screen):
         elif event.state == WorkerState.ERROR:
             log = self.query_one("#chat-log", ChatLog)
             log.append_error(f"Agent error: {event.worker.error}")
+            # Safety net: a worker that died BEFORE calling its own
+            # completion handler (e.g. the model-switch or vision-restart
+            # worker throwing mid-flight) would otherwise leave
+            # _server_restarting / _vision_download_in_flight stuck True
+            # forever — input queues with no way to unblock, or /vision
+            # is permanently dead. Clear them here whatever the worker.
+            self._recover_stuck_state()
             self._on_turn_done()
+
+    def _recover_stuck_state(self) -> None:
+        """Clear blocking flags after a worker crash so the UI can't wedge.
+
+        Idempotent and harmless when nothing is stuck. Restores input,
+        refreshes the status bar + queue, and drains any messages the
+        user typed while the (now-dead) worker held the lock.
+        """
+        was_blocked = self._server_restarting or getattr(
+            self, "_vision_download_in_flight", False
+        )
+        self._server_restarting = False
+        self._vision_download_in_flight = False
+        try:
+            self._clear_download_line()
+        except Exception:
+            pass
+        if was_blocked:
+            try:
+                self._update_status()
+            except Exception:
+                pass
+            # Kick the queue drain — input typed during the dead restart
+            # is still in _pending_messages.
+            try:
+                self._drain_next_queued()
+            except Exception:
+                pass
 
     def _on_turn_done(self) -> None:
         self._agent_busy = False
@@ -2943,11 +3145,34 @@ class ChatScreen(Screen):
         self._update_status()
 
         # Auto-submit queued messages
-        if self._pending_messages:
-            next_msg = self._pending_messages.pop(0)
-            self._update_queue()
+        self._drain_next_queued()
+
+    def _drain_next_queued(self) -> None:
+        """Pop + start the next queued message, crash-safe.
+
+        If `_start_turn` throws, the popped message is put BACK at the
+        front of the queue (instead of silently lost) and the error is
+        surfaced — the user can retry rather than wondering where their
+        message went.
+        """
+        if not self._pending_messages or self._agent_busy or self._server_restarting:
+            return
+        next_msg = self._pending_messages.pop(0)
+        self._update_queue()
+        try:
+            log = self.query_one("#chat-log", ChatLog)
             log.append_user(next_msg)
+            log.scroll_end(animate=False)
             self._start_turn(next_msg)
+        except Exception as e:
+            self._pending_messages.insert(0, next_msg)
+            self._update_queue()
+            try:
+                self.query_one("#chat-log", ChatLog).append_error(
+                    f"Couldn't start queued message (kept in queue): {e}"
+                )
+            except Exception:
+                pass
 
     # ── Agent events (from bridge via OutputManager) ──
 
@@ -3266,12 +3491,25 @@ class ChatScreen(Screen):
             verdict, label = "deny", "denied"
 
         if verdict is not None:
+            # Clear the gate FIRST so any exception below can't leave the
+            # input disabled forever; then deliver the verdict + re-enable.
             self._awaiting_approval = False
-            log.append_info(f"  └ {label}")
-            self.tui.bridge.set_approval(verdict)
-            inp = self.query_one("#chat-input", Input)
-            inp.disabled = False
-            inp.focus()
+            try:
+                log.append_info(f"  └ {label}")
+                self.tui.bridge.set_approval(verdict)
+            finally:
+                inp = self.query_one("#chat-input", Input)
+                inp.disabled = False
+                inp.focus()
+        else:
+            # Invalid key while a decision is required — silence reads as
+            # "frozen / broken". Ring the bell and re-show the choices so
+            # the user knows the prompt is live and what to press.
+            try:
+                self.app.bell()
+            except Exception:
+                pass
+            log.append_info("  [dim]press 1/y allow · 2 always · 3/n/Esc deny[/]")
 
         # Block ALL other keys during approval
         event.prevent_default()

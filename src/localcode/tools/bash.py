@@ -901,6 +901,21 @@ def execute(ctx: ToolContext, args: dict) -> str:
             env=clean_env(),
         )
         output = (r.stdout + r.stderr).strip()
+        # Prompt-injection guard. A repo file or web response echoed by the
+        # command (`cat README`, `curl …`) can carry "ignore all prior
+        # instructions" text — bash was the one tool output that reached
+        # the model unguarded (read_file/web_fetch already wrap theirs).
+        # bash output is also read by internal heuristics and is the
+        # overwhelmingly-common case, so we do NOT blanket-wrap: only when
+        # a hostile pattern is actually detected do we fence the output +
+        # prepend the warning. Clean output passes through byte-for-byte,
+        # preserving the exact format every downstream consumer expects.
+        try:
+            from ..injection_defense import detect_injection_patterns, wrap_untrusted
+            if output and detect_injection_patterns(output):
+                output = wrap_untrusted(output, source=f"$ {cmd[:60]}")
+        except Exception:
+            pass
         if r.returncode != 0:
             output = f"[exit code {r.returncode}]\n{output}"
         # AirPlay-collision detector: if the model curls localhost:5000
