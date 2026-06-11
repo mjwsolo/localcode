@@ -80,8 +80,13 @@ def test_picker_level2_shows_quants_with_fit_badges(monkeypatch):
             assert "mmproj" not in body.lower()
             # at least one fit badge glyph rendered
             assert any(g in body for g in ("✓", "⚠", "✗"))
-            # exactly one quant is starred as "recommended for this machine"
-            assert body.count("★") == 1
+            # exactly one quant ROW is starred as recommended (the footer legend
+            # also contains a ★, so target rows that name a quant)
+            starred_rows = [
+                ln for ln in body.splitlines()
+                if "★" in ln and ("Q4_K_M" in ln or "Q8_0" in ln)
+            ]
+            assert len(starred_rows) == 1, starred_rows
     asyncio.run(scenario())
 
 
