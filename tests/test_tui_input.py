@@ -40,13 +40,17 @@ def test_chat_input_paste_prevents_textual_default_insert() -> None:
     assert target.inserted == "hello"
 
 
-def test_chat_input_paste_preserves_multiline_content_as_single_line() -> None:
+def test_chat_input_paste_preserves_multiline_newlines() -> None:
+    # Paste now KEEPS newlines (normalizing CRLF/CR → LF) so pasted code
+    # / JSON retains its structure on submit. The screen's #input-overflow
+    # preview renders the multi-line value; the old behaviour flattened
+    # everything to spaces and destroyed any pasted block.
     event = _PasteEvent("line one\nline two\r\nline three")
     target = _InputLike()
 
     _NoTintInput._on_paste(target, event)
 
-    assert target.inserted == "line one line two line three"
+    assert target.inserted == "line one\nline two\nline three"
 
 
 class _HistInputLike:

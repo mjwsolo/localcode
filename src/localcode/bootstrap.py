@@ -11,6 +11,24 @@ import threading
 import time
 from typing import Callable, TypeVar
 
+# huggingface_hub snapshots these env vars into `huggingface_hub.constants`
+# AT IMPORT TIME — setting them after the first `import huggingface_hub`
+# anywhere in the process silently does nothing. Set them here, before any
+# code path can import the hub:
+#   HF_HUB_DISABLE_XET — force the hub's plain-HTTP downloader instead of
+#     the hf_xet backend. Xet is faster on a clean run, but it CANNOT
+#     resume an interrupted download: it rewrites the `.incomplete` file
+#     from its chunk cache, and on a default install that cache holds
+#     ~nothing — so quitting LocalCode mid-download restarted a 33 GB
+#     model from byte 0 (observed 2026-06-11). The HTTP path resumes via
+#     `.incomplete` + Range. For 10-35 GB GGUFs on desktop machines,
+#     surviving an interrupt is worth more than peak throughput.
+#   HF_HUB_DISABLE_PROGRESS_BARS — keeps tqdm off stderr, which would
+#     corrupt the Textual screen; progress reaches the TUI through the
+#     `tqdm_class` hook in `_try_hub_download` instead.
+os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+
 from rich.console import Console
 from rich.live import Live
 from rich.panel import Panel
@@ -368,15 +386,26 @@ def _download_parallel(url: str, dest: Path, num_threads: int = 16,
                        on_progress: Callable[[str], None] | None = None) -> None:
     """Download a large file using parallel HTTP range requests.
 
-    Uses 16 threads and 1MB buffers for maximum throughput.
     Falls back to single-threaded if the server doesn't support ranges.
+
+    All bytes land in `<dest>.part`, atomically renamed to `dest` only on
+    success. NEVER write to the final name directly: the parallel path
+    pre-allocates the full file size up front, so a kill mid-download
+    used to leave a full-size mostly-zeros file at the final name that
+    passed the size-based completeness check and then failed inside
+    llama-server with a cryptic GGUF error.
     """
     import ssl
     import threading
     import urllib.request
 
-    # Create SSL context — try certifi, then system, then unverified
+    # Create SSL context — try certifi, then system, then unverified.
+    # The probing HEAD doubles as the size/range capability check, so the
+    # common case (certifi works) costs exactly ONE round-trip before data
+    # flows instead of two.
     ssl_ctx = None
+    total_size = 0
+    accepts_ranges = False
     for _attempt in range(3):
         try:
             if _attempt == 0:
@@ -387,7 +416,9 @@ def _download_parallel(url: str, dest: Path, num_threads: int = 16,
             else:
                 ssl_ctx = ssl._create_unverified_context()
             req = urllib.request.Request(url, method="HEAD")
-            urllib.request.urlopen(req, context=ssl_ctx, timeout=10).close()
+            with urllib.request.urlopen(req, context=ssl_ctx, timeout=10) as resp:
+                total_size = int(resp.headers.get("Content-Length", 0))
+                accepts_ranges = resp.headers.get("Accept-Ranges", "none") != "none"
             break  # this context works
         except ImportError:
             continue
@@ -396,11 +427,7 @@ def _download_parallel(url: str, dest: Path, num_threads: int = 16,
     if ssl_ctx is None:
         ssl_ctx = ssl._create_unverified_context()
 
-    # Get file size via HEAD
-    req = urllib.request.Request(url, method="HEAD")
-    with urllib.request.urlopen(req, context=ssl_ctx) as resp:
-        total_size = int(resp.headers.get("Content-Length", 0))
-        accepts_ranges = resp.headers.get("Accept-Ranges", "none") != "none"
+    part = dest.with_name(dest.name + ".part")
 
     if not total_size or not accepts_ranges:
         # Fallback: single-threaded
@@ -408,7 +435,8 @@ def _download_parallel(url: str, dest: Path, num_threads: int = 16,
             if on_progress and total_size > 0:
                 done = min(block_num * block_size, total_size)
                 on_progress(f"Downloading: {done // (1024*1024)}/{total_size // (1024*1024)} MB ({done * 100 // total_size}%)")
-        urllib.request.urlretrieve(url, str(dest), reporthook=_report)  # no ssl_ctx for urlretrieve
+        urllib.request.urlretrieve(url, str(part), reporthook=_report)  # no ssl_ctx for urlretrieve
+        part.replace(dest)
         return
 
     # Split into chunks
@@ -417,8 +445,8 @@ def _download_parallel(url: str, dest: Path, num_threads: int = 16,
     errors: list[str] = []
     lock = threading.Lock()
 
-    # Pre-allocate the output file
-    with open(dest, "wb") as f:
+    # Pre-allocate the working file
+    with open(part, "wb") as f:
         f.seek(total_size - 1)
         f.write(b"\0")
 
@@ -426,9 +454,12 @@ def _download_parallel(url: str, dest: Path, num_threads: int = 16,
         try:
             req = urllib.request.Request(url)
             req.add_header("Range", f"bytes={start}-{end}")
-            with urllib.request.urlopen(req, context=ssl_ctx) as resp:
+            # timeout bounds CONNECT + each blocking read, not the whole
+            # transfer — a stalled thread aborts in 60s instead of hanging
+            # the download forever.
+            with urllib.request.urlopen(req, context=ssl_ctx, timeout=60) as resp:
                 buf_size = 8 * 1024 * 1024  # 8MB read buffer — cuts syscall overhead vs 1MB
-                with open(dest, "r+b") as f:
+                with open(part, "r+b") as f:
                     f.seek(start)
                     while True:
                         data = resp.read(buf_size)
@@ -474,8 +505,10 @@ def _download_parallel(url: str, dest: Path, num_threads: int = 16,
     progress_thread.join(timeout=1)
 
     if errors:
-        dest.unlink(missing_ok=True)
+        part.unlink(missing_ok=True)
         raise RuntimeError("; ".join(errors))
+    # All chunks verified-written — promote atomically to the final name.
+    part.replace(dest)
 
 
 def download_model(
@@ -504,16 +537,45 @@ def download_model(
     model_dir.mkdir(parents=True, exist_ok=True)
     model_file = choice.local_path
 
-    if model_file.exists():
+    # A file at the final name only counts when it's the full size — a
+    # partial from an interrupted attempt must fall through to the
+    # download (the hub path resumes; treating the partial as "done"
+    # produced a model llama-server couldn't load).
+    if model_file.exists() and _is_complete_download(model_file, choice):
         return True, str(model_file)
+
+    # Disk-space preflight. A 33 GB download that fills the disk fails
+    # cryptically near the end (and leaves a useless partial); catching
+    # it up front with the real numbers is far kinder. Require headroom
+    # for the bytes still needed (size minus any partial already on disk)
+    # plus a 2 GB safety margin so we don't wedge the whole system.
+    try:
+        import shutil as _shutil
+        already = model_file.stat().st_size if model_file.exists() else 0
+        need = max(0, int(choice.size_gb * 1000 ** 3) - already)
+        free = _shutil.disk_usage(model_dir).free
+        if free < need + 2 * 1024 ** 3:
+            need_gb = need / 1000 ** 3
+            free_gb = free / 1000 ** 3
+            return False, (
+                f"Not enough disk space: {choice.name} needs ~{need_gb:.1f} GB "
+                f"but only {free_gb:.1f} GB is free in {model_dir}. Free up space "
+                f"or pick a smaller quant in /model."
+            )
+    except Exception:
+        # Never let the preflight itself block a download — if disk_usage
+        # fails (exotic FS), fall through and let the download try.
+        pass
 
     url = f"https://huggingface.co/{choice.hf_repo}/resolve/main/{choice.filename}"
     if on_progress:
         on_progress(f"Downloading {choice.filename} (~{choice.size_gb:.1f} GB)...")
 
-    # Retry with exponential backoff. Both hf_transfer and urllib paths
-    # support resume — we DO NOT delete the partial file between attempts
-    # so retries pick up where the last attempt left off.
+    # Retry with exponential backoff. The hub path resumes from its
+    # `.incomplete` sidecar (kept across attempts AND across app
+    # restarts); the urllib fallback restarts its own `.part` file but
+    # never touches the hub's partial, so a later hub attempt still
+    # resumes.
     last_err: Exception | None = None
     last_err_category = "unknown"
     backoffs = [0, 2, 5]  # seconds; 3 attempts total
@@ -523,10 +585,10 @@ def download_model(
                 on_progress(f"Retry {attempt}/{len(backoffs)} in {delay}s...")
             import time as _t
             _t.sleep(delay)
-        # Fast path: hf_transfer (Rust). Resumes via huggingface_hub's
-        # built-in `.incomplete` partial file handling.
+        # Fast path: huggingface_hub (hf_xet Rust backend on Xet repos).
+        # Resumes via the hub's built-in partial-download handling.
         try:
-            if _try_hf_transfer_download(choice, model_file, on_progress):
+            if _try_hub_download(choice, model_file, on_progress):
                 return True, str(model_file)
         except Exception as e:
             last_err = e
@@ -536,7 +598,7 @@ def download_model(
                 return False, _format_download_error(last_err_category, e)
             if on_progress:
                 on_progress(
-                    f"hf_transfer failed ({last_err_category}); trying urllib fallback"
+                    f"Hub download failed ({last_err_category}); trying urllib fallback"
                 )
         # Slow path: tuned urllib parallel downloader.
         try:
@@ -658,8 +720,62 @@ def _is_mmproj_complete(p: Path, choice) -> bool:
     return size >= int(expected * 0.9)
 
 
-def _try_hf_transfer_download(choice, dest: Path, on_progress: Callable[[str], None] | None) -> bool:
-    """Try to download via huggingface_hub + hf_transfer (Rust-backed).
+def _make_progress_tqdm(on_progress: Callable[[str], None]):
+    """Build a tqdm subclass that forwards download progress to the UI.
+
+    huggingface_hub drives BOTH of its backends — hf_xet (Rust, parallel
+    chunked) and plain HTTP — through `tqdm_class(...).update(nbytes)`,
+    so overriding `update` is the one hook that sees every downloaded
+    byte regardless of backend. Drawing to stderr stays disabled (a real
+    tqdm bar would corrupt the Textual screen); we keep our own byte
+    counter (tqdm's own `n` stops counting when `disable=True`) and
+    throttle the UI callback to ~2 Hz.
+    """
+    from huggingface_hub.utils import tqdm as _hf_tqdm
+
+    class _ProgressTqdm(_hf_tqdm):
+        def __init__(self, *args, **kwargs):
+            kwargs["disable"] = True  # never draw to stderr
+            super().__init__(*args, **kwargs)
+            # `initial` is the resume offset on the HTTP path.
+            self._lc_done = int(kwargs.get("initial") or 0)
+            self._lc_last_emit = 0.0
+
+        def update(self, n=1):
+            self._lc_done += int(n or 0)
+            now = time.monotonic()
+            if now - self._lc_last_emit >= 0.5:
+                self._lc_last_emit = now
+                total = int(self.total or 0)
+                # Sub-MB files (e.g. config.json) used to render as
+                # "0/0 MB (100%)" — integer MB truncation. Show percent
+                # alone for those; MB counts only once there are whole MBs
+                # to show.
+                if total >= 1024 * 1024:
+                    pct = min(100, self._lc_done * 100 // total) if total else 0
+                    on_progress(
+                        f"Downloading: {self._lc_done // (1024 * 1024)}"
+                        f"/{total // (1024 * 1024)} MB ({pct}%)"
+                    )
+                elif total:
+                    pct = min(100, self._lc_done * 100 // total)
+                    on_progress(f"Downloading: {pct}%")
+                else:
+                    on_progress("Downloading…")
+            return super().update(n)
+
+    return _ProgressTqdm
+
+
+def _try_hub_download(choice, dest: Path, on_progress: Callable[[str], None] | None) -> bool:
+    """Try to download via huggingface_hub's resumable HTTP downloader.
+
+    The hf_xet backend is deliberately disabled (`HF_HUB_DISABLE_XET=1`
+    at module import, top of this file): Xet is faster on a clean run
+    but cannot resume an interrupted download, which on 10-35 GB GGUFs
+    meant quitting LocalCode mid-download lost everything. The HTTP path
+    streams into an `.incomplete` sidecar and resumes it via Range
+    requests — across retries and across app restarts.
 
     Returns True on success, raises on hard failure. Returns False if the
     library is not available (caller should fall back).
@@ -668,23 +784,13 @@ def _try_hf_transfer_download(choice, dest: Path, on_progress: Callable[[str], N
         from huggingface_hub import hf_hub_download
     except ImportError:
         return False
-    # hf_transfer is opt-in via env var; huggingface_hub auto-uses it when
-    # available and HF_HUB_ENABLE_HF_TRANSFER=1.
-    try:
-        import hf_transfer  # noqa: F401  -- presence check
-        os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
-    except ImportError:
-        # huggingface_hub alone is still faster than urllib because it does
-        # connection reuse + better chunking, so we still use it without
-        # the Rust extension.
-        pass
     if on_progress:
-        on_progress(f"Downloading {choice.filename} via hf_transfer (Rust)...")
+        on_progress(f"Downloading {choice.filename} (HuggingFace, accelerated)...")
     downloaded_path = hf_hub_download(
         repo_id=choice.hf_repo,
         filename=choice.filename,
         local_dir=str(dest.parent),
-        local_dir_use_symlinks=False,
+        tqdm_class=_make_progress_tqdm(on_progress) if on_progress else None,
     )
     # huggingface_hub may write to a slightly different filename inside
     # local_dir; symlink/rename to our expected dest.
@@ -716,6 +822,108 @@ def _ensure_cmake() -> bool:
                 result = subprocess.run(cmd, capture_output=True, text=True, check=False)
                 return result.returncode == 0
     return False
+
+
+# ── DiffusionGemma runner (experimental) ────────────────────────────
+#
+# DiffusionGemma is a block-diffusion LM: llama-server cannot generate
+# from it. Upstream support lives in llama.cpp PR #24423, which ships a
+# dedicated one-shot runner, `llama-diffusion-cli`. The TurboQuant fork
+# predates the diffusion_gemma arch and has no diffusion-cli target, so
+# we build the runner ONCE from a stock llama.cpp checkout of the PR
+# branch (Metal is llama.cpp's default backend on macOS — no flags
+# needed) and cache the binary next to llama-server in the data dir.
+
+_DIFFUSION_LLAMA_REPO = "https://github.com/ggml-org/llama.cpp"
+_DIFFUSION_PR_REF = "refs/pull/24423/head"  # diffusion_gemma arch + entropy-bounded denoising
+_DIFFUSION_BIN_NAME = "llama-diffusion-cli"
+
+
+def diffusion_cli_path(config=None) -> Path | None:
+    """Locate an existing llama-diffusion-cli binary, or None."""
+    if config is not None:
+        p = (getattr(config.runtime, "diffusion_cli_binary", "") or "").strip()
+        if p and Path(p).is_file():
+            return Path(p)
+    cached = Path.home() / ".local" / "share" / "localcode" / _DIFFUSION_BIN_NAME
+    if cached.is_file():
+        return cached
+    return None
+
+
+def ensure_diffusion_cli(
+    on_progress: Callable[[str], None] | None = None,
+) -> tuple[bool, str]:
+    """Build (once) and cache the llama-diffusion-cli runner.
+
+    Returns (ok, binary_path_or_error). Idempotent — short-circuits if a
+    cached binary exists. The build is a few minutes of cmake on first
+    use; every later launch reuses the cached binary.
+    """
+    existing = diffusion_cli_path()
+    if existing is not None:
+        return True, str(existing)
+
+    def _say(msg: str) -> None:
+        if on_progress:
+            on_progress(msg)
+
+    if not shutil.which("git"):
+        return False, "git is required to build the diffusion runner (xcode-select --install)."
+    if not _ensure_cmake():
+        return False, "cmake is required to build the diffusion runner (brew install cmake)."
+
+    data_dir = Path.home() / ".local" / "share" / "localcode"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    src = data_dir / "llama.cpp-diffusion"
+
+    def _run(cmd: list[str], cwd: Path | None, timeout: int) -> tuple[bool, str]:
+        r = subprocess.run(cmd, cwd=str(cwd) if cwd else None,
+                           capture_output=True, text=True, timeout=timeout, check=False)
+        if r.returncode != 0:
+            tail = (r.stderr or r.stdout or "").strip().splitlines()[-8:]
+            return False, "\n".join(tail)
+        return True, ""
+
+    try:
+        if not (src / "CMakeLists.txt").is_file():
+            _say("Fetching llama.cpp (diffusion branch, one-time)...")
+            shutil.rmtree(src, ignore_errors=True)
+            ok, err = _run(["git", "clone", "--depth", "1", _DIFFUSION_LLAMA_REPO, str(src)],
+                           cwd=None, timeout=600)
+            if not ok:
+                return False, f"git clone failed:\n{err}"
+        _say("Checking out diffusion support (PR #24423)...")
+        ok, err = _run(["git", "fetch", "--depth", "1", "origin", _DIFFUSION_PR_REF],
+                       cwd=src, timeout=600)
+        if not ok:
+            return False, f"git fetch of {_DIFFUSION_PR_REF} failed:\n{err}"
+        ok, err = _run(["git", "checkout", "--force", "FETCH_HEAD"], cwd=src, timeout=120)
+        if not ok:
+            return False, f"git checkout failed:\n{err}"
+
+        _say("Building llama-diffusion-cli (one-time, ~3-6 min)...")
+        ok, err = _run(["cmake", "-B", "build", "-DCMAKE_BUILD_TYPE=Release",
+                        "-DLLAMA_CURL=OFF"], cwd=src, timeout=600)
+        if not ok:
+            return False, f"cmake configure failed:\n{err}"
+        ok, err = _run(["cmake", "--build", "build", "-j", "--config", "Release",
+                        "--target", _DIFFUSION_BIN_NAME], cwd=src, timeout=2400)
+        if not ok:
+            return False, f"cmake build failed:\n{err}"
+
+        built = src / "build" / "bin" / _DIFFUSION_BIN_NAME
+        if not built.is_file():
+            return False, f"build finished but {built} is missing."
+        dest = data_dir / _DIFFUSION_BIN_NAME
+        shutil.copyfile(built, dest)
+        dest.chmod(0o755)
+        _say("Diffusion runner ready.")
+        return True, str(dest)
+    except subprocess.TimeoutExpired as e:
+        return False, f"build step timed out: {' '.join(map(str, e.cmd))}"
+    except Exception as e:
+        return False, f"diffusion runner build failed: {e}"
 
 
 def _ensure_ollama() -> bool:

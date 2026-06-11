@@ -62,6 +62,13 @@ class LocalCodeToolkit:
         self.tools: dict[str, LocalCodeTool] = {}
         self.plugin_errors: list[str] = []
         self.changes = ChangeLog(repo_root)
+        # MCP wiring was deferred out during the T0.9 purge, but close()
+        # and diagnostics() still reference these — initialize them so
+        # those methods don't AttributeError. close() runs on every
+        # session teardown (app.py), so the crash was guaranteed.
+        self.mcp_clients: dict[str, Any] = {}
+        self._mcp_loaded: bool = False
+        self.mcp_errors: list[str] = []
         # File state tracking (agent pattern: pre-read validation + staleness)
         self._read_state: dict[str, float] = {}  # path → timestamp when last read
         self._register_builtin_tools()
@@ -293,22 +300,9 @@ class LocalCodeToolkit:
             handler=lambda args: self._security_scan(str(args.get("path", ""))),
         ))
 
-        # -- Sub-agent delegation --
-        self._register(LocalCodeTool(
-            name="delegate",
-            description=(
-                "Delegate a subtask to an isolated worker agent. "
-                "Use for independent research or code tasks that don't need your full context."
-            ),
-            parameters={
-                "type": "object",
-                "properties": {
-                    "task": {"type": "string", "description": "Task description for the worker agent"},
-                },
-                "required": ["task"],
-            },
-            handler=lambda args: self._delegate(str(args["task"])),
-        ))
+        # Sub-agent delegation tool removed — the handler was a stub that
+        # only returned "delegation has been removed", so exposing it just
+        # spent context tokens on a tool the model could never use.
 
         # -- Codemod (regex replace across files) --
         self._register(LocalCodeTool(
@@ -849,10 +843,6 @@ class LocalCodeToolkit:
         if not findings:
             return f"No security issues found in {files_scanned} files."
         return f"Found {len(findings)} potential issues in {files_scanned} files:\n" + "\n".join(findings)
-
-    def _delegate(self, task: str) -> str:
-        """Delegate a task to a sub-agent (removed)."""
-        return "Sub-agent delegation has been removed."
 
     def _codemod(self, pattern: str, replacement: str, include: str = "") -> str:
         """Regex find-and-replace across all matching files."""

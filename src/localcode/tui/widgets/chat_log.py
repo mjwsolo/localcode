@@ -189,8 +189,25 @@ class ChatLog(RichLog):
         keeps prose intact, and the next non-streaming resize will reflow
         normally.
         """
-        if self._history and not getattr(self, "_stream_started", False):
-            self._rerender()
+        self.reflow_if_needed()
+
+    def reflow_if_needed(self) -> None:
+        """Re-render history from scratch, but ONLY when the width changed.
+
+        Reflow depends on WIDTH alone. Height-only resizes — which is
+        what the floating #active-step / #queue-line widgets produce
+        when they toggle display 2-3 times per tool call — used to
+        replay the entire history for zero visual change. On long
+        conversations that full replay (clear + re-render every entry)
+        was a visible stall at every tool start. Also called by the
+        screen's own on_resize; the width gate makes the duplicate
+        widget/screen resize notifications cost one rerender, not two.
+        """
+        if not self._history or getattr(self, "_stream_started", False):
+            return
+        if self._content_width() == getattr(self, "_render_width", None):
+            return
+        self._rerender()
 
     def on_mouse_down(self, event) -> None:
         """Start selection on mouse down."""
@@ -779,9 +796,10 @@ class ChatLog(RichLog):
     #    is dominated by Strip object construction, not flush rate, so
     #    3× the flush rate ≈ 1.2× the work — well worth it.
     # 2. Eager flush on word boundary (' ' or punctuation) so text
-    #    appears word-by-word to the eye, not chunk-by-chunk. At ~5 chars
-    #    per word + 33 ms cadence, the practical effective rate is one
-    #    visible word every 30-50 ms — feels real-time.
+    #    appears word-by-word to the eye, not chunk-by-chunk — rate-capped
+    #    by `_stream_coalesce_window()` (33 ms base, widening as the
+    #    response grows) because each flush re-renders the full
+    #    accumulated text; see comment in `stream_token`.
     # 3. Skip scroll_end when already at bottom (the common case during
     #    streaming) — saves ~1-3 ms per flush of layout work.
     _STREAM_COALESCE_SEC = 0.033
@@ -862,6 +880,7 @@ class ChatLog(RichLog):
         self._stream_start_idx = -1       # index where this stream's lines begin
         self._stream_lines_written = 0    # how many lines our block currently occupies
         self._stream_timer = None         # pending Textual Timer
+        self._stream_last_flush = 0.0     # monotonic ts of last flush (rate cap)
 
     def stream_token(self, token: str) -> None:
         """Accept a token. Accumulate; flush ≤10/s or on newline."""
@@ -894,28 +913,55 @@ class ChatLog(RichLog):
             # subsequent flushes doesn't delete the blank we just added.
             self._stream_start_idx = len(self.lines)
 
-        # Flush immediately on newline OR word boundary. Newlines bound
-        # the partial-line size; word boundaries make text appear
-        # word-by-word visually rather than chunked at the coalesce
-        # interval. At 27 tok/s and ~5 chars/word, this gives one
-        # visible word every ~30-50 ms — feels real-time without the
-        # constant per-character flush overhead.
+        # Flush eagerly on newline OR word boundary — but rate-capped.
+        # Every flush re-renders the FULL accumulated response (required
+        # so streaming output is pixel-identical to the final render —
+        # no end-of-stream snap), which means an UNCAPPED word-boundary
+        # flush costs O(response²) Markdown work over a long answer: at
+        # ~27 tok/s nearly every token ends a word, so the old eager
+        # path re-parsed the whole response ~27×/s, growing linearly in
+        # size — THE source of UI lag on long replies. The cap keeps the
+        # word-by-word feel (the window stays under the ~100 ms
+        # perception threshold) while bounding re-renders per second.
         last_char = self._stream_buf[-1] if self._stream_buf else ""
-        if "\n" in self._stream_buf or last_char in self._STREAM_WORD_BOUNDARIES:
+        boundary = "\n" in self._stream_buf or last_char in self._STREAM_WORD_BOUNDARIES
+        window = self._stream_coalesce_window()
+        elapsed = time.monotonic() - getattr(self, "_stream_last_flush", 0.0)
+        if boundary and elapsed >= window:
             self._cancel_stream_timer()
             self._flush_stream()
             return
 
-        # Otherwise schedule a coalesced flush. One timer only — subsequent
-        # tokens in the window just extend _stream_buf.
+        # Otherwise schedule a coalesced flush at the end of the current
+        # window. One timer only — subsequent tokens in the window just
+        # extend _stream_buf.
         if self._stream_timer is None:
             try:
                 self._stream_timer = self.set_timer(
-                    self._STREAM_COALESCE_SEC, self._flush_stream
+                    max(window - elapsed, 0.005), self._flush_stream
                 )
             except Exception:
                 # If we're somehow not mounted yet, fall back to eager flush.
                 self._flush_stream()
+
+    def _stream_coalesce_window(self) -> float:
+        """Current min interval between stream flushes, adaptive to size.
+
+        Each flush re-renders everything streamed so far, so a fixed
+        window makes total render work quadratic in response length.
+        Growing the window with the accumulated text keeps per-second
+        render cost roughly constant: ~30 fps while re-renders are cheap
+        (short answers), easing to ~4 fps when each re-render is
+        expensive (very long answers) — still well within "feels live".
+        """
+        n = len(getattr(self, "_stream_full", ""))
+        if n < 4_000:
+            return self._STREAM_COALESCE_SEC
+        if n < 16_000:
+            return 0.08
+        if n < 64_000:
+            return 0.15
+        return 0.25
 
     def _cancel_stream_timer(self) -> None:
         t = getattr(self, "_stream_timer", None)
@@ -952,6 +998,7 @@ class ChatLog(RichLog):
         self._stream_buf = ""
         if not buf:
             return
+        self._stream_last_flush = time.monotonic()
         # Keep `_stream_text` updated for any legacy reader; the new
         # path renders from `_stream_full` directly.
         self._stream_text += buf
@@ -1110,6 +1157,9 @@ class ChatLog(RichLog):
         output to the original turn — no drift after a resize.
         """
         self._rerendering = True
+        # Record the width this render used — `on_resize` compares against
+        # it to skip height-only resize events (no reflow needed).
+        self._render_width = self._content_width()
         saved_scroll = self.scroll_offset.y
         super().clear()
         self._thinking_line_map.clear()

@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 import os
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 import tomllib
+
+# Serializes config writes. The setup worker thread and the model
+# picker can both call save_config concurrently; without this two
+# interleaved write_text calls could leave a half-written TOML.
+_SAVE_LOCK = threading.Lock()
 
 
 DEFAULT_CONFIG = """[runtime]
@@ -111,6 +117,7 @@ class RuntimeConfig:
     kv_cache_type_k: str = "q8_0"          # K cache type: q8_0, q4_0, f16, turbo2, turbo3, turbo4
     kv_cache_type_v: str = "turbo4"        # V cache type: turbo4 recommended (3.8x compression, +0.23% PPL)
     llama_cpp_binary: str = ""             # custom llama-server path (e.g. TurboQuant fork)
+    diffusion_cli_binary: str = ""         # llama-diffusion-cli path (DiffusionGemma runner; built on demand)
     model_dir: str = ""                    # directory where GGUFs download to (blank → ~/.local/share/localcode/models)
     temperature: float = 1.0  # Unsloth's official Gemma 4 recommendation — prevents IQ3_S mode-collapse loops
     max_context_chars: int = 200000
@@ -266,7 +273,15 @@ def save_config(config: AppConfig) -> Path:
         f"log_responses = {'true' if config.logging.log_responses else 'false'}\n"
         f"max_days = {config.logging.max_days}\n"
     )
-    path.write_text(content)
+    # Atomic write: a reader (or a crash) must never observe a
+    # half-written config. Write to a temp file in the same directory,
+    # then os.replace (atomic rename on the same filesystem). The lock
+    # serializes concurrent savers so their temp files don't race on the
+    # final rename.
+    with _SAVE_LOCK:
+        tmp = path.with_name(f".{path.name}.tmp{os.getpid()}")
+        tmp.write_text(content)
+        os.replace(tmp, path)
     return path
 
 
