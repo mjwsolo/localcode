@@ -1120,11 +1120,20 @@ class LocalCodeRuntimeGateway:
                 proc.kill()
 
         text = self._clean_diffusion_output("".join(raw_parts), prompt)
-        if text:
-            # Emit in modest chunks so the chat log renders progressively
-            # rather than in one jump.
-            for i in range(0, len(text), 160):
-                yield {"type": "content", "content": text[i:i + 160]}
+        if not text.strip():
+            # DiffusionGemma is a research diffusion model; given LocalCode's
+            # full agent + tool-calling system prompt it frequently collapses
+            # to near-empty output. Surface a clear message instead of a
+            # silent blank turn, and steer the user to a model that works.
+            text = (
+                "⚠ DiffusionGemma is experimental and returned no usable "
+                "response — it doesn't handle the agent's tool-calling prompt. "
+                "For coding, switch to a Gemma 26B-A4B quant via /model."
+            )
+        # Emit in modest chunks so the chat log renders progressively
+        # rather than in one jump.
+        for i in range(0, len(text), 160):
+            yield {"type": "content", "content": text[i:i + 160]}
 
         if tools:
             parsed = parse_tool_calls(text)
