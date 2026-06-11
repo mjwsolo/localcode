@@ -50,6 +50,7 @@ class ModelFamily(str, Enum):
     QWEN = "qwen"
     LLAMA = "llama"
     DEEPSEEK = "deepseek"
+    COHERE = "cohere"
 
 
 @dataclass(frozen=True)
@@ -173,11 +174,42 @@ DEEPSEEK_ADAPTER = FamilyAdapter(
 )
 
 
+# Cohere's cohere2 / cohere2_moe (Command R7B, North-Mini-Code) family.
+# Reasoning is wrapped in `<|START_THINKING|>…<|END_THINKING|>` and tool
+# calls in a JSON array inside `<|START_ACTION|>…<|END_ACTION|>` (vLLM
+# "cohere_command4" / command-R style), NOT gemma/qwen/llama formats.
+# Patterns below are documented from Cohere's published chat template;
+# we have no North-Mini-Code GGUF running on this stack yet, so treat
+# the tool-call regex as best-effort and validate against real output
+# before relying on it. The thinking markers are exact literals from
+# the template and safe to strip.
+COHERE_ADAPTER = FamilyAdapter(
+    family=ModelFamily.COHERE,
+    thinking_open="<|START_THINKING|>",
+    thinking_close="<|END_THINKING|>",
+    strip_patterns=(
+        re.compile(r"<\|START_THINKING\|>"),
+        re.compile(r"<\|END_THINKING\|>"),
+    ),
+    # `<|START_ACTION|>[{"tool_name":…,"parameters":{…}}]<|END_ACTION|>`.
+    # Captures the JSON array payload; tool_parsing.py still parses the
+    # inner JSON. Assumed from the command-R template — unvalidated on
+    # this stack, hence kept as a single capturing group rather than the
+    # name/args split the Gemma regex uses.
+    tool_call_primary=re.compile(
+        r"<\|START_ACTION\|>(.*?)<\|END_ACTION\|>", re.DOTALL,
+    ),
+    tool_call_alt=None,
+    arg_string_delim=None,
+)
+
+
 _REGISTRY: dict[ModelFamily, FamilyAdapter] = {
     ModelFamily.GEMMA4: GEMMA4_ADAPTER,
     ModelFamily.QWEN: QWEN_ADAPTER,
     ModelFamily.LLAMA: LLAMA_ADAPTER,
     ModelFamily.DEEPSEEK: DEEPSEEK_ADAPTER,
+    ModelFamily.COHERE: COHERE_ADAPTER,
 }
 
 
@@ -219,6 +251,8 @@ def infer_family_from_profile(profile_id: str) -> ModelFamily:
         return ModelFamily.LLAMA
     if low.startswith("deepseek") or "deepseek" in low:
         return ModelFamily.DEEPSEEK
+    if "cohere" in low or "north" in low or "command" in low:
+        return ModelFamily.COHERE
     return ModelFamily.GEMMA4
 
 
