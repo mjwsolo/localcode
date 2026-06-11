@@ -7,13 +7,14 @@ name: Linux model smoke (vanilla llama.cpp, free CI)
 # fork — so it proves the agent loop + tools + a real model work on Linux,
 # NOT the Metal/TurboQuant perf path (that still needs Apple Silicon).
 #
-# Free Linux runners have 16 GB RAM, so the 7.4 GB 12B model fits on CPU.
-# CPU inference is slow, so this is manual + nightly, never gates pushes.
+# Free Linux runners have 16 GB RAM, so the 7.4 GB 12B model fits on CPU —
+# but CPU inference of a 12B is too slow to reliably finish an agent turn
+# within the runner budget, so the nightly schedule was REMOVED (it only ever
+# went red). Kept as MANUAL-ONLY: run it on demand when you want to exercise
+# the vanilla Linux path; it never gates pushes and won't auto-fail on a timer.
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 8 * * *"
 
 jobs:
   smoke:
