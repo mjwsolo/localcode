@@ -110,7 +110,7 @@ class ModelPickerScreen(Screen):
     #picker-box {
         background: ansi_default;
         width: 92%;
-        max-width: 56;
+        max-width: 80;
         height: auto;
         max-height: 90%;        /* cap to viewport so long quant lists don't run off-screen */
         overflow-y: auto;       /* scroll instead of clipping */
@@ -158,6 +158,19 @@ class ModelPickerScreen(Screen):
         # ── delete flow state (Level 1) ─────────────────────────────
         self._delete_state = self._DELETE_IDLE
         self._delete_target_idx: int | None = None
+
+        # Live-refresh timer for background-download progress (Level 2). Lazily
+        # started when a background download is kicked off; self-cancels once no
+        # downloads remain in flight.
+        self._progress_timer = None
+
+        # Host memory bandwidth (GB/s), detected once — drives the per-quant
+        # tok/s estimate so it reflects THIS machine's chip, not a fixed number.
+        try:
+            from ...performance import apple_silicon_bandwidth_gbps
+            self._bandwidth_gbps = apple_silicon_bandwidth_gbps()
+        except Exception:
+            self._bandwidth_gbps = 150.0
 
         # Start Level 1 focus on the RAM-recommended group so the first thing
         # a user sees highlighted is appropriate for their machine. We map the
@@ -300,6 +313,7 @@ class ModelPickerScreen(Screen):
     def _render_quants(self) -> str:
         from ...models_catalog import _system_ram_gb, model_dir
         from ...hf_quants import fit_badge
+        from ... import bootstrap
 
         g = self._open_group
         lines = [
@@ -331,21 +345,51 @@ class ModelPickerScreen(Screen):
             # ★ marks the quant we recommend for THIS machine (biggest that fits).
             star = "★ " if i == rec_idx else "  "
 
-            downloaded = (mdir / q.filename).is_file()
-            # Row: "▸ ★ ✓  UD-Q4_K_XL · 7.4 GB" with an optional downloaded tag.
+            # Row: "▸ ★ ✓  UD-Q4_K_XL · 7.4 GB" with an optional state tag.
+            # State tag is sourced from the background-download registry
+            # (download_status / is_download_complete) so an in-flight quant
+            # shows live "downloading 23%" / "queued" alongside "downloaded".
             label = f"[bold]{q.label}[/]"
             tail_bits = [f"{q.size_gb:.1f} GB"]
-            if downloaded:
-                tail_bits.append("downloaded")
+            # Estimated decode speed for THIS machine's chip. Memory-bandwidth
+            # bound, so it scales with the host's bandwidth; the ratio between
+            # quants of this model is reliable even if the absolute is rough.
+            from ...models_catalog import estimate_decode_tok_s
+            spd = estimate_decode_tok_s(q.size_gb, g.display_name, self._bandwidth_gbps)
+            if spd:
+                tail_bits.append(f"~{spd} tok/s")
+            state = self._quant_state(bootstrap, q, mdir)
+            if state:
+                tail_bits.append(state)
             tail = "[dim] · " + " · ".join(tail_bits) + "[/]"
             lines.append(f" [dim]{chevron}[/] {star}{badge}  {label}{tail}")
 
         lines.append("")
         lines.append(
-            f"[dim]★ best for {ram} GB · ✓ fits · ⚠ tight · ✗ too big   ·   "
-            "Esc/← back[/]"
+            f"[dim]★ best for {ram} GB · ✓ fits · ⚠ tight · ✗ too big · "
+            "~tok/s est. for your chip   ·   Esc/← back[/]"
         )
         return "\n".join(lines)
+
+    def _quant_state(self, bootstrap, q, mdir: Path) -> str:
+        """The per-quant state tag for a row: "downloaded", "downloading 23%",
+        "queued", or "" (none). Sourced from the background-download registry,
+        falling back to the on-disk check for files downloaded out-of-band."""
+        entry = bootstrap.download_status(q.filename)
+        if entry is not None:
+            status = entry["status"]
+            if status == "done":
+                return "downloaded"
+            if status == "downloading":
+                return f"↓ {entry['progress_pct']}%"
+            if status == "queued":
+                return "queued"
+            if status == "failed":
+                return "failed"
+        # No registry entry (or a terminal one cleared) — defer to disk truth.
+        if (mdir / q.filename).is_file():
+            return "downloaded"
+        return ""
 
     def _recommended_quant_idx(self, rows, ram: int) -> int | None:
         """Index of the quant to recommend for this machine: the BIGGEST quant
@@ -391,6 +435,27 @@ class ModelPickerScreen(Screen):
             except Exception:
                 pass
         self._scroll_focus_into_view()
+
+    def _ensure_progress_timer(self) -> None:
+        """Start the live-progress refresh interval if it isn't already running.
+        Mirrors the set_interval idiom used elsewhere for periodic refreshes."""
+        if self._progress_timer is not None:
+            return
+        self._progress_timer = self.set_interval(0.5, self._tick_progress)
+
+    def _tick_progress(self) -> None:
+        """Refresh in-flight quant rows; self-cancel once nothing's downloading."""
+        from ... import bootstrap
+        if not bootstrap.list_active_downloads():
+            if self._progress_timer is not None:
+                self._progress_timer.stop()
+                self._progress_timer = None
+            # One final repaint so a just-finished quant flips to "downloaded".
+            if self._level == self._LEVEL_QUANTS:
+                self._refresh()
+            return
+        if self._level == self._LEVEL_QUANTS:
+            self._refresh()
 
     def _flash_footer(self, markup: str) -> None:
         """Replace the footer with a status message. Restored by the next
@@ -457,6 +522,11 @@ class ModelPickerScreen(Screen):
         self._focused_idx = 0
         self._reset_delete_state()
         self._refresh()
+        # If downloads are already in flight (e.g. started from another quant or
+        # screen), keep the rows live while browsing this group.
+        from ... import bootstrap
+        if bootstrap.list_active_downloads():
+            self._ensure_progress_timer()
         # Fetch on a worker thread so the UI stays responsive (and the cache /
         # network call never blocks the event loop). Mirrors setup.py's
         # run_worker(..., thread=True) + call_from_thread idiom.
@@ -494,14 +564,55 @@ class ModelPickerScreen(Screen):
         self._refresh()
 
     def _pick_quant(self, idx: int) -> None:
-        """Enter on a quant → mint a ModelChoice and dismiss with it."""
+        """Enter on a quant → use it (if downloaded) or start a background
+        download (if not).
+
+        Downloaded → mint a ModelChoice via choice_for_quant and dismiss with
+        it (used immediately, existing path). Not downloaded → kick off a
+        background download and STAY in the picker, with one exception: if no
+        model is usable yet (first-run, nothing on disk), we still dismiss with
+        the choice so the caller blocks on the download — otherwise the app has
+        nothing to run."""
         from ...models_catalog import choice_for_quant
+        from ... import bootstrap
         rows = self._visible_quants()
         if not (0 <= idx < len(rows)):
             return
         q = rows[idx]
         choice = choice_for_quant(self._open_group, q.filename, q.size_gb)
-        self.dismiss(choice)
+
+        if bootstrap.is_download_complete(choice):
+            self.dismiss(choice)
+            return
+
+        # Not on disk. If there's no usable model yet, the caller must block on
+        # this download — dismiss with the choice (existing foreground path).
+        if not self._has_usable_model():
+            self.dismiss(choice)
+            return
+
+        # A model is already usable — download in the background and stay put so
+        # the user can keep working; the row reflects live progress.
+        bootstrap.start_background_download(choice)
+        self._ensure_progress_timer()
+        self._refresh()
+        self._flash_footer(
+            f"[dim]Downloading {q.label} in the background — pick it again when "
+            "it's ready.[/]"
+        )
+
+    def _has_usable_model(self) -> bool:
+        """True iff a fully-downloaded model is available to run right now."""
+        from ...models_catalog import current as current_choice
+        from ... import bootstrap
+        cfg = getattr(self.app, "config", None)
+        if cfg is None:
+            return False
+        try:
+            cur = current_choice(cfg)
+        except Exception:
+            return False
+        return cur is not None and bootstrap.is_download_complete(cur)
 
     def action_back(self) -> None:
         """Left / h — back out of Level 2 to Level 1 (no-op at Level 1)."""
