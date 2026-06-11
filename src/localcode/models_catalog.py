@@ -212,6 +212,29 @@ CHOICES: list[ModelChoice] = [
         mmproj_hf_filename="mmproj-F16.gguf",
     ),
     ModelChoice(
+        key="north-mini-code",
+        name="North-Mini-Code 1.0 (30B-A3B MoE)",
+        hf_repo="unsloth/North-Mini-Code-1.0-GGUF",
+        filename="North-Mini-Code-1.0-UD-IQ1_M.gguf",
+        size_gb=9.38,
+        active_params="3B active / 30B total (MoE, 128 experts, 8 active per token)",
+        architecture="cohere2_moe",
+        license="Apache 2.0",
+        humaneval_pass_at_1=None,
+        notes=(
+            "Cohere Labs' code-specialized sparse MoE — 30B total / ~3B active (128 experts, "
+            "top-8), interleaved sliding-window + global (NoPE) attention 3:1, 256K context. "
+            "DOES NOT fit a 16 GB Mac's ~8.8 GB budget: smallest published Unsloth quant is "
+            "UD-IQ1_M at 9.38 GB (~0.6 GB over), and IQ1-level quant degrades code quality "
+            "noticeably — do not auto-select for 16 GB Macs without warning the user. Wants a "
+            "24 GB+ Mac (UD-Q3_K_XL ~14.3 GB or UD-IQ4_XS ~15.2 GB). Architecture is "
+            "Cohere2MoeForCausalLM / model_type \"cohere2_moe\", a NEW MoE variant of cohere2 "
+            "(Command R7B) — verify your llama.cpp/TurboQuant fork is new enough to load it. "
+            "Tool calls use Cohere's command-R style parser, not gemma/qwen/llama. Text-only, "
+            "no vision/mmproj. Untested on this stack — no HumanEval number yet."
+        ),
+    ),
+    ModelChoice(
         key="qwen-q8",
         name="Qwen 3.6 35B-A3B (Q8)",
         hf_repo="unsloth/Qwen3.6-35B-A3B-GGUF",
@@ -327,3 +350,173 @@ def format_choice_long(c: ModelChoice, *, downloaded: bool, current_marker: bool
         f"  download path: {c.local_path}\n"
         f"  note:      {c.notes}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Curated MODEL-GROUP layer (ADDITIVE — built on top of the catalog above).
+#
+# CHOICES is a hand-picked shortlist: one or two quants per model, chosen to
+# fit common Macs. The browsing UI wants something richer — like HuggingFace's
+# GGUF page, it lists EVERY quant a repo ships for a given model VERSION, each
+# with its exact size and a fit badge for this Mac's unified memory.
+#
+# A ModelGroup describes one model VERSION (repo + family + arch + license +
+# optional vision sidecar). The browser fetches the repo's quant list at
+# runtime, then calls `choice_for_quant(group, filename, size_gb)` to mint a
+# ModelChoice for whichever quant the user picks. That ModelChoice flows
+# through the EXISTING download/runtime path unchanged — it carries the same
+# hf_repo / architecture / license / mmproj fields the rest of the code reads.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ModelGroup:
+    key: str               # short id for the group (e.g. "gemma-4-12b")
+    display_name: str      # SPECIFIC version, e.g. "Gemma 4 12B" — never bare "gemma"
+    maker: str             # Google / Alibaba / Cohere
+    hf_repo: str           # HuggingFace repo that ships the quants
+    family: str            # model family bucket (gemma4 / qwen / cohere)
+    architecture: str      # llama.cpp arch enum, copied onto each ModelChoice
+    license: str           # license tag, copied onto each ModelChoice
+    notes: str             # honest caveats, copied onto each minted ModelChoice
+    # Optional vision sidecar — mirrors ModelChoice's mmproj fields. None / 0
+    # for text-only models. `mmproj_filename` is the unique LOCAL name (so two
+    # families' mmprojs don't collide on disk); `mmproj_hf_filename` is what HF
+    # calls it in the repo (commonly just "mmproj-F16.gguf").
+    mmproj_filename: str | None = None
+    mmproj_size_gb: float = 0.0
+    mmproj_hf_filename: str | None = None
+
+    @property
+    def supports_vision(self) -> bool:
+        return self.mmproj_filename is not None
+
+
+MODEL_GROUPS: list[ModelGroup] = [
+    ModelGroup(
+        key="gemma-4-26b-a4b",
+        display_name="Gemma 4 26B-A4B",
+        maker="Google",
+        hf_repo="unsloth/gemma-4-26B-A4B-it-GGUF",
+        family="gemma4",
+        architecture="gemma4-iswa",
+        license="Gemma (Google) — research + commercial w/ attribution",
+        notes=(
+            "Google's sparse MoE — ~3.8B active (top-8 of 128 experts). Native "
+            "multimodal: pair any quant with the F16 mmproj for image input. "
+            "Tool calling via Gemma 4 native format."
+        ),
+        mmproj_filename="mmproj-gemma-4-26B-A4B-F16.gguf",
+        mmproj_size_gb=1.2,
+        mmproj_hf_filename="mmproj-F16.gguf",
+    ),
+    ModelGroup(
+        key="gemma-4-12b",
+        display_name="Gemma 4 12B",
+        maker="Google",
+        hf_repo="unsloth/gemma-4-12b-it-GGUF",
+        family="gemma4",
+        architecture="gemma4-iswa",
+        license="Apache 2.0",
+        notes=(
+            "Mid-sized dense Gemma 4 — sits between E4B and the 26B MoE. Native "
+            "multimodal (vision + audio per Google's Gemma 4 announcement); pair "
+            "any quant with the F16 mmproj for image input. Apache 2.0 licensed."
+        ),
+        mmproj_filename="mmproj-gemma-4-12b-F16.gguf",
+        mmproj_size_gb=0.86,
+        mmproj_hf_filename="mmproj-F16.gguf",
+    ),
+    ModelGroup(
+        key="qwen-3.6-35b-a3b",
+        display_name="Qwen 3.6 35B-A3B",
+        maker="Alibaba",
+        hf_repo="unsloth/Qwen3.6-35B-A3B-GGUF",
+        family="qwen",
+        architecture="qwen35moe",
+        license="Apache 2.0",
+        notes=(
+            "Alibaba's sparse MoE — ~3.0B active (top-8 + 1 shared of 256 experts). "
+            "Hybrid attn + Mamba-2 SSM, native 262K context. Native multimodal: "
+            "pair any quant with the F16 mmproj for image input. Requires the "
+            "multi-region mmap patch (llama-cpp-turboquant commit 3d66675b8)."
+        ),
+        mmproj_filename="mmproj-Qwen3.6-35B-A3B-F16.gguf",
+        mmproj_size_gb=0.9,
+        mmproj_hf_filename="mmproj-F16.gguf",
+    ),
+    ModelGroup(
+        key="north-mini-code-1.0",
+        display_name="North-Mini-Code 1.0 30B-A3B",
+        maker="Cohere",
+        hf_repo="unsloth/North-Mini-Code-1.0-GGUF",
+        family="cohere",
+        architecture="cohere2_moe",
+        license="Apache 2.0",
+        notes=(
+            "Cohere Labs' code-specialized sparse MoE — 30B total / ~3B active "
+            "(128 experts, top-8), interleaved sliding-window + global (NoPE) "
+            "attention 3:1, 256K context. Architecture is Cohere2MoeForCausalLM "
+            "(\"cohere2_moe\") — verify your llama.cpp/TurboQuant fork is new "
+            "enough to load it. Tool calls use Cohere's command-R style parser. "
+            "Text-only — no vision/mmproj."
+        ),
+        # Text-only: no vision sidecar.
+    ),
+]
+
+
+def _quant_label(filename: str) -> str:
+    """Derive a readable quant label from a GGUF filename.
+
+    Strips the repo/model prefix and the `.gguf` suffix, leaving the quant
+    descriptor, e.g.:
+        "gemma-4-12b-it-UD-Q4_K_XL.gguf" -> "UD-Q4_K_XL"
+        "Qwen3.6-35B-A3B-UD-IQ2_M.gguf"  -> "UD-IQ2_M"
+        "gemma-4-12b-it-BF16.gguf"       -> "BF16"
+    Falls back to the bare stem if no quant token is recognizable.
+    """
+    import re
+    stem = filename[:-5] if filename.lower().endswith(".gguf") else filename
+    # Match a trailing quant descriptor: optional UD-/IQ/Q tier with K/_ parts,
+    # or a plain precision tag like BF16 / F16 / F32.
+    m = re.search(
+        r"(?:^|[-_.])((?:UD-)?(?:I?Q\d+[A-Z0-9_]*|BF16|F16|F32))$",
+        stem,
+    )
+    if m:
+        return m.group(1)
+    # Fallback: take the last hyphen-delimited chunk that looks quant-ish.
+    tail = stem.rsplit("-", 1)[-1]
+    return tail or stem
+
+
+def choice_for_quant(group: ModelGroup, filename: str, size_gb: float) -> ModelChoice:
+    """Mint a ModelChoice for a specific quant of `group` so the EXISTING
+    download/runtime path (download_model / get_model_path / launch) just
+    works. Copies repo / arch / license / mmproj from the group; the quant's
+    filename + size come from the (live-fetched) repo listing.
+    """
+    label = _quant_label(filename)
+    return ModelChoice(
+        key=f"{group.key}:{label}",
+        name=f"{group.display_name} ({label})",
+        hf_repo=group.hf_repo,
+        filename=filename,
+        size_gb=size_gb,
+        active_params="",  # not known per-quant from the listing; group-level
+        architecture=group.architecture,
+        license=group.license,
+        humaneval_pass_at_1=None,  # browsed quants are unmeasured on this stack
+        notes=group.notes,
+        mmproj_filename=group.mmproj_filename,
+        mmproj_size_gb=group.mmproj_size_gb,
+        mmproj_hf_filename=group.mmproj_hf_filename,
+    )
+
+
+def by_group(key: str) -> ModelGroup | None:
+    for g in MODEL_GROUPS:
+        if g.key == key:
+            return g
+    return None
