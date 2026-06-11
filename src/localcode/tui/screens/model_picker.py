@@ -112,6 +112,8 @@ class ModelPickerScreen(Screen):
         width: 92%;
         max-width: 56;
         height: auto;
+        max-height: 90%;        /* cap to viewport so long quant lists don't run off-screen */
+        overflow-y: auto;       /* scroll instead of clipping */
         padding: 1 2;
         border: round #5f87ff;
     }
@@ -321,26 +323,52 @@ class ModelPickerScreen(Screen):
 
         ram = _system_ram_gb()
         mdir = model_dir()
+        rec_idx = self._recommended_quant_idx(rows, ram)
         for i, q in enumerate(rows):
             badge = _BADGE.get(fit_badge(q.size_gb, ram), "?")
             focused = (i == self._focused_idx)
             chevron = "▸" if focused else " "
+            # ★ marks the quant we recommend for THIS machine (biggest that fits).
+            star = "★ " if i == rec_idx else "  "
 
             downloaded = (mdir / q.filename).is_file()
-            # Row: "▸ ✓  UD-Q4_K_XL · 7.4 GB" with an optional ✓ downloaded tag.
+            # Row: "▸ ★ ✓  UD-Q4_K_XL · 7.4 GB" with an optional downloaded tag.
             label = f"[bold]{q.label}[/]"
             tail_bits = [f"{q.size_gb:.1f} GB"]
             if downloaded:
                 tail_bits.append("downloaded")
             tail = "[dim] · " + " · ".join(tail_bits) + "[/]"
-            lines.append(f" [dim]{chevron}[/] {badge}  {label}{tail}")
+            lines.append(f" [dim]{chevron}[/] {star}{badge}  {label}{tail}")
 
         lines.append("")
         lines.append(
-            f"[dim]✓ fits · ⚠ tight · ✗ too big for ~{ram} GB RAM   ·   "
+            f"[dim]★ best for {ram} GB · ✓ fits · ⚠ tight · ✗ too big   ·   "
             "Esc/← back[/]"
         )
         return "\n".join(lines)
+
+    def _recommended_quant_idx(self, rows, ram: int) -> int | None:
+        """Index of the quant to recommend for this machine: the BIGGEST quant
+        that still fits ~55% of RAM (best quality that runs comfortably). If
+        none fit, recommend the smallest (rows are sorted ascending)."""
+        if not rows:
+            return None
+        fitting = [i for i, q in enumerate(rows) if q.size_gb <= 0.55 * ram]
+        return max(fitting, key=lambda i: rows[i].size_gb) if fitting else 0
+
+    def _focused_line(self) -> int:
+        """Line offset of the focused row in the rendered body (2 header lines;
+        quants are 1 line each, groups 2 lines each) — used to scroll it into view."""
+        if self._level == self._LEVEL_QUANTS:
+            return 2 + self._focused_idx
+        return 2 + self._focused_idx * 2
+
+    def _scroll_focus_into_view(self) -> None:
+        try:
+            box = self.query_one("#picker-box")
+            box.scroll_to(y=max(0, self._focused_line() - 2), animate=False)
+        except Exception:
+            pass
 
     def _visible_quants(self) -> list:
         """Quants shown to the user — mmproj sidecars are filtered out."""
@@ -362,6 +390,7 @@ class ModelPickerScreen(Screen):
                 self.query_one("#picker-footer", Static).update(self._footer_markup())
             except Exception:
                 pass
+        self._scroll_focus_into_view()
 
     def _flash_footer(self, markup: str) -> None:
         """Replace the footer with a status message. Restored by the next
@@ -455,10 +484,11 @@ class ModelPickerScreen(Screen):
         ):
             return
         self._quants = quants
-        # Clamp focus to the visible (mmproj-filtered) row count.
+        # Land focus on the recommended quant for this machine (biggest that fits).
         visible = self._visible_quants()
         if visible:
-            self._focused_idx = min(self._focused_idx, len(visible) - 1)
+            from ...models_catalog import _system_ram_gb
+            self._focused_idx = self._recommended_quant_idx(visible, _system_ram_gb()) or 0
         else:
             self._focused_idx = 0
         self._refresh()
