@@ -7,6 +7,11 @@ if TYPE_CHECKING:
     from .goal import GoalState
     from .prompt_context import PromptBuildResult
     from ..app import LocalCodeApp
+__all__ = [
+    "strip_ephemeral_nudges",
+    "status_for_exit",
+    "finalize_turn",
+]
 
 
 def strip_ephemeral_nudges(messages: list[dict[str, Any]], indices: list[int]) -> None:

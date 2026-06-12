@@ -33,6 +33,11 @@ if TYPE_CHECKING:
 
 _PATH_FIELD_RE = re.compile(r'"path"\s*:\s*"([^"\\]{1,300})"')
 _CONTENT_FIELD_RE = re.compile(r'"content"\s*:\s*"')
+__all__ = [
+    "StreamRoundResult",
+    "stream_model_round",
+    "finish_thinking_display",
+]
 
 
 def _decode_streaming_content(args: str, start_pos: int) -> tuple[str, int]:

@@ -103,10 +103,15 @@ class TestLlamaServerCommand:
         assert "--cache-type-k" not in cmd
         assert "--cache-type-v" not in cmd
 
-    def test_custom_binary_used(self) -> None:
-        gw = self._make_gw(llama_cpp_binary="/opt/turbo/llama-server")
+    def test_custom_binary_used(self, tmp_path) -> None:
+        # A configured binary is honored only when it exists on disk; the
+        # command builder self-heals (falls back to discovery) for a stale
+        # path, so the test must point at a real file to assert "used".
+        custom = tmp_path / "llama-server"
+        custom.write_text("#!/bin/sh\n")
+        gw = self._make_gw(llama_cpp_binary=str(custom))
         cmd = gw.llama_server_command("/path/model.gguf")
-        assert cmd[0] == "/opt/turbo/llama-server"
+        assert cmd[0] == str(custom)
 
     def test_error_message_serializes_backend_error_dict(self) -> None:
         msg = _error_message({"message": "server unavailable", "code": 503})

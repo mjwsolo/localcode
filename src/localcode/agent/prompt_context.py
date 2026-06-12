@@ -6,6 +6,12 @@ from typing import Any
 
 from .prompts import REASONING_RULES, SYSTEM_PROMPT, _load_project_instructions
 from .sections import Section, SectionContext, compose_system_prompt, default_sections
+__all__ = [
+    "PromptBuildResult",
+    "build_agent_system_prompt",
+    "build_task_goal_block",
+    "build_dynamic_skills_block",
+]
 
 
 @dataclass(slots=True)
