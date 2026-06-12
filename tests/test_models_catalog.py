@@ -20,19 +20,22 @@ def test_diffusiongemma_catalog_entry_uses_release_gguf() -> None:
     assert "diffusion" in choice.notes.lower()
 
 
-def test_north_mini_code_removed_unsupported_arch() -> None:
-    # Removed 2026-06-12: the TurboQuant llama-server can't load cohere2moe
-    # ("unknown model architecture: 'cohere2moe'"), so North-Mini-Code can
-    # never start — it must not be offered in the catalog/picker.
-    assert by_key("north-mini-code") is None
-    assert all("north-mini" not in c.key for c in CHOICES)
+def test_north_mini_code_catalog_entry() -> None:
+    # North-Mini-Code is served via a dedicated llama-server built from
+    # llama.cpp PR #24260 (cohere2moe), so it's a real catalog model again.
+    choice = by_key("north-mini-code")
+    assert choice is not None
+    assert choice.hf_repo == "unsloth/North-Mini-Code-1.0-GGUF"
+    assert choice.filename == "North-Mini-Code-1.0-UD-Q4_K_M.gguf"
+    assert choice.architecture == "cohere2_moe"
 
 
 def test_new_models_are_available_in_model_picker_order() -> None:
     keys = [choice.key for choice in CHOICES]
 
     assert "diffusiongemma" in keys
-    assert keys.index("gemma") < keys.index("diffusiongemma") < keys.index("gemma-q8")
+    assert "north-mini-code" in keys
+    assert keys.index("gemma") < keys.index("diffusiongemma") < keys.index("north-mini-code")
 
 
 def test_diffusiongemma_profile_and_aliases() -> None:
