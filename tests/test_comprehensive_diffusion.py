@@ -122,10 +122,13 @@ def test_chat_once_uses_diffusion_backend(tmp_path):
 def test_diffusion_emits_plain_json_tool_call(tmp_path):
     # DiffusionGemma emits plain-JSON tool calls (wrapped in its channel/thought
     # reasoning); the backend must parse them and strip the scaffolding.
+    # Quoted heredoc → literal output, identical under bash and dash (CI
+    # runs /bin/sh = dash, where escaped printf quotes behaved differently).
     body = (
-        "printf '<|channel>thought\\nreason<channel|>"
-        '{\\"tool\\":\\"list_files\\",\\"args\\":{\\"path\\":\\".\\"}}'
-        "<tool_call|>'\n"
+        "cat <<'STUBEOF'\n"
+        '<|channel>thought\n'
+        'reason<channel|>{"tool":"list_files","args":{"path":"."}}<tool_call|>\n'
+        "STUBEOF\n"
     )
     gw = _gateway(tmp_path, body)
     tools = [{"function": {"name": "list_files",
