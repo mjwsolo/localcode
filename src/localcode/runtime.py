@@ -973,19 +973,27 @@ class LocalCodeRuntimeGateway:
         return None
 
     @staticmethod
-    def _format_diffusion_prompt(messages: list[dict[str, Any]]) -> str:
+    def _format_diffusion_prompt(
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+    ) -> str:
         """Gemma chat template, applied by hand.
 
         llama-diffusion-cli's `-p` is a raw prompt — unlike llama-server
         there is no /v1/chat/completions layer to apply the GGUF's
         embedded Jinja template. Gemma's convention: system text is
         folded into the first user turn; roles are `user` / `model`.
+
+        Tools are described in PLAIN JSON (not the Gemma special-token
+        format), which is the one form DiffusionGemma reliably emits.
         """
         system_bits = [
             str(m.get("content") or "").strip()
             for m in messages
             if m.get("role") == "system" and str(m.get("content") or "").strip()
         ]
+        if tools:
+            system_bits.append(LocalCodeRuntimeGateway._diffusion_tool_block(tools))
         pending_system = "\n\n".join(system_bits)
         parts: list[str] = []
         for m in messages:
@@ -1004,6 +1012,100 @@ class LocalCodeRuntimeGateway:
             parts.append(f"<start_of_turn>user\n{pending_system}<end_of_turn>\n")
         parts.append("<start_of_turn>model\n")
         return "".join(parts)
+
+    @staticmethod
+    def _diffusion_tool_block(tools: list[dict[str, Any]]) -> str:
+        """Plain-JSON tool instructions for DiffusionGemma.
+
+        Verified that DiffusionGemma emits `{"tool":"NAME","args":{...}}`
+        cleanly with this format, whereas the Gemma-4 special-token format
+        (<|tool_call>…<tool_call|>) makes it collapse to empty output.
+        """
+        lines = []
+        for t in tools:
+            fn = t.get("function", t) if isinstance(t, dict) else {}
+            name = fn.get("name", "")
+            if not name:
+                continue
+            desc = (fn.get("description", "") or "").strip().split("\n")[0][:120]
+            params = fn.get("parameters", {}).get("properties", {}) or {}
+            pnames = ", ".join(params.keys())
+            lines.append(f'- {name}({pnames}): {desc}')
+        return (
+            "You can call tools. To call one, reply with ONLY a single JSON "
+            'object on its own line: {"tool":"NAME","args":{...}} — no other '
+            "text. After the tool result comes back, continue. Available tools:\n"
+            + "\n".join(lines)
+        )
+
+    @staticmethod
+    def _parse_diffusion_tool_calls(text: str) -> tuple[list, str]:
+        """Extract plain-JSON tool calls from DiffusionGemma output.
+
+        Returns (tool_calls_in_ollama_format, remaining_visible_text).
+        Finds `{"tool":"NAME","args":{...}}` objects (balanced braces),
+        converts them to the {function:{name,arguments}} shape the agent
+        loop expects, and removes them from the visible text.
+        """
+        import json as _json
+        calls = []
+        spans: list[tuple[int, int]] = []
+        i = 0
+        while True:
+            j = text.find('{"tool"', i)
+            if j < 0:
+                j = text.find('{ "tool"', i)
+            if j < 0:
+                break
+            # Balanced-brace scan from j.
+            depth = 0
+            k = j
+            in_str = False
+            esc = False
+            while k < len(text):
+                c = text[k]
+                if in_str:
+                    if esc:
+                        esc = False
+                    elif c == "\\":
+                        esc = True
+                    elif c == '"':
+                        in_str = False
+                elif c == '"':
+                    in_str = True
+                elif c == "{":
+                    depth += 1
+                elif c == "}":
+                    depth -= 1
+                    if depth == 0:
+                        k += 1
+                        break
+                k += 1
+            blob = text[j:k]
+            try:
+                obj = _json.loads(blob)
+                name = obj.get("tool")
+                args = obj.get("args", {})
+                if name:
+                    calls.append({
+                        "id": f"diff_{len(calls)}",
+                        "type": "function",
+                        "function": {"name": name, "arguments": args},
+                    })
+                    spans.append((j, k))
+            except Exception:
+                pass
+            i = k if k > j else j + 1
+        # Remove parsed tool-call JSON from the visible text.
+        if spans:
+            out = []
+            last = 0
+            for s, e in spans:
+                out.append(text[last:s])
+                last = e
+            out.append(text[last:])
+            text = "".join(out)
+        return calls, text.strip()
 
     def _diffusion_cli_binary(self) -> str | None:
         p = (getattr(self.config, "diffusion_cli_binary", "") or "").strip()
@@ -1042,10 +1144,12 @@ class LocalCodeRuntimeGateway:
             binary = result
 
         model_path = str(_Path(self.config.model or "").expanduser())
-        effective_messages = messages
-        if tools:
-            effective_messages = self._inject_tools_into_messages(messages, tools)
-        prompt = self._format_diffusion_prompt(effective_messages)
+        # DiffusionGemma chokes on the Gemma-4 special-token tool format
+        # (<|tool_call>…<tool_call|>) — it collapses to near-empty output.
+        # It DOES reliably emit a plain JSON tool call when asked in plain
+        # text, so for the diffusion path we inject tools as plain JSON and
+        # parse that (see _diffusion_tool_block / _parse_diffusion_tool_call).
+        prompt = self._format_diffusion_prompt(messages, tools=tools)
 
         cmd = [
             binary,
@@ -1120,25 +1224,27 @@ class LocalCodeRuntimeGateway:
                 proc.kill()
 
         text = self._clean_diffusion_output("".join(raw_parts), prompt)
-        if not text.strip():
-            # DiffusionGemma is a research diffusion model; given LocalCode's
-            # full agent + tool-calling system prompt it frequently collapses
-            # to near-empty output. Surface a clear message instead of a
-            # silent blank turn, and steer the user to a model that works.
+
+        # Tool calls first: DiffusionGemma emits plain JSON ({"tool":...,
+        # "args":...}) when tools were offered in plain-text form. Parse and
+        # surface those as a tool_calls event; strip them from the visible
+        # content so the user doesn't see raw JSON.
+        tool_calls = []
+        if tools:
+            tool_calls, text = self._parse_diffusion_tool_calls(text)
+
+        if not text.strip() and not tool_calls:
             text = (
-                "⚠ DiffusionGemma is experimental and returned no usable "
-                "response — it doesn't handle the agent's tool-calling prompt. "
-                "For coding, switch to a Gemma 26B-A4B quant via /model."
+                "⚠ DiffusionGemma returned no usable response this turn. "
+                "It's an experimental diffusion model — for heavier coding, "
+                "a Gemma 26B-A4B quant (via /model) is more reliable."
             )
-        # Emit in modest chunks so the chat log renders progressively
-        # rather than in one jump.
+        # Emit in modest chunks so the chat log renders progressively.
         for i in range(0, len(text), 160):
             yield {"type": "content", "content": text[i:i + 160]}
 
-        if tools:
-            parsed = parse_tool_calls(text)
-            if parsed.has_tools:
-                yield {"type": "tool_calls", "tool_calls": parsed.to_ollama_format()}
+        if tool_calls:
+            yield {"type": "tool_calls", "tool_calls": tool_calls}
 
         # Terminal event — the agent/streaming consumer needs this to record
         # token counts and finish the round. The HTTP path emits it from the
@@ -1174,6 +1280,14 @@ class LocalCodeRuntimeGateway:
             r"(?m)^\s*(total time:|throughput:|time per step:|diffusion step:|diffusion_).*$",
             "", text,
         )
+        # Strip DiffusionGemma's channel/thought reasoning block — it wraps
+        # its deliberation in <|channel>thought … <channel|> before the real
+        # answer / tool call. Remove the whole block, then any stray channel
+        # or tool-call delimiter tokens (the tool-call JSON between them is
+        # parsed separately by _parse_diffusion_tool_calls).
+        text = _re.sub(r"<\|channel>.*?<channel\|>", "", text, flags=_re.DOTALL)
+        for tok in ("<|channel>", "<channel|>", "<tool_call|>", "<|tool_call>"):
+            text = text.replace(tok, "")
         text = text.replace("<start_of_turn>model", "").replace("<start_of_turn>", "")
         return text.strip()
 
