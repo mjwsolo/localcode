@@ -72,13 +72,17 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+# Exclude the real-inference tier from the default run; opt in with
+# `pytest -m real_models` (a command-line -m overrides this). CI runs the
+# CI-safe glob `tests/test_comprehensive_*.py`, which doesn't include it.
+addopts = "-q -m 'not real_models'"
 # Put repo root + src on sys.path so `from tests.e2e...` and `from
 # localcode...` resolve under a bare `pytest` invocation (CI), not just
 # `python -m pytest` (which adds CWD itself).
 pythonpath = [".", "src"]
 markers = [
   "slow: heavyweight tests (real venv install, network) — opt-in, skipped by default",
+  "real_models: load a downloaded GGUF and run a real inference turn — opt-in (`-m real_models`), auto-skipped when the model file is absent (so CI skips).",
 ]
 
 [tool.ruff]

@@ -208,6 +208,25 @@ def test_diffusion_non_dict_args_coerced():
     assert calls and calls[0]["function"]["arguments"] == {}
 
 
+def test_diffusion_canvas_clamps_nonpositive_num_predict(tmp_path):
+    # The agent loop passes num_predict = MAX_OUTPUT_TOKENS = -1. The CLI's -n
+    # is a fixed CANVAS SIZE; `-n -1` yields an empty canvas ("no usable
+    # response"). Non-positive num_predict MUST become the default 512 canvas.
+    # (Regression for the live BF16/Q4 "returned no usable response" bug.)
+    # The stub writes its argv to a file (the prompt contains <end_of_turn>,
+    # which the output cleaner would otherwise truncate).
+    argsfile = tmp_path / "argv.txt"
+    gw = _gateway(tmp_path, f'printf "%s\\n" "$@" > "{argsfile}"\nprintf "ok"\n')
+
+    def canvas_arg() -> str:
+        toks = argsfile.read_text().splitlines()
+        return toks[toks.index("-n") + 1]
+
+    for np_in, want in [(-1, "512"), (0, "512"), (None, "512"), (128, "128"), (9999, "512")]:
+        list(gw.stream_chat_events([{"role": "user", "content": "hi"}], num_predict=np_in))
+        assert canvas_arg() == want, f"num_predict={np_in} → expected -n {want}"
+
+
 def test_diffusion_bf16_strips_unmarked_thought_reasoning():
     # BF16 emits `thought\n<reasoning>.<answer>` with no channel markers and
     # no space at the reasoning→answer join (reasoning's own sentences use
