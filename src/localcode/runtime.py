@@ -1264,32 +1264,41 @@ class LocalCodeRuntimeGateway:
     def _clean_diffusion_output(raw: str, prompt: str) -> str:
         """Turn raw llama-diffusion-cli stdout into a clean assistant reply.
 
-        Strips: the echoed prompt, the runner's own stats lines (which print
-        to stdout), Gemma turn markers, and any canvas padding the model
-        emits after `<end_of_turn>`.
+        DiffusionGemma's output is non-deterministic in SHAPE — it may wrap
+        deliberation in `<|channel>thought … <channel|>` then give the answer,
+        or spend its whole canvas on reasoning, or emit `<end_of_turn>` early.
+        Each cleaning step is therefore applied ONLY IF it leaves real text,
+        so we never blank out a turn that actually contained content.
         """
         import re as _re
+
+        def _strip_tokens(s: str) -> str:
+            for tok in ("<|channel>", "<channel|>", "<tool_call|>", "<|tool_call>",
+                        "<start_of_turn>model", "<start_of_turn>", "<end_of_turn>"):
+                s = s.replace(tok, "")
+            return s
+
         text = raw
         if text.startswith(prompt):
             text = text[len(prompt):]
-        # The model marks end-of-reply with <end_of_turn>; everything after is
-        # canvas padding / repeats.
-        text = text.split("<end_of_turn>", 1)[0]
-        # Drop the runner's stdout stats/progress lines.
+        # Always drop the runner's stdout stats/progress lines.
         text = _re.sub(
             r"(?m)^\s*(total time:|throughput:|time per step:|diffusion step:|diffusion_).*$",
             "", text,
         )
-        # Strip DiffusionGemma's channel/thought reasoning block — it wraps
-        # its deliberation in <|channel>thought … <channel|> before the real
-        # answer / tool call. Remove the whole block, then any stray channel
-        # or tool-call delimiter tokens (the tool-call JSON between them is
-        # parsed separately by _parse_diffusion_tool_calls).
-        text = _re.sub(r"<\|channel>.*?<channel\|>", "", text, flags=_re.DOTALL)
-        for tok in ("<|channel>", "<channel|>", "<tool_call|>", "<|tool_call>"):
-            text = text.replace(tok, "")
-        text = text.replace("<start_of_turn>model", "").replace("<start_of_turn>", "")
-        return text.strip()
+        # Prefer the reply BEFORE the first <end_of_turn> (drops canvas
+        # padding) — but only if that leaves content; the model sometimes
+        # emits <end_of_turn> first, which would otherwise empty the turn.
+        head = text.split("<end_of_turn>", 1)[0]
+        if head.strip():
+            text = head
+        # Remove the channel/thought reasoning block (keeping the answer after
+        # <channel|>) — but only if the answer is non-empty; if the model
+        # spent its whole canvas reasoning, keep that rather than blank out.
+        deblocked = _re.sub(r"<\|channel>.*?<channel\|>", "", text, flags=_re.DOTALL)
+        if deblocked.strip():
+            text = deblocked
+        return _strip_tokens(text).strip()
 
     def stream_chat_events(
         self,

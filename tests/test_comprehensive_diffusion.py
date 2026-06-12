@@ -137,6 +137,23 @@ def test_diffusion_emits_plain_json_tool_call(tmp_path):
     assert "<|channel>" not in content and '"tool"' not in content
 
 
+def test_diffusion_clean_never_blanks_out():
+    # The cleaner must never empty a turn that contained real text, whatever
+    # shape DiffusionGemma's non-deterministic output takes (this was the
+    # BF16 "returned no usable response" bug).
+    G = LocalCodeRuntimeGateway
+    variants = [
+        "<|channel>thought\nreason<channel|>Hello!",          # answer after channel
+        "<|channel>thought\nuser said hi, I should greet",     # reasoning only, no answer
+        "<end_of_turn>Hi there!",                              # early end_of_turn
+        "Hello!<end_of_turn>Hello!Hello!",                     # answer then canvas padding
+    ]
+    for raw in variants:
+        out = G._clean_diffusion_output(raw, "")
+        assert out.strip(), f"cleaner blanked out: {raw!r}"
+        assert "<|channel>" not in out and "<end_of_turn>" not in out
+
+
 def test_non_diffusion_model_does_not_dispatch(tmp_path):
     cfg = RuntimeConfig()
     cfg.provider = "llama_cpp"
