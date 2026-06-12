@@ -120,8 +120,9 @@ CHOICES: list[ModelChoice] = [
             "Mid-sized dense Gemma 4 — sits between E4B and the 26B MoE. "
             "UD-Q4_K_XL fits 16 GB unified memory (~7.4 GB weights + KV + mmproj). "
             "Native multimodal (vision + audio per Google's Gemma 4 announcement). "
-            "Apache 2.0 licensed. Untested on this stack — no HumanEval number yet. "
-            "TODO: confirm exact GGUF filename, arch enum, and mmproj filename/size against the repo before release."
+            "Apache 2.0 licensed. No HumanEval number yet, but the GGUF/arch/mmproj "
+            "filenames are verified against the repo (2026-06-12) and the model passes "
+            "a real chat + tool-call turn on this stack."
         ),
         mmproj_filename="mmproj-gemma-4-12b-F16.gguf",
         mmproj_size_gb=0.86,  # 862 MB; repo offers BF16 + F16, both 862 MB
@@ -142,8 +143,9 @@ CHOICES: list[ModelChoice] = [
             "baseline every quant's '% of BF16' is measured against). ~24 GB weights → needs "
             "≥48 GB unified memory (sweet spot 64-128 GB Apple Silicon). 16/24 GB Macs CANNOT run "
             "this — use the [gemma-12b] Q4 entry instead. Same dense 12B as the Q4 entry, just "
-            "unquantized. Untested on this stack. TODO: confirm exact BF16 filename (may be split into "
-            "shards) + mmproj filename/size against the repo before release."
+            "unquantized. Output quality untested on this stack, but the BF16 GGUF is verified to "
+            "exist as a SINGLE file (not sharded) and the mmproj filename is confirmed against the "
+            "repo (2026-06-12), so the download resolves."
         ),
         mmproj_filename="mmproj-gemma-4-12b-F16.gguf",
         mmproj_size_gb=0.86,  # 862 MB; repo offers BF16 + F16, both 862 MB

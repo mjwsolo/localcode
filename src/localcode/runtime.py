@@ -615,16 +615,10 @@ class LocalCodeRuntimeGateway:
         if self.config.quant_preset == "fastest":
             turbo = self.config.kv_cache_type_v.startswith("turbo")
             if self.config.laptop_26b_runtime_mode in ("context", "turbo", "turbo-think") and turbo:
-                # Scale context based on system RAM
-                import subprocess
-                try:
-                    mem_bytes = int(subprocess.run(
-                        ["sysctl", "-n", "hw.memsize"],
-                        capture_output=True, text=True, timeout=2
-                    ).stdout.strip())
-                    ram_gb = mem_bytes // (1024 ** 3)
-                except Exception:
-                    ram_gb = 16
+                # Scale context based on system RAM (via the shared helper so
+                # tests can mock it — an inline sysctl call here read the real
+                # machine's RAM regardless and produced 128K on big Macs).
+                ram_gb = self._system_ram_gb()
                 # Tier ladder MUST be monotonic — more RAM can only hold
                 # more KV, never less. Pre-2026-04 the 16 GB branch was
                 # 32K and the ladder (32K / 48K / 64K / 128K) made sense.
@@ -1047,7 +1041,8 @@ class LocalCodeRuntimeGateway:
             "You are LocalCode, a coding agent on the user's machine with "
             "filesystem access through the tools below. Be brief and act "
             "directly — when a task needs to read, write, or run something, "
-            "call a tool."
+            "call a tool. Reply with ONLY your final answer — do not write a "
+            "'thought' preamble, reasoning, or narration."
         ]
         if cwd_line:
             system_bits.append(cwd_line)
@@ -1087,13 +1082,15 @@ class LocalCodeRuntimeGateway:
             if not name:
                 continue
             desc = (fn.get("description", "") or "").strip().split("\n")[0][:120]
-            params = fn.get("parameters", {}).get("properties", {}) or {}
+            params = (fn.get("parameters") or {}).get("properties", {}) or {}
             pnames = ", ".join(params.keys())
             lines.append(f'- {name}({pnames}): {desc}')
         return (
             "You can call tools. To call one, reply with ONLY a single JSON "
-            'object on its own line: {"tool":"NAME","args":{...}} — no other '
-            "text. After the tool result comes back, continue. Available tools:\n"
+            'object on its own line, e.g. {"tool":"list_files","args":'
+            '{"path":"."}} — every string value MUST be in double quotes '
+            "(write \"path\":\".\", never path:.), and emit no other text. "
+            "After the tool result comes back, continue. Available tools:\n"
             + "\n".join(lines)
         )
 
@@ -1107,15 +1104,19 @@ class LocalCodeRuntimeGateway:
         loop expects, and removes them from the visible text.
         """
         import json as _json
+        import re as _re
         calls = []
         spans: list[tuple[int, int]] = []
+        # Locate every tool object opener in order. A single regex matches all
+        # whitespace variants (`{"tool"`, `{ "tool"`, `{\n"tool"`) so an early
+        # spaced-form call is never skipped in favor of a later compact one.
+        opener = _re.compile(r'\{\s*"tool"')
         i = 0
         while True:
-            j = text.find('{"tool"', i)
-            if j < 0:
-                j = text.find('{ "tool"', i)
-            if j < 0:
+            m = opener.search(text, i)
+            if not m:
                 break
+            j = m.start()
             # Balanced-brace scan from j.
             depth = 0
             k = j
@@ -1141,10 +1142,27 @@ class LocalCodeRuntimeGateway:
                         break
                 k += 1
             blob = text[j:k]
+            obj = None
             try:
                 obj = _json.loads(blob)
+            except Exception:
+                # DiffusionGemma is non-deterministic and frequently emits
+                # *almost*-valid JSON — a bare `.` value ({"path":.}), an
+                # unquoted bareword, or a trailing comma. Repair the common
+                # cases and retry rather than dropping a real tool call.
+                try:
+                    obj = _json.loads(
+                        LocalCodeRuntimeGateway._repair_diffusion_json(blob)
+                    )
+                except Exception:
+                    obj = None
+            if isinstance(obj, dict):
                 name = obj.get("tool")
                 args = obj.get("args", {})
+                if not isinstance(args, dict):
+                    # The agent loop expects an arguments dict; a model that
+                    # emits "args":"foo" or a list would otherwise crash it.
+                    args = {}
                 if name:
                     calls.append({
                         "id": f"diff_{len(calls)}",
@@ -1152,8 +1170,6 @@ class LocalCodeRuntimeGateway:
                         "function": {"name": name, "arguments": args},
                     })
                     spans.append((j, k))
-            except Exception:
-                pass
             i = k if k > j else j + 1
         # Remove parsed tool-call JSON from the visible text.
         if spans:
@@ -1165,6 +1181,89 @@ class LocalCodeRuntimeGateway:
             out.append(text[last:])
             text = "".join(out)
         return calls, text.strip()
+
+    @staticmethod
+    def _repair_diffusion_json(blob: str) -> str:
+        """Best-effort repair of almost-valid JSON from DiffusionGemma.
+
+        The diffusion model often emits a recognizable tool-call object with
+        one malformed value — most commonly a bare ``.`` ({"path":.}), an
+        unquoted bareword ({"path":src/main.py}), or a trailing comma. We
+        quote bare values (leaving real numbers and the literals
+        true/false/null alone) and drop trailing commas, then let json.loads
+        validate the result. If the repair doesn't yield valid JSON the
+        caller's try/except discards it — this never fabricates a tool call.
+
+        This is a single-pass char scanner, NOT a regex, because it MUST be
+        string-aware: a blind regex would fire on a ``:`` or ``,}`` that
+        lives inside a legitimate string value (e.g. a shell command
+        ``"grep foo: bar"``) and corrupt it. Here, repairs only ever apply to
+        value positions OUTSIDE of strings.
+        """
+        import re as _re
+
+        out: list[str] = []
+        n = len(blob)
+        i = 0
+        in_str = False
+        esc = False
+        while i < n:
+            c = blob[i]
+            if in_str:
+                out.append(c)
+                if esc:
+                    esc = False
+                elif c == "\\":
+                    esc = True
+                elif c == '"':
+                    in_str = False
+                i += 1
+                continue
+            if c == '"':
+                in_str = True
+                out.append(c)
+                i += 1
+                continue
+            if c == ",":
+                # Drop a trailing comma (comma followed only by ws then } or ]).
+                j = i + 1
+                while j < n and blob[j] in " \t\r\n":
+                    j += 1
+                if j < n and blob[j] in "}]":
+                    i += 1  # skip the comma
+                    continue
+                out.append(c)
+                i += 1
+                continue
+            if c == ":":
+                out.append(c)
+                i += 1
+                j = i
+                while j < n and blob[j] in " \t\r\n":
+                    j += 1
+                out.append(blob[i:j])
+                i = j
+                if i < n:
+                    nxt = blob[i]
+                    # Leave already-valid values (string/object/array/number)
+                    # untouched; only quote a bare value.
+                    if nxt not in '"{[' and not (nxt.isdigit() or nxt == "-"):
+                        k = i
+                        while k < n and blob[k] not in ",}]":
+                            k += 1
+                        token = blob[i:k].strip()
+                        if token in ("true", "false", "null") or _re.fullmatch(
+                            r"-?\d+(\.\d+)?([eE][+-]?\d+)?", token
+                        ):
+                            out.append(blob[i:k])
+                        else:
+                            esc_tok = token.replace("\\", "\\\\").replace('"', '\\"')
+                            out.append('"' + esc_tok + '"')
+                        i = k
+                continue
+            out.append(c)
+            i += 1
+        return "".join(out)
 
     def _diffusion_cli_binary(self) -> str | None:
         p = (getattr(self.config, "diffusion_cli_binary", "") or "").strip()
@@ -1357,6 +1456,15 @@ class LocalCodeRuntimeGateway:
         deblocked = _re.sub(r"<\|channel>.*?<channel\|>", "", text, flags=_re.DOTALL)
         if deblocked.strip():
             text = deblocked
+        # BF16 DiffusionGemma emits reasoning WITHOUT channel markers — a bare
+        # `thought` line followed by the deliberation, then the answer. There
+        # is no closing marker, so the answer boundary is unknowable; the most
+        # we can safely do is drop the leading `thought` marker token itself
+        # (the prompt now also tells the model to skip the preamble). Only
+        # strip if it leaves real text.
+        unthought = _re.sub(r"(?is)^\s*thought\b[ \t]*\n?", "", text)
+        if unthought.strip():
+            text = unthought
         return _strip_tokens(text).strip()
 
     def stream_chat_events(
@@ -1704,11 +1812,20 @@ class LocalCodeRuntimeGateway:
                                     break
                         if tool_args_oversize:
                             break
-                        # Check for explicit reasoning_content first
+                        # Check for explicit reasoning_content first.
+                        # Reasoning models (e.g. North-Mini-Code) reason
+                        # UNCONDITIONALLY — the server returns it in
+                        # reasoning_content even when we asked for no thinking.
+                        # Honor `/thinking off` by displaying it only when
+                        # think is on. We must NOT `continue` here: a single
+                        # delta can carry BOTH reasoning_content and the first
+                        # fragment of visible content, and skipping would drop
+                        # that answer text. Falling through processes the
+                        # co-arriving content below (and is a no-op when the
+                        # reasoning delta has no content).
                         thinking = message.get("thinking")
-                        if thinking:
+                        if thinking and think:
                             yield {"type": "thinking", "content": thinking}
-                            continue
                         content = message.get("content", "")
                         if not content:
                             continue
