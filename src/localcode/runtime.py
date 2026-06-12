@@ -1313,6 +1313,16 @@ class LocalCodeRuntimeGateway:
         # parse that (see _diffusion_tool_block / _parse_diffusion_tool_call).
         prompt = self._format_diffusion_prompt(messages, tools=tools)
 
+        # The agent loop passes num_predict = MAX_OUTPUT_TOKENS = -1 ("no
+        # server-side cap, let it run"). For the HTTP server that means
+        # unlimited, but llama-diffusion-cli's -n is a fixed CANVAS SIZE —
+        # passing `-n -1` produces a degenerate/empty canvas ("returned no
+        # usable response"). So treat any non-positive num_predict as "use
+        # the default canvas", and cap at 512 (the canvas we validated).
+        # NOTE: `num_predict or 512` does NOT work here — -1 is truthy.
+        _n = int(num_predict) if (num_predict and int(num_predict) > 0) else 512
+        _canvas = min(_n, 512)
+
         cmd = [
             binary,
             "-m", model_path,
@@ -1324,7 +1334,7 @@ class LocalCodeRuntimeGateway:
                                 # produced empty output. -no-cnv treats -p as the
                                 # already-formatted raw prompt and runs one-shot.
             "-ngl", "99",
-            "-n", str(min(int(num_predict or 512), 512)),
+            "-n", str(_canvas),
         ]
         deadline = _time.monotonic() + max(60, int(self.config.request_timeout_seconds or 600))
         proc = subprocess.Popen(
@@ -1385,7 +1395,36 @@ class LocalCodeRuntimeGateway:
             if proc.poll() is None:
                 proc.kill()
 
-        text = self._clean_diffusion_output("".join(raw_parts), prompt)
+        _raw_joined = "".join(raw_parts)
+        text = self._clean_diffusion_output(_raw_joined, prompt)
+
+        # Diagnostic dump of the REAL live turn (prompt the model actually saw,
+        # raw stdout, cleaned text, tool names offered). This is the only way
+        # to see why a live turn differs from an isolated reconstruction.
+        # Opt-in via LOCALCODE_DIFFUSION_DEBUG=1; overwrites each turn.
+        import os as _os
+        if _os.environ.get("LOCALCODE_DIFFUSION_DEBUG"):
+            try:
+                _dbg = _os.path.join(
+                    _os.path.expanduser("~/.local/share/localcode"),
+                    "diffusion_last.log",
+                )
+                _tool_names = [
+                    (t.get("function", t) or {}).get("name", "?")
+                    for t in (tools or [])
+                ]
+                with open(_dbg, "w", errors="replace") as _f:
+                    _f.write(
+                        f"=== PROMPT ({len(prompt)} chars, {len(_tool_names)} tools) ===\n"
+                        f"tools: {_tool_names}\n"
+                        f"num_predict={num_predict}\n"
+                        f"{prompt}\n"
+                        f"=== RAW STDOUT ({len(_raw_joined)} chars) ===\n"
+                        f"{_raw_joined!r}\n"
+                        f"=== CLEANED ===\n{text!r}\n"
+                    )
+            except Exception:
+                pass
 
         # Tool calls first: DiffusionGemma emits plain JSON ({"tool":...,
         # "args":...}) when tools were offered in plain-text form. Parse and
