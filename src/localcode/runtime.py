@@ -265,6 +265,38 @@ class LocalCodeRuntimeGateway:
         if mode == "context":
             threads = max(threads, 10)  # context mode benefits from all cores
 
+        # ── cohere2moe (North-Mini-Code) ──────────────────────────────
+        # The TurboQuant fork can't load cohere2moe; LocalCode builds a
+        # dedicated stock llama-server from llama.cpp PR #24260. It's a
+        # stock binary, so it only accepts STOCK flags — none of the
+        # TurboQuant extras (turbo4 KV, --spec-type, -fit, --ctx-checkpoints).
+        try:
+            from .models_catalog import by_filename as _bf
+            _choice = _bf(_P(model_path).name)
+            _arch = str(getattr(_choice, "architecture", "")) if _choice else ""
+        except Exception:
+            _arch = ""
+        if "cohere" in _arch:
+            from .bootstrap import cohere_server_path
+            cbin = (self.config.cohere_server_binary or "").strip()
+            if not (cbin and _P(cbin).is_file()):
+                found = cohere_server_path()
+                cbin = str(found) if found else ""
+            if cbin:
+                return [
+                    cbin,
+                    "--model", model_path,
+                    "--port", str(port),
+                    "--ctx-size", str(self._target_num_ctx(model_path=model_path)),
+                    "--threads", str(threads),
+                    "--flash-attn", "on",
+                    "--mmap", "-ngl", "999",
+                    "--jinja",
+                    "-b", "512", "-ub", "512",
+                ]
+            # No cohere binary yet — fall through; setup builds it on select,
+            # and _restart_server surfaces a clear error if it's truly missing.
+
         # ── Vanilla / stock llama.cpp compatibility (Linux CI, no Metal) ──
         # The bundled server is a TurboQuant fork whose flags (turbo4 KV,
         # -fit, --ctx-checkpoints, --spec-type) stock llama.cpp rejects.
@@ -871,6 +903,13 @@ class LocalCodeRuntimeGateway:
         `[E3102] Lost connection to the model server` after model
         swaps. (See RESUME.md port-isolation TODO.)
         """
+        # Diffusion models have NO persistent server — each turn spawns the
+        # one-shot llama-diffusion-cli. Trying to start a llama-server for
+        # them just times out (E1002). Nothing to restart → report ready so
+        # the /model hot-swap and recovery paths don't choke on them.
+        if self._diffusion_choice() is not None:
+            return True
+
         from .bootstrap import get_model_path
         from .server_manager import ServerManager
         from pathlib import Path
@@ -986,12 +1025,32 @@ class LocalCodeRuntimeGateway:
 
         Tools are described in PLAIN JSON (not the Gemma special-token
         format), which is the one form DiffusionGemma reliably emits.
+
+        CRITICAL: LocalCode's full agent system prompt (~10K chars with
+        reasoning rules, notebook rules, skills, project instructions)
+        OVERFLOWS DiffusionGemma's fixed canvas and makes it emit
+        degenerate/empty output. Block-diffusion can't use most of that
+        instruction text anyway. So for the diffusion path we DISCARD the
+        verbose system prompt and substitute a concise one — keeping only
+        the role, the working directory, and the (plain-JSON) tool block.
         """
+        # Pull the working directory out of whatever big system prompt we
+        # were handed, so path-relative tool calls still resolve.
+        cwd_line = ""
+        for m in messages:
+            if m.get("role") == "system":
+                for line in str(m.get("content") or "").splitlines():
+                    if line.strip().lower().startswith("working directory:"):
+                        cwd_line = line.strip()
+                        break
         system_bits = [
-            str(m.get("content") or "").strip()
-            for m in messages
-            if m.get("role") == "system" and str(m.get("content") or "").strip()
+            "You are LocalCode, a coding agent on the user's machine with "
+            "filesystem access through the tools below. Be brief and act "
+            "directly — when a task needs to read, write, or run something, "
+            "call a tool."
         ]
+        if cwd_line:
+            system_bits.append(cwd_line)
         if tools:
             system_bits.append(LocalCodeRuntimeGateway._diffusion_tool_block(tools))
         pending_system = "\n\n".join(system_bits)

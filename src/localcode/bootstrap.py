@@ -1137,6 +1137,105 @@ def ensure_diffusion_cli(
         return False, f"diffusion runner build failed: {e}"
 
 
+# ── cohere2moe server (North-Mini-Code) ─────────────────────────────
+#
+# The TurboQuant llama-server can't load North-Mini-Code's cohere2moe
+# architecture. Upstream llama.cpp PR #24260 adds it, so — exactly like
+# the diffusion runner — we build a stock llama-server from that PR ONCE
+# and cache it. cohere2moe is an ordinary autoregressive model, so it's
+# served over the normal HTTP path (no special runner); it just needs a
+# binary with the arch compiled in, launched with stock (non-TurboQuant)
+# flags (see runtime.llama_server_command).
+_COHERE_PR_REF = "refs/pull/24260/head"  # adds the cohere2moe architecture
+_COHERE_BIN_NAME = "llama-server-cohere"
+
+
+def cohere_server_path(config=None) -> Path | None:
+    """Locate an existing cohere2moe-capable llama-server binary, or None."""
+    if config is not None:
+        p = (getattr(config.runtime, "cohere_server_binary", "") or "").strip()
+        if p and Path(p).is_file():
+            return Path(p)
+    cached = Path.home() / ".local" / "share" / "localcode" / _COHERE_BIN_NAME
+    if cached.is_file():
+        return cached
+    return None
+
+
+def ensure_cohere_server(
+    on_progress: Callable[[str], None] | None = None,
+) -> tuple[bool, str]:
+    """Build (once) and cache a llama-server with cohere2moe support.
+
+    Returns (ok, binary_path_or_error). Idempotent — short-circuits if a
+    cached binary exists. First build is several minutes of cmake.
+    """
+    existing = cohere_server_path()
+    if existing is not None:
+        return True, str(existing)
+
+    def _say(msg: str) -> None:
+        if on_progress:
+            on_progress(msg)
+
+    if not shutil.which("git"):
+        return False, "git is required to build the cohere server (xcode-select --install)."
+    if not _ensure_cmake():
+        return False, "cmake is required to build the cohere server (brew install cmake)."
+
+    data_dir = Path.home() / ".local" / "share" / "localcode"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    src = data_dir / "llama.cpp-cohere"
+
+    def _run(cmd: list[str], cwd: Path | None, timeout: int) -> tuple[bool, str]:
+        r = subprocess.run(cmd, cwd=str(cwd) if cwd else None,
+                           capture_output=True, text=True, timeout=timeout, check=False)
+        if r.returncode != 0:
+            tail = (r.stderr or r.stdout or "").strip().splitlines()[-8:]
+            return False, "\n".join(tail)
+        return True, ""
+
+    try:
+        if not (src / "CMakeLists.txt").is_file():
+            _say("Fetching llama.cpp (cohere2moe branch, one-time)...")
+            shutil.rmtree(src, ignore_errors=True)
+            ok, err = _run(["git", "clone", "--depth", "1", _DIFFUSION_LLAMA_REPO, str(src)],
+                           cwd=None, timeout=600)
+            if not ok:
+                return False, f"git clone failed:\n{err}"
+        _say("Checking out cohere2moe support (PR #24260)...")
+        ok, err = _run(["git", "fetch", "--depth", "1", "origin", _COHERE_PR_REF],
+                       cwd=src, timeout=600)
+        if not ok:
+            return False, f"git fetch of {_COHERE_PR_REF} failed:\n{err}"
+        ok, err = _run(["git", "checkout", "--force", "FETCH_HEAD"], cwd=src, timeout=120)
+        if not ok:
+            return False, f"git checkout failed:\n{err}"
+
+        _say("Building llama-server with cohere2moe (one-time, ~5-12 min)...")
+        ok, err = _run(["cmake", "-B", "build", "-DCMAKE_BUILD_TYPE=Release",
+                        "-DLLAMA_CURL=OFF"], cwd=src, timeout=600)
+        if not ok:
+            return False, f"cmake configure failed:\n{err}"
+        ok, err = _run(["cmake", "--build", "build", "-j", "--config", "Release",
+                        "--target", "llama-server"], cwd=src, timeout=3600)
+        if not ok:
+            return False, f"cmake build failed:\n{err}"
+
+        built = src / "build" / "bin" / "llama-server"
+        if not built.is_file():
+            return False, f"build finished but {built} is missing."
+        dest = data_dir / _COHERE_BIN_NAME
+        shutil.copyfile(built, dest)
+        dest.chmod(0o755)
+        _say("Cohere server ready.")
+        return True, str(dest)
+    except subprocess.TimeoutExpired as e:
+        return False, f"build step timed out: {' '.join(map(str, e.cmd))}"
+    except Exception as e:
+        return False, f"cohere server build failed: {e}"
+
+
 def _ensure_ollama() -> bool:
     """Install Ollama if not present. Returns True if Ollama is available."""
     if is_ollama_installed():
