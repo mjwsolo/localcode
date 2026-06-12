@@ -18,6 +18,17 @@ PARTIAL_HANDOFF_RE = re.compile(
 )
 BLOCKING_QUESTION_RE = re.compile(r"^(?:[^?]{0,320}\?)$", re.DOTALL)
 PORT_RE = re.compile(r"(?:--port\s+|-p\s+|localhost:|127\.0\.0\.1:)(\d{2,5})")
+__all__ = [
+    "is_app_build_request",
+    "looks_like_partial_handoff",
+    "is_focused_blocking_question",
+    "extract_port",
+    "has_runtime_verification_signal",
+    "app_source_line_stats",
+    "has_launch_signal",
+    "ground_run_or_launch_text",
+    "format_run_or_launch_summary",
+]
 
 
 def is_app_build_request(user_text: str) -> bool:
