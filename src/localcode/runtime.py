@@ -1251,7 +1251,11 @@ class LocalCodeRuntimeGateway:
                         k = i
                         while k < n and blob[k] not in ",}]":
                             k += 1
-                        token = blob[i:k].strip()
+                        # A bare (unquoted) value shouldn't contain quotes; a
+                        # stray one means the model dropped a delimiter (it
+                        # emitted `."` meaning `"."`). Strip surrounding quotes
+                        # before re-quoting so {"path":."} → {"path":"."}.
+                        token = blob[i:k].strip().strip('"')
                         if token in ("true", "false", "null") or _re.fullmatch(
                             r"-?\d+(\.\d+)?([eE][+-]?\d+)?", token
                         ):
@@ -1457,14 +1461,24 @@ class LocalCodeRuntimeGateway:
         if deblocked.strip():
             text = deblocked
         # BF16 DiffusionGemma emits reasoning WITHOUT channel markers — a bare
-        # `thought` line followed by the deliberation, then the answer. There
-        # is no closing marker, so the answer boundary is unknowable; the most
-        # we can safely do is drop the leading `thought` marker token itself
-        # (the prompt now also tells the model to skip the preamble). Only
-        # strip if it leaves real text.
-        unthought = _re.sub(r"(?is)^\s*thought\b[ \t]*\n?", "", text)
-        if unthought.strip():
-            text = unthought
+        # `thought` line, the deliberation, then the answer, with no closing
+        # marker. Observed shape: the reasoning's own sentences are separated
+        # by ". " (period + SPACE), but the join from the last reasoning
+        # sentence to the answer has NO space ("...wait for a task.Hello!").
+        # So: strip the `thought` marker, then split on a sentence-end
+        # immediately followed by a capital (no space) and keep the final
+        # segment as the answer. Each step only applies if it leaves real
+        # text, so a reasoning-only turn is never blanked.
+        m = _re.match(r"(?is)^\s*thought\b[ \t]*\n?(.*)$", text)
+        if m and m.group(1).strip():
+            body = m.group(1)
+            joins = list(_re.finditer(r"[.!?](?=[A-Z])", body))
+            if joins:
+                answer = body[joins[-1].end():].strip()
+                if answer:
+                    body = answer
+            if body.strip():
+                text = body
         return _strip_tokens(text).strip()
 
     def stream_chat_events(
