@@ -391,14 +391,36 @@ class ModelPickerScreen(Screen):
             return "downloaded"
         return ""
 
+    # The recommended quant must decode at least this fraction of the FASTEST
+    # fitting quant's speed. A relative bar (not an absolute tok/s) because the
+    # speed estimate is rough and mis-scales between dense and MoE — but its
+    # ORDERING is reliable. This excludes the slow full-precision tier
+    # (BF16/Q8) that "biggest that fits" used to recommend on big-RAM Macs,
+    # while still picking the highest-quality quant that stays responsive.
+    _MIN_SPEED_FRACTION = 0.5
+
     def _recommended_quant_idx(self, rows, ram: int) -> int | None:
-        """Index of the quant to recommend for this machine: the BIGGEST quant
-        that still fits ~55% of RAM (best quality that runs comfortably). If
-        none fit, recommend the smallest (rows are sorted ascending)."""
+        """Index of the quant to recommend: the highest-quality (largest) quant
+        that fits ~55% of RAM AND decodes at >= half the fastest fitting
+        quant's estimated speed. Falls back to smallest if nothing fits."""
         if not rows:
             return None
         fitting = [i for i, q in enumerate(rows) if q.size_gb <= 0.55 * ram]
-        return max(fitting, key=lambda i: rows[i].size_gb) if fitting else 0
+        if not fitting:
+            return 0  # rows sorted ascending → smallest
+        from ...models_catalog import estimate_decode_tok_s
+        name = self._open_group.display_name if self._open_group else ""
+        speeds = {
+            i: (estimate_decode_tok_s(rows[i].size_gb, name, self._bandwidth_gbps) or 0)
+            for i in fitting
+        }
+        fastest = max(speeds.values()) or 0
+        if fastest <= 0:
+            return max(fitting, key=lambda i: rows[i].size_gb)
+        bar = fastest * self._MIN_SPEED_FRACTION
+        responsive = [i for i in fitting if speeds[i] >= bar]
+        # Largest (highest quality) quant that stays responsive.
+        return max(responsive or fitting, key=lambda i: rows[i].size_gb)
 
     def _focused_line(self) -> int:
         """Line offset of the focused row in the rendered body (2 header lines;
