@@ -59,7 +59,7 @@ def test_picker_level1_renders_without_crashing():
             assert "Choose a model" in body
             # specific VERSIONS are listed, not just "gemma"/"qwen"
             assert "Gemma 4 12B" in body
-            assert "North-Mini-Code" in body
+            assert "Qwen 3.6 35B-A3B" in body
     asyncio.run(scenario())
 
 

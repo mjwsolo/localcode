@@ -181,22 +181,11 @@ CHOICES: list[ModelChoice] = [
             "this stack has measured load/runtime behavior. No LocalCode HumanEval number yet."
         ),
     ),
-    ModelChoice(
-        key="north-mini-code",
-        name="North Mini Code 30B-A3B (Q4)",
-        hf_repo="unsloth/North-Mini-Code-1.0-GGUF",
-        filename="North-Mini-Code-1.0-UD-Q4_K_M.gguf",
-        size_gb=17.9,
-        active_params="3B active (30B total MoE)",
-        architecture="cohere2_moe",
-        license="Apache 2.0",
-        humaneval_pass_at_1=None,
-        notes=(
-            "Cohere North Mini Code 1.0 — agentic coding model; 30B total parameters with ~3B "
-            "active. Cohere reports 33.4 on the Artificial Analysis Coding Index. Apache 2.0. "
-            "UD-Q4_K_M is ~17.9 GiB, so recommend 32 GB+ unified memory. Untested on this stack."
-        ),
-    ),
+    # North-Mini-Code REMOVED 2026-06-12: its cohere2moe architecture is not
+    # compiled into the TurboQuant llama-server ("unknown model architecture:
+    # 'cohere2moe'"), so the server can never start for it — selecting it gave
+    # a guaranteed E1002 timeout + dead session. Re-add only once the fork's
+    # llama.cpp gains cohere2moe support.
     ModelChoice(
         key="gemma-q8",
         name="Gemma 4 26B-A4B (Q8)",
@@ -464,24 +453,9 @@ MODEL_GROUPS: list[ModelGroup] = [
         mmproj_size_gb=0.9,
         mmproj_hf_filename="mmproj-F16.gguf",
     ),
-    ModelGroup(
-        key="north-mini-code-1.0",
-        display_name="North-Mini-Code 1.0 30B-A3B",
-        maker="Cohere",
-        hf_repo="unsloth/North-Mini-Code-1.0-GGUF",
-        family="cohere",
-        architecture="cohere2_moe",
-        license="Apache 2.0",
-        notes=(
-            "Cohere Labs' code-specialized sparse MoE — 30B total / ~3B active "
-            "(128 experts, top-8), interleaved sliding-window + global (NoPE) "
-            "attention 3:1, 256K context. Architecture is Cohere2MoeForCausalLM "
-            "(\"cohere2_moe\") — verify your llama.cpp/TurboQuant fork is new "
-            "enough to load it. Tool calls use Cohere's command-R style parser. "
-            "Text-only — no vision/mmproj."
-        ),
-        # Text-only: no vision sidecar.
-    ),
+    # North-Mini-Code group REMOVED 2026-06-12 — cohere2moe arch is not
+    # supported by the TurboQuant llama-server (the model fails to load), so
+    # it can't be served. See the matching note in CHOICES above.
     ModelGroup(
         key="diffusiongemma-26b-a4b",
         display_name="DiffusionGemma 26B-A4B",
