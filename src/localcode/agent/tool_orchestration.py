@@ -10,6 +10,9 @@ import json
 from typing import Any
 
 from ..tools import is_concurrency_safe
+__all__ = [
+    "prefetch_parallel_tool_calls",
+]
 
 
 def prefetch_parallel_tool_calls(

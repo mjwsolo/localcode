@@ -144,6 +144,70 @@ def test_diffusion_emits_plain_json_tool_call(tmp_path):
     assert "<|channel>" not in content and '"tool"' not in content
 
 
+def test_diffusion_repairs_malformed_tool_json():
+    # DiffusionGemma is non-deterministic and often emits almost-valid JSON:
+    # a bare `.` value, an unquoted path, or a trailing comma. The parser must
+    # repair these and still surface the tool call (the real "ls" failure was
+    # {"path":.} — invalid JSON — silently dropping the call). Valid JSON with
+    # strings/numbers/booleans must pass through untouched.
+    G = LocalCodeRuntimeGateway
+    cases = {
+        '{"tool":"list_files","args":{"path":.}}': {"path": "."},
+        '{"tool":"read_file","args":{"path":src/main.py}}': {"path": "src/main.py"},
+        '{"tool":"list_files","args":{"path":".",}}': {"path": "."},
+        '{"tool":"bash","args":{"cmd":"ls -la","n":5}}': {"cmd": "ls -la", "n": 5},
+        '{"tool":"x","args":{"enabled":true,"count":-3}}': {"enabled": True, "count": -3},
+    }
+    for raw, expected_args in cases.items():
+        calls, _ = G._parse_diffusion_tool_calls(raw)
+        assert calls, f"dropped tool call for {raw!r}"
+        assert calls[0]["function"]["arguments"] == expected_args, raw
+
+
+def test_diffusion_json_repair_is_string_aware():
+    # The repair must NOT corrupt string values that legitimately contain a
+    # `:` or `,}` (e.g. shell commands) — a blind regex did, dropping the
+    # call. It must also drop trailing commas and quote bare values, but only
+    # OUTSIDE of strings.
+    G = LocalCodeRuntimeGateway
+    calls, _ = G._parse_diffusion_tool_calls(
+        'Sure. {"tool":"run","args":{"cmd":"grep -n foo: bar","path":.}}'
+    )
+    assert calls and calls[0]["function"]["arguments"] == {
+        "cmd": "grep -n foo: bar", "path": "."
+    }
+    calls, _ = G._parse_diffusion_tool_calls(
+        '{"tool":"x","args":{"k":"trailing comma here ,}","path":.}}'
+    )
+    assert calls and calls[0]["function"]["arguments"]["k"] == "trailing comma here ,}"
+
+
+def test_diffusion_finds_all_brace_forms_in_order():
+    # An earlier spaced-form `{ "tool"` call must not be skipped in favor of a
+    # later compact `{"tool"` one.
+    G = LocalCodeRuntimeGateway
+    calls, _ = G._parse_diffusion_tool_calls(
+        '{ "tool":"a","args":{}} and {"tool":"b","args":{}}'
+    )
+    assert [c["function"]["name"] for c in calls] == ["a", "b"]
+
+
+def test_diffusion_tool_block_handles_none_parameters():
+    # An MCP tool with inputSchema: null surfaces as parameters=None; must not
+    # crash prompt formatting.
+    G = LocalCodeRuntimeGateway
+    block = G._diffusion_tool_block([{"function": {"name": "f", "parameters": None}}])
+    assert "f(" in block
+
+
+def test_diffusion_non_dict_args_coerced():
+    # A model emitting "args":"foo" (or a list) must not produce a tool call
+    # whose arguments crash the agent loop — coerce to {}.
+    G = LocalCodeRuntimeGateway
+    calls, _ = G._parse_diffusion_tool_calls('{"tool":"x","args":"oops"}')
+    assert calls and calls[0]["function"]["arguments"] == {}
+
+
 def test_diffusion_clean_never_blanks_out():
     # The cleaner must never empty a turn that contained real text, whatever
     # shape DiffusionGemma's non-deterministic output takes (this was the
