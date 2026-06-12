@@ -53,29 +53,33 @@ def _gateway(tmp_path: Path, script_body: str) -> LocalCodeRuntimeGateway:
 
 def test_prompt_format_basic():
     msgs = [
-        {"role": "system", "content": "Be terse."},
+        {"role": "system", "content": "Be terse.\nWorking directory: /tmp/proj"},
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": "hello"},
         {"role": "user", "content": "again"},
     ]
     p = LocalCodeRuntimeGateway._format_diffusion_prompt(msgs)
-    # System folds into the FIRST user turn (Gemma convention).
-    assert "<start_of_turn>user\nBe terse.\n\nhi<end_of_turn>" in p
-    # Assistant renders as the `model` role.
+    # The verbose system prompt is REPLACED with a concise one (it overflows
+    # DiffusionGemma's canvas), but the working directory is carried over.
+    assert "concise" not in p  # sanity: literal placeholder not leaked
+    assert "Working directory: /tmp/proj" in p
+    assert "LocalCode" in p  # concise role line
+    # User / assistant turns are preserved with Gemma roles.
     assert "<start_of_turn>model\nhello<end_of_turn>" in p
     assert "<start_of_turn>user\nagain<end_of_turn>" in p
     # Generation slot comes last.
     assert p.endswith("<start_of_turn>model\n")
-    # No raw system role leaks through.
-    assert "system" not in p
 
 
-def test_prompt_format_system_only():
+def test_prompt_format_drops_verbose_system():
+    # A huge system prompt must not be folded in verbatim — only the concise
+    # substitute is used, so the prompt stays small enough for the canvas.
+    big = "X" * 9000
     p = LocalCodeRuntimeGateway._format_diffusion_prompt(
-        [{"role": "system", "content": "Rules."}]
+        [{"role": "system", "content": big}, {"role": "user", "content": "hi"}]
     )
-    assert "<start_of_turn>user\nRules.<end_of_turn>" in p
-    assert p.endswith("<start_of_turn>model\n")
+    assert "XXXX" not in p
+    assert "<start_of_turn>user\n" in p and p.endswith("<start_of_turn>model\n")
 
 
 # ── Stream dispatch through the stub runner ──────────────────────────

@@ -2424,6 +2424,25 @@ class ChatScreen(Screen):
                     "Backend not initialized — can't restart server. Type a message to trigger a fresh start.",
                 )
                 return
+            # cohere2moe (North-Mini-Code) needs its dedicated PR-#24260
+            # server built before the restart can launch it — the setup
+            # screen does this on first launch, but an in-chat /model swap
+            # bypasses setup, so build-on-demand here too (else the restart
+            # falls through to the TurboQuant binary and times out: E1002).
+            _arch = str(getattr(choice, "architecture", ""))
+            if "cohere" in _arch:
+                from ...bootstrap import ensure_cohere_server
+                self.app.call_from_thread(
+                    self._set_download_line, "Building cohere server (one-time)…")
+                ok, res = ensure_cohere_server(
+                    on_progress=lambda m: self.app.call_from_thread(self._set_download_line, m))
+                self.app.call_from_thread(self._clear_download_line)
+                if not ok:
+                    self.app.call_from_thread(
+                        self._on_server_restart_failed,
+                        f"Couldn't build the cohere2moe server: {res}")
+                    return
+                engine.config.cohere_server_binary = res
             # _restart_server now returns the healthcheck result that
             # ServerManager.restart already waits for (up to 120 s for a
             # 10 GB model cold-load). The previous code threw away that
