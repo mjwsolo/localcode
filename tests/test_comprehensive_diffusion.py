@@ -208,6 +208,27 @@ def test_diffusion_non_dict_args_coerced():
     assert calls and calls[0]["function"]["arguments"] == {}
 
 
+def test_diffusion_bf16_strips_unmarked_thought_reasoning():
+    # BF16 emits `thought\n<reasoning>.<answer>` with no channel markers and
+    # no space at the reasoning→answer join (reasoning's own sentences use
+    # ". "). The cleaner must keep only the answer. Real captured output.
+    G = LocalCodeRuntimeGateway
+    raw = (
+        '\nthought\nThe user said "hi". I am LocalCode, a coding agent. '
+        "I should greet briefly and wait for a task.Hello! How can I help you today?\n"
+        "total time: 2156ms\nthroughput: 118 tok/s\n"
+    )
+    assert G._clean_diffusion_output(raw, "") == "Hello! How can I help you today?"
+
+
+def test_diffusion_repairs_stray_quote_in_bare_value():
+    # BF16 emitted {"path":."} (dropped the leading quote); the bare value `."`
+    # must repair to "." not `."`.
+    G = LocalCodeRuntimeGateway
+    calls, _ = G._parse_diffusion_tool_calls('{"tool":"list_files","args":{"path":."}}')
+    assert calls and calls[0]["function"]["arguments"] == {"path": "."}
+
+
 def test_diffusion_clean_never_blanks_out():
     # The cleaner must never empty a turn that contained real text, whatever
     # shape DiffusionGemma's non-deterministic output takes (this was the
