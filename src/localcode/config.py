@@ -118,6 +118,7 @@ class RuntimeConfig:
     kv_cache_type_v: str = "turbo4"        # V cache type: turbo4 recommended (3.8x compression, +0.23% PPL)
     llama_cpp_binary: str = ""             # custom llama-server path (e.g. TurboQuant fork)
     diffusion_cli_binary: str = ""         # llama-diffusion-cli path (DiffusionGemma runner; built on demand)
+    cohere_server_binary: str = ""         # llama-server with cohere2moe (North-Mini-Code; built on demand from PR #24260)
     model_dir: str = ""                    # directory where GGUFs download to (blank → ~/.local/share/localcode/models)
     temperature: float = 1.0  # Unsloth's official Gemma 4 recommendation — prevents IQ3_S mode-collapse loops
     max_context_chars: int = 200000

@@ -665,6 +665,31 @@ class SetupScreen(Screen):
             self.app.call_from_thread(self._finish)
             return
 
+        # cohere2moe (North-Mini-Code): the TurboQuant server can't load it,
+        # so build a dedicated llama-server from llama.cpp PR #24260 (one-time)
+        # before launching. After that it serves over the normal HTTP path.
+        if _arch_choice is not None and "cohere" in str(
+            getattr(_arch_choice, "architecture", "")
+        ):
+            from ...bootstrap import ensure_cohere_server
+
+            def _cohere_progress(msg: str) -> None:
+                self._status_text = msg
+
+            ok, result = ensure_cohere_server(on_progress=_cohere_progress)
+            if not ok:
+                self.app.call_from_thread(lambda e=result: self._show_error(
+                    msg="Couldn't build the cohere2moe server.",
+                    code="E1002",
+                    details=e,
+                ))
+                return
+            config.runtime.cohere_server_binary = result
+            # Don't touch llama_cpp_binary — that stays the TurboQuant binary
+            # for every other model; llama_server_command routes cohere2moe to
+            # the cohere binary on its own via cohere_server_path().
+            save_config(config)
+
         # Launch server
         gw = LocalCodeRuntimeGateway(config.runtime)
         from ...bootstrap import _turboquant_binary_path as _tbp
