@@ -115,6 +115,28 @@ def test_chat_once_uses_diffusion_backend(tmp_path):
     assert r["message"]["tool_calls"] == []
 
 
+def test_diffusion_emits_plain_json_tool_call(tmp_path):
+    # DiffusionGemma emits plain-JSON tool calls (wrapped in its channel/thought
+    # reasoning); the backend must parse them and strip the scaffolding.
+    body = (
+        "printf '<|channel>thought\\nreason<channel|>"
+        '{\\"tool\\":\\"list_files\\",\\"args\\":{\\"path\\":\\".\\"}}'
+        "<tool_call|>'\n"
+    )
+    gw = _gateway(tmp_path, body)
+    tools = [{"function": {"name": "list_files",
+                           "parameters": {"properties": {"path": {"type": "string"}}}}}]
+    events = list(gw.stream_chat_events([{"role": "user", "content": "ls"}], tools=tools))
+    tc = [e for e in events if e["type"] == "tool_calls"]
+    assert tc, "expected a tool_calls event"
+    fn = tc[0]["tool_calls"][0]["function"]
+    assert fn["name"] == "list_files"
+    assert fn["arguments"] == {"path": "."}
+    # The raw JSON / channel scaffolding must NOT leak into visible content.
+    content = "".join(e["content"] for e in events if e["type"] == "content")
+    assert "<|channel>" not in content and '"tool"' not in content
+
+
 def test_non_diffusion_model_does_not_dispatch(tmp_path):
     cfg = RuntimeConfig()
     cfg.provider = "llama_cpp"
