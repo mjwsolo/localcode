@@ -631,7 +631,20 @@ def run_agent_loop(
         try:
             # Compact older tool results so every round's prompt stays small
             # enough for hybrid-memory models (Qwen 3.6) to re-evaluate fast.
-            model_messages = hook_before_model(_prepare_model_messages(messages), _hook_state)
+            # Pass the model's context window (RAM-derived) so compaction is
+            # window-aware: a big machine keeps far more history instead of
+            # crushing it to a fixed 36 KB (which made the model lose track).
+            _ctx_chars = None
+            try:
+                _nctx = app.engine._target_num_ctx()
+                if _nctx:
+                    _ctx_chars = int(_nctx * 3.5)  # tokens → ~chars
+            except Exception:
+                _ctx_chars = None
+            model_messages = hook_before_model(
+                _prepare_model_messages(messages, ctx_window_chars=_ctx_chars),
+                _hook_state,
+            )
             round_tool_schemas = schemas_for_goal(
                 _goal_state.goal_type,
                 user_text,
