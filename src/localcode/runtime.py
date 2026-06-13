@@ -658,6 +658,20 @@ class LocalCodeRuntimeGateway:
                     return 131072  # 128K context (validated)
                 return 65536       # 16-32 GB: 64K (validated on 16 GB)
             return min(num_ctx, 16384 if turbo else 3072)
+        # RAM-aware lift for the balanced/default path. Without this, ctx was
+        # a flat `max_context_chars // 4` (~50K) on EVERY machine — a 128 GB
+        # Mac got the same window as a 16 GB one. On a capable machine that
+        # starved long agentic sessions: once the window filled, the model
+        # lost earlier turns and re-read files it had already read (the
+        # observed "re-reading App.tsx forever" loop). A big machine can hold
+        # a big KV cache, so give it one. Small machines keep their sizing.
+        ram_gb = self._system_ram_gb()
+        if ram_gb >= 64:
+            num_ctx = max(num_ctx, 131072)   # 64-128 GB: ≥128K
+        elif ram_gb >= 48:
+            num_ctx = max(num_ctx, 98304)    # 48 GB: ≥96K
+        elif ram_gb >= 32:
+            num_ctx = max(num_ctx, 65536)    # 32 GB: ≥64K
         return num_ctx
 
     def _options(self, num_ctx_override: int | None = None, num_predict_override: int | None = None) -> dict[str, Any]:
