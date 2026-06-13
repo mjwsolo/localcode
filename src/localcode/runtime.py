@@ -1142,17 +1142,67 @@ class LocalCodeRuntimeGateway:
         pending_system = "\n\n".join(
             ([system_text] if system_text else []) + suffix_bits
         )
+        # Map tool_call_id → tool name so a tool RESULT can be labeled with the
+        # tool it came from (the model reads "Tool result (web_search):" and
+        # knows it's its own search coming back, not a fresh user request).
+        import json as _json
+        id_to_name: dict[str, str] = {}
+        for m in messages:
+            if m.get("role") == "assistant":
+                for tc in m.get("tool_calls") or []:
+                    tcid, nm = tc.get("id"), (tc.get("function") or {}).get("name")
+                    if tcid and nm:
+                        id_to_name[tcid] = nm
+
         parts: list[str] = []
         for m in messages:
             role = m.get("role")
             text = str(m.get("content") or "").strip()
-            if role == "system" or not text:
+            if role == "system":
                 continue
-            if role == "user" and pending_system:
+            if role == "assistant":
+                # CRITICAL: an assistant turn that ONLY made tool calls has
+                # empty content. Skipping it (the old `not text: continue`)
+                # left the next prompt as `user → user → model` — the model
+                # saw a tool result with no record it had asked for one, and
+                # the entropy-bound decoder denoised to EMPTY in ~2 steps
+                # (E3107 on every multi-step agentic task). Render the tool
+                # calls as a model turn, in the same plain-JSON shape the model
+                # itself emits, so the conversation stays coherent.
+                bits = [text] if text else []
+                for tc in m.get("tool_calls") or []:
+                    fn = tc.get("function") or {}
+                    nm = fn.get("name")
+                    if not nm:
+                        continue
+                    try:
+                        a = _json.loads(fn.get("arguments") or "{}")
+                    except Exception:
+                        a = {}
+                    bits.append(_json.dumps(
+                        {"tool": nm, "args": a if isinstance(a, dict) else {}}
+                    ))
+                rendered = "\n".join(b for b in bits if b)
+                if not rendered:
+                    continue
+                parts.append(f"<start_of_turn>model\n{rendered}<end_of_turn>\n")
+                continue
+            if role == "tool":
+                # Tool results are fed back as a labeled user turn (Gemma has
+                # no dedicated tool role in this hand-applied template).
+                nm = id_to_name.get(m.get("tool_call_id"))
+                label = f"Tool result ({nm}):" if nm else "Tool result:"
+                parts.append(
+                    f"<start_of_turn>user\n{label}\n{text or '(no output)'}<end_of_turn>\n"
+                )
+                continue
+            # user
+            if not text:
+                continue
+            if pending_system:
                 text = f"{pending_system}\n\n{text}"
                 pending_system = ""
-            gemma_role = "model" if role == "assistant" else "user"
-            parts.append(f"<start_of_turn>{gemma_role}\n{text}<end_of_turn>\n")
+            parts.append(f"<start_of_turn>user\n{text}<end_of_turn>\n")
         if pending_system:
             # System-only conversations (rare): emit it as a user turn so
             # the instructions reach the model at all.
