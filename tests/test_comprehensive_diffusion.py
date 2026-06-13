@@ -16,12 +16,19 @@ here use a stub executable so they run in milliseconds:
 """
 from __future__ import annotations
 
+import json
 import os
 import stat
 import sys
 from pathlib import Path
 
 import pytest
+
+
+def _tool_args(call):
+    """Tool-call arguments are a JSON STRING (OpenAI/Ollama convention, what
+    the agent loop json.loads()es). Decode for assertions."""
+    return json.loads(call["function"]["arguments"])
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
@@ -59,11 +66,10 @@ def test_prompt_format_basic():
         {"role": "user", "content": "again"},
     ]
     p = LocalCodeRuntimeGateway._format_diffusion_prompt(msgs)
-    # The verbose system prompt is REPLACED with a concise one (it overflows
-    # DiffusionGemma's canvas), but the working directory is carried over.
-    assert "concise" not in p  # sanity: literal placeholder not leaked
+    # UNIFIED: the SAME system prompt every model gets is folded in verbatim
+    # (no bespoke concise substitute) — the full system text is preserved.
+    assert "Be terse." in p
     assert "Working directory: /tmp/proj" in p
-    assert "LocalCode" in p  # concise role line
     # User / assistant turns are preserved with Gemma roles.
     assert "<start_of_turn>model\nhello<end_of_turn>" in p
     assert "<start_of_turn>user\nagain<end_of_turn>" in p
@@ -71,14 +77,15 @@ def test_prompt_format_basic():
     assert p.endswith("<start_of_turn>model\n")
 
 
-def test_prompt_format_drops_verbose_system():
-    # A huge system prompt must not be folded in verbatim — only the concise
-    # substitute is used, so the prompt stays small enough for the canvas.
-    big = "X" * 9000
+def test_prompt_format_includes_full_system_verbatim():
+    # The full system prompt is folded in as-is (the old "discard verbose
+    # system" workaround is gone — the empty-output bug was num_predict=-1,
+    # not prompt length, so diffusion now shares the unified prompt).
+    big = "UNIQUE_SYSTEM_MARKER " * 300
     p = LocalCodeRuntimeGateway._format_diffusion_prompt(
         [{"role": "system", "content": big}, {"role": "user", "content": "hi"}]
     )
-    assert "XXXX" not in p
+    assert "UNIQUE_SYSTEM_MARKER" in p  # full system IS included now
     assert "<start_of_turn>user\n" in p and p.endswith("<start_of_turn>model\n")
 
 
@@ -138,7 +145,7 @@ def test_diffusion_emits_plain_json_tool_call(tmp_path):
     assert tc, "expected a tool_calls event"
     fn = tc[0]["tool_calls"][0]["function"]
     assert fn["name"] == "list_files"
-    assert fn["arguments"] == {"path": "."}
+    assert _tool_args(tc[0]["tool_calls"][0]) == {"path": "."}
     # The raw JSON / channel scaffolding must NOT leak into visible content.
     content = "".join(e["content"] for e in events if e["type"] == "content")
     assert "<|channel>" not in content and '"tool"' not in content
@@ -161,7 +168,7 @@ def test_diffusion_repairs_malformed_tool_json():
     for raw, expected_args in cases.items():
         calls, _ = G._parse_diffusion_tool_calls(raw)
         assert calls, f"dropped tool call for {raw!r}"
-        assert calls[0]["function"]["arguments"] == expected_args, raw
+        assert _tool_args(calls[0]) == expected_args, raw
 
 
 def test_diffusion_json_repair_is_string_aware():
@@ -173,13 +180,13 @@ def test_diffusion_json_repair_is_string_aware():
     calls, _ = G._parse_diffusion_tool_calls(
         'Sure. {"tool":"run","args":{"cmd":"grep -n foo: bar","path":.}}'
     )
-    assert calls and calls[0]["function"]["arguments"] == {
+    assert calls and _tool_args(calls[0]) == {
         "cmd": "grep -n foo: bar", "path": "."
     }
     calls, _ = G._parse_diffusion_tool_calls(
         '{"tool":"x","args":{"k":"trailing comma here ,}","path":.}}'
     )
-    assert calls and calls[0]["function"]["arguments"]["k"] == "trailing comma here ,}"
+    assert calls and _tool_args(calls[0])["k"] == "trailing comma here ,}"
 
 
 def test_diffusion_finds_all_brace_forms_in_order():
@@ -205,16 +212,17 @@ def test_diffusion_non_dict_args_coerced():
     # whose arguments crash the agent loop — coerce to {}.
     G = LocalCodeRuntimeGateway
     calls, _ = G._parse_diffusion_tool_calls('{"tool":"x","args":"oops"}')
-    assert calls and calls[0]["function"]["arguments"] == {}
+    assert calls and _tool_args(calls[0]) == {}
 
 
 def test_diffusion_canvas_clamps_nonpositive_num_predict(tmp_path):
     # The agent loop passes num_predict = MAX_OUTPUT_TOKENS = -1. The CLI's -n
-    # is a fixed CANVAS SIZE; `-n -1` yields an empty canvas ("no usable
-    # response"). Non-positive num_predict MUST become the default 512 canvas.
-    # (Regression for the live BF16/Q4 "returned no usable response" bug.)
-    # The stub writes its argv to a file (the prompt contains <end_of_turn>,
-    # which the output cleaner would otherwise truncate).
+    # is a CANVAS/token budget; `-n -1` yields an empty canvas ("no usable
+    # response"). Non-positive num_predict MUST become the default 1024 budget
+    # (room for a reasoning preamble AND a complete tool call); positive values
+    # are capped at 1024. (Regression for the "returned no usable response" /
+    # truncated-tool-call bugs.) The stub writes its argv to a file (the prompt
+    # contains <end_of_turn>, which the output cleaner would otherwise truncate).
     argsfile = tmp_path / "argv.txt"
     gw = _gateway(tmp_path, f'printf "%s\\n" "$@" > "{argsfile}"\nprintf "ok"\n')
 
@@ -222,7 +230,7 @@ def test_diffusion_canvas_clamps_nonpositive_num_predict(tmp_path):
         toks = argsfile.read_text().splitlines()
         return toks[toks.index("-n") + 1]
 
-    for np_in, want in [(-1, "512"), (0, "512"), (None, "512"), (128, "128"), (9999, "512")]:
+    for np_in, want in [(-1, "1024"), (0, "1024"), (None, "1024"), (128, "128"), (9999, "1024")]:
         list(gw.stream_chat_events([{"role": "user", "content": "hi"}], num_predict=np_in))
         assert canvas_arg() == want, f"num_predict={np_in} → expected -n {want}"
 
@@ -245,7 +253,7 @@ def test_diffusion_repairs_stray_quote_in_bare_value():
     # must repair to "." not `."`.
     G = LocalCodeRuntimeGateway
     calls, _ = G._parse_diffusion_tool_calls('{"tool":"list_files","args":{"path":."}}')
-    assert calls and calls[0]["function"]["arguments"] == {"path": "."}
+    assert calls and _tool_args(calls[0]) == {"path": "."}
 
 
 def test_diffusion_clean_never_blanks_out():

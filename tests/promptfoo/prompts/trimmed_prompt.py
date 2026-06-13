@@ -61,7 +61,7 @@ def _strip_rules(system_prompt: str) -> str:
 
 
 def _render_trimmed_system_prompt() -> str:
-    from localcode.agent import SYSTEM_PROMPT, NOTEBOOK_RULES_TEMPLATE
+    from localcode.agent import SYSTEM_PROMPT
 
     full = SYSTEM_PROMPT.format(
         cwd=str(_ROOT),
@@ -69,7 +69,6 @@ def _render_trimmed_system_prompt() -> str:
         network_status="Network: ONLINE — you can download files, install packages, fetch URLs.",
         skills_block="",
         reasoning_rules="",
-        notebook_block=NOTEBOOK_RULES_TEMPLATE.format(notebook_dir="/tmp/eval-notebook"),
     )
     return _strip_rules(full)
 
@@ -86,12 +85,11 @@ def prompt(context: dict[str, Any]) -> list[dict[str, Any]]:
 # char-count delta so we can confirm the strip actually removed bytes
 # before wasting eval time.
 if __name__ == "__main__":
-    from localcode.agent import SYSTEM_PROMPT, NOTEBOOK_RULES_TEMPLATE
+    from localcode.agent import SYSTEM_PROMPT
     full = SYSTEM_PROMPT.format(
         cwd=str(_ROOT), project_instructions="",
         network_status="Network: ONLINE — you can download files, install packages, fetch URLs.",
         skills_block="", reasoning_rules="",
-        notebook_block=NOTEBOOK_RULES_TEMPLATE.format(notebook_dir="/tmp/eval-notebook"),
     )
     trimmed = _strip_rules(full)
     print(f"full:    {len(full):>6} chars")

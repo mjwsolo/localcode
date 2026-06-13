@@ -256,6 +256,14 @@ def infer_family_from_profile(profile_id: str) -> ModelFamily:
     return ModelFamily.GEMMA4
 
 
+# Degenerate-collapse artifacts: a known llama.cpp Gemma-4 bug (esp. the
+# 26B-A4B MoE) makes the model spew raw <unusedNN> / [multimodal] tokens in a
+# loop. None of these are ever legitimate user-facing content for ANY family,
+# so we scrub them globally as defense-in-depth (the streaming layer also
+# detects the collapse and stops early). See ggml-org/llama.cpp#21516 / #21321.
+_COLLAPSE_TOKEN_RE = re.compile(r"<unused\d+>|\[multimodal\]|<eos>")
+
+
 def strip_thinking_tokens(text: str, family: ModelFamily | None = None) -> str:
     """Apply the family's thinking-strip patterns to `text`.
 
@@ -268,4 +276,4 @@ def strip_thinking_tokens(text: str, family: ModelFamily | None = None) -> str:
     out = text
     for pat in adapter.strip_patterns:
         out = pat.sub("", out)
-    return out
+    return _COLLAPSE_TOKEN_RE.sub("", out)

@@ -83,3 +83,7 @@ backend.log
 *.log
 nohup.out
 eval/results/
+
+# Local benchmark result artifacts (scratch)
+bench_*.json
+SESSION_HANDOFF.md

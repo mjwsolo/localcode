@@ -306,6 +306,13 @@ class TestStripThinkingTokens:
     def test_strips_unused25(self) -> None:
         assert _strip_thinking_tokens("hello <unused25> world") == "hello  world"
 
+    def test_strips_gemma4_collapse_soup(self) -> None:
+        # Known llama.cpp Gemma-4 bug: the model collapses into a loop of raw
+        # <unusedNN> / [multimodal] / <eos> tokens. None are user-facing — scrub
+        # them all (the streaming layer also detects the collapse and stops).
+        soup = "Answer<unused12><unused29>[multimodal] here<eos>"
+        assert _strip_thinking_tokens(soup) == "Answer here"
+
     def test_strips_channel_tags(self) -> None:
         text = "<|channel>thought\nsome thinking\n<channel|>actual response"
         result = _strip_thinking_tokens(text)

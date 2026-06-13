@@ -6,7 +6,7 @@ re-exported here so external callers can continue to import from
 `localcode.agent` without caring about the internal split.
 
   loop.py       — `run_agent_loop`, the main entry point
-  prompts.py    — SYSTEM_PROMPT, REASONING_RULES, NOTEBOOK_RULES_TEMPLATE,
+  prompts.py    — SYSTEM_PROMPT, REASONING_RULES,
                   _load_project_instructions
   constants.py  — policy knobs, safety caps, tables
   context.py    — message aging / redaction / compaction pipeline
@@ -39,7 +39,6 @@ __all__ = [
     # Prompts
     "SYSTEM_PROMPT",
     "REASONING_RULES",
-    "NOTEBOOK_RULES_TEMPLATE",
     # Constants (policy knobs external code may want to read)
     "MAX_ROUNDS",
     "MAX_OUTPUT_TOKENS",
@@ -149,7 +148,6 @@ from .helpers import (  # noqa: F401
 
 from .prompts import (  # noqa: F401 — re-exports for back-compat
     SYSTEM_PROMPT,
-    NOTEBOOK_RULES_TEMPLATE,
     REASONING_RULES,
     _load_project_instructions,
 )

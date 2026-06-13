@@ -16,7 +16,7 @@ The system prompt is rendered the same way agent.run_agent_loop renders
 it at runtime — same template, same conditional blocks — but without
 needing a real `LocalCodeApp` instance. We inject minimal stubs for
 the {cwd}, {network_status}, {project_instructions}, {skills_block},
-{reasoning_rules}, {notebook_block} slots.
+{reasoning_rules} slots.
 
 This lets promptfoo evaluate prompt behavior independently of the TUI
 and agent loop plumbing. A/B tests are then as simple as editing
@@ -36,22 +36,18 @@ def _render_system_prompt() -> str:
     """Render the system prompt with reasonable defaults for every
     template slot. Matches what run_agent_loop does at runtime but
     without needing a real app instance."""
-    from localcode.agent import SYSTEM_PROMPT, REASONING_RULES, NOTEBOOK_RULES_TEMPLATE
+    from localcode.agent import SYSTEM_PROMPT, REASONING_RULES
 
     # Sensible defaults. These can be parameterised per-scenario later
     # (e.g. to test reasoning-mode variants) by passing them through
     # promptfoo's `vars:` block.
     reasoning_rules = ""  # assume fast mode by default
-    notebook_block = NOTEBOOK_RULES_TEMPLATE.format(
-        notebook_dir="/tmp/eval-notebook"
-    )
     return SYSTEM_PROMPT.format(
         cwd=str(_ROOT),
         project_instructions="",
         network_status="Network: ONLINE — you can download files, install packages, fetch URLs.",
         skills_block="",
         reasoning_rules=reasoning_rules,
-        notebook_block=notebook_block,
     )
 
 

@@ -4,9 +4,9 @@ Background
 ----------
 Before this module, `SYSTEM_PROMPT` was one monolithic ~20K-character
 string with template placeholders (`{cwd}`, `{network_status}`,
-`{project_instructions}`, `{skills_block}`, `{reasoning_rules}`,
-`{notebook_block}`) baked into the middle. `run_agent_loop` called
-`.format(...)` on the whole thing.
+`{project_instructions}`, `{skills_block}`, `{reasoning_rules}`)
+baked into the middle. `run_agent_loop` called `.format(...)` on the
+whole thing.
 
 Problems with the monolith:
   • Every placeholder interpolation invalidates the llama-server
@@ -95,7 +95,6 @@ class SectionContext:
     network_status: str
     skills_block: str
     reasoning_rules: str
-    notebook_block: str
 
 
 @dataclass(frozen=True)
@@ -160,10 +159,6 @@ def _reasoning_rules(ctx: SectionContext) -> str:
     return ctx.reasoning_rules or ""
 
 
-def _notebook_block(ctx: SectionContext) -> str:
-    return ctx.notebook_block or ""
-
-
 def default_sections() -> list[Section]:
     """Return the section list whose composed output matches the
     pre-T0.11 monolith. This is the default the loop uses today.
@@ -180,7 +175,6 @@ def default_sections() -> list[Section]:
         Section(id="project_instructions", render=_project_instructions, always_on=True, cacheable=False),
         Section(id="skills_block", render=_skills_block, always_on=True, cacheable=False),
         Section(id="reasoning_rules", render=_reasoning_rules, always_on=True, cacheable=False),
-        Section(id="notebook_block", render=_notebook_block, always_on=True, cacheable=False),
     ]
 
 

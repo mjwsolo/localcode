@@ -1017,38 +1017,38 @@ class LocalCodeRuntimeGateway:
         embedded Jinja template. Gemma's convention: system text is
         folded into the first user turn; roles are `user` / `model`.
 
-        Tools are described in PLAIN JSON (not the Gemma special-token
-        format), which is the one form DiffusionGemma reliably emits.
+        UNIFIED PROMPT: diffusion uses the SAME system prompt as every
+        other model — it's already in `messages` as the system turn,
+        fully formatted by the agent loop. (The old code substituted a
+        bespoke "concise" prompt under the belief that the full one
+        overflowed the canvas and produced empty output; that was a
+        misdiagnosis — the real cause was `num_predict=-1` sent as the
+        CLI's `-n` canvas size. With that fixed the full prompt works,
+        verified on BF16 + Q4.)
 
-        CRITICAL: LocalCode's full agent system prompt (~10K chars with
-        reasoning rules, notebook rules, skills, project instructions)
-        OVERFLOWS DiffusionGemma's fixed canvas and makes it emit
-        degenerate/empty output. Block-diffusion can't use most of that
-        instruction text anyway. So for the diffusion path we DISCARD the
-        verbose system prompt and substitute a concise one — keeping only
-        the role, the working directory, and the (plain-JSON) tool block.
+        Two things are still diffusion-specific and APPENDED, because they
+        are delivery mechanics, not prompt content:
+          * the PLAIN-JSON tool block — diffusion has no server/template to
+            deliver tools natively, and the Gemma special-token tool format
+            collapses it to empty output;
+          * a one-line nudge to skip the `thought` preamble some quants
+            (notably BF16) emit ahead of the answer.
         """
-        # Pull the working directory out of whatever big system prompt we
-        # were handed, so path-relative tool calls still resolve.
-        cwd_line = ""
+        system_text = ""
         for m in messages:
             if m.get("role") == "system":
-                for line in str(m.get("content") or "").splitlines():
-                    if line.strip().lower().startswith("working directory:"):
-                        cwd_line = line.strip()
-                        break
-        system_bits = [
-            "You are LocalCode, a coding agent on the user's machine with "
-            "filesystem access through the tools below. Be brief and act "
-            "directly — when a task needs to read, write, or run something, "
-            "call a tool. Reply with ONLY your final answer — do not write a "
-            "'thought' preamble, reasoning, or narration."
-        ]
-        if cwd_line:
-            system_bits.append(cwd_line)
+                system_text = str(m.get("content") or "").strip()
+                break
+        suffix_bits: list[str] = []
         if tools:
-            system_bits.append(LocalCodeRuntimeGateway._diffusion_tool_block(tools))
-        pending_system = "\n\n".join(system_bits)
+            suffix_bits.append(LocalCodeRuntimeGateway._diffusion_tool_block(tools))
+        suffix_bits.append(
+            "Reply with ONLY your final answer or a tool call — no 'thought' "
+            "preamble, reasoning, or narration."
+        )
+        pending_system = "\n\n".join(
+            ([system_text] if system_text else []) + suffix_bits
+        )
         parts: list[str] = []
         for m in messages:
             role = m.get("role")
@@ -1106,6 +1106,10 @@ class LocalCodeRuntimeGateway:
         import json as _json
         import re as _re
         calls = []
+        # Every `{"tool"...}` region we locate is a tool-call ATTEMPT, not
+        # prose — strip it from the visible text whether or not it parses, so
+        # a malformed/truncated call (the model's stray `}` / JSON fragments)
+        # never leaks into the chat. `calls` only gets the ones that parse.
         spans: list[tuple[int, int]] = []
         # Locate every tool object opener in order. A single regex matches all
         # whitespace variants (`{"tool"`, `{ "tool"`, `{\n"tool"`) so an early
@@ -1142,6 +1146,7 @@ class LocalCodeRuntimeGateway:
                         break
                 k += 1
             blob = text[j:k]
+            spans.append((j, k))  # strip the attempt from visible regardless
             obj = None
             try:
                 obj = _json.loads(blob)
@@ -1160,18 +1165,20 @@ class LocalCodeRuntimeGateway:
                 name = obj.get("tool")
                 args = obj.get("args", {})
                 if not isinstance(args, dict):
-                    # The agent loop expects an arguments dict; a model that
-                    # emits "args":"foo" or a list would otherwise crash it.
                     args = {}
                 if name:
                     calls.append({
                         "id": f"diff_{len(calls)}",
                         "type": "function",
-                        "function": {"name": name, "arguments": args},
+                        # arguments MUST be a JSON STRING, not a dict — the
+                        # agent loop (and OpenAI/Ollama convention) does
+                        # json.loads(arguments) everywhere. Emitting a dict
+                        # crashed with "the JSON object must be str... not
+                        # dict" (E9001) on the first diffusion tool call.
+                        "function": {"name": name, "arguments": _json.dumps(args)},
                     })
-                    spans.append((j, k))
             i = k if k > j else j + 1
-        # Remove parsed tool-call JSON from the visible text.
+        # Remove every located tool-call region from the visible text.
         if spans:
             out = []
             last = 0
@@ -1180,6 +1187,18 @@ class LocalCodeRuntimeGateway:
                 last = e
             out.append(text[last:])
             text = "".join(out)
+        # Strip orphaned structural braces left by tool-call scaffolding — the
+        # model sometimes wraps its plan in braces or leaves a dangling `}`
+        # next to a stripped call (the "...directory.}" leak). Only when braces
+        # are unbalanced, and only at the edges, so balanced braces in real
+        # code/prose are untouched.
+        opens, closes = text.count("{"), text.count("}")
+        while closes > opens and text.rstrip().endswith("}"):
+            text = text.rstrip()[:-1]
+            closes -= 1
+        while opens > closes and text.lstrip().startswith("{"):
+            text = text.lstrip()[1:]
+            opens -= 1
         return calls, text.strip()
 
     @staticmethod
@@ -1278,14 +1297,98 @@ class LocalCodeRuntimeGateway:
         found = diffusion_cli_path()
         return str(found) if found is not None else None
 
+    def _run_diffusion_cli(self, cmd: list[str], timeout_secs: int) -> str:
+        """Run the one-shot diffusion CLI once and return its full stdout.
+
+        Block-diffusion isn't token-streamed — the runner denoises a whole
+        canvas and prints it at once — so we collect all stdout, then clean it
+        once. stderr is drained CONCURRENTLY: reading only stdout while stderr
+        is a full PIPE deadlocks (llama.cpp is chatty on stderr during load).
+        """
+        import subprocess
+        import threading as _threading
+        import time as _time
+        deadline = _time.monotonic() + timeout_secs
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, errors="replace",
+        )
+        stderr_tail: list[str] = []
+
+        def _drain_stderr() -> None:
+            try:
+                assert proc.stderr is not None
+                for line in proc.stderr:
+                    stderr_tail.append(line)
+                    if len(stderr_tail) > 50:
+                        stderr_tail.pop(0)
+            except Exception:
+                pass
+
+        _threading.Thread(target=_drain_stderr, daemon=True,
+                          name="diffusion-stderr").start()
+        raw_parts: list[str] = []
+        try:
+            assert proc.stdout is not None
+            while True:
+                if _time.monotonic() > deadline:
+                    proc.kill()
+                    raise RuntimeErrorWithContext(
+                        f"diffusion generation timed out ({timeout_secs}s)"
+                    )
+                chunk = proc.stdout.read(4096)
+                if not chunk:
+                    break
+                raw_parts.append(chunk)
+            rc = proc.wait(timeout=30)
+            if rc != 0:
+                err_tail = "".join(stderr_tail[-6:]).strip()
+                raise RuntimeErrorWithContext(
+                    f"llama-diffusion-cli exited with code {rc}:\n{err_tail}"
+                )
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+        return "".join(raw_parts)
+
+    @staticmethod
+    def _diffusion_turn_usable(
+        text: str, tool_calls: list, tools: list | None
+    ) -> bool:
+        """Whether a diffusion turn is good enough to surface (vs re-sample).
+
+        Usable = real visible text, OR tool calls whose REQUIRED args are all
+        present. A tool call missing a required arg (e.g. bash with no
+        `command`) means the canvas truncated the call — re-sampling usually
+        produces a complete one, so treat it as unusable.
+        """
+        import json as _json
+        if not tool_calls:
+            return bool(text.strip())
+        required_by_name: dict[str, list] = {}
+        for t in (tools or []):
+            fn = t.get("function", t) if isinstance(t, dict) else {}
+            name = fn.get("name")
+            if name:
+                required_by_name[name] = (
+                    fn.get("parameters") or {}
+                ).get("required", []) or []
+        for tc in tool_calls:
+            fn = tc.get("function", {})
+            try:
+                args = _json.loads(fn.get("arguments") or "{}")
+            except Exception:
+                args = {}
+            if any(r not in args for r in required_by_name.get(fn.get("name"), [])):
+                return False
+        return True
+
     def _stream_diffusion_events(
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         num_predict: int | None = None,
     ) -> Iterator[dict[str, Any]]:
-        import subprocess
-        import time as _time
         from pathlib import Path as _Path
 
         binary = self._diffusion_cli_binary()
@@ -1313,90 +1416,49 @@ class LocalCodeRuntimeGateway:
         # parse that (see _diffusion_tool_block / _parse_diffusion_tool_call).
         prompt = self._format_diffusion_prompt(messages, tools=tools)
 
-        # The agent loop passes num_predict = MAX_OUTPUT_TOKENS = -1 ("no
-        # server-side cap, let it run"). For the HTTP server that means
-        # unlimited, but llama-diffusion-cli's -n is a fixed CANVAS SIZE —
-        # passing `-n -1` produces a degenerate/empty canvas ("returned no
-        # usable response"). So treat any non-positive num_predict as "use
-        # the default canvas", and cap at 512 (the canvas we validated).
-        # NOTE: `num_predict or 512` does NOT work here — -1 is truthy.
-        _n = int(num_predict) if (num_predict and int(num_predict) > 0) else 512
-        _canvas = min(_n, 512)
+        # llama-diffusion-cli's `-n` is a CANVAS/token budget, not a "stop when
+        # done" cap. The agent loop passes num_predict=MAX_OUTPUT_TOKENS=-1, and
+        # `-1 or 512` is -1 (truthy!) → `-n -1` → empty canvas. Treat any
+        # non-positive value as the default budget. Use a generous budget +
+        # multiple blocks so a complex agentic turn has room for BOTH its
+        # reasoning preamble AND a complete tool call (a 1-block 256-tok canvas
+        # truncated the tool call to empty args on "build an app" tasks). The
+        # entropy-bound decoder stops early when the answer is done, so the
+        # larger budget doesn't slow simple turns.
+        _n = int(num_predict) if (num_predict and int(num_predict) > 0) else 1024
+        _canvas = min(_n, 1024)
 
         cmd = [
             binary,
             "-m", model_path,
             "-p", prompt,
-            "-no-cnv",          # CRITICAL: the GGUF ships a chat template, so the
-                                # CLI auto-enables conversation mode and would apply
-                                # the template AGAIN on top of the one we built in
-                                # _format_diffusion_prompt — double-templating that
-                                # produced empty output. -no-cnv treats -p as the
-                                # already-formatted raw prompt and runs one-shot.
+            "-no-cnv",   # GGUF ships a chat template; -no-cnv stops the CLI
+                         # re-applying it on top of the prompt we built (double
+                         # templating produced empty output).
             "-ngl", "99",
             "-n", str(_canvas),
+            "--diffusion-blocks", "8",  # allow >1 block so a long turn isn't
+                                        # truncated mid tool-call
         ]
-        deadline = _time.monotonic() + max(60, int(self.config.request_timeout_seconds or 600))
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            errors="replace",
-        )
-        # Drain stderr CONCURRENTLY. Reading only stdout while stderr is a
-        # PIPE deadlocks the moment the runner writes >64 KB of logs to
-        # stderr (pipe buffer fills → child blocks on write → stdout goes
-        # silent → we block on read forever). llama.cpp binaries are
-        # chatty on stderr during model load, so this is the common case,
-        # not the edge case.
-        import threading as _threading
-        stderr_tail: list[str] = []
+        timeout_secs = max(60, int(self.config.request_timeout_seconds or 600))
 
-        def _drain_stderr() -> None:
-            try:
-                assert proc.stderr is not None
-                for line in proc.stderr:
-                    stderr_tail.append(line)
-                    if len(stderr_tail) > 50:
-                        stderr_tail.pop(0)
-            except Exception:
-                pass
-
-        _threading.Thread(target=_drain_stderr, daemon=True,
-                          name="diffusion-stderr").start()
-        # Block-diffusion isn't token-streamed — the runner denoises a whole
-        # canvas and prints it in one go — so we COLLECT the full stdout, then
-        # clean it once. Streaming 512-byte chunks straight through leaked the
-        # prompt echo, the runner's "total time:/throughput:" stats lines (it
-        # prints those to stdout, not stderr), and canvas padding after the
-        # answer. We still read in a loop to honour the timeout.
-        raw_parts: list[str] = []
-        try:
-            assert proc.stdout is not None
-            while True:
-                if _time.monotonic() > deadline:
-                    proc.kill()
-                    raise RuntimeErrorWithContext(
-                        "diffusion generation timed out "
-                        f"({self.config.request_timeout_seconds}s)"
-                    )
-                chunk = proc.stdout.read(4096)
-                if not chunk:
-                    break
-                raw_parts.append(chunk)
-            rc = proc.wait(timeout=30)
-            if rc != 0:
-                err_tail = "".join(stderr_tail[-6:]).strip()
-                raise RuntimeErrorWithContext(
-                    f"llama-diffusion-cli exited with code {rc}:\n{err_tail}"
-                )
-        finally:
-            if proc.poll() is None:
-                proc.kill()
-
-        _raw_joined = "".join(raw_parts)
-        text = self._clean_diffusion_output(_raw_joined, prompt)
+        # Diffusion is NON-DETERMINISTIC in output SHAPE — one sample gives a
+        # clean tool call, the next dumps a visible plan and a truncated
+        # empty-args call. So generate, validate, and RETRY (re-sample) until
+        # the turn is usable: real text, or tool calls whose required args are
+        # all present. Each turn is a few seconds, so this cheaply turns flaky
+        # failures into reliable output.
+        text = ""
+        tool_calls: list = []
+        _raw_joined = ""
+        for _attempt in range(3):
+            _raw_joined = self._run_diffusion_cli(cmd, timeout_secs)
+            text = self._clean_diffusion_output(_raw_joined, prompt)
+            tool_calls = []
+            if tools:
+                tool_calls, text = self._parse_diffusion_tool_calls(text)
+            if self._diffusion_turn_usable(text, tool_calls, tools):
+                break
 
         # Diagnostic dump of the REAL live turn (prompt the model actually saw,
         # raw stdout, cleaned text, tool names offered). This is the only way
@@ -1426,14 +1488,9 @@ class LocalCodeRuntimeGateway:
             except Exception:
                 pass
 
-        # Tool calls first: DiffusionGemma emits plain JSON ({"tool":...,
-        # "args":...}) when tools were offered in plain-text form. Parse and
-        # surface those as a tool_calls event; strip them from the visible
-        # content so the user doesn't see raw JSON.
-        tool_calls = []
-        if tools:
-            tool_calls, text = self._parse_diffusion_tool_calls(text)
-
+        # (tool_calls + text were already parsed/cleaned in the retry loop
+        # above — DiffusionGemma's plain-JSON calls are surfaced as a
+        # tool_calls event with the scaffolding stripped from the content.)
         if not text.strip() and not tool_calls:
             text = (
                 "⚠ DiffusionGemma returned no usable response this turn. "
@@ -1659,6 +1716,8 @@ class LocalCodeRuntimeGateway:
                 content_chars_total = 0
                 reasoning_chars_total = 0
                 raw_content_tail = ""  # last 500 chars of `content` deltas
+                _collapse_hits = 0     # raw <unusedNN>/[multimodal] tokens seen
+                _collapsed = False     # known llama.cpp Gemma-4 token-soup loop
                 # Timing markers — captured here, surfaced on stream_done.
                 # `_stream_started_at` lets us compute total stream wall.
                 # `_first_token_at` is the moment the first usable token
@@ -1762,6 +1821,20 @@ class LocalCodeRuntimeGateway:
                         _delta_reasoning = message.get("thinking", "") or ""
                         if _delta_reasoning:
                             reasoning_chars_total += len(_delta_reasoning)
+                        # Known llama.cpp Gemma-4 bug: the 26B-A4B MoE (and 31B
+                        # dense) collapse into a loop of raw <unusedNN> /
+                        # [multimodal] tokens during longer generation. The
+                        # tokens are stripped from the display, but the model
+                        # keeps spending the whole budget on soup — so once the
+                        # collapse is unmistakable, STOP reading.
+                        _collapse_hits += (
+                            (_delta_content + _delta_reasoning).count("<unused")
+                            + (_delta_content + _delta_reasoning).count("[multimodal]")
+                        )
+                        if _collapse_hits >= 8:
+                            _collapsed = True
+                            last_finish_reason = "collapse"
+                            break
                         # Record first-token timestamp on the first
                         # arriving delta (content, reasoning, or any
                         # tool-call deltas — caught a few lines below).
@@ -1970,6 +2043,18 @@ class LocalCodeRuntimeGateway:
                         "x" * (content_chars_total + reasoning_chars_total + tool_arg_chars)
                     )
                     usage_estimated = True
+                if _collapsed:
+                    # Replace the (stripped-to-near-empty) soup with a clear,
+                    # actionable note instead of leaving a blank turn.
+                    yield {
+                        "type": "content",
+                        "content": (
+                            "⚠ This model collapsed into repeated junk tokens — "
+                            "a known llama.cpp bug with Gemma 4 (the 26B-A4B MoE "
+                            "especially), worse with thinking on. Try Gemma 4 12B, "
+                            "a higher quant, or /thinking off."
+                        ),
+                    }
                 yield {
                     "type": "stream_done",
                     "finish_reason": last_finish_reason,
