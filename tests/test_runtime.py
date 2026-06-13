@@ -248,7 +248,20 @@ class TestTargetNumCtx:
         )
         defaults.update(overrides)
         cfg = RuntimeConfig(**defaults)
-        return LocalCodeRuntimeGateway(cfg)
+        gw = LocalCodeRuntimeGateway(cfg)
+        # Pin RAM low so these chars→ctx assertions are host-independent (the
+        # balanced path now lifts ctx on ≥32 GB machines; without this they'd
+        # fail on the dev box / CI runner depending on its RAM).
+        gw._system_ram_gb = lambda: 16  # type: ignore[assignment]
+        return gw
+
+    def test_balanced_lift_on_big_ram(self) -> None:
+        # A capable machine should get a large context on the balanced/default
+        # preset, not the flat max_context_chars//4. (Regression: 128 GB Macs
+        # were stuck at ~50K, starving long agentic sessions into re-read loops.)
+        gw = self._make_gw(max_context_chars=200000, quant_preset="balanced")
+        gw._system_ram_gb = lambda: 128  # type: ignore[assignment]
+        assert gw._target_num_ctx() == 131072
 
     def test_balanced_preset(self) -> None:
         gw = self._make_gw(max_context_chars=40000, quant_preset="balanced")
