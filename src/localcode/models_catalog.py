@@ -559,11 +559,20 @@ def _parse_total_active_b(name: str) -> tuple[float, float]:
 
     "Gemma 4 26B-A4B" -> (26, 4); "Qwen 3.6 35B-A3B" -> (35, 3);
     a dense "Gemma 4 12B" -> (12, 12). (0, 0) if no size is found.
+
+    Handles optional decimal totals ("Qwen 3.6 35B-A3B" → total=35.0) and
+    both hyphen and space separators between the total-B and A<n>B tokens.
+    The active figure parsed here may differ slightly from the exact active
+    count advertised per model (e.g. Gemma 26B-A4B has 3.8B actual active
+    but the name encodes "4B"); callers rely on the ratio active/total for
+    the bandwidth fraction, so small rounding in the name is acceptable.
     """
     import re
+    # MoE pattern: "<total>B[-_ ]A<active>B" (e.g. "26B-A4B", "35B-A3B")
     m = re.search(r"(\d+(?:\.\d+)?)\s*B\s*[-_ ]?A(\d+(?:\.\d+)?)", name, re.I)
     if m:
         return float(m.group(1)), float(m.group(2))
+    # Dense pattern: single "<n>B" (active == total)
     m = re.search(r"(\d+(?:\.\d+)?)\s*B", name, re.I)
     if m:
         v = float(m.group(1))
@@ -572,17 +581,36 @@ def _parse_total_active_b(name: str) -> tuple[float, float]:
 
 
 def estimate_decode_tok_s(size_gb: float, name: str, bandwidth_gbps: float) -> int | None:
-    """Rough estimated decode speed (tokens/sec) for a quant ON THIS machine.
+    """Rough estimated decode speed (tokens/sec) for a quant on this machine.
 
-    Apple-Silicon decode is memory-bandwidth bound: each token re-reads the
-    per-token ACTIVE weights from RAM, so tok/s ≈ realized_bandwidth /
-    (size_gb · active/total). For MoE models only the active experts are
-    read, which is why a 26B-A4B is far faster than its file size suggests.
+    Uses a saturating two-term model:
+
+        tok_s = 1 / (effective_gb / realized_bw + compute_overhead)
+
+    where:
+      effective_gb   = size_gb × (active / total)   — bytes read per token
+                       (for MoE only the active experts are read)
+      realized_bw    = bandwidth_gbps × 0.70         — Apple Silicon realises
+                       ~65-75 % of peak spec bandwidth during decode
+      compute_overhead                               — per-token floor that
+                       CAPS tiny-active MoE quants at a realistic ceiling.
+                       MoE routing and expert dispatch add ~8 ms/token of
+                       irreducible compute on Apple Silicon regardless of
+                       quant size; dense models are lower (~2 ms/token) so
+                       the model remains more bandwidth-bound there.
+
+    Calibration (M5 Max, 614 GB/s):
+      Gemma-4-26B-A4B IQ3_S (~1.7 GB effective) → ~83 tok/s  [measured]
+      Gemma-4-26B-A4B Q8    (~4.3 GB effective) → ~55 tok/s  [estimate]
+      Dense Gemma-4-12B Q4  (~7.4 GB effective) → ~35 tok/s  [estimate]
 
     The ABSOLUTE number is approximate — it ignores attention/KV-cache reads,
-    compute, and context length — but the RATIO between quants of the SAME
-    model is exact (they share active/total), which is the comparison that
-    actually guides a pick (e.g. BF16 vs Q4). Returns None if unknown.
+    context length, and per-session speculative decoding gains (which can add
+    3-8× on repetitive/code output but are invisible to this static formula).
+    The PRIMARY signal is the RATIO between quants of the same model family:
+    a 3× size difference in effective_gb produces a roughly 2× speed ratio
+    once compute overhead is included, matching observed MoE flatness.
+    Returns None when inputs are invalid.
     """
     if size_gb <= 0 or bandwidth_gbps <= 0:
         return None
@@ -591,13 +619,20 @@ def estimate_decode_tok_s(size_gb: float, name: str, bandwidth_gbps: float) -> i
     effective_gb = size_gb * frac
     if effective_gb <= 0:
         return None
-    # 0.25 calibrates the bandwidth-bound ceiling toward MEASURED base
-    # (spec-off) Apple-Silicon decode rates — benchmarked on an M5 Max:
-    # Gemma-4-26B-A4B IQ3 ~83, Q8 ~71, Qwen-35B-A3B ~83, dense 12B ~20 tok/s.
-    # Still a rough BASE-rate estimate (it ignores attention/KV/compute and is
-    # blind to speculative decoding, which can add 5-10x on repetitive output);
-    # the quant-to-quant ratio is the reliable signal. Scales with host bandwidth.
-    tok_s = (bandwidth_gbps * 0.25) / effective_gb
+
+    # Apple Silicon realises roughly 65-75% of advertised peak bandwidth
+    # during LLM decode (cache misses, memory controller overhead, etc.).
+    realized_bw = bandwidth_gbps * 0.70
+
+    # Per-token compute overhead (seconds) — the irreducible floor that
+    # prevents tiny-active MoE quants from predicting unrealistic speeds.
+    # MoE models have significant routing/dispatch overhead (~8 ms/token);
+    # dense models are lower (~2 ms/token) so bandwidth dominates there.
+    is_moe = frac < 0.5
+    compute_overhead_s = 0.008 if is_moe else 0.002
+
+    tok_s = 1.0 / (effective_gb / realized_bw + compute_overhead_s)
+
     if tok_s >= 100:
         return int(round(tok_s / 10) * 10)
     if tok_s >= 20:

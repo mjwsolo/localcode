@@ -218,11 +218,12 @@ def test_diffusion_non_dict_args_coerced():
 def test_diffusion_canvas_clamps_nonpositive_num_predict(tmp_path):
     # The agent loop passes num_predict = MAX_OUTPUT_TOKENS = -1. The CLI's -n
     # is a CANVAS/token budget; `-n -1` yields an empty canvas ("no usable
-    # response"). Non-positive num_predict MUST become the default 1024 budget
-    # (room for a reasoning preamble AND a complete tool call); positive values
-    # are capped at 1024. (Regression for the "returned no usable response" /
-    # truncated-tool-call bugs.) The stub writes its argv to a file (the prompt
-    # contains <end_of_turn>, which the output cleaner would otherwise truncate).
+    # response"). Non-positive num_predict MUST become the default 2048 budget
+    # (room for a reasoning preamble AND a complete tool call across blocks);
+    # positive values are capped at 2048. (Regression for the "returned no
+    # usable response" / truncated-tool-call bugs.) Also: NO --diffusion-blocks
+    # flag — it caps output to one block regardless of -n. The stub writes its
+    # argv to a file (the prompt has <end_of_turn>, which the cleaner truncates).
     argsfile = tmp_path / "argv.txt"
     gw = _gateway(tmp_path, f'printf "%s\\n" "$@" > "{argsfile}"\nprintf "ok"\n')
 
@@ -230,8 +231,9 @@ def test_diffusion_canvas_clamps_nonpositive_num_predict(tmp_path):
         toks = argsfile.read_text().splitlines()
         return toks[toks.index("-n") + 1]
 
-    for np_in, want in [(-1, "1024"), (0, "1024"), (None, "1024"), (128, "128"), (9999, "1024")]:
+    for np_in, want in [(-1, "2048"), (0, "2048"), (None, "2048"), (128, "128"), (9999, "2048")]:
         list(gw.stream_chat_events([{"role": "user", "content": "hi"}], num_predict=np_in))
+        assert "--diffusion-blocks" not in argsfile.read_text(), "must not cap blocks"
         assert canvas_arg() == want, f"num_predict={np_in} → expected -n {want}"
 
 

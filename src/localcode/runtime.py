@@ -1509,17 +1509,19 @@ class LocalCodeRuntimeGateway:
         # parse that (see _diffusion_tool_block / _parse_diffusion_tool_call).
         prompt = self._format_diffusion_prompt(messages, tools=tools)
 
-        # llama-diffusion-cli's `-n` is a CANVAS/token budget, not a "stop when
-        # done" cap. The agent loop passes num_predict=MAX_OUTPUT_TOKENS=-1, and
-        # `-1 or 512` is -1 (truthy!) → `-n -1` → empty canvas. Treat any
-        # non-positive value as the default budget. Use a generous budget +
-        # multiple blocks so a complex agentic turn has room for BOTH its
-        # reasoning preamble AND a complete tool call (a 1-block 256-tok canvas
-        # truncated the tool call to empty args on "build an app" tasks). The
-        # entropy-bound decoder stops early when the answer is done, so the
-        # larger budget doesn't slow simple turns.
-        _n = int(num_predict) if (num_predict and int(num_predict) > 0) else 1024
-        _canvas = min(_n, 1024)
+        # llama-diffusion-cli generates block-autoregressively in 256-token
+        # blocks; `-n` is the TOTAL token budget across blocks (verified:
+        # -n 256 → 1 block ≈1K chars, -n 768 → 3 blocks, -n 2048 → ~8 blocks).
+        # The agent loop passes num_predict=MAX_OUTPUT_TOKENS=-1; `-1 or 512`
+        # is -1 (truthy!) → `-n -1` → degenerate, so treat non-positive as a
+        # generous default. We DON'T pass --diffusion-blocks: it CAPS output
+        # to one block regardless of -n, which truncated long turns mid-
+        # reasoning before the tool call ever appeared (→ E3107). Without it,
+        # -n alone controls length and the entropy-bound decoder still stops
+        # early on short turns, so simple replies stay fast. 2048 leaves room
+        # for a reasoning preamble AND a complete tool call on agentic turns.
+        _n = int(num_predict) if (num_predict and int(num_predict) > 0) else 2048
+        _canvas = min(_n, 2048)
 
         cmd = [
             binary,
@@ -1530,8 +1532,6 @@ class LocalCodeRuntimeGateway:
                          # templating produced empty output).
             "-ngl", "99",
             "-n", str(_canvas),
-            "--diffusion-blocks", "8",  # allow >1 block so a long turn isn't
-                                        # truncated mid tool-call
         ]
         timeout_secs = max(60, int(self.config.request_timeout_seconds or 600))
 

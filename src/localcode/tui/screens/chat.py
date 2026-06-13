@@ -3381,6 +3381,14 @@ class ChatScreen(Screen):
                 # window; this is what the context bar should reflect.
                 if _pt:
                     self._last_round_prompt_tokens = _pt
+                    # Live update: let the context bar drop mid-turn as
+                    # each round's prompt grows the window.  The turn-end
+                    # handler overwrites this with the same max() logic so
+                    # there is no regression on the final value.
+                    self._context_used = max(
+                        self._last_round_prompt_tokens, self._context_used
+                    )
+                    self._update_status()
                 self._turn_completion_tokens += int(p.get("completion_tokens", 0) or 0)
                 total = int(p.get("total_tokens", 0) or 0)
                 if total > 0:
