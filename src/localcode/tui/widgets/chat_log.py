@@ -1208,16 +1208,41 @@ class ChatLog(RichLog):
     # ── Render methods (write to display, no history recording) ──
 
     def _render_user(self, text: str) -> None:
-        # Spacing before the prompt is owned by `_dispatch_gap("user")`;
-        # an explicit leading blank here doubled up with it. The
-        # trailing blank below the prompt is handled by the next entry's
-        # `_dispatch_gap` (since prev=user is not in any TIGHT_PAIR with
-        # the assistant/tool that follows).
-        line = Text()
-        line.append("❯ ", style=f"bold {C.primary}")
-        line.append(text, style="bold white")
-        self.write(line)
-        self._track_lines()
+        # Spacing before the prompt is owned by `_dispatch_gap("user")`.
+        # Pre-wrap with a HANGING INDENT so every wrapped line — including a
+        # long unbreakable token like an absolute path — aligns under the
+        # text after the "❯ " marker. Writing a single Text("❯ "+text) and
+        # letting RichLog wrap dedented long tokens to the left margin
+        # ("/Users/.../CHINESE" sat flush-left while the rest was indented).
+        # no_wrap=True blocks RichLog's second-pass re-wrap; width-8 leaves it
+        # headroom so it never needs one (same approach as _render_error).
+        import textwrap
+        try:
+            avail = max(20, self.size.width - 8)
+        except Exception:
+            avail = 72
+        first = True
+        for paragraph in (text or "").split("\n"):
+            if not paragraph.strip():
+                self.write(Text(""))
+                self._track_lines()
+                continue
+            wrapped = textwrap.fill(
+                paragraph, width=avail,
+                initial_indent="❯ " if first else "  ",
+                subsequent_indent="  ",
+                break_long_words=True, break_on_hyphens=True,
+            )
+            for line in wrapped.split("\n"):
+                styled = Text(no_wrap=True)
+                if first:
+                    styled.append("❯ ", style=f"bold {C.primary}")
+                    styled.append(line[2:], style="bold white")
+                    first = False
+                else:
+                    styled.append(line, style="bold white")
+                self.write(styled)
+                self._track_lines()
 
     def _render_queued(self, text: str) -> None:
         line = Text()

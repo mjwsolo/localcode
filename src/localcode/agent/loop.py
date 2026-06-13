@@ -12,7 +12,7 @@ stall-recovery cap is exhausted.
 
 It depends on every other submodule in agent/:
   • constants — policy knobs, safety caps
-  • prompts   — SYSTEM_PROMPT, NOTEBOOK_RULES_TEMPLATE, REASONING_RULES
+  • prompts   — SYSTEM_PROMPT, REASONING_RULES
   • context   — _prepare_model_messages, _compact_messages, truncation
   • recovery  — detect_stall, nudge_for
   • helpers   — _execute_tool, _needs_confirmation, display helpers
@@ -130,7 +130,7 @@ def run_agent_loop(
         variant) to exercise different prompts without monkey-patching
         module globals. The string still goes through `.format(cwd=...,
         project_instructions=..., network_status=..., skills_block=...,
-        reasoning_rules=..., notebook_block=...)` so any caller-supplied
+        reasoning_rules=...)` so any caller-supplied
         override must expose the same placeholder slots (our variant
         renderers all produce strings that have already had these
         placeholders baked in to no-op values, so `.format()` is

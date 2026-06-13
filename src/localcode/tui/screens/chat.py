@@ -1101,10 +1101,21 @@ class ChatScreen(Screen):
 
     def _update_status(self) -> None:
         config = self.tui.config
-        mode = config.runtime.laptop_26b_runtime_mode
-        mode_label = "fast" if not mode.endswith("-think") else "reasoning"
         from ...models_catalog import current as current_choice
         cur = current_choice(config)
+        # Thinking indicator: reflects the `/thinking` policy
+        # (internal_thinking_mode), NOT the perf runtime mode. Block-diffusion
+        # models can't produce hidden reasoning, so show "n/a" there rather
+        # than a misleading on/off.
+        if cur is not None and str(
+            getattr(cur, "architecture", "")
+        ).startswith("diffusion"):
+            thinking_label = "n/a"
+        else:
+            _tm = (config.runtime.internal_thinking_mode or "off").strip().lower()
+            thinking_label = "off" if _tm in (
+                "", "off", "none", "false", "0", "no"
+            ) else "on"
         if cur is not None:
             model = cur.name
         else:
@@ -1227,7 +1238,7 @@ class ChatScreen(Screen):
         left = RichText.from_markup(
             f"[{C.primary}]LocalCode[/] · "
             f"{server_label} · context: {pct_remaining}% free · "
-            f"mode: {mode_label}"
+            f"thinking: {thinking_label}"
             + (f" · task: {task_stage}" if task_stage else "")
             + f" · model: {short_model}"
         )
@@ -1318,8 +1329,22 @@ class ChatScreen(Screen):
                 _screen_w = int(getattr(self.size, "width", 0) or 0)
             except Exception:
                 pass
+            # Prefer the overflow box's OWN rendered width: it lives in
+            # whatever pane the terminal is split into, which can be far
+            # narrower than the app/terminal width. Wrapping to the app width
+            # made pre-wrapped lines overflow the narrow box, and the Static
+            # re-wrapped them at column 0 — a long path dedented out of the
+            # hanging indent. Trust the measured box width once it's a sane
+            # value (after first layout); before that, fall back to the app
+            # width with a 60 floor (an unsettled early measure once wrapped a
+            # 32-char string to ribbons at ~17 cols).
+            _box_w = 0
+            try:
+                _box_w = int(getattr(overflow.size, "width", 0) or 0)
+            except Exception:
+                pass
             raw = _app_w or _screen_w or 80
-            avail = max(60, raw - 8)
+            avail = (_box_w - 2) if _box_w >= 24 else max(60, raw - 8)
             # Show the wrapped preview when the value is too long for one
             # line OR contains explicit newlines (multi-line paste) — a
             # single-line Input can't render the latter, so without this
@@ -1328,18 +1353,30 @@ class ChatScreen(Screen):
             # keeps its line breaks instead of being reflowed into prose.
             if len(text) > avail or "\n" in text:
                 import textwrap
-                out_lines: list[str] = []
+                # Flatten to physical rows so we can cap height + show a cursor.
+                flat: list[str] = []
                 for i, logical in enumerate(text.split("\n")):
                     lead = "› " if i == 0 else "  "
                     if not logical:
-                        out_lines.append("  ")
+                        flat.append("  ")
                         continue
-                    out_lines.append(textwrap.fill(
-                        logical, width=avail,
+                    wrapped = textwrap.fill(
+                        logical, width=max(8, avail),
                         initial_indent=lead, subsequent_indent="  ",
-                        break_long_words=False, break_on_hyphens=False,
-                    ))
-                overflow.update("\n".join(out_lines))
+                        break_long_words=True, break_on_hyphens=True,
+                    )
+                    flat.extend(wrapped.split("\n"))
+                # The real single-line Input is hidden while the preview shows,
+                # so paste/typed text would scroll the cursor off the top with
+                # no way to find it. Mark the end with a cursor glyph and, when
+                # the input is taller than the box, keep the TAIL (where the
+                # cursor is) behind a ⋮ marker instead of the (stale) top.
+                if flat:
+                    flat[-1] = flat[-1] + "▌"
+                _MAX_VIS = 7
+                if len(flat) > _MAX_VIS:
+                    flat = ["  ⋮"] + flat[-_MAX_VIS:]
+                overflow.update("\n".join(flat))
                 overflow.add_class("active")
                 input_row.add_class("hidden-by-overflow")
             else:
@@ -1686,6 +1723,7 @@ class ChatScreen(Screen):
             except Exception:
                 pass
             log.append_info(f"Thinking {value}.")
+            self._update_status()  # reflect the change in the status bar now
             return
 
         value = parts[1].strip().lower()
@@ -1703,6 +1741,7 @@ class ChatScreen(Screen):
         except Exception:
             pass
         log.append_info(f"Thinking {value}.")
+        self._update_status()  # reflect the change in the status bar now
 
     def _handle_status_command(self) -> None:
         """Show what's running, what model is loaded, and where things live.

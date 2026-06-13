@@ -570,7 +570,7 @@ def test_sections_compose_callable():
     ctx = SectionContext(
         cwd="/tmp/x", project_instructions="",
         network_status="Network: ONLINE", skills_block="",
-        reasoning_rules="", notebook_block="",
+        reasoning_rules="",
     )
     out = compose_system_prompt(ctx)
     assert isinstance(out, str) and len(out) > 100
