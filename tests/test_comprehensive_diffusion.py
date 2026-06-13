@@ -89,6 +89,35 @@ def test_prompt_format_includes_full_system_verbatim():
     assert "<start_of_turn>user\n" in p and p.endswith("<start_of_turn>model\n")
 
 
+def test_prompt_format_renders_tool_call_turn_and_labeled_result():
+    # THE post-tool-result E3107 bug: an assistant turn that ONLY made tool
+    # calls has empty content. The old formatter skipped it, leaving the
+    # prompt as `user -> user -> model` (a tool result with no record the
+    # model asked for one). The entropy-bound decoder then denoised to EMPTY
+    # in ~2 steps -> E3107 on EVERY multi-step agentic task. The tool-call
+    # turn must be rendered as a `model` turn, and the tool result as a
+    # labeled `user` turn, so the conversation stays coherent.
+    import re
+    G = LocalCodeRuntimeGateway
+    msgs = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "search for X"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "c0", "type": "function",
+             "function": {"name": "web_search",
+                          "arguments": '{"query": "X"}'}}]},
+        {"role": "tool", "tool_call_id": "c0", "content": "result body"},
+    ]
+    p = G._format_diffusion_prompt(msgs, tools=None)
+    # Coherent alternation — NOT user,user,model.
+    assert re.findall(r"<start_of_turn>(\w+)", p) == ["user", "model", "user", "model"]
+    # The empty-content tool-call turn is rendered as the model's JSON call.
+    assert '{"tool": "web_search", "args": {"query": "X"}}' in p
+    # The result is labeled with the tool it came from.
+    assert "Tool result (web_search):" in p
+    assert "result body" in p
+
+
 # ── Stream dispatch through the stub runner ──────────────────────────
 
 
