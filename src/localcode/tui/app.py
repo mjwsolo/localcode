@@ -414,7 +414,7 @@ class LocalCodeTUI(App):
             self._pending_resume_messages = []
 
     def action_copy_or_quit(self) -> None:
-        """Ctrl+C: double-press to exit (like Claude Code).
+        """Ctrl+C: double-press to exit.
 
         First press does NOT quit — it cancels any in-flight turn and
         shows a grey "Press Ctrl+C again to exit" hint at the bottom.
