@@ -129,10 +129,11 @@ _REGISTRY: list[ErrorCode] = [
               "agentic work, `/model` to a Gemma 26B-A4B or Qwen quant.",
               cause="model"),
     ErrorCode("E3108", "Model collapsed into repeated junk tokens",
-              "A known llama.cpp Gemma-4 bug (the 26B-A4B MoE / 31B dense especially, worse with "
-              "thinking on) loops on raw <unusedNN>/[multimodal] tokens. We stopped the turn. "
-              "`/model` to Gemma 4 12B or a higher quant, or `/thinking off`. "
-              "(Upstream: ggml-org/llama.cpp#21516)",
+              "A llama.cpp Gemma-4 tokenizer bug (the 26B-A4B MoE / 31B dense especially) loops on "
+              "raw <unusedNN>/[multimodal] tokens; we stopped the turn. FIXED upstream by "
+              "llama.cpp PR #21343 (merged Apr 2026) — rebuild the LocalCode server binary from a "
+              "current llama.cpp base to clear it. Until then: `/model` to Gemma 4 12B (unaffected) "
+              "or `/thinking off` (shorter generations collapse less).",
               cause="model"),
 
     # E4xxx — Filesystem / git
