@@ -31,10 +31,12 @@ from localcode.runtime import LocalCodeRuntimeGateway
 # The Apple-Silicon RAM configurations LocalCode ships against.
 RAM_LADDER = [8, 16, 18, 24, 32, 36, 48, 64, 96, 128]
 
-# Hard KV ceilings the runtime must never exceed for a given RAM (validated
-# on 16 GB; 128 GB allowed up to 128K). A model asking for more must clamp.
+# Hard KV ceiling the runtime must never exceed for a given RAM. Use the
+# runtime's own _ram_ctx_ceiling as the single source of truth so this test
+# can't drift from it (it did once — the 48GB->96K tier was added to the
+# runtime but not here).
 def _ctx_ceiling(ram_gb: int) -> int:
-    return 131072 if ram_gb >= 64 else 65536
+    return LocalCodeRuntimeGateway._ram_ctx_ceiling(ram_gb)
 
 
 def _backend_for(arch: str) -> str:
