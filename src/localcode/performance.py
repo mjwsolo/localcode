@@ -289,14 +289,24 @@ def _run_capture(command: list[str]) -> str:
 def apple_silicon_bandwidth_gbps() -> float:
     """Approx peak unified-memory bandwidth (GB/s) for THIS Mac's chip.
 
-    Decode speed on Apple Silicon is memory-bandwidth bound (every token
-    re-reads the active weights from RAM), so this — not RAM size — is what
-    sets tokens/sec. Parsed from the CPU brand string ("Apple M5 Max") so
-    the estimate tracks the user's actual machine: a base M1 (~68 GB/s) vs
-    an M-Max (~400-600 GB/s) is a ~6-9x speed difference on the same model.
-    Official numbers are sparse for the newest gens, so values are
-    approximate — only the relative ordering needs to hold. Conservative
-    150 GB/s fallback for non-Apple / unparseable.
+    Decode speed on Apple Silicon is memory-bandwidth bound (each token
+    re-reads the active model weights from RAM), so this — not RAM size —
+    is the primary speed lever.  Parsed from the CPU brand string so the
+    estimate reflects the actual chip tier.
+
+    Figures are Apple's advertised spec values (GB/s) where published,
+    otherwise the closest verified third-party measurement.  Sources:
+      M1/M1 Pro/M1 Max/M1 Ultra — Apple newsroom Oct 2021 / Mar 2022
+      M2/M2 Pro/M2 Max/M2 Ultra — Apple newsroom Jan/Jun 2023
+      M3/M3 Pro/M3 Max/M3 Ultra — Apple newsroom Oct/Nov 2023 + Mar 2024
+        (M3 Pro regressed vs M2 Pro: 150 GB/s vs 200 GB/s)
+      M4/M4 Pro/M4 Max           — Apple newsroom Oct 2024
+        (M4 base = 120 GB/s; M4 Pro = 273 GB/s; M4 Max = 546 GB/s)
+      M5/M5 Pro/M5 Max           — Apple newsroom Oct 2025 / Mar 2026
+        (M5 base = 153 GB/s; M5 Pro = 307 GB/s; M5 Max = 614 GB/s)
+      M5 Ultra                   — expected ~1100 GB/s (unreleased as of Jun 2026)
+
+    Conservative 150 GB/s fallback for non-Apple or unparseable brand strings.
     """
     if platform.system().lower() != "darwin":
         return 150.0
@@ -309,23 +319,64 @@ def apple_silicon_bandwidth_gbps() -> float:
         return 150.0
     if not brand:
         return 150.0
-    # Tier base (≈ M1/M2/M3-era GB/s); generation multiplier lifts M4/M5,
-    # which raised bandwidth markedly (e.g. M4 Max ≈ 546 GB/s).
+
+    # Per-chip lookup table keyed on (generation, tier).
+    # Generation is the first "m<N>" token; tier is ultra/max/pro/base.
+    # The M3 Pro is a known regression vs M2 Pro (150 vs 200 GB/s) so
+    # simple base×multiplier tables silently overstate it; explicit values
+    # avoid that class of bug.
+    #
+    # Ordering: check for the most-descriptive tier first (ultra > max > pro)
+    # so "m1 ultra" doesn't match the "max" branch.
+    _TABLE: dict[tuple[str, str], float] = {
+        # M1 family
+        ("m1", "ultra"): 800.0,   # Apple spec: 800 GB/s
+        ("m1", "max"):   400.0,   # Apple spec: 400 GB/s
+        ("m1", "pro"):   200.0,   # Apple spec: 200 GB/s
+        ("m1", "base"):   68.0,   # Apple spec:  68 GB/s (LPDDR4X; notable outlier)
+        # M2 family
+        ("m2", "ultra"): 800.0,   # Apple spec: 800 GB/s
+        ("m2", "max"):   400.0,   # Apple spec: 400 GB/s
+        ("m2", "pro"):   200.0,   # Apple spec: 200 GB/s
+        ("m2", "base"):  100.0,   # Apple spec: 100 GB/s
+        # M3 family — M3 Pro regressed to 150 GB/s (vs 200 on M2 Pro)
+        ("m3", "ultra"): 819.0,   # Apple spec: 819 GB/s
+        ("m3", "max"):   400.0,   # Apple spec: 400 GB/s (16-core GPU config)
+        ("m3", "pro"):   150.0,   # Apple spec: 150 GB/s (↓ from M2 Pro's 200)
+        ("m3", "base"):  100.0,   # Apple spec: 100 GB/s
+        # M4 family — significant bandwidth uplift at Pro/Max tiers
+        # (No M4 Ultra was released.)
+        ("m4", "max"):   546.0,   # Apple spec: 546 GB/s (40-core GPU)
+        ("m4", "pro"):   273.0,   # Apple spec: 273 GB/s
+        ("m4", "base"):  120.0,   # Apple spec: 120 GB/s
+        # M5 family
+        ("m5", "ultra"): 1100.0,  # Expected ~1100 GB/s (unreleased; 2× M5 Max)
+        ("m5", "max"):   614.0,   # Apple spec: 614 GB/s
+        ("m5", "pro"):   307.0,   # Apple spec: 307 GB/s
+        ("m5", "base"):  153.0,   # Apple spec: 153 GB/s
+    }
+
+    gen = ""
+    for g in ("m1", "m2", "m3", "m4", "m5"):
+        # Match "m5" but not "m5 pro" inside the generation check — just
+        # look for the token anywhere in the brand string.
+        if g in brand:
+            gen = g
+            break  # brand strings are unique per generation
+
+    if not gen:
+        return 150.0  # non-Apple or future unrecognised generation
+
     if "ultra" in brand:
-        base = 800.0
+        tier = "ultra"
     elif "max" in brand:
-        base = 400.0
+        tier = "max"
     elif "pro" in brand:
-        base = 200.0
+        tier = "pro"
     else:
-        base = 100.0
-    if "m5" in brand:
-        base *= 1.5
-    elif "m4" in brand:
-        base *= 1.35
-    elif "m1" in brand and "max" not in brand and "pro" not in brand and "ultra" not in brand:
-        base = 68.0  # base M1 is the notable low outlier
-    return base
+        tier = "base"
+
+    return _TABLE.get((gen, tier), 150.0)
 
 
 def detect_machine_profile() -> MachineProfile:
