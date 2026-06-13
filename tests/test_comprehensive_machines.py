@@ -126,3 +126,50 @@ def test_no_promotion_without_gpu():
 def test_no_promotion_on_non_mac():
     machine = _machine(64, "small", system="linux")
     assert perf.should_promote_legacy_default_to_laptop_26b(_blank_config(), machine) is False
+
+
+# ── apple_silicon_bandwidth_gbps chip table ─────────────────────────
+
+
+@pytest.mark.parametrize("brand,expected", [
+    # M1 family
+    ("Apple M1",           68.0),
+    ("Apple M1 Pro",      200.0),
+    ("Apple M1 Max",      400.0),
+    ("Apple M1 Ultra",    800.0),
+    # M2 family
+    ("Apple M2",          100.0),
+    ("Apple M2 Pro",      200.0),
+    ("Apple M2 Max",      400.0),
+    ("Apple M2 Ultra",    800.0),
+    # M3 family — M3 Pro is 150, NOT 200 (regression vs M2 Pro)
+    ("Apple M3",          100.0),
+    ("Apple M3 Pro",      150.0),
+    ("Apple M3 Max",      400.0),
+    ("Apple M3 Ultra",    819.0),
+    # M4 family (no M4 Ultra released)
+    ("Apple M4",          120.0),
+    ("Apple M4 Pro",      273.0),
+    ("Apple M4 Max",      546.0),
+    # M5 family
+    ("Apple M5",          153.0),
+    ("Apple M5 Pro",      307.0),
+    ("Apple M5 Max",      614.0),
+    ("Apple M5 Ultra",   1100.0),
+])
+def test_bandwidth_table(brand, expected, monkeypatch):
+    """Each chip tier must map to its documented peak bandwidth."""
+    monkeypatch.setattr(perf.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(
+        perf.subprocess, "run",
+        lambda *a, **kw: type("R", (), {"stdout": brand, "returncode": 0})(),
+    )
+    result = perf.apple_silicon_bandwidth_gbps()
+    assert result == expected, (
+        f"{brand}: expected {expected} GB/s, got {result} GB/s"
+    )
+
+
+def test_bandwidth_fallback_non_mac(monkeypatch):
+    monkeypatch.setattr(perf.platform, "system", lambda: "Linux")
+    assert perf.apple_silicon_bandwidth_gbps() == 150.0

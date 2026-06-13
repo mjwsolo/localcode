@@ -4,7 +4,7 @@ Lets a user add MCP servers to LocalCode in `~/.localcode/mcp.json`.
 Each server's tools get auto-registered with the agent so the model
 can call them like any other tool.
 
-Config shape (matches Anthropic / OpenAI MCP convention):
+Config shape (standard MCP server convention):
 
     {
       "mcpServers": {
@@ -208,7 +208,7 @@ def shutdown_all() -> None:
 
 
 def mcp_tool_schemas() -> list[dict]:
-    """Return Anthropic-style tool schemas for every connected MCP
+    """Return OpenAI-style tool schemas for every connected MCP
     server's tools. Each tool is renamed `mcp_<server>_<tool>` so
     multiple servers can expose tools with the same name without
     collision."""
