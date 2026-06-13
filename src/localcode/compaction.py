@@ -37,13 +37,43 @@ RESERVE_TOKENS_DEFAULT = 4096
 
 # Keep this many tokens of most-recent history verbatim after a compact.
 # Picked so the last few tool results + the user's latest ask + the
-# in-progress assistant turn all survive intact.
+# in-progress assistant turn all survive intact. This is a FLOOR — on a
+# big-RAM machine with a 128K/256K window we keep proportionally more
+# verbatim (see `_keep_recent_for_window`), because crushing a huge
+# window's history down to 6K recent tokens throws away context the
+# model still has room to hold.
 KEEP_RECENT_TOKENS_DEFAULT = 6144
+KEEP_RECENT_TOKENS_MAX = 49152
 
 # Trigger compaction when estimated prompt exceeds this fraction of
 # (context_window - reserve). 0.70 leaves enough margin for compaction
 # itself to not blow the window.
 COMPACT_THRESHOLD_FRACTION = 0.70
+
+# Below this much system RAM we do NOT spend an LLM generation on the
+# summary. Rationale (matches the per-machine policy used everywhere
+# else — context window, model rec, tok/s): summarizing with the model
+# means feeding the entire old history back through it (a big prefill)
+# plus ~1500 tokens of decode. On a small machine that's a multi-second
+# stall mid-task, the resident model is the weak/quantized one (so the
+# summary is poor anyway), AND the tight window can't spare the room. So
+# small RAM uses the instant deterministic structured summary; capable
+# machines (≥32 GB) spend the generation for a richer summary.
+LLM_SUMMARY_MIN_RAM_GB = 32
+
+
+def _keep_recent_for_window(context_window: int) -> int:
+    """How many recent tokens to keep verbatim, scaled to the window.
+
+    Small windows (16 GB Mac, ~64K) keep the 6K floor — there's no room
+    for more. Big windows (128 GB, 256K) keep up to ~48K verbatim so a
+    long session preserves far more raw recent history instead of being
+    crushed to the same tiny tail as a small machine.
+    """
+    if not context_window or context_window <= 0:
+        return KEEP_RECENT_TOKENS_DEFAULT
+    scaled = context_window // 5
+    return max(KEEP_RECENT_TOKENS_DEFAULT, min(KEEP_RECENT_TOKENS_MAX, scaled))
 
 
 _SUMMARIZATION_SYSTEM = (
@@ -157,43 +187,14 @@ def _split_at_keep_recent(
     return non_system[:cutoff], non_system[cutoff:]
 
 
-def compact(
-    messages: list[dict[str, Any]],
-    runtime: Any,
-    context_window: int,
-    keep_recent_tokens: int = KEEP_RECENT_TOKENS_DEFAULT,
-) -> list[dict[str, Any]]:
-    """Return a compacted copy of `messages`.
-
-    Workflow:
-      1. Keep every role="system" message up front (system prompt + any
-         prior compaction memos).
-      2. Split the remaining (user/assistant/tool) messages into
-         "to-summarize" and "keep-verbatim" slices by token count.
-      3. Call `runtime.chat_once` with the to-summarize slice + the
-         SUMMARIZATION_PROMPT to produce a structured summary.
-      4. Return: [original system msgs] + [new system summary] +
-         [keep-verbatim slice].
-
-    If there's nothing old enough to summarize, return `messages`
-    unchanged. If the summary call fails, return `messages` unchanged
-    (fail-safe — worse to corrupt the conversation).
-    """
-    sys_msgs = [m for m in messages if m.get("role") == "system"]
-    others = [m for m in messages if m.get("role") != "system"]
-
-    to_summarize, keep = _split_at_keep_recent(others, keep_recent_tokens)
-    if not to_summarize:
-        return messages
-
-    # Build the summarization request. The model sees prior turns as
-    # normal context and then our final user-role instruction.
+def _llm_summary(runtime: Any, to_summarize: list[dict[str, Any]]) -> str:
+    """Ask the resident model for a structured summary. Returns "" on any
+    failure so the caller can fall back to the deterministic summary."""
     summary_req = (
         [{"role": "system", "content": _SUMMARIZATION_SYSTEM}]
         + to_summarize
         + [{"role": "user", "content": _SUMMARIZATION_USER}]
     )
-
     try:
         result = runtime.chat_once(
             summary_req,
@@ -202,10 +203,73 @@ def compact(
             num_predict=1500,
         )
     except Exception:
+        return ""
+    msg = (result or {}).get("message", {}) or {}
+    return (msg.get("content") or "").strip()
+
+
+def _deterministic_summary(to_summarize: list[dict[str, Any]]) -> str:
+    """Build a structured summary with zero model calls.
+
+    Reuses the agent's `_compact_history_summary` (files touched, commands
+    run, errors to preserve, recent user intent, recent tool actions) so the
+    small-RAM path and the per-round aging path produce consistent memos.
+    """
+    try:
+        from .agent.context import _compact_history_summary
+        text = _compact_history_summary(to_summarize)
+    except Exception:
+        text = ""
+    return (text or "").strip()
+
+
+def compact(
+    messages: list[dict[str, Any]],
+    runtime: Any,
+    context_window: int,
+    keep_recent_tokens: int | None = None,
+    ram_gb: int | None = None,
+) -> list[dict[str, Any]]:
+    """Return a compacted copy of `messages`.
+
+    Workflow:
+      1. Keep every role="system" message up front (system prompt + any
+         prior compaction memos).
+      2. Split the remaining (user/assistant/tool) messages into
+         "to-summarize" and "keep-verbatim" slices by token count.
+      3. Produce a structured summary of the to-summarize slice. On a
+         capable machine (`ram_gb` ≥ `LLM_SUMMARY_MIN_RAM_GB`) we ask the
+         resident model for a rich summary; on a small machine — or if the
+         model summary call fails/returns nothing — we fall back to an
+         instant deterministic summary. This keeps a 16 GB Mac responsive
+         (no mid-task generation stall, no weak-model summary) while a
+         128 GB Mac spends the tokens for a better one.
+      4. Return: [original system msgs] + [new system summary] +
+         [keep-verbatim slice].
+
+    `keep_recent_tokens` defaults to a window-scaled value (`None` →
+    `_keep_recent_for_window`) so big windows preserve more recent history.
+
+    If there's nothing old enough to summarize, return `messages`
+    unchanged. If summarization produces nothing, return `messages`
+    unchanged (fail-safe — worse to corrupt the conversation).
+    """
+    if keep_recent_tokens is None:
+        keep_recent_tokens = _keep_recent_for_window(context_window)
+
+    sys_msgs = [m for m in messages if m.get("role") == "system"]
+    others = [m for m in messages if m.get("role") != "system"]
+
+    to_summarize, keep = _split_at_keep_recent(others, keep_recent_tokens)
+    if not to_summarize:
         return messages
 
-    msg = (result or {}).get("message", {}) or {}
-    summary_text = (msg.get("content") or "").strip()
+    # RAM-tiered: spend a model generation only where it's worth it.
+    use_llm = ram_gb is None or ram_gb >= LLM_SUMMARY_MIN_RAM_GB
+    summary_text = _llm_summary(runtime, to_summarize) if use_llm else ""
+    if not summary_text:
+        # Small machine, or the LLM summary failed/was empty — deterministic.
+        summary_text = _deterministic_summary(to_summarize)
     if not summary_text:
         return messages
 
