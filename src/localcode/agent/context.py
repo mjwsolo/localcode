@@ -149,28 +149,33 @@ def _truncate_result(result: str, tool_name: str) -> str:
 # to constants.py during the T0.1 split; re-exported at the top of
 # this module for back-compat.
 
-def _compact_old_tool_results(messages: list[dict]) -> list[dict]:
+def _compact_old_tool_results(
+    messages: list[dict], keep_recent: int = COMPACT_KEEP_RECENT_TOOL_RESULTS
+) -> list[dict]:
     """Return a copy of `messages` with older tool-role results summarized.
 
     Gated on `Feature.TOOL_RESULT_AGING` — when disabled the caller gets
     the input list back unchanged, which is what eval uses to A/B
     "how much does aging actually save per turn?"
 
-    We keep the last `COMPACT_KEEP_RECENT_TOOL_RESULTS` tool results
-    verbatim (the model usually only needs the recent ones to decide the
-    next step) and replace earlier ones with a compact "[summarized ...]"
-    placeholder. User, assistant, and system messages pass through
-    unchanged, and `tool_call_id` is preserved so the chat protocol still
-    reconciles ids correctly.
+    We keep the last `keep_recent` tool results verbatim (the model usually
+    only needs the recent ones to decide the next step) and replace earlier
+    ones with a compact "[summarized ...]" placeholder. `keep_recent` scales
+    with the context window (more on a big machine — see
+    `_prepare_model_messages`), so a 128K-window session preserves far more
+    raw tool output than a 16K one instead of crushing both to the same 4.
+    User/assistant/system messages pass through unchanged, and `tool_call_id`
+    is preserved so the chat protocol still reconciles ids correctly.
     """
     from ..features import Feature, is_enabled
     if not is_enabled(Feature.TOOL_RESULT_AGING):
         return messages
+    keep_recent = max(1, keep_recent)
     tool_idxs = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
-    if len(tool_idxs) <= COMPACT_KEEP_RECENT_TOOL_RESULTS:
+    if len(tool_idxs) <= keep_recent:
         return messages
 
-    cutoff_idx = tool_idxs[-COMPACT_KEEP_RECENT_TOOL_RESULTS]
+    cutoff_idx = tool_idxs[-keep_recent]
     out: list[dict] = []
     for i, m in enumerate(messages):
         if i >= cutoff_idx or m.get("role") != "tool":
@@ -463,8 +468,33 @@ def _msg_bytes(messages: list[dict]) -> int:
     except Exception:
         return 0
 
-def _prepare_model_messages(messages: list[dict]) -> list[dict]:
+def _window_aware_compaction(ctx_window_chars: int | None) -> tuple[int, int]:
+    """(history_budget_bytes, keep_recent_tool_results) scaled to the context
+    window. The whole point: compaction must be DYNAMIC per machine. A 16 GB
+    Mac with a ~16K window has no room, so aggressive lossy compaction (the
+    old fixed 36 KB / keep-4) is correct. A 128 GB Mac with a 128K window has
+    ~8x the room — crushing its history to 36 KB threw away the data model the
+    model needs and made it lose track / re-read / drift. So budget ~55% of
+    the window to history and keep proportionally more recent tool output.
+
+    `ctx_window_chars` ≈ num_ctx tokens × ~3.5 chars/token. None/unknown →
+    the legacy fixed behaviour (back-compat, safe on tiny windows).
+    """
+    if not ctx_window_chars or ctx_window_chars <= 0:
+        return 36_000, COMPACT_KEEP_RECENT_TOOL_RESULTS
+    budget = max(36_000, int(ctx_window_chars * 0.55))
+    keep = max(COMPACT_KEEP_RECENT_TOOL_RESULTS, min(24, ctx_window_chars // 20_000))
+    return budget, keep
+
+
+def _prepare_model_messages(
+    messages: list[dict], ctx_window_chars: int | None = None
+) -> list[dict]:
     """One-stop context-shrink pass before sending to the model.
+
+    `ctx_window_chars` (the model's context window in chars, RAM-derived) makes
+    compaction window-aware: big machines keep far more history, small ones
+    stay aggressive. None preserves the legacy fixed budget.
 
     Composes the three reduction passes in a fixed order:
       1. `_redact_old_write_args` — strip bulky content from old
@@ -484,13 +514,14 @@ def _prepare_model_messages(messages: list[dict]) -> list[dict]:
     practice?" without instrumenting the agent loop. Silent on no-op
     so the log doesn't fill up with empty events.
     """
+    budget_bytes, keep_recent = _window_aware_compaction(ctx_window_chars)
     before = _msg_bytes(messages)
     after_writes = _redact_old_write_args(messages)
     bytes_writes = before - _msg_bytes(after_writes)
     after_reads = _redact_duplicate_reads(after_writes)
     bytes_reads = _msg_bytes(after_writes) - _msg_bytes(after_reads)
-    after_tools = _compact_old_tool_results(after_reads)
-    after_budget = _microcompact_for_prompt_budget(after_tools)
+    after_tools = _compact_old_tool_results(after_reads, keep_recent=keep_recent)
+    after_budget = _microcompact_for_prompt_budget(after_tools, target_bytes=budget_bytes)
     bytes_tools = _msg_bytes(after_reads) - _msg_bytes(after_tools)
     bytes_budget = _msg_bytes(after_tools) - _msg_bytes(after_budget)
     total_saved = bytes_writes + bytes_reads + bytes_tools + bytes_budget
