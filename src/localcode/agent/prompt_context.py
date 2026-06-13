@@ -38,8 +38,6 @@ def build_agent_system_prompt(
     skills_block, skill_names, skill_origins, skill_chars, skill_candidates = (
         build_dynamic_skills_block(app, user_text)
     )
-    notebook_block = ""
-
     def _render_caller_template(ctx: SectionContext) -> str:
         return base_system_prompt.format(
             cwd=ctx.cwd,
@@ -47,7 +45,6 @@ def build_agent_system_prompt(
             network_status=ctx.network_status,
             skills_block=ctx.skills_block,
             reasoning_rules=ctx.reasoning_rules,
-            notebook_block=ctx.notebook_block,
         )
 
     section_ctx = SectionContext(
@@ -56,7 +53,6 @@ def build_agent_system_prompt(
         network_status=network_status,
         skills_block=skills_block,
         reasoning_rules=REASONING_RULES if use_thinking else "",
-        notebook_block=notebook_block,
     )
     using_default_prompt = base_system_prompt == SYSTEM_PROMPT
     system = compose_system_prompt(
