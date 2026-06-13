@@ -1492,11 +1492,8 @@ class LocalCodeRuntimeGateway:
         # above — DiffusionGemma's plain-JSON calls are surfaced as a
         # tool_calls event with the scaffolding stripped from the content.)
         if not text.strip() and not tool_calls:
-            text = (
-                "⚠ DiffusionGemma returned no usable response this turn. "
-                "It's an experimental diffusion model — for heavier coding, "
-                "a Gemma 26B-A4B quant (via /model) is more reliable."
-            )
+            from .errors import LocalCodeError, by_code, format_for_user
+            text = format_for_user(LocalCodeError(by_code("E3107")))
         # Emit in modest chunks so the chat log renders progressively.
         for i in range(0, len(text), 160):
             yield {"type": "content", "content": text[i:i + 160]}
@@ -2044,16 +2041,16 @@ class LocalCodeRuntimeGateway:
                     )
                     usage_estimated = True
                 if _collapsed:
-                    # Replace the (stripped-to-near-empty) soup with a clear,
-                    # actionable note instead of leaving a blank turn.
+                    # Surface the canonical error code (E3108) instead of the
+                    # stripped-to-near-empty soup or ad-hoc prose.
+                    from .errors import (
+                        LocalCodeError as _LCE,
+                        by_code as _by_code,
+                        format_for_user as _fmt_err,
+                    )
                     yield {
                         "type": "content",
-                        "content": (
-                            "⚠ This model collapsed into repeated junk tokens — "
-                            "a known llama.cpp bug with Gemma 4 (the 26B-A4B MoE "
-                            "especially), worse with thinking on. Try Gemma 4 12B, "
-                            "a higher quant, or /thinking off."
-                        ),
+                        "content": _fmt_err(_LCE(_by_code("E3108"))),
                     }
                 yield {
                     "type": "stream_done",

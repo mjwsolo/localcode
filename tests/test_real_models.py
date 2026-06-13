@@ -41,7 +41,13 @@ pytestmark = pytest.mark.real_models
 # the whole point — it's what broke diffusion in the live app.
 LIVE_NUM_PREDICT = -1
 TEST_PORT = 8199  # distinct from the default 8081 so a running app is untouched
-ERR_SENTINEL = "no usable response"
+# Degenerate-output error codes a turn must NOT return: E3107 (diffusion gave
+# no usable output), E3108 (model collapsed into junk tokens).
+ERR_SENTINELS = ("[E3107]", "[E3108]")
+
+
+def _has_error(content: str) -> bool:
+    return any(s in content for s in ERR_SENTINELS)
 
 
 def _model_path(choice) -> Path:
@@ -147,7 +153,7 @@ def test_real_chat_turn(choice):
     tools = _toolkit_schemas()
     with _Server(gw, gw.config.model):
         content, tcs, _ = _collect(gw, [SYS, {"role": "user", "content": "hi"}], tools)
-    assert ERR_SENTINEL not in content, f"{choice.key}: error sentinel returned"
+    assert not _has_error(content), f"{choice.key}: degenerate-output error code returned"
     assert content or tcs, f"{choice.key}: empty chat turn"
 
 
@@ -161,7 +167,7 @@ def test_real_tool_turn(choice):
         content, tcs, _ = _collect(
             gw, [SYS, {"role": "user", "content": "List the files in the current directory."}], tools
         )
-    assert ERR_SENTINEL not in content, f"{choice.key}: error sentinel on tool turn"
+    assert not _has_error(content), f"{choice.key}: degenerate-output error code on tool turn"
     # A coding agent should call a tool here; at minimum it must not be empty.
     assert tcs or content, f"{choice.key}: empty tool turn"
 
@@ -196,6 +202,6 @@ def test_real_diffusion_reliable_across_runs(choice):
     fails = 0
     for _ in range(3):
         content, tcs, _ = _collect(gw, [SYS, {"role": "user", "content": "hi"}], tools)
-        if ERR_SENTINEL in content or not (content or tcs):
+        if _has_error(content) or not (content or tcs):
             fails += 1
     assert fails == 0, f"{choice.key}: {fails}/3 diffusion chat runs failed"
