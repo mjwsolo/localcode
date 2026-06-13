@@ -665,6 +665,7 @@ class ChatScreen(Screen):
         # cumulative total. Falls back to 0 when the backend doesn't
         # populate `usage` (e.g. some local fallback paths).
         self._turn_prompt_tokens: int = 0
+        self._last_round_prompt_tokens: int = 0  # peak window occupancy / turn
         self._turn_completion_tokens: int = 0
         self._turn_total_tokens: int = 0
         self._thinking_phase: str = ""
@@ -1636,6 +1637,7 @@ class ChatScreen(Screen):
             if self.tui.engine:
                 self.tui.engine.session.messages.clear()
             self._context_used = 0
+            self._last_round_prompt_tokens = 0
             self._total_tokens = 0
             self._update_status()
         elif text == "/undo" or text == "/undo all":
@@ -3267,9 +3269,17 @@ class ChatScreen(Screen):
         self._turn_prompt_tokens = 0
         self._turn_completion_tokens = 0
         self._turn_total_tokens = 0
-        # Refresh the context counter from current session state.
-        # Automatically picks up anything compaction shrank.
-        self._context_used = self._recompute_context_used()
+        # Refresh the context counter. Prefer the backend's REAL prompt-token
+        # count for the turn (`in_tokens`) — it includes the full agentic
+        # working context (system prompt + tools + every tool result the model
+        # actually processed this turn), which `_recompute_context_used` MISSES
+        # because session.messages only holds user turns + final assistant text
+        # (the tool history lives in the agent loop's own list). Summing only
+        # session.messages was why the bar read ~99% free even mid-build. Fall
+        # back to the session estimate when the backend reported no usage.
+        self._context_used = max(
+            self._last_round_prompt_tokens, self._recompute_context_used()
+        )
         self._update_status()
 
         # Auto-submit queued messages
@@ -3363,7 +3373,14 @@ class ChatScreen(Screen):
             # turn (multi-tool rounds fire this multiple times) and
             # let the response_done handler read them for the summary.
             try:
-                self._turn_prompt_tokens += int(p.get("prompt_tokens", 0) or 0)
+                _pt = int(p.get("prompt_tokens", 0) or 0)
+                self._turn_prompt_tokens += _pt
+                # The LAST round's prompt size = the real peak window occupancy
+                # this turn (history grows each round, so the final round's
+                # prompt is the fullest). The accumulated sum over-counts the
+                # window; this is what the context bar should reflect.
+                if _pt:
+                    self._last_round_prompt_tokens = _pt
                 self._turn_completion_tokens += int(p.get("completion_tokens", 0) or 0)
                 total = int(p.get("total_tokens", 0) or 0)
                 if total > 0:
