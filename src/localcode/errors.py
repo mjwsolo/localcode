@@ -123,6 +123,17 @@ _REGISTRY: list[ErrorCode] = [
               "during your last request, so the safety monitor freed memory by killing the server "
               "before macOS itself would have force-killed it.",
               cause="system"),
+    ErrorCode("E3107", "Diffusion model returned no usable output",
+              "DiffusionGemma is an experimental block-diffusion model with a small canvas; it "
+              "occasionally denoises to empty. The turn was retried automatically. For heavier "
+              "agentic work, `/model` to a Gemma 26B-A4B or Qwen quant.",
+              cause="model"),
+    ErrorCode("E3108", "Model collapsed into repeated junk tokens",
+              "A known llama.cpp Gemma-4 bug (the 26B-A4B MoE / 31B dense especially, worse with "
+              "thinking on) loops on raw <unusedNN>/[multimodal] tokens. We stopped the turn. "
+              "`/model` to Gemma 4 12B or a higher quant, or `/thinking off`. "
+              "(Upstream: ggml-org/llama.cpp#21516)",
+              cause="model"),
 
     # E4xxx — Filesystem / git
     ErrorCode("E4101", "Path is a directory, not a file",

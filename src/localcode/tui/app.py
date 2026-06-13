@@ -414,24 +414,34 @@ class LocalCodeTUI(App):
             self._pending_resume_messages = []
 
     def action_copy_or_quit(self) -> None:
-        """Ctrl+C: always quit.
+        """Ctrl+C: double-press to exit (like Claude Code).
 
-        Earlier behavior: if a chat-log selection existed, Ctrl+C
-        copied it via pbcopy and showed a "Copied!" toast instead of
-        quitting. That was a confusing dual-purpose binding —
-        selections from earlier drags persist on `_selected_text`
-        invisibly, so Ctrl+C-to-quit would silently re-copy stale
-        text and the user had to press Ctrl+C twice to actually exit.
+        First press does NOT quit — it cancels any in-flight turn and
+        shows a grey "Press Ctrl+C again to exit" hint at the bottom.
+        A second press within 3 s actually quits; otherwise the window
+        lapses and the next Ctrl+C is treated as a fresh first press.
+        This stops an accidental single Ctrl+C from killing a session
+        (a long-standing papercut).
 
-        Why the copy branch is no longer needed: `chat_log.on_mouse_up`
-        already calls `_set_clipboard_osc52` the moment a drag ends,
-        so the selection lands in the terminal clipboard automatically
-        without a keyboard shortcut. Terminals that don't honor OSC 52
-        also typically support native Cmd-C / Ctrl-Shift-C on visually
-        selected text. Either path works; Ctrl+C as keyboard-copy was
-        redundant and confusing.
+        (Selection-copy on Ctrl+C was removed earlier — chat_log's
+        on_mouse_up already copies via OSC 52 the moment a drag ends.)
         """
-        self.action_quit()
+        import time as _t
+        now = _t.monotonic()
+        if now - getattr(self, "_ctrl_c_at", 0.0) <= 3.0:
+            self.action_quit()
+            return
+        self._ctrl_c_at = now
+        # First press also interrupts an in-flight generation (no-op if idle).
+        try:
+            if getattr(self, "engine", None) is not None:
+                self.engine.cancel_requested = True
+        except Exception:
+            pass
+        screen = self.screen
+        _hint = getattr(screen, "flash_exit_hint", None)
+        if callable(_hint):
+            _hint()
 
     # Route bridge messages to the active screen
     def on_agent_event(self, event: AgentEvent) -> None:

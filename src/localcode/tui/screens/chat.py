@@ -1099,7 +1099,28 @@ class ChatScreen(Screen):
         total += 4000
         return total // 4  # chars → approx tokens
 
+    def flash_exit_hint(self) -> None:
+        """Show a transient grey "Press Ctrl+C again to exit" in the status
+        bar (first Ctrl+C). _update_status renders the hint while the window
+        is open; the timer below restores the normal bar when it lapses."""
+        import time as _t
+        self._exit_hint_until = _t.monotonic() + 3.0
+        self._update_status()
+        try:
+            self.set_timer(3.1, self._update_status)
+        except Exception:
+            pass
+
     def _update_status(self) -> None:
+        import time as _t
+        if _t.monotonic() < getattr(self, "_exit_hint_until", 0.0):
+            try:
+                self.query_one("#status-bar", Static).update(
+                    RichText("  Press Ctrl+C again to exit", style="dim")
+                )
+                return
+            except Exception:
+                pass
         config = self.tui.config
         from ...models_catalog import current as current_choice
         cur = current_choice(config)
