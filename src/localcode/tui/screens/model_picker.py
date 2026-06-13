@@ -430,9 +430,19 @@ class ModelPickerScreen(Screen):
         return 2 + self._focused_idx * 2
 
     def _scroll_focus_into_view(self) -> None:
+        # Scroll ONLY when the focused row is at/past a viewport edge — just
+        # enough to bring it into view. The old code scrolled the focused row
+        # to the top on EVERY move, so pressing DOWN through already-visible
+        # rows yanked the whole list UP (the "down arrow scrolls up" bug).
         try:
             box = self.query_one("#picker-box")
-            box.scroll_to(y=max(0, self._focused_line() - 2), animate=False)
+            line = self._focused_line()
+            top = int(getattr(box.scroll_offset, "y", 0) or 0)
+            height = int(getattr(box.size, "height", 0) or 0) or 12
+            if line <= top:
+                box.scroll_to(y=max(0, line - 1), animate=False)
+            elif line >= top + height - 1:
+                box.scroll_to(y=max(0, line - height + 2), animate=False)
         except Exception:
             pass
 
