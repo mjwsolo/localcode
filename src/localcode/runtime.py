@@ -459,16 +459,77 @@ class LocalCodeRuntimeGateway:
         used by BOTH the fastest+turbo path and the balanced/default lift so
         a given machine gets the SAME window on every preset (a 48 GB Mac was
         getting 64K on one path, 96K on another). Monotonic + gap-free across
-        all Mac sizes. Conservative on small RAM: only 16 GB→64K and
-        64 GB→128K are hardware-validated; 24/32 GB stay at 64K to respect a
-        tight Metal wired budget (bumping them needs real-hardware OOM
-        measurement, not extrapolation); 48 GB+ is roomy.
+        all real Mac sizes. The CAP here is the RAM/KV budget; the model's
+        trained length is a separate cap applied via `_model_max_ctx`.
+
+        Every current catalog model trains to >=256K (Gemma 4 / Qwen 3.6 =
+        262144, North-Mini = 500000), so on a big machine RAM is the binding
+        constraint, not the model — hence 96 GB+ unlocks 256K. Small-RAM tiers
+        stay conservative: only 16 GB→64K and 64 GB→128K are hardware-measured;
+        24/32/36 hold at 64K pending real-hardware OOM measurement.
         """
+        if ram_gb >= 96:
+            return 262144   # 256K — 96/128/192 GB hold a 256K KV easily
         if ram_gb >= 64:
-            return 131072   # 128K (validated)
+            return 131072   # 128K (validated; 256K KV is tight beside a Q8 model on 64 GB)
         if ram_gb >= 48:
             return 98304    # 96K
         return 65536        # 16-47 GB: 64K (validated on 16 GB)
+
+    def _model_max_ctx(self, model_path: str | None = None) -> int:
+        """The model's trained context length (`*.context_length` in the GGUF
+        header) — the hard cap we must never exceed, else the model decodes
+        past where it was trained and output degrades. Read once per file and
+        cached (this is called per-request via _options). Returns a large
+        sentinel if the file can't be read, so an unreadable GGUF never
+        wrongly clamps the window below the RAM ceiling.
+        """
+        import struct
+        from pathlib import Path as _Path
+        path = str(model_path or getattr(self.config, "model", "") or "")
+        if not path:
+            return 1_000_000
+        cache = getattr(self, "_model_ctx_cache", None)
+        if cache is None:
+            cache = self._model_ctx_cache = {}
+        if path in cache:
+            return cache[path]
+        result = 1_000_000  # unknown → don't clamp
+        try:
+            if _Path(path).is_file():
+                with open(path, "rb") as f:
+                    if f.read(4) == b"GGUF":
+                        f.read(4)            # version
+                        f.read(8)            # tensor_count
+                        n_kv, = struct.unpack("<Q", f.read(8))
+                        _S = {0: "<B", 1: "<b", 2: "<H", 3: "<h", 4: "<I",
+                              5: "<i", 6: "<f", 7: "<?", 10: "<Q", 11: "<q", 12: "<d"}
+
+                        def _rs():
+                            ln, = struct.unpack("<Q", f.read(8))
+                            return f.read(ln).decode("utf-8", "replace")
+
+                        def _rv(t):
+                            if t == 8:
+                                return _rs()
+                            if t == 9:
+                                et, = struct.unpack("<I", f.read(4))
+                                ln, = struct.unpack("<Q", f.read(8))
+                                return [_rv(et) for _ in range(ln)]
+                            fmt = _S[t]
+                            return struct.unpack(fmt, f.read(struct.calcsize(fmt)))[0]
+
+                        for _ in range(n_kv):
+                            k = _rs()
+                            t, = struct.unpack("<I", f.read(4))
+                            v = _rv(t)
+                            if k.endswith(".context_length") and isinstance(v, int):
+                                result = v
+                                break
+        except Exception:
+            result = 1_000_000
+        cache[path] = result
+        return result
 
     def _system_ram_gb(self) -> int:
         try:
@@ -671,7 +732,10 @@ class LocalCodeRuntimeGateway:
                     # before. Inside the validated turbo branch, 64K
                     # is the floor.
                     return 65536
-                return self._ram_ctx_ceiling(ram_gb)
+                return min(
+                    self._ram_ctx_ceiling(ram_gb),
+                    self._model_max_ctx(model_path),
+                )
             return min(num_ctx, 16384 if turbo else 3072)
         # RAM-aware lift for the balanced/default path. Without this, ctx was
         # a flat `max_context_chars // 4` (~50K) on EVERY machine — a 128 GB
@@ -686,7 +750,8 @@ class LocalCodeRuntimeGateway:
         ram_gb = self._system_ram_gb()
         if ram_gb >= 32:
             num_ctx = max(num_ctx, self._ram_ctx_ceiling(ram_gb))
-        return num_ctx
+        # Never exceed the model's trained context length (degrades past it).
+        return min(num_ctx, self._model_max_ctx(model_path))
 
     def _options(self, num_ctx_override: int | None = None, num_predict_override: int | None = None) -> dict[str, Any]:
         # Anti-repetition sampler stack — fixes the IQ3_S quantization-
