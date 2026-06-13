@@ -367,8 +367,8 @@ def main(argv: list[str] | None = None) -> None:
         except Exception:
             pass
         # Print exit summary AFTER textual has restored the terminal so
-        # the lines survive in scrollback — same UX as Claude Code's
-        # "Resume with: ..." footer. Pull session ID + last assistant
+        # the lines survive in scrollback — a familiar "Resume with: ..."
+        # footer pattern. Pull session ID + last assistant
         # message from app state; silent no-op if we can't find them.
         try:
             _print_exit_summary(app)
@@ -387,7 +387,7 @@ def main(argv: list[str] | None = None) -> None:
 
 
 def _print_exit_summary(app) -> None:
-    """Print a Claude-Code-style exit footer to stdout so the user sees:
+    """Print an exit footer to stdout so the user sees:
 
       - the last assistant exchange (briefly), and
       - a `localcode --resume <id>` hint they can copy-paste

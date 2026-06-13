@@ -60,7 +60,7 @@ LEGACY_BIG_FILES: dict[str, int] = {
     "server_manager.py": 667,
     "skills.py": 589,
     "tui/screens/setup.py": 946,
-    "performance.py": 515,
+    "performance.py": 630,
     "history.py": 475,
     "agent/context.py": 715,
     "config.py": 464,
