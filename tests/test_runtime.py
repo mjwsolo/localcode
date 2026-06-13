@@ -259,9 +259,11 @@ class TestTargetNumCtx:
         # A capable machine should get a large context on the balanced/default
         # preset, not the flat max_context_chars//4. (Regression: 128 GB Macs
         # were stuck at ~50K, starving long agentic sessions into re-read loops.)
+        # 96 GB+ now unlocks 256K since every catalog model trains to >=256K;
+        # the fake model path here is unreadable so _model_max_ctx doesn't clamp.
         gw = self._make_gw(max_context_chars=200000, quant_preset="balanced")
         gw._system_ram_gb = lambda: 128  # type: ignore[assignment]
-        assert gw._target_num_ctx() == 131072
+        assert gw._target_num_ctx() == 262144
 
     def test_balanced_preset(self) -> None:
         gw = self._make_gw(max_context_chars=40000, quant_preset="balanced")
