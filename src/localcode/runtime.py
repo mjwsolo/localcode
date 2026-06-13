@@ -1314,20 +1314,50 @@ class LocalCodeRuntimeGateway:
         """
         import re as _re
 
+        # Valid JSON string-escape initiators. A backslash inside a string
+        # followed by anything else is INVALID JSON — `json.loads` rejects
+        # the whole blob. DiffusionGemma routinely emits these in long
+        # `content` values (observed: `\ ` — a stray backslash before a
+        # space, inside the text of a write_file payload). The book/code it
+        # was asked to write parsed perfectly except for one bad escape,
+        # which dropped the entire tool call → empty turn → E3107. We
+        # repair by ESCAPING the stray backslash (`\` → `\\`, a literal
+        # backslash) rather than dropping it, so a real backslash in a
+        # Windows path (`C:\Users` → emitted `\U`, also invalid) survives.
+        _VALID_ESC = set('"\\/bfnrtu')
+
+        def _is_valid_escape(at: int) -> bool:
+            """True if blob[at] is a backslash beginning a valid JSON escape."""
+            nxt = blob[at + 1] if at + 1 < n else ""
+            if nxt not in _VALID_ESC:
+                return False
+            if nxt == "u":
+                # \u must be followed by exactly 4 hex digits.
+                hexpart = blob[at + 2 : at + 6]
+                return len(hexpart) == 4 and all(
+                    ch in "0123456789abcdefABCDEF" for ch in hexpart
+                )
+            return True
+
         out: list[str] = []
         n = len(blob)
         i = 0
         in_str = False
-        esc = False
         while i < n:
             c = blob[i]
             if in_str:
+                if c == "\\":
+                    if _is_valid_escape(i):
+                        # Keep the escape sequence verbatim (copy both chars).
+                        out.append(blob[i : i + 2])
+                        i += 2
+                        continue
+                    # Stray/invalid backslash — escape it to a literal one.
+                    out.append("\\\\")
+                    i += 1
+                    continue
                 out.append(c)
-                if esc:
-                    esc = False
-                elif c == "\\":
-                    esc = True
-                elif c == '"':
+                if c == '"':
                     in_str = False
                 i += 1
                 continue
