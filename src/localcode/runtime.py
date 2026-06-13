@@ -453,6 +453,23 @@ class LocalCodeRuntimeGateway:
             pass
         return model_name  # fallback: return as-is
 
+    @staticmethod
+    def _ram_ctx_ceiling(ram_gb: int) -> int:
+        """Single source of truth for the per-RAM context-window ceiling —
+        used by BOTH the fastest+turbo path and the balanced/default lift so
+        a given machine gets the SAME window on every preset (a 48 GB Mac was
+        getting 64K on one path, 96K on another). Monotonic + gap-free across
+        all Mac sizes. Conservative on small RAM: only 16 GB→64K and
+        64 GB→128K are hardware-validated; 24/32 GB stay at 64K to respect a
+        tight Metal wired budget (bumping them needs real-hardware OOM
+        measurement, not extrapolation); 48 GB+ is roomy.
+        """
+        if ram_gb >= 64:
+            return 131072   # 128K (validated)
+        if ram_gb >= 48:
+            return 98304    # 96K
+        return 65536        # 16-47 GB: 64K (validated on 16 GB)
+
     def _system_ram_gb(self) -> int:
         try:
             import subprocess
@@ -654,9 +671,7 @@ class LocalCodeRuntimeGateway:
                     # before. Inside the validated turbo branch, 64K
                     # is the floor.
                     return 65536
-                if ram_gb >= 64:
-                    return 131072  # 128K context (validated)
-                return 65536       # 16-32 GB: 64K (validated on 16 GB)
+                return self._ram_ctx_ceiling(ram_gb)
             return min(num_ctx, 16384 if turbo else 3072)
         # RAM-aware lift for the balanced/default path. Without this, ctx was
         # a flat `max_context_chars // 4` (~50K) on EVERY machine — a 128 GB
@@ -665,13 +680,12 @@ class LocalCodeRuntimeGateway:
         # lost earlier turns and re-read files it had already read (the
         # observed "re-reading App.tsx forever" loop). A big machine can hold
         # a big KV cache, so give it one. Small machines keep their sizing.
+        # Lift only on >=32 GB machines (lots of headroom regardless of KV
+        # type). Below that we keep the chars-based value to avoid an OOM on
+        # an unvalidated small-RAM × KV-type combination.
         ram_gb = self._system_ram_gb()
-        if ram_gb >= 64:
-            num_ctx = max(num_ctx, 131072)   # 64-128 GB: ≥128K
-        elif ram_gb >= 48:
-            num_ctx = max(num_ctx, 98304)    # 48 GB: ≥96K
-        elif ram_gb >= 32:
-            num_ctx = max(num_ctx, 65536)    # 32 GB: ≥64K
+        if ram_gb >= 32:
+            num_ctx = max(num_ctx, self._ram_ctx_ceiling(ram_gb))
         return num_ctx
 
     def _options(self, num_ctx_override: int | None = None, num_predict_override: int | None = None) -> dict[str, Any]:
