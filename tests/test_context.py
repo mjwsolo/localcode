@@ -145,3 +145,17 @@ class TestBuildContextBlock:
     def test_truncation(self, tmp_repo: Path) -> None:
         block = build_context_block(tmp_repo, ["main.py"], max_chars=50)
         assert len(block) <= 70  # some slack for truncation message
+
+
+def test_window_aware_compaction_scales_with_ram():
+    # Compaction must be DYNAMIC per machine: tiny window -> aggressive (the
+    # legacy 36KB/keep-4); big window -> keep far more history (a 128GB Mac was
+    # crushing its 128K window to 36KB, making the model lose track). None ->
+    # legacy fixed behaviour.
+    from localcode.agent.context import _window_aware_compaction as W
+    assert W(None) == (36_000, 4)
+    small_b, small_k = W(int(16384 * 3.5))      # 16K window
+    big_b, big_k = W(int(131072 * 3.5))         # 128K window
+    assert small_b == 36_000 and small_k == 4   # small stays aggressive
+    assert big_b > 200_000 and big_k >= 16      # big keeps much more
+    assert big_b > small_b and big_k > small_k  # strictly scales up
