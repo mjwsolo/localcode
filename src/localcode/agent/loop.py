@@ -587,11 +587,20 @@ def run_agent_loop(
                     or 65536
                 )
             if should_compact(messages, context_window=ctx_tokens):
+                # RAM-tier the summary: capable machines spend a model
+                # generation for a rich summary; small machines fall back
+                # to an instant deterministic one (compact() decides).
+                try:
+                    _ram_gb = int(app.engine._system_ram_gb())
+                except Exception:
+                    _ram_gb = None
                 out.print_info(
                     f"Compacting conversation (≈{estimate_tokens(messages)} tokens "
                     f"of {ctx_tokens} context → summary)..."
                 )
-                messages[:] = compact(messages, app.engine, context_window=ctx_tokens)
+                messages[:] = compact(
+                    messages, app.engine, context_window=ctx_tokens, ram_gb=_ram_gb
+                )
         except Exception as _compact_err:
             # Never let compaction failure kill the agent loop — continue
             # with the unchanged messages and let the user see the error.

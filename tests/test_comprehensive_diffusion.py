@@ -189,6 +189,46 @@ def test_diffusion_json_repair_is_string_aware():
     assert calls and _tool_args(calls[0])["k"] == "trailing comma here ,}"
 
 
+def test_diffusion_repairs_invalid_string_escapes():
+    # THE green-eggs-and-ham bug: DiffusionGemma emitted a perfect write_file
+    # tool call, but the `content` string contained `\ ` (a stray backslash
+    # before a space) — an INVALID JSON escape. json.loads rejected the whole
+    # blob, the call was dropped, the span was still stripped from visible
+    # text → empty turn → E3107 on EVERY prompt, even trivial ones. The repair
+    # must sanitize invalid escapes INSIDE strings while preserving valid ones
+    # (\n, \t, \", \uXXXX) so the tool call survives.
+    G = LocalCodeRuntimeGateway
+    raw = (
+        '{"tool":"write_file","args":{"path":"book.txt",'
+        r'"content":"line one.\nline two.\ stray backslash space.\nlast line."}}'
+    )
+    calls, text = G._parse_diffusion_tool_calls(raw)
+    assert calls, "invalid \\ escape must be repaired, not drop the tool call"
+    args = _tool_args(calls[0])
+    assert args["path"] == "book.txt"
+    # Valid \n escapes are preserved as real newlines; the stray backslash is
+    # kept as a literal backslash (escaping, not dropping — so a Windows path
+    # like C:\Users emitted as \U survives too).
+    assert "line one.\nline two." in args["content"]
+    assert "last line." in args["content"]
+    # The arguments string must itself be valid JSON the agent loop can reparse.
+    import json as _json
+    _json.loads(calls[0]["function"]["arguments"])
+
+
+def test_diffusion_repairs_invalid_escape_is_kept_not_dropped():
+    # A stray backslash before a non-escape char must be ESCAPED (kept as a
+    # literal backslash), not dropped — otherwise content/paths silently lose
+    # characters. (\b \f \n \r \t \" \\ \/ \uXXXX stay valid escapes; we can't
+    # disambiguate those from a literal-backslash intent, and don't try.)
+    G = LocalCodeRuntimeGateway
+    calls, _ = G._parse_diffusion_tool_calls(
+        r'{"tool":"read_file","args":{"path":"C:\Xenon\queue.txt"}}'
+    )
+    assert calls, "invalid escapes in a path must not drop the call"
+    assert _tool_args(calls[0])["path"] == r"C:\Xenon\queue.txt"
+
+
 def test_diffusion_finds_all_brace_forms_in_order():
     # An earlier spaced-form `{ "tool"` call must not be skipped in favor of a
     # later compact `{"tool"` one.
