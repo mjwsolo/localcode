@@ -780,42 +780,93 @@ def execute(ctx: ToolContext, args: dict) -> str:
     if file_write_redirect:
         return file_write_redirect
 
-    # GUI / long-running servers: launch detached, don't block.
+    # GUI / long-running servers: launch detached, don't block. We pipe
+    # output to a log and WAIT briefly for the server to either print its
+    # URL or crash — so we can hand the agent the REAL url (dev servers like
+    # vite hop 5173→5174→5175 when a port is taken; returning a hardcoded
+    # port is why the user hit a 404) and surface a startup crash as an
+    # error the agent can fix, instead of a blind "the app is running".
     is_gui = _looks_like_detached_server_command(cmd)
     if is_gui and "&" not in cmd:
+        import time as _time
+        fd, log_path = tempfile.mkstemp(prefix="lc-server-", suffix=".log")
+        os.close(fd)
+        wrapped = f"({cmd}) > {log_path} 2>&1"
         try:
             proc = subprocess.Popen(
-                cmd, shell=True, cwd=str(repo),
+                wrapped, shell=True, cwd=str(repo),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
                 env=clean_env(),
             )
-            _track_background(proc.pid)
-            port = _extract_command_port(cmd)
-            if port:
-                try:
-                    record_process(
-                        repo,
-                        ProcessRecord(
-                            pid=proc.pid,
-                            pgid=proc.pid,
-                            port=port,
-                            url=f"http://localhost:{port}",
-                            cwd=str(repo),
-                            kind="bash-background",
-                            command=cmd,
-                            log_path="",
-                            verified=False,
-                            started_at=__import__("time").time(),
-                        ),
-                    )
-                except Exception:
-                    pass
-            return f"Launched in background: {cmd}\nThe app is running. Tell the user to interact with it directly."
         except Exception as e:
             return f"Error launching: {e}"
+        _track_background(proc.pid)
+
+        # Poll the log for a printed URL or an early crash (up to ~18s —
+        # vite/next/etc. usually ready in 1-3s; a crash is near-instant).
+        _URL_RE = re.compile(
+            r"https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d+)\S*"
+        )
+        url, detected_port, log_tail = None, None, ""
+        deadline = _time.monotonic() + 18
+        crashed = False
+        while _time.monotonic() < deadline:
+            if proc.poll() is not None:
+                crashed = True
+                break
+            try:
+                log_tail = open(log_path, errors="replace").read()
+            except Exception:
+                log_tail = ""
+            m = _URL_RE.search(log_tail)
+            if m:
+                detected_port = m.group(1)
+                url = f"http://localhost:{detected_port}"
+                break
+            _time.sleep(0.4)
+
+        if crashed:
+            try:
+                log_tail = open(log_path, errors="replace").read()
+            except Exception:
+                pass
+            tail = "\n".join(log_tail.splitlines()[-25:]).strip()
+            return (
+                f"Server exited during startup (exit {proc.returncode}) — it is NOT running. "
+                f"Fix the error below and retry; do NOT tell the user it's running.\n"
+                f"--- {cmd} ---\n{tail or '(no output captured)'}"
+            )
+
+        port = detected_port or _extract_command_port(cmd)
+        if port:
+            try:
+                record_process(
+                    repo,
+                    ProcessRecord(
+                        pid=proc.pid, pgid=proc.pid, port=int(port),
+                        url=url or f"http://localhost:{port}",
+                        cwd=str(repo), kind="bash-background", command=cmd,
+                        log_path=log_path, verified=bool(url),
+                        started_at=_time.time(),
+                    ),
+                )
+            except Exception:
+                pass
+        if url:
+            return (
+                f"Launched in background (PID {proc.pid}). Server is UP at {url}\n"
+                f"Verify with `curl -sS -o /dev/null -w '%{{http_code}}' {url}` "
+                f"(expect 200), then tell the user to open {url}. "
+                f"Logs: {log_path}. Do NOT relaunch — it's already running."
+            )
+        return (
+            f"Launched in background (PID {proc.pid}); still starting — no URL "
+            f"printed within 18s. Check progress with `tail -n 40 {log_path}` "
+            f"(it may just be slow, or it may not print a URL). Do NOT relaunch blindly."
+        )
 
     # Single timeout for foreground commands. Earlier this short-
     # circuited to 30s for `python`/`python3`/`node` to catch

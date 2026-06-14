@@ -547,6 +547,37 @@ def test_bash_does_not_background_probe_commands_that_mention_app_py() -> None:
     assert _looks_like_detached_server_command("cd demo && python3 app.py")
 
 
+def test_bash_server_launch_surfaces_startup_crash(tmp_path: Path, monkeypatch) -> None:
+    # A server command that exits during startup must report the FAILURE +
+    # the captured error (so the agent fixes it), NOT a blind "it's running".
+    # This is the dev-server class of failure that made the model give up.
+    import localcode.tools.bash as b
+    monkeypatch.setattr(b, "_looks_like_detached_server_command", lambda c: True)
+    result = bash_execute(
+        ToolContext(app=_App(tmp_path), out=_Out()),
+        {"command": "sh -c 'echo boom-startup-error; exit 1'"},
+    )
+    assert "NOT running" in result
+    assert "boom-startup-error" in result
+
+
+def test_bash_server_launch_detects_printed_url(tmp_path: Path, monkeypatch) -> None:
+    # A server that prints its URL (vite-style, possibly a hopped port) must
+    # be surfaced with the REAL url — not a hardcoded/blind port (the 404 bug).
+    import localcode.tools.bash as b
+    monkeypatch.setattr(b, "_looks_like_detached_server_command", lambda c: True)
+    try:
+        result = bash_execute(
+            ToolContext(app=_App(tmp_path), out=_Out()),
+            {"command": "sh -c 'echo \"  Local:   http://localhost:5174/\"; sleep 20'"},
+        )
+        assert "http://localhost:5174" in result
+        assert "UP at" in result
+        assert "Do NOT relaunch" in result
+    finally:
+        b.reap_background_processes()
+
+
 def test_bash_redirects_shell_file_reads_to_read_file(tmp_path: Path) -> None:
     target = tmp_path / "src" / "App.jsx"
     target.parent.mkdir()
