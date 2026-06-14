@@ -106,7 +106,8 @@ _REGISTRY: list[ErrorCode] = [
               "Try again. If it keeps happening, switch model with /model.",
               cause="model"),
     ErrorCode("E3102", "Lost connection to the model server",
-              "Try again. If it persists, quit LocalCode and relaunch.", cause="system"),
+              "Send another message — the server auto-restarts. If it recurs on "
+              "big builds, `/model` to a smaller quant.", cause="system"),
     ErrorCode("E3103", "Conversation is too long for this model",
               "Type /clear to start a fresh conversation.", cause="user"),
     ErrorCode("E3104", "The GPU couldn't run the model",
