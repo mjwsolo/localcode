@@ -622,3 +622,116 @@ def test_tool_arg_stream_guard_keeps_extreme_safety_ceiling() -> None:
     limited, reason = _tool_arg_stream_guard("write_file", args, elapsed_s=1)
     assert limited is True
     assert "safety ceiling" in reason
+
+
+class _FakeStreamResponse:
+    """Minimal stand-in for httpx's streaming response context manager.
+
+    Yields a fixed list of SSE lines from iter_lines(), mirroring what
+    llama-server emits in OpenAI-compatible streaming mode.
+    """
+
+    def __init__(self, lines: list[str]) -> None:
+        self._lines = lines
+        self.status_code = 200
+
+    def __enter__(self) -> "_FakeStreamResponse":
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+    def iter_lines(self):
+        for ln in self._lines:
+            yield ln
+
+
+def _sse(content: str) -> str:
+    """One llama.cpp streaming chunk carrying `content` in choices[0].delta."""
+    import json as _json
+    return "data: " + _json.dumps(
+        {"choices": [{"delta": {"content": content}, "finish_reason": None}]}
+    )
+
+
+def _sse_done() -> str:
+    import json as _json
+    return "data: " + _json.dumps(
+        {"choices": [{"delta": {}, "finish_reason": "stop"}],
+         "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}}
+    )
+
+
+def _collapse_lines() -> list[str]:
+    """A stream that trips the Gemma-4 collapse detector (>=8 soup tokens)."""
+    soup = "".join(f"<unused{n}>" for n in range(20, 32))  # 12 hits
+    return [_sse(soup), _sse_done()]
+
+
+def _good_lines(text: str = "Hello! How can I help?") -> list[str]:
+    return [_sse(text), _sse_done()]
+
+
+def _collapse_test_gw() -> LocalCodeRuntimeGateway:
+    cfg = RuntimeConfig(
+        provider="llama_cpp",
+        base_url="http://localhost:8081",
+        model="gemma4.gguf",
+        max_retries=3,
+    )
+    return LocalCodeRuntimeGateway(cfg)
+
+
+class TestCollapseRetry:
+    """Gemma-4 token-soup collapse should auto-regenerate, not hard-fail."""
+
+    def _run(self, gw, stream_batches: list[list[str]]):
+        """Drive stream_chat_events with a scripted sequence of SSE batches —
+        one batch consumed per HTTP stream attempt."""
+        # Each call to client.stream returns the next prepared response.
+        prepared = [_FakeStreamResponse(b) for b in stream_batches]
+        fake_client = MagicMock()
+        fake_client.is_closed = False
+        fake_client.stream = MagicMock(side_effect=prepared)
+        gw._client = fake_client
+        with patch.object(gw, "_quick_server_probe", return_value=True):
+            return list(gw.stream_chat_events([{"role": "user", "content": "hi"}]))
+
+    def test_collapse_then_success_recovers_with_no_error(self) -> None:
+        gw = _collapse_test_gw()
+        events = self._run(gw, [_collapse_lines(), _good_lines("Hi there!")])
+        contents = [e["content"] for e in events if e["type"] == "content"]
+        joined = "".join(contents)
+        # The good attempt's content is delivered...
+        assert "Hi there!" in joined
+        # ...and the collapse error is NEVER surfaced to the consumer.
+        assert "E3108" not in joined
+        # A collapse_retry stage event was emitted to signal the regeneration.
+        assert any(
+            e["type"] == "stage" and e.get("name") == "collapse_retry"
+            for e in events
+        )
+        # Exactly one terminal stream_done (only the successful attempt's).
+        assert sum(1 for e in events if e["type"] == "stream_done") == 1
+
+    def test_all_attempts_collapse_surfaces_e3108(self) -> None:
+        gw = _collapse_test_gw()
+        # Initial attempt + 2 collapse retries = 3 collapsing streams.
+        events = self._run(
+            gw, [_collapse_lines(), _collapse_lines(), _collapse_lines()]
+        )
+        joined = "".join(e["content"] for e in events if e["type"] == "content")
+        assert "E3108" in joined
+        assert sum(1 for e in events if e["type"] == "stream_done") == 1
+
+    def test_normal_stream_unaffected_no_retry(self) -> None:
+        gw = _collapse_test_gw()
+        events = self._run(gw, [_good_lines("All good.")])
+        joined = "".join(e["content"] for e in events if e["type"] == "content")
+        assert "All good." in joined
+        assert "E3108" not in joined
+        assert not any(
+            e["type"] == "stage" and e.get("name") == "collapse_retry"
+            for e in events
+        )
+        assert sum(1 for e in events if e["type"] == "stream_done") == 1
