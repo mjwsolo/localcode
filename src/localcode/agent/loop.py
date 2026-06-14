@@ -97,6 +97,8 @@ from .hooks import (
     before_turn as hook_before_turn,
     completion_gate as hook_completion_gate,
     quality_monitor as hook_quality_monitor,
+    ran_build_or_test,
+    _changed_code_files,
 )
 from .app_tasks import (
     extract_port,
@@ -458,6 +460,8 @@ def run_agent_loop(
     _command_fail_counts: dict[str, int] = {}
     _churn_nudge_done = False
     _last_churn_mode = ""
+    # Build-verification gate: capped at ONE nudge per turn (loop-safe).
+    _build_verify_nudges = 0
     # Generalized dedup for cacheable read-only investigations:
     # list_files / glob / grep with identical args within a turn return
     # the same content (modulo external file-system changes we can't
@@ -1169,6 +1173,42 @@ def run_agent_loop(
             # permission question, the user gets to answer — the runtime
             # does not silently force a retry.
             _blocking_question = is_focused_blocking_question(content)
+            # ── Build-verification gate ──
+            # The model wants to finish a build_app turn, but it changed CODE
+            # and never built/typechecked/tested or ran it. Nudge it ONCE to
+            # compile + fix before finishing. STRICTLY scoped to avoid the
+            # 2026-04-29 paraphrase-loop regression: build_app goal ONLY (never
+            # Q&A), not a blocking question, never deletes the assistant answer,
+            # capped at one nudge per turn. Mirrors the proven stall-nudge
+            # pattern (append user message + continue).
+            if (
+                not _blocking_question
+                and _goal_state.goal_type == "build_app"
+                and _build_verify_nudges < 1
+                and _is_enabled(Feature.AUTO_NUDGE_RECOVERY)
+                and _changed_code_files(changed_files)
+                and not has_runtime_verification_signal(bash_history)
+                and not ran_build_or_test(bash_history)
+            ):
+                _build_verify_nudges += 1
+                try:
+                    from ..events import emit as _emit_bg
+                    _emit_bg("auto_nudge", signal="build_unverified", round_idx=round_num)
+                except Exception:
+                    pass
+                out.print_info(
+                    "Changed code but never built/ran it — nudging it to build "
+                    "and fix before finishing."
+                )
+                messages.append({"role": "user", "content": (
+                    "SYSTEM: You changed code but never built, type-checked, or ran "
+                    "it this turn. Run the project's build/typecheck now (e.g. "
+                    "`npm run build` or `npx tsc --noEmit` for TypeScript; the test "
+                    "command or an import smoke-check for Python), FIX every error it "
+                    "reports, then finish. Do not claim it works without building it."
+                )})
+                _ephemeral_nudge_indices.append(len(messages) - 1)
+                continue  # don't accept completion — let it build + fix first
             if _goal_state.goal_type == "run_or_launch":
                 _task_port = int(getattr(_task_state, "active_port", 0) or 0)
                 content = ground_run_or_launch_text(content, _task_port)

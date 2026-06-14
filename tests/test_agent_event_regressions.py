@@ -789,3 +789,16 @@ def test_prepare_model_messages_microcompacts_large_turn_history() -> None:
     assert len(compacted) < len(messages)
     assert "Earlier context summarized" in compacted[1]["content"]
     assert compacted[-1]["role"] == "tool"
+
+
+def test_ran_build_or_test_detects_builds_not_dev_server() -> None:
+    from localcode.agent.hooks import ran_build_or_test
+    # Build/typecheck/test commands = evidence the code was compiled.
+    assert ran_build_or_test([("npm run build", "ok")])
+    assert ran_build_or_test([("npx tsc --noEmit", "ok")])
+    assert ran_build_or_test([("pytest -q", "ok"), ("ls", "")])
+    assert ran_build_or_test([("cargo test", "ok")])
+    # A dev-server launch or plain inspection is NOT a build.
+    assert not ran_build_or_test([("npm run dev", "")])
+    assert not ran_build_or_test([("ls -la", ""), ("cat x", "")])
+    assert not ran_build_or_test([])
