@@ -3,8 +3,33 @@ from localcode.tui.screens.chat import (
     _spinner_label,
     _SPINNER_GERUNDS,
     ChatScreen,
+    reconcile_live_tokens,
 )
 from localcode.tui.widgets.chat_log import ChatLog
+
+
+def test_live_token_counter_snaps_to_real_cumulative_usage() -> None:
+    # Round 1 streams ~200 tokens (char/4 estimate), then stream_done reports
+    # real completion tokens. Mid-stream the estimate leads; once real usage
+    # arrives the badge must reflect the real cumulative, not the estimate.
+    live = 200  # streamed char/4 estimate for round 1
+    live = reconcile_live_tokens(live, 900)  # round 1 real completion = 900
+    assert live == 900
+    # Round 2 decodes another ~150 estimated tokens on TOP of the reconciled
+    # value (the handler keeps adding char-deltas mid-stream).
+    live += 150
+    assert live == 1050
+    # Round 2 closes; cumulative real completion is 900 + 600 = 1500.
+    live = reconcile_live_tokens(live, 1500)
+    assert live == 1500
+
+
+def test_live_token_counter_never_regresses() -> None:
+    # A late/duplicate usage report with a smaller cumulative must not pull
+    # the badge backwards.
+    assert reconcile_live_tokens(1500, 1200) == 1500
+    # Zero / missing real usage leaves the live estimate intact.
+    assert reconcile_live_tokens(340, 0) == 340
 
 
 def test_spinner_label_is_always_a_generic_placeholder() -> None:
