@@ -460,6 +460,13 @@ def run_agent_loop(
     _command_fail_counts: dict[str, int] = {}
     _churn_nudge_done = False
     _last_churn_mode = ""
+    # Planning-without-progress streak (recovery.detect_churn PLANNING_SPIN):
+    # consecutive rounds that changed no NEW file, ran no build/verify, and
+    # produced thinking/narration. Catches a model re-deriving the same plan
+    # round after round — which readonly-spin misses, because think-only
+    # rounds (zero tools) reset the read-only streak. Resets to 0 the moment
+    # a round changes a file or runs a build.
+    _planning_streak = 0
     # Build-verification gate: capped at ONE nudge per turn (loop-safe).
     _build_verify_nudges = 0
     # Generalized dedup for cacheable read-only investigations:
@@ -647,6 +654,12 @@ def run_agent_loop(
         _round_decode_ms = 0
         _round_tool_exec_ms = 0
         _round_started_at = time.monotonic()
+        # Snapshots for the planning-without-progress signal: how many files
+        # were changed and how many bash commands had run BEFORE this round.
+        # Compared after the round's tools run to decide if this round made
+        # concrete progress (new file / build) or was pure (re-)planning.
+        _changed_files_at_round_start = len(changed_files)
+        _bash_history_at_round_start = len(bash_history)
         round_task_stage = _current_task_stage_for_thinking()
         round_use_thinking = should_use_thinking(
             app.config.runtime.laptop_26b_runtime_mode,
@@ -854,6 +867,7 @@ def run_agent_loop(
                 },
                 command_fail_counts=dict(_command_fail_counts),
                 readonly_streak=_readonly_streak,
+                planning_streak=_planning_streak,
                 churn_nudge=_last_churn_mode,
             )
         except Exception:
@@ -1717,11 +1731,32 @@ def run_agent_loop(
         # time). ONE nudge per turn — if the model ignores it, the normal
         # exit paths (repeated-failure guard, stall, completion gate)
         # still apply. Gated on the same recovery feature flag as stalls.
+        # Update the planning-without-progress streak for THIS round. Disjoint
+        # from the read-only-spin signal: a pure read-only round feeds
+        # `_readonly_streak` (INVESTIGATION_SPIN) and is deliberately NOT
+        # counted here, so this signal targets exactly what that one misses —
+        # rounds that re-derive the plan via thinking/narration without
+        # reading or doing anything. A round makes "progress" if it changed a
+        # new file or ran a build/verify this round; either resets the streak.
+        # Otherwise, a non-read-only round that produced thinking/narration
+        # counts as another re-planning round. Quiet rounds (no progress, no
+        # narration) leave the streak unchanged.
+        _round_changed_new_file = len(changed_files) > _changed_files_at_round_start
+        _round_ran_build = ran_build_or_test(bash_history[_bash_history_at_round_start:])
+        _round_had_reasoning = bool(
+            (content and content.strip()) or _round_reasoning_chars > 0
+        )
+        if _round_changed_new_file or _round_ran_build:
+            _planning_streak = 0
+        elif _round_had_reasoning and not _round_was_readonly:
+            _planning_streak += 1
+
         if not _churn_nudge_done and not _spin_nudge_done and _is_enabled(Feature.AUTO_NUDGE_RECOVERY):
             _churn = detect_churn(
                 file_write_counts=_file_write_counts,
                 command_fail_counts=_command_fail_counts,
                 readonly_streak=_readonly_streak,
+                planning_streak=_planning_streak,
             )
             if _churn is not None:
                 _churn_nudge_done = True
