@@ -4,7 +4,12 @@ import importlib.util
 from localcode.agent.goal import infer_goal_state
 from localcode.agent.hooks import EvidenceLedger, TurnState, completion_gate, quality_monitor
 from localcode.agent.app_tasks import is_focused_blocking_question
-from localcode.agent.prompt_context import build_task_goal_block
+from localcode.agent.prompt_context import (
+    build_target_grounding_block,
+    build_task_goal_block,
+    is_placeholder_segment,
+    sanitize_placeholder_path,
+)
 from localcode.launcher import detect_launch_candidate
 from localcode.process_registry import (
     ProcessRecord,
@@ -390,6 +395,56 @@ def test_build_app_goal_block_is_empty() -> None:
     task.current_stage = "scaffolding"
 
     assert build_task_goal_block("build a small dashboard app", goal, task) == ""
+
+
+def test_placeholder_segment_detection() -> None:
+    # Literal fill-in slots the model should never leave in a path.
+    for seg in (
+        "[insert your model name]",
+        "<your app>",
+        "{project-name}",
+        "project-name",
+        "app_name",
+        "model name",
+        "...",
+        "TODO",
+        "xxxx",
+    ):
+        assert is_placeholder_segment(seg), seg
+    # Real, concrete names must NOT be flagged.
+    for seg in ("src", "my-dashboard", "app.py", "weather_cli", "v2", "README.md"):
+        assert not is_placeholder_segment(seg), seg
+
+
+def test_sanitize_placeholder_path_substitutes_default() -> None:
+    # Placeholder segment is replaced; the rest of the path is preserved.
+    assert (
+        sanitize_placeholder_path("./[insert your model name]/main.py", "weather-cli")
+        == "./weather-cli/main.py"
+    )
+    # An unsafe default name is slugged.
+    assert (
+        sanitize_placeholder_path("<your app>/index.html", "My Cool App!")
+        == "My-Cool-App/index.html"
+    )
+    # A concrete path is returned byte-identical (no spurious rewriting).
+    assert sanitize_placeholder_path("src/server/app.py", "x") == "src/server/app.py"
+    # Empty / missing default falls back to "app".
+    assert sanitize_placeholder_path("[insert name]/x.py", "") == "app/x.py"
+
+
+class _BuildGoal:
+    goal_type = "build_app"
+    task_slug = "weather-dashboard"
+
+
+def test_target_grounding_block_pins_root_and_forbids_placeholders(tmp_path: Path) -> None:
+    block = build_target_grounding_block(tmp_path, _BuildGoal())
+    assert str(tmp_path.resolve()) in block
+    assert "placeholder" in block.lower()
+    assert "weather-dashboard" in block  # suggested concrete name
+    # Non-build goals get no block (keeps the cached prefix unchanged).
+    assert build_target_grounding_block(tmp_path, infer_goal_state("what is 2+2")) == ""
 
 
 def test_quality_monitor_rejects_placeholder_url() -> None:
