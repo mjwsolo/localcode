@@ -1556,6 +1556,72 @@ class LocalCodeRuntimeGateway:
                 return False
         return True
 
+    @staticmethod
+    def _diffusion_stats(raw: str) -> dict[str, Any]:
+        """Parse the runner's own stats line from stdout.
+
+        The CLI prints e.g. `... (33 steps over 1 blocks, entropy-bound)` and
+        `throughput: 48.0 tok/s (...)`. We surface steps/blocks/tok_s into
+        telemetry — a 2-step turn is the entropy-bound-empty signature, so
+        this is how we DETECT (not guess) the empty-denoise in the wild.
+        """
+        import re as _re
+        st: dict[str, Any] = {"steps": None, "blocks": None, "tok_s": None}
+        m = _re.search(r"\((\d+)\s+steps over\s+(\d+)\s+blocks", raw)
+        if m:
+            st["steps"], st["blocks"] = int(m.group(1)), int(m.group(2))
+        t = _re.search(r"throughput:\s*([\d.]+)\s*tok/s", raw)
+        if t:
+            st["tok_s"] = float(t.group(1))
+        return st
+
+    def _log_diffusion_telemetry(
+        self,
+        *,
+        model_path: str,
+        prompt: str,
+        n_canvas: int,
+        num_predict: int | None,
+        tools: list[dict[str, Any]] | None,
+        attempts: list[dict],
+        final_text: str,
+        final_tool_calls: list,
+    ) -> None:
+        """Append one JSONL line per diffusion turn — the real telemetry for
+        what actually happened (prompt size, per-attempt eb mode + steps +
+        tok/s, retries, final outcome). Best-effort; never breaks a turn."""
+        try:
+            import json as _json
+            import os as _os
+            from pathlib import Path as _Path
+            outcome = (
+                "tool" if final_tool_calls
+                else ("text" if final_text.strip() else "empty_e3107")
+            )
+            rec = {
+                "model": _Path(model_path).name,
+                "prompt_chars": len(prompt),
+                "prompt_tokens_est": len(prompt) // 4,
+                "n_canvas": n_canvas,
+                "num_predict": num_predict,
+                "n_tools_offered": len(tools or []),
+                "attempts": len(attempts),
+                "attempts_detail": attempts,
+                "recovered_on_retry": (
+                    len(attempts) > 1 and bool(attempts) and attempts[-1].get("usable")
+                ),
+                "outcome": outcome,
+                "final_clean_len": len(final_text.strip()),
+            }
+            path = _Path(_os.path.expanduser(
+                "~/.local/share/localcode/diffusion_telemetry.jsonl"
+            ))
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a", errors="replace") as f:
+                f.write(_json.dumps(rec) + "\n")
+        except Exception:
+            pass
+
     def _stream_diffusion_events(
         self,
         messages: list[dict[str, Any]],
@@ -1617,21 +1683,55 @@ class LocalCodeRuntimeGateway:
 
         # Diffusion is NON-DETERMINISTIC in output SHAPE — one sample gives a
         # clean tool call, the next dumps a visible plan and a truncated
-        # empty-args call. So generate, validate, and RETRY (re-sample) until
-        # the turn is usable: real text, or tool calls whose required args are
-        # all present. Each turn is a few seconds, so this cheaply turns flaky
-        # failures into reliable output.
+        # empty-args call. So generate, validate, and RETRY until the turn is
+        # usable: real text, or tool calls whose required args are all present.
+        #
+        # ADAPTIVE retry (data-driven, see diffusion_telemetry.jsonl): the
+        # FIRST attempt uses the entropy-bound decoder's fast `auto` mode
+        # (early-stops on short turns → snappy simple replies). But on a large
+        # prompt (a big tool result, a long spec) the entropy-bound decoder
+        # CONFIDENTLY denoises the first block to EMPTY in ~2 steps — a
+        # deterministic empty, so re-running the identical command (the old
+        # behaviour) could NEVER recover it. Verified: `--diffusion-eb off`
+        # forces full denoising and produces real content on the exact prompts
+        # that `auto` empties. So every RETRY forces the entropy bound off.
         text = ""
         tool_calls: list = []
         _raw_joined = ""
+        _attempts_meta: list[dict] = []
         for _attempt in range(3):
-            _raw_joined = self._run_diffusion_cli(cmd, timeout_secs)
+            _cmd = cmd if _attempt == 0 else cmd + ["--diffusion-eb", "off"]
+            _raw_joined = self._run_diffusion_cli(_cmd, timeout_secs)
             text = self._clean_diffusion_output(_raw_joined, prompt)
             tool_calls = []
             if tools:
                 tool_calls, text = self._parse_diffusion_tool_calls(text)
-            if self._diffusion_turn_usable(text, tool_calls, tools):
+            _usable = self._diffusion_turn_usable(text, tool_calls, tools)
+            _attempts_meta.append({
+                "eb": "auto" if _attempt == 0 else "off",
+                **self._diffusion_stats(_raw_joined),
+                "raw_len": len(_raw_joined),
+                "clean_len": len(text.strip()),
+                "tool_calls": len(tool_calls),
+                "usable": _usable,
+            })
+            if _usable:
                 break
+
+        # Persistent telemetry — one JSONL line per diffusion turn so we can
+        # SEE what actually happens (steps, blocks, tok/s, retries, outcome)
+        # instead of guessing. Inspect with:
+        #   tail -f ~/.local/share/localcode/diffusion_telemetry.jsonl
+        self._log_diffusion_telemetry(
+            model_path=model_path,
+            prompt=prompt,
+            n_canvas=_canvas,
+            num_predict=num_predict,
+            tools=tools,
+            attempts=_attempts_meta,
+            final_text=text,
+            final_tool_calls=tool_calls,
+        )
 
         # Diagnostic dump of the REAL live turn (prompt the model actually saw,
         # raw stdout, cleaned text, tool names offered). This is the only way
@@ -1704,6 +1804,13 @@ class LocalCodeRuntimeGateway:
             for tok in ("<|channel>", "<channel|>", "<tool_call|>", "<|tool_call>",
                         "<start_of_turn>model", "<start_of_turn>", "<end_of_turn>"):
                 s = s.replace(tok, "")
+            # Strip Gemma collapse tokens (<unused42>, [multimodal], <eos>).
+            # On a large prompt the entropy-bound-off retry can collapse into
+            # a stream of these — non-empty, so it was surfaced as "text"
+            # (the `<unused26><unused27>…` soup). Removing them here means a
+            # collapse-only turn cleans to EMPTY → unusable → honest E3107
+            # instead of garbage in the chat. (Same regex the HTTP path uses.)
+            s = _re.sub(r"<unused\d+>|\[multimodal\]|<eos>", "", s)
             return s
 
         text = raw
