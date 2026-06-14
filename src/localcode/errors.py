@@ -124,16 +124,10 @@ _REGISTRY: list[ErrorCode] = [
               "before macOS itself would have force-killed it.",
               cause="system"),
     ErrorCode("E3107", "Diffusion model returned no usable output",
-              "DiffusionGemma is an experimental block-diffusion model with a small canvas; it "
-              "occasionally denoises to empty. The turn was retried automatically. For heavier "
-              "agentic work, `/model` to a Gemma 26B-A4B or Qwen quant.",
+              "Auto-retried. For heavier agentic work, `/model` to a Gemma 26B-A4B or Qwen quant.",
               cause="model"),
     ErrorCode("E3108", "Model collapsed into repeated junk tokens",
-              "A llama.cpp Gemma-4 tokenizer bug (the 26B-A4B MoE / 31B dense especially) loops on "
-              "raw <unusedNN>/[multimodal] tokens; we stopped the turn. FIXED upstream by "
-              "llama.cpp PR #21343 (merged Apr 2026) — rebuild the LocalCode server binary from a "
-              "current llama.cpp base to clear it. Until then: `/model` to Gemma 4 12B (unaffected) "
-              "or `/thinking off` (shorter generations collapse less).",
+              "Known Gemma-4 llama.cpp bug. `/model` to Gemma 4 12B, or rebuild the server binary.",
               cause="model"),
 
     # E4xxx — Filesystem / git
