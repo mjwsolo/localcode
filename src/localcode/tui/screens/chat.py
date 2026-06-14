@@ -2468,7 +2468,8 @@ class ChatScreen(Screen):
         # The GGUF is fully on disk by this point (the not-complete case
         # returned early after kicking off / observing the background
         # download), so this is a pure server hot-swap.
-        log.append_info(f"Switching to {choice.name} — restarting server...")
+        _from = f"from {cur.name} " if cur is not None else ""
+        log.append_info(f"Switching {_from}to {choice.name} — restarting server...")
         # Block input submission until the new server is fully loaded.
         # Anything the user types during the restart window is queued
         # (see on_input_submitted) and drained by `_on_server_ready`
