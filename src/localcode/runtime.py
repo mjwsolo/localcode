@@ -1987,6 +1987,33 @@ class LocalCodeRuntimeGateway:
         # behaviour) could NEVER recover it. Verified: `--diffusion-eb off`
         # forces full denoising and produces real content on the exact prompts
         # that `auto` empties. So every RETRY forces the entropy bound off.
+        # Pre-empt the small-canvas failure: a prompt this large makes
+        # DiffusionGemma denoise to empty / <unused> collapse even with the
+        # eb-off retry (verified ~16K+ chars). Don't burn ~75s on 3 futile
+        # retries — surface E3107 with the model-switch guidance immediately,
+        # and record WHY in telemetry so the threshold is tunable from data.
+        _DIFFUSION_PROMPT_CHAR_LIMIT = 16000
+        if len(prompt) > _DIFFUSION_PROMPT_CHAR_LIMIT:
+            self._log_diffusion_telemetry(
+                model_path=model_path, prompt=prompt, n_canvas=_canvas,
+                num_predict=num_predict, tools=tools,
+                attempts=[{"eb": "skipped", "reason": "prompt_over_limit",
+                           "prompt_chars": len(prompt),
+                           "limit": _DIFFUSION_PROMPT_CHAR_LIMIT}],
+                final_text="", final_tool_calls=[],
+            )
+            from .errors import LocalCodeError, by_code, format_for_user
+            _msg = format_for_user(LocalCodeError(by_code("E3107")))
+            for i in range(0, len(_msg), 160):
+                yield {"type": "content", "content": _msg[i:i + 160]}
+            yield {
+                "type": "stream_done", "finish_reason": "stop",
+                "content_chars": len(_msg),
+                "completion_tokens": max(1, len(_msg) // 4),
+                "total_tokens": max(1, len(_msg) // 4), "usage_estimated": True,
+            }
+            return
+
         text = ""
         tool_calls: list = []
         _raw_joined = ""
