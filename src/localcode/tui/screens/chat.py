@@ -26,7 +26,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
-from textual.widgets import Input, Static
+from textual.widgets import Input, Static, TextArea
 from textual.worker import Worker, WorkerState
 
 
@@ -360,6 +360,219 @@ class _NoTintInput(Input):
         strip = strip.extend_cell_length(max_content_width + 1)
         return strip.apply_style(self.rich_style)
 
+
+class _ChatTextArea(TextArea):
+    """Multi-line, scrollable chat input.
+
+    Replaces the old single-line `_NoTintInput`. Standard chat submit
+    semantics: plain **Enter submits** the message (routed to the
+    screen's `_submit_message`), **Shift+Enter / Ctrl+J insert a
+    newline**. TextArea's stock behaviour is Enter=newline, so we
+    override it in `_on_key` below.
+
+    The widget auto-grows with its content (CSS `height: auto`) up to a
+    max height, after which it scrolls internally instead of pushing the
+    rest of the layout. Arrow / Home / End / PageUp / PageDown all do
+    real cursor + scroll navigation through long pasted content because
+    that is TextArea's native behaviour — the old `#input-overflow`
+    wrap-preview Static is gone (it only existed to fake multi-line for
+    the single-line Input).
+
+    Voice-recording indication: while the screen's `_ptt_recorder` is
+    set we add the `recording` CSS class (red border, see screen CSS).
+    The old inline colored-block glyph rendered in `Input.render_line`
+    does not port cleanly to TextArea's document renderer, so we use a
+    border-colour indicator instead.
+    """
+
+    # No `:focus` highlight; keep the terminal-native background and stay
+    # full-brightness while disabled (during the approval prompt) — same
+    # rationale as the old _NoTintInput CSS.
+    DEFAULT_CSS = """
+    _ChatTextArea {
+        background: ansi_default;
+        & .text-area--cursor-line {
+            background: ansi_default;
+        }
+        &:focus {
+            background-tint: transparent 0%;
+            background: ansi_default;
+        }
+        &:disabled, &:disabled:can-focus {
+            opacity: 1;
+            background: ansi_default;
+            background-tint: transparent 0%;
+        }
+    }
+    """
+
+    # ── value compatibility shim ──
+    # The old call sites used Input's `.value`; TextArea exposes `.text`.
+    # We migrated those call sites to `.text`, but keep a `value` alias so
+    # any stray access keeps working and reads identically.
+    @property
+    def value(self) -> str:
+        return self.text
+
+    @value.setter
+    def value(self, new: str) -> None:
+        self.text = new or ""
+
+    def insert_text_at_cursor(self, text: str) -> None:
+        """Input-API compatibility: TextArea uses `insert()`."""
+        self.insert(text)
+
+    # ── input history (per-session, in-memory) ──
+    # Same shell-style behaviour as the old Input: ↑ recalls older
+    # submissions, ↓ walks newer / clears the draft. For a multi-line
+    # field we only hijack the arrow for history when the cursor can't
+    # move further in that direction (↑ on the first line, ↓ on the last
+    # line) so normal multi-line cursor movement is preserved.
+    def _hist_init(self) -> None:
+        if not hasattr(self, "_input_history"):
+            self._input_history: list[str] = []
+            self._input_history_pos: int = -1  # -1 = not browsing
+            self._input_history_draft: str = ""
+
+    def history_push(self, text: str) -> None:
+        self._hist_init()
+        text = (text or "").rstrip()
+        if not text:
+            return
+        if self._input_history and self._input_history[-1] == text:
+            self._input_history_pos = -1
+            return
+        self._input_history.append(text)
+        self._input_history_pos = -1
+        self._input_history_draft = ""
+
+    def _set_text_and_cursor_end(self, text: str) -> None:
+        self.text = text or ""
+        self.move_cursor(self.document.end)
+
+    def _hist_navigate(self, direction: int) -> bool:
+        self._hist_init()
+        if not self._input_history and direction < 0:
+            return False
+        pos = self._input_history_pos
+        if direction < 0:  # up = older
+            if pos == -1:
+                self._input_history_draft = self.text
+                pos = len(self._input_history) - 1
+            elif pos > 0:
+                pos -= 1
+            else:
+                return False
+        else:  # down = newer
+            if pos == -1:
+                if not self.text:
+                    return False
+                self._set_text_and_cursor_end("")
+                self._input_history_draft = ""
+                return True
+            if pos < len(self._input_history) - 1:
+                pos += 1
+            else:
+                self._input_history_pos = -1
+                self._set_text_and_cursor_end(self._input_history_draft)
+                return True
+        self._input_history_pos = pos
+        self._set_text_and_cursor_end(self._input_history[pos])
+        return True
+
+    def _on_paste(self, event) -> None:  # type: ignore[override]
+        # Normalize CRLF/CR → LF; TextArea inserts the text natively
+        # (and keeps newlines), so we just clean line endings and let
+        # the default insertion run.
+        text = getattr(event, "text", "") or ""
+        if not text:
+            return
+        joined = text.replace("\r\n", "\n").replace("\r", "\n")
+        if joined != text:
+            prevent_default = getattr(event, "prevent_default", None)
+            if callable(prevent_default):
+                prevent_default()
+            self.insert(joined)
+            event.stop()
+        # else: identical text — let TextArea's stock paste handle it.
+
+    async def _on_key(self, event) -> None:  # type: ignore[override]
+        # Runs BEFORE TextArea's own _on_key insertion (we call super at
+        # the end for the non-intercepted keys). Intercept Enter to
+        # submit; Shift+Enter / Ctrl+J insert a literal newline.
+        # NOTE: TextArea._on_key is a coroutine, so this override is async
+        # and awaits super() for the keys we don't handle ourselves.
+        key = event.key
+
+        # ── Enter submits ──
+        if key == "enter":
+            # When the slash menu is open, Enter is handled by the
+            # screen's on_key (selects the highlighted command). We must
+            # prevent_default (else TextArea inserts a literal newline)
+            # but NOT stop propagation, so the event bubbles up to
+            # ChatScreen.on_key which handles the selection + submit.
+            if getattr(self.screen, "_slash_matches", None):
+                event.prevent_default()
+                return
+            event.prevent_default()
+            event.stop()
+            submit = getattr(self.screen, "_submit_message", None)
+            if callable(submit):
+                submit(self.text)
+            return
+
+        # ── Shift+Enter / Ctrl+J insert a newline ──
+        if key in ("shift+enter", "ctrl+j"):
+            event.prevent_default()
+            event.stop()
+            self.insert("\n")
+            return
+
+        # ── Space → push-to-talk when voice mode is on (empty input) ──
+        if key == "space":
+            vs = getattr(self.app, "voice_state", None)
+            if vs is not None and getattr(vs, "enabled", False):
+                already_recording = getattr(
+                    self.screen, "_ptt_recorder", None
+                ) is not None
+                input_empty = not (self.text or "").strip()
+                last_voice_fill = getattr(self.screen, "_ptt_last_input_value", None)
+                voice_filled_untouched = (
+                    last_voice_fill is not None
+                    and (self.text or "") == last_voice_fill
+                )
+                if already_recording or input_empty or voice_filled_untouched:
+                    ptt = getattr(self.screen, "action_ptt_space", None)
+                    if callable(ptt):
+                        ptt()
+                        event.prevent_default()
+                        event.stop()
+                        return
+
+        # ── Arrow-key history navigation ──
+        # When the slash menu is open, up/down navigate the menu (screen
+        # on_key) — prevent_default so TextArea doesn't move the cursor,
+        # but let the event bubble to ChatScreen.on_key.
+        if key in ("up", "down"):
+            if getattr(self.screen, "_slash_matches", None):
+                event.prevent_default()
+                return
+        if key == "up" and self.cursor_at_first_line:
+            if self._hist_navigate(-1):
+                event.prevent_default()
+                event.stop()
+                return
+        elif key == "down" and self.cursor_at_last_line:
+            if self._hist_navigate(+1):
+                event.prevent_default()
+                event.stop()
+                return
+
+        # Everything else: TextArea's native handling (typing, cursor
+        # movement within the document, scrolling, etc.).
+        await super()._on_key(event)
+
+
 from ..bridge import AgentEvent, ApprovalRequest
 from ..widgets.chat_log import ChatLog
 from ...autonomy import AutonomyLevel, apply_autonomy_to_permissions, get_policy
@@ -517,64 +730,47 @@ class ChatScreen(Screen):
         display: block;
     }
     /* Input box + row and children — explicit terminal-default so
-       Textual's surface color doesn't bleed through. */
+       Textual's surface color doesn't bleed through. The box is one
+       bordered multi-line field: the `›` prompt on the left and the
+       scrollable TextArea filling the rest of the row. */
     #input-box {
         background: ansi_default;
         height: auto;
     }
     #input-row {
         background: ansi_default;
-        height: 1;
-    }
-    /* When the wrap-preview is showing the full multi-line text,
-       we used to set `display: none` on the input row. That stopped
-       the "double text" effect but ALSO removed the Input from the
-       layout tree — Textual then stopped routing keystrokes to it,
-       so the user could not type, backspace, or submit. ("More than
-       one line of text breaks everything.") Instead, KEEP the row
-       in the tree (so it stays focused + interactive), just hide
-       its rendered text by painting #chat-input text the same as
-       the background. Cursor is still visible because we draw it
-       as a styled glyph in _NoTintInput.render_line. */
-    #input-row.hidden-by-overflow #chat-input {
-        /* text-opacity 0 actually makes the rendered glyphs invisible
-           (color: ansi_default merely set the fg to the terminal's
-           DEFAULT FOREGROUND colour, i.e. white-ish, which is the
-           same colour user text normally is — so the duplication
-           the user reported persisted). The widget itself stays in
-           the layout so Textual keeps routing keystrokes to it. */
-        text-opacity: 0%;
-    }
-    #input-row.hidden-by-overflow #input-prompt {
-        text-opacity: 0%;
-    }
-    /* Multi-line wrap preview — first child INSIDE #input-box, above
-       the input line, so long values grow within the bordered field
-       (no more text "falling out" above the box). Hidden by default;
-       Static.update() fills it when input value exceeds visible width.
-       max-height caps growth at 8 visible lines (~640 chars at 80
-       cols). Past that the preview itself scrolls. */
-    #input-overflow {
-        background: ansi_default;
-        color: $text;
-        /* Left pad 1 lines the wrapped text's `› ` up with the prompt
-           glyph on the input line below it. */
-        padding: 0 1 0 1;
+        /* Grow with the TextArea's content (auto) rather than a fixed
+           single row, so multi-line input expands the box. */
         height: auto;
-        max-height: 8;
-        margin: 0;
-        display: none;
-    }
-    #input-overflow.active {
-        display: block;
     }
     #input-prompt {
         background: ansi_default;
         color: #5f87ff;
         width: 2;
+        /* Pin the prompt glyph to the top of a multi-line input so it
+           sits beside the first line, terminal-coding-tools style. */
+        height: 1;
     }
+    /* The multi-line chat input (TextArea). Auto-grows with content up
+       to max-height, then scrolls internally so the rest of the layout
+       (status bar, slash menu) stays put. */
     #chat-input {
         background: ansi_default;
+        width: 1fr;
+        height: auto;
+        /* ~10 visible lines before internal scroll kicks in. */
+        max-height: 10;
+        border: none;
+        padding: 0;
+        scrollbar-size-vertical: 1;
+    }
+    /* Voice-recording indicator: red left-border accent while
+       _ptt_recorder is set (toggled via the `recording` class in the
+       PTT start/stop handlers). Replaces the old inline colored-block
+       glyph that Input.render_line painted — that doesn't port to
+       TextArea's document renderer. */
+    #chat-input.recording {
+        border-left: thick #ff5470;
     }
     #status-bar {
         dock: bottom;
@@ -701,29 +897,21 @@ class ChatScreen(Screen):
         yield Static("", id="queue-line")
         yield Static("", id="search-bar")
         yield Input(placeholder="Search conversation...", id="search-input")
-        # Voice visualizer is a dedicated widget pinned to the right of
-        # the input. It's the most reliable way to show a colored,
-        # amplitude-cycling bar — coloring the Input's own cursor via
-        # render_line was getting overwritten by textual's base-style
-        # application pipeline and showing up white. The sibling widget
-        # has its own render path so color + glyph both stick.
-        # One bordered input BOX containing the wrap-preview + the input
-        # row. The preview (full multi-line text for long values) used to
-        # be a free-floating Static ABOVE the bordered row — long input
-        # visually "fell out" of the field and read as chat content.
-        # Inside the same rounded border it reads as one multiline field.
+        # One bordered input BOX containing the `›` prompt and the
+        # multi-line, scrollable chat TextArea. The old single-line Input
+        # needed a separate `#input-overflow` wrap-preview Static to fake
+        # multi-line display; the TextArea wraps + scrolls natively, so
+        # that preview (and all the on_input_changed wrap logic) is gone.
         with Vertical(id="input-box"):
-            # Wrap-preview: shows long input values across multiple
-            # wrapped lines above the input line. Hidden when the value
-            # is empty or fits in one line. Updated on input Changed.
-            yield Static("", id="input-overflow")
-            # NOTE: voice indicator is rendered INLINE inside the Input —
-            # see _NoTintInput.render_line, which appends a colored █ to
-            # the end of the text while _ptt_recorder is set. No sibling
-            # widget on the right.
             with Horizontal(id="input-row"):
                 yield Static("›", id="input-prompt")
-                yield _NoTintInput(placeholder="", id="chat-input")
+                # Multi-line chat input. Enter submits, Shift+Enter
+                # inserts a newline (see _ChatTextArea). Voice-recording
+                # is shown via the `recording` CSS class on this widget.
+                yield _ChatTextArea(
+                    id="chat-input", soft_wrap=True,
+                    show_line_numbers=False, tab_behavior="focus",
+                )
         # Slash command palette appears BELOW the input (terminal coding tools style),
         # not above. Visually it reads as a dropdown extending downward from
         # the prompt the user is typing in.
@@ -733,7 +921,7 @@ class ChatScreen(Screen):
     def on_mount(self) -> None:
         self._start_status_probe()
         self._update_status()
-        self.query_one("#chat-input", Input).focus()
+        self.query_one("#chat-input", _ChatTextArea).focus()
         log = self.query_one("#chat-log", ChatLog)
         # If the user launched with --resume, the TUI app stored prior
         # messages in `_pending_resume_messages`. Replay them into the
@@ -1307,12 +1495,31 @@ class ChatScreen(Screen):
     # ── Input handling ──
 
     def on_input_changed(self, event: Input.Changed) -> None:
-        """Show slash command menu when user types /, or live search."""
-        # Search input — live search as you type
+        """Live search as the user types in the (single-line) search box.
+
+        The chat input is now a TextArea, not an Input, so its changes
+        arrive via `on_text_area_changed` below — this handler only sees
+        the `#search-input` Input now.
+        """
         if event.input.id == "search-input":
             self._do_search(event.value)
+
+    def on_text_area_changed(self, event) -> None:
+        """Chat TextArea content changed — drive slash menu + voice state.
+
+        The TextArea wraps + scrolls natively, so the old
+        `#input-overflow` wrap-preview logic is gone; we only need to
+        maintain the slash-command menu and the voice "untouched"
+        snapshot here.
+        """
+        try:
+            if event.text_area.id != "chat-input":
+                return
+        except Exception:
             return
-        text = event.value
+        self._on_chat_text_changed(event.text_area.text)
+
+    def _on_chat_text_changed(self, text: str) -> None:
         # Invalidate the "voice-filled but untouched" snapshot the
         # moment the value diverges from what we last wrote — past
         # that point Space should type a literal space, not re-trigger
@@ -1320,93 +1527,6 @@ class ChatScreen(Screen):
         last_voice = getattr(self, "_ptt_last_input_value", None)
         if last_voice is not None and text != last_voice:
             self._ptt_last_input_value = None
-        # Wrap-preview: when value overflows the visible width, render
-        # the FULL value wrapped in #input-overflow above the input
-        # row AND hide the single-line input row entirely. Otherwise
-        # the user sees the same text twice — once wrapped above, once
-        # scrolled below — and the bottom row looks like "auto-typed"
-        # input they can't get rid of. Enter still submits (the Input
-        # widget receives the keypress even when display: none isn't
-        # technically applied to focus).
-        try:
-            overflow = self.query_one("#input-overflow", Static)
-            input_row = self.query_one("#input-row")
-            # Width source priority:
-            #   1. App-level size (always measured before the screen
-            #      mounts), minus padding/scrollbar reserve.
-            #   2. Screen size as a backup.
-            #   3. Conservative fallback (80 cols).
-            # Floor of 60 prevents over-eager wrap during early
-            # on_input_changed calls before layout settles. The
-            # 2026-05-23 bug was a 32-char "show me where to find
-            # the songg" wrapping at column 17 in a 95-col terminal
-            # because avail was being computed as ~17 cells.
-            _app_w = 0
-            try:
-                _app_w = int(getattr(self.app.size, "width", 0) or 0)
-            except Exception:
-                pass
-            _screen_w = 0
-            try:
-                _screen_w = int(getattr(self.size, "width", 0) or 0)
-            except Exception:
-                pass
-            # Prefer the overflow box's OWN rendered width: it lives in
-            # whatever pane the terminal is split into, which can be far
-            # narrower than the app/terminal width. Wrapping to the app width
-            # made pre-wrapped lines overflow the narrow box, and the Static
-            # re-wrapped them at column 0 — a long path dedented out of the
-            # hanging indent. Trust the measured box width once it's a sane
-            # value (after first layout); before that, fall back to the app
-            # width with a 60 floor (an unsettled early measure once wrapped a
-            # 32-char string to ribbons at ~17 cols).
-            _box_w = 0
-            try:
-                _box_w = int(getattr(overflow.size, "width", 0) or 0)
-            except Exception:
-                pass
-            raw = _app_w or _screen_w or 80
-            avail = (_box_w - 2) if _box_w >= 24 else max(60, raw - 8)
-            # Show the wrapped preview when the value is too long for one
-            # line OR contains explicit newlines (multi-line paste) — a
-            # single-line Input can't render the latter, so without this
-            # the user sees a one-line jumble while the real value has
-            # structure. Wrap each logical line separately so pasted code
-            # keeps its line breaks instead of being reflowed into prose.
-            if len(text) > avail or "\n" in text:
-                import textwrap
-                # Flatten to physical rows so we can cap height + show a cursor.
-                flat: list[str] = []
-                for i, logical in enumerate(text.split("\n")):
-                    lead = "› " if i == 0 else "  "
-                    if not logical:
-                        flat.append("  ")
-                        continue
-                    wrapped = textwrap.fill(
-                        logical, width=max(8, avail),
-                        initial_indent=lead, subsequent_indent="  ",
-                        break_long_words=True, break_on_hyphens=True,
-                    )
-                    flat.extend(wrapped.split("\n"))
-                # The real single-line Input is hidden while the preview shows,
-                # so paste/typed text would scroll the cursor off the top with
-                # no way to find it. Mark the end with a cursor glyph and, when
-                # the input is taller than the box, keep the TAIL (where the
-                # cursor is) behind a ⋮ marker instead of the (stale) top.
-                if flat:
-                    flat[-1] = flat[-1] + "▌"
-                _MAX_VIS = 7
-                if len(flat) > _MAX_VIS:
-                    flat = ["  ⋮"] + flat[-_MAX_VIS:]
-                overflow.update("\n".join(flat))
-                overflow.add_class("active")
-                input_row.add_class("hidden-by-overflow")
-            else:
-                overflow.update("")
-                overflow.remove_class("active")
-                input_row.remove_class("hidden-by-overflow")
-        except Exception:
-            pass
         menu = self.query_one("#slash-menu", Static)
         # Also toggle the status bar in lockstep with the slash menu —
         # when the menu is open it pushes content downward and visually
@@ -1462,23 +1582,33 @@ class ChatScreen(Screen):
     # inserted AGAIN. Single source of truth: the Input subclass.
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        # Search input — Enter navigates to next result
+        # Only the single-line search box submits via Input now — the
+        # chat input is a TextArea whose Enter is routed to
+        # `_submit_message` (see _ChatTextArea._on_key).
         if event.input.id == "search-input":
+            # Search input — Enter navigates to next result
             if self._search_results:
                 self._search_idx = (self._search_idx + 1) % len(self._search_results)
                 self._show_search_result()
             return
 
-        text = event.value.strip()
+    def _submit_message(self, raw_text: str) -> None:
+        """Submit the chat input's contents.
+
+        Called by the TextArea's Enter binding (`_ChatTextArea._on_key`)
+        with the widget's full multi-line `.text`. Mirrors the old
+        single-line `on_input_submitted` chat path.
+        """
+        inp = self.query_one("#chat-input", _ChatTextArea)
+        text = (raw_text if raw_text is not None else inp.text).strip()
         if not text:
             return
         # Record into per-input history so ↑/↓ can recall it next time.
-        # Skipped for slash commands (next line clears event.input)
-        # because users normally don't want `/clear` and `/quit` in
-        # their navigable history; safe to add later if desired.
-        if hasattr(event.input, "history_push") and not text.startswith("/"):
-            event.input.history_push(text)
-        event.input.clear()
+        # Skipped for slash commands because users normally don't want
+        # `/clear` and `/quit` in their navigable history.
+        if not text.startswith("/"):
+            inp.history_push(text)
+        inp.clear()
         # Belt + suspenders for the "submitted text reappears in the
         # input" bug. Three layers:
         #   1. Bump session counter — stale workers' apply call sees
@@ -1505,9 +1635,9 @@ class ChatScreen(Screen):
         _submitted = text
         def _double_clear(expected=_submitted) -> None:
             try:
-                inp = self.query_one("#chat-input", Input)
-                if inp.value and inp.value == expected:
-                    inp.value = ""
+                inp2 = self.query_one("#chat-input", _ChatTextArea)
+                if inp2.text and inp2.text == expected:
+                    inp2.text = ""
             except Exception:
                 pass
         self.set_timer(0.1, _double_clear)
@@ -2661,7 +2791,7 @@ class ChatScreen(Screen):
         # ── Voice OFF: space is just a space ────────────────────
         if not state.enabled:
             try:
-                inp = self.query_one("#chat-input", Input)
+                inp = self.query_one("#chat-input", _ChatTextArea)
                 inp.insert_text_at_cursor(" ")
             except Exception:
                 pass
@@ -2695,22 +2825,22 @@ class ChatScreen(Screen):
             # recordings stack ("hello" + hold-Space + "how are you"
             # → "hello how are you") instead of overwriting.
             try:
-                existing = self.query_one("#chat-input", Input).value or ""
+                inp = self.query_one("#chat-input", _ChatTextArea)
+                existing = inp.text or ""
                 # Ensure exactly one trailing space so the join is clean.
                 self._ptt_input_prefix = existing.rstrip() + " " if existing.strip() else ""
+                # Voice-recording indicator: red left-border accent via
+                # the `recording` CSS class (the old inline colored-block
+                # glyph from Input.render_line doesn't port to TextArea).
+                inp.add_class("recording")
             except Exception:
                 self._ptt_input_prefix = ""
             # Don't log "Recording — release Space" anymore — it spammed
-            # the chat log if the watchdog mis-fired. The visualizer bar
-            # next to the input is now the only recording indicator.
-            # The voice indicator is rendered INLINE inside the Input
-            # — render_line appends a colored █ to the text while
-            # _ptt_recorder is set. We need a periodic refresh so the
-            # color + amplitude animation actually fires (textual only
-            # redraws on its own when content changes).
+            # the chat log if the watchdog mis-fired. The recording border
+            # accent on the input is now the recording indicator.
             def _cursor_pulse() -> None:
                 try:
-                    self.query_one("#chat-input", Input).refresh()
+                    self.query_one("#chat-input", _ChatTextArea).refresh()
                 except Exception:
                     pass
             self._ptt_cursor_timer = self.set_interval(0.05, _cursor_pulse)
@@ -2846,7 +2976,7 @@ class ChatScreen(Screen):
         if session >= 0 and session != getattr(self, "_ptt_session", -1):
             return
         try:
-            inp = self.query_one("#chat-input", Input)
+            inp = self.query_one("#chat-input", _ChatTextArea)
             prefix = getattr(self, "_ptt_input_prefix", "") or ""
             # Compare to whatever we last wrote during THIS session
             # (per-session so a new recording starts fresh).
@@ -2870,8 +3000,8 @@ class ChatScreen(Screen):
             # purely so we COULD do something fancier (e.g. cursor
             # animation) on `tail` if we wanted; setting the full
             # `joined` matches what's been transcribed so far.
-            inp.value = joined
-            inp.cursor_position = len(joined)
+            inp.text = joined
+            inp.move_cursor(inp.document.end)
             inp.focus()
             # Snapshot what we just wrote so the space-PTT gate can tell
             # whether the user has typed anything since. If the input
@@ -2900,11 +3030,12 @@ class ChatScreen(Screen):
             except Exception:
                 pass
             setattr(self, attr, None)
-        # Tear down visualizer widget.
+        # Drop the recording border accent + force one final repaint so
+        # the indicator disappears immediately.
         try:
-            # Tear down the inline-cursor refresh timer + force one
-            # final repaint so the inline bar disappears immediately.
-            self.query_one("#chat-input", Input).refresh()
+            inp = self.query_one("#chat-input", _ChatTextArea)
+            inp.remove_class("recording")
+            inp.refresh()
         except Exception:
             pass
         try:
@@ -2977,11 +3108,12 @@ class ChatScreen(Screen):
             except Exception:
                 pass
             setattr(self, attr, None)
-        # Tear down visualizer widget.
+        # Drop the recording border accent + force one final repaint so
+        # the indicator disappears immediately.
         try:
-            # Tear down the inline-cursor refresh timer + force one
-            # final repaint so the inline bar disappears immediately.
-            self.query_one("#chat-input", Input).refresh()
+            inp = self.query_one("#chat-input", _ChatTextArea)
+            inp.remove_class("recording")
+            inp.refresh()
         except Exception:
             pass
         # Stop the recorder, discard the wav
@@ -3010,7 +3142,7 @@ class ChatScreen(Screen):
             search_input.value = ""
             self._search_results = []
             self._search_idx = 0
-            self.query_one("#chat-input", Input).focus()
+            self.query_one("#chat-input", _ChatTextArea).focus()
         else:
             self._search_active = True
             search_input.add_class("active")
@@ -3572,7 +3704,7 @@ class ChatScreen(Screen):
         elif t == "_approval_request":
             log.append_approval(p.get("tool_name", ""), p.get("command", ""))
             self._awaiting_approval = True
-            inp = self.query_one("#chat-input", Input)
+            inp = self.query_one("#chat-input", _ChatTextArea)
             inp.disabled = True
             self.focus()
 
@@ -3586,7 +3718,7 @@ class ChatScreen(Screen):
         log.append_approval(event.tool_name, event.command)
         self._awaiting_approval = True
         # Disable input and remove focus so keys go to screen
-        inp = self.query_one("#chat-input", Input)
+        inp = self.query_one("#chat-input", _ChatTextArea)
         inp.disabled = True
         self.focus()  # focus the screen itself to capture keys
 
@@ -3630,12 +3762,20 @@ class ChatScreen(Screen):
                 event.stop()
                 return
             elif key == "enter":
-                # Select the highlighted command
+                # Select the highlighted command and submit it. (With the
+                # old single-line Input we just set the value and let
+                # Input.Submitted fire; the TextArea has no equivalent
+                # auto-submit, so clear the menu and submit explicitly.)
                 cmd = self._slash_matches[self._slash_selected][0]
-                inp = self.query_one("#chat-input", Input)
-                inp.value = cmd
-                inp.cursor_position = len(cmd)
-                # Don't prevent default — let Input.Submitted fire
+                inp = self.query_one("#chat-input", _ChatTextArea)
+                inp.text = cmd
+                self._slash_matches = []
+                self._slash_selected = 0
+                self.query_one("#slash-menu", Static).remove_class("active")
+                self.query_one("#status-bar", Static).remove_class("hidden")
+                event.prevent_default()
+                event.stop()
+                self._submit_message(cmd)
                 return
             elif key == "escape":
                 self._slash_matches = []
@@ -3666,7 +3806,7 @@ class ChatScreen(Screen):
                 log.append_info(f"  └ {label}")
                 self.tui.bridge.set_approval(verdict)
             finally:
-                inp = self.query_one("#chat-input", Input)
+                inp = self.query_one("#chat-input", _ChatTextArea)
                 inp.disabled = False
                 inp.focus()
         else:
