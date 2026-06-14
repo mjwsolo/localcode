@@ -83,6 +83,10 @@ def build_parser() -> argparse.ArgumentParser:
                      help="abort after N seconds (0 = no limit)")
     run.add_argument("--quiet", action="store_true",
                      help="suppress streamed agent output; print only the final answer")
+    run.add_argument("--json", action="store_true",
+                     help="emit the agent's event stream as JSON Lines (one JSON object "
+                          "per line) on stdout instead of human-readable output — for "
+                          "editors / CI driving LocalCode programmatically")
 
     subparsers.add_parser("models", help="list Gemma profiles and installed local models")
     subparsers.add_parser(
@@ -159,10 +163,18 @@ def _run_headless(config, args, console) -> int:
     forced to full-auto — there's no human to answer prompts.
 
     Exit codes: 0 ok · 1 error · 124 timeout · 130 interrupted.
+
+    With ``--json`` the same backend runs, but instead of Rich/human output
+    we emit the agent's event stream as JSON Lines on stdout (one object per
+    line) and a final ``result`` event with status + token counts + exit
+    reason. See ``headless_json`` for the schema.
     """
     import os
     from pathlib import Path as _Path
     os.environ["LOCALCODE_AUTONOMY"] = "full_auto"  # no human to approve tools
+
+    if getattr(args, "json", False):
+        return _run_headless_json(config, args)
 
     from .app import LocalCodeApp
     from .server_manager import _probe_health
@@ -238,6 +250,121 @@ def _run_headless(config, args, console) -> int:
     if args.quiet:
         console.print(result or "")
     return 0
+
+
+def _run_headless_json(config, args) -> int:
+    """Headless run that emits the agent event stream as JSONL on stdout.
+
+    Same backend as `_run_headless` (LocalCodeApp + `.ask`, full-auto
+    approvals) but with all human/Rich output suppressed: model-resolution
+    chatter goes to a silent Console, the agent's own raw ANSI writes
+    (OutputManager pokes sys.stdout directly) are redirected to /dev/null,
+    and structured events are written as JSON Lines to a private duplicate
+    of the original stdout via the OutputManager event callback.
+
+    Exit codes match `_run_headless`: 0 ok · 1 error · 124 timeout ·
+    130 interrupted. The final line is always a `result` event carrying
+    the status, exit reason, and accumulated token counts.
+    """
+    import os
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    from rich.console import Console as _Console
+    from .headless_json import JsonlEmitter, open_clean_stdout
+
+    # Clean channel for JSONL, captured BEFORE we redirect fd 1 to devnull.
+    out_stream = open_clean_stdout()
+    emitter = JsonlEmitter(out_stream)
+
+    def _emit_result(status: str, code: int, reason: str, text: str = "") -> int:
+        emitter.result(status=status, exit_code=code, reason=reason, final_text=text)
+        return code
+
+    # Silent Rich console — swallows every console.print on the resolve /
+    # server-start path so it never lands on the machine-readable stdout.
+    null_console = _Console(file=open(os.devnull, "w"), quiet=True)
+
+    from .app import LocalCodeApp
+    from .server_manager import _probe_health
+    from .bootstrap import get_model_path
+    from .models_catalog import CHOICES
+
+    # Resolve model — identical logic to `_run_headless`, errors become a
+    # `result` event instead of a red Rich line.
+    resolved: _Path | None = None
+    for candidate in (args.model, config.runtime.model):
+        name = _Path(candidate).name if candidate else None
+        if name and name.endswith(".gguf"):
+            resolved = get_model_path(name)
+            if resolved:
+                break
+    if resolved is None:
+        downloaded = [c for c in CHOICES if c.local_path.exists()]
+        if downloaded:
+            resolved = min(downloaded, key=lambda c: c.size_gb).local_path
+    if resolved is None:
+        return _emit_result("error", 1, "no model found on disk")
+    config.runtime.model = str(resolved)
+    if args.binary:
+        config.runtime.llama_cpp_binary = args.binary
+
+    app = LocalCodeApp(config, profile_name=args.profile)
+    # Route every agent event to the JSONL emitter (replaces the default
+    # exec-event recorder for this headless run).
+    app.out.set_event_callback(emitter.emit)
+
+    if not any(_probe_health(p, timeout=1.0) for p in range(8081, 8100)):
+        if not app.engine._restart_server():
+            return _emit_result("error", 1, "could not start the model server")
+
+    if args.timeout and args.timeout > 0:
+        import signal
+
+        def _on_timeout(_sig, _frame):
+            raise TimeoutError(f"run exceeded {args.timeout}s")
+
+        signal.signal(signal.SIGALRM, _on_timeout)
+        signal.alarm(args.timeout)
+
+    # Silence the agent's own raw ANSI stdout writes for the duration of
+    # the run by pointing fd 1 (and sys.stdout) at /dev/null. The emitter
+    # already holds a private dup of the real stdout, so JSONL is unaffected.
+    devnull = open(os.devnull, "w")
+    saved_stdout = _sys.stdout
+    saved_fd = None
+    try:
+        saved_fd = os.dup(1)
+        os.dup2(devnull.fileno(), 1)
+    except Exception:
+        saved_fd = None
+    _sys.stdout = devnull
+
+    try:
+        result_text = app.ask(args.goal, stream=True)
+    except TimeoutError:
+        return _emit_result("timeout", 124, f"run exceeded {args.timeout}s")
+    except KeyboardInterrupt:
+        return _emit_result("interrupted", 130, "keyboard interrupt")
+    except Exception as e:  # noqa: BLE001 — headless: surface any failure as exit 1
+        return _emit_result("error", 1, f"{type(e).__name__}: {e}")
+    finally:
+        if args.timeout and args.timeout > 0:
+            import signal
+            signal.alarm(0)
+        _sys.stdout = saved_stdout
+        if saved_fd is not None:
+            try:
+                os.dup2(saved_fd, 1)
+                os.close(saved_fd)
+            except Exception:
+                pass
+        try:
+            devnull.close()
+        except Exception:
+            pass
+
+    return _emit_result("ok", 0, "completed", result_text or "")
 
 
 def main(argv: list[str] | None = None) -> None:
