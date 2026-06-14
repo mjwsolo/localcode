@@ -1,5 +1,25 @@
-from localcode.tui.screens.chat import _NoTintInput, ChatScreen
+from localcode.tui.screens.chat import (
+    _NoTintInput,
+    _spinner_label,
+    _SPINNER_GERUNDS,
+    ChatScreen,
+)
 from localcode.tui.widgets.chat_log import ChatLog
+
+
+def test_spinner_label_is_always_a_generic_placeholder() -> None:
+    # Every rotation value must yield one of the allowed playful gerunds —
+    # never the model's real thinking text.
+    for tick in range(len(_SPINNER_GERUNDS) * 3):
+        assert _spinner_label(tick) in _SPINNER_GERUNDS
+
+
+def test_spinner_label_never_echoes_model_thinking() -> None:
+    # The helper takes no model text and must not surface any. Simulate a
+    # leaked reasoning string and confirm it can't appear in the label.
+    leaked = "the user wants me to compute the eigenvalues first"
+    assert leaked not in _spinner_label(0)
+    assert all(leaked not in g for g in _SPINNER_GERUNDS)
 
 
 class _Selection:

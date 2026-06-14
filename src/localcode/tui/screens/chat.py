@@ -602,11 +602,25 @@ if TYPE_CHECKING:
 
 # Cycling thinking indicator — icons + labels rotate per tick.
 _THINK_ICONS = ["·", "•", "●"]
-_THINK_LABELS = [
-    "thinking", "reasoning", "working",
-    "planning", "checking", "analyzing",
-    "processing", "computing", "considering",
+# Playful generic gerund placeholders for the streaming spinner. These are
+# the ONLY labels the spinner may show while the model is reasoning — the
+# model's real thinking text must never leak into the spinner (it belongs
+# in the expandable thinking section). Rotating between these is fine.
+_SPINNER_GERUNDS = [
+    "mining", "digging", "crunching", "pondering", "brewing",
+    "thinking", "reasoning", "cooking", "noodling", "scheming",
+    "percolating", "tinkering",
 ]
+
+
+def _spinner_label(tick: int = 0) -> str:
+    """Return a generic playful gerund for the streaming spinner.
+
+    Deliberately ignores any model output: callers must NEVER pass the
+    model's reasoning text here. `tick` rotates the placeholder so the
+    label feels alive without ever revealing real thinking content.
+    """
+    return _SPINNER_GERUNDS[tick % len(_SPINNER_GERUNDS)]
 
 _TOOL_CALL_RE = re.compile(
     r'<\|?tool_call\|?>.*?<\|?/?tool_call\|?>', re.DOTALL
@@ -3657,23 +3671,24 @@ class ChatScreen(Screen):
             self._thinking_text += chunk
             self._turn_tokens += max(1, len(chunk) // 4) if chunk else 0
             self._thinking_phase = "thinking"
-            # Update active step with thinking preview
-            preview = self._thinking_text.strip().replace("\n", " ")[:60]
-            if preview:
-                if self._active_mode != "thinking":
-                    self._show_active_thinking(preview)
-                else:
-                    self._active_step_text = preview
-                    self._tick_active()
+            # Keep the spinner on a generic placeholder — never surface the
+            # model's real reasoning text here (it goes to the expandable
+            # thinking section on thinking_done). Token count + elapsed time
+            # next to the label keep updating via _tick_active.
+            if self._active_mode != "thinking":
+                self._show_active_thinking(_spinner_label(self._tick_count))
+            else:
+                self._active_step_text = _spinner_label(self._tick_count)
+                self._tick_active()
         elif t == "thinking_peek":
             self._thinking_phase = "thinking"
-            peek = (p.get("text", "") or "").strip().replace("\n", " ")[:60]
-            if peek:
-                if self._active_mode != "thinking":
-                    self._show_active_thinking(peek)
-                else:
-                    self._active_step_text = peek
-                    self._tick_active()
+            # thinking_peek carries model text in p["text"]; deliberately
+            # ignore it for the spinner label and show a placeholder instead.
+            if self._active_mode != "thinking":
+                self._show_active_thinking(_spinner_label(self._tick_count))
+            else:
+                self._active_step_text = _spinner_label(self._tick_count)
+                self._tick_active()
         elif t == "thinking_done":
             text = p.get("text", "")
             self._thinking_text = text
