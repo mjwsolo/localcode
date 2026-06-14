@@ -506,19 +506,14 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
         all real Mac sizes. The CAP here is the RAM/KV budget; the model's
         trained length is a separate cap applied via `_model_max_ctx`.
 
-        Every current catalog model trains to >=256K (Gemma 4 / Qwen 3.6 =
-        262144, North-Mini = 500000), so on a big machine RAM is the binding
-        constraint, not the model — hence 96 GB+ unlocks 256K. Small-RAM tiers
-        stay conservative: only 16 GB→64K and 64 GB→128K are hardware-measured;
-        24/32/36 hold at 64K pending real-hardware OOM measurement.
+        The tier ladder lives in `model_config.RAM_CTX_CEILING_TIERS` (the
+        central per-Mac config); this delegates so the numbers are edited in
+        one place. Every current catalog model trains to >=256K, so on a big
+        machine RAM is the binding constraint — 96 GB+ unlocks 256K; small-RAM
+        tiers stay conservative (16 GB→64K, 64 GB→128K hardware-measured).
         """
-        if ram_gb >= 96:
-            return 262144   # 256K — 96/128/192 GB hold a 256K KV easily
-        if ram_gb >= 64:
-            return 131072   # 128K (validated; 256K KV is tight beside a Q8 model on 64 GB)
-        if ram_gb >= 48:
-            return 98304    # 96K
-        return 65536        # 16-47 GB: 64K (validated on 16 GB)
+        from .model_config import ram_ctx_ceiling
+        return ram_ctx_ceiling(ram_gb)
 
     @staticmethod
     def _cohere_ctx_ceiling(ram_gb: int) -> int:
@@ -534,14 +529,11 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
         the agent "thinking..." for 11 minutes). These tiers keep the
         allocated KV well within unified memory while still leaving plenty
         of room for this model's long unconditional reasoning. Monotonic.
+
+        Tier ladder lives in `model_config.COHERE_CTX_CEILING_TIERS`.
         """
-        if ram_gb >= 96:
-            return 65536    # 64K
-        if ram_gb >= 48:
-            return 49152    # 48K
-        if ram_gb >= 32:
-            return 32768    # 32K
-        return 16384        # <32 GB: 16K (32 GB+ is the recommended floor)
+        from .model_config import cohere_ctx_ceiling
+        return cohere_ctx_ceiling(ram_gb)
 
     def _model_max_ctx(self, model_path: str | None = None) -> int:
         """The model's trained context length (`*.context_length` in the GGUF
@@ -553,15 +545,16 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
         """
         import struct
         from pathlib import Path as _Path
+        from .model_config import CTX_NO_CLAMP_SENTINEL
         path = str(model_path or getattr(self.config, "model", "") or "")
         if not path:
-            return 1_000_000
+            return CTX_NO_CLAMP_SENTINEL
         cache = getattr(self, "_model_ctx_cache", None)
         if cache is None:
             cache = self._model_ctx_cache = {}
         if path in cache:
             return cache[path]
-        result = 1_000_000  # unknown → don't clamp
+        result = CTX_NO_CLAMP_SENTINEL  # unknown → don't clamp
         try:
             if _Path(path).is_file():
                 with open(path, "rb") as f:
@@ -594,7 +587,7 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
                                 result = v
                                 break
         except Exception:
-            result = 1_000_000
+            result = CTX_NO_CLAMP_SENTINEL
         cache[path] = result
         return result
 
@@ -617,13 +610,10 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
 
     # Bytes per KV element by quant type. None-on-miss is deliberate:
     # an unknown (e.g. "turbo4") type means "don't clamp — defer to the
-    # validated ceilings", never "guess and risk a wrong cap".
-    _KV_DTYPE_BYTES = {
-        "f32": 4.0, "f16": 2.0, "bf16": 2.0,
-        "q8_0": 1.0625, "q8_1": 1.125,
-        "q5_1": 0.875, "q5_0": 0.8125,
-        "q4_1": 0.625, "q4_0": 0.5625,
-    }
+    # validated ceilings", never "guess and risk a wrong cap". The table is
+    # the central `model_config.KV_DTYPE_BYTES`; aliased here so the existing
+    # `self._KV_DTYPE_BYTES.get(...)` call sites are unchanged.
+    from .model_config import KV_DTYPE_BYTES as _KV_DTYPE_BYTES
 
     def _effective_kv_dtypes(self, model_path: str | None) -> tuple[str, str]:
         """The KV (K, V) dtypes the server is ACTUALLY launched with for this
@@ -732,19 +722,23 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
         headroom for the OS, the app, and compute activations. Returns a large
         sentinel (no clamp) when KV size isn't confidently computable, so the
         existing validated ceilings govern the turbo-compressed path."""
+        from .model_config import (
+            CTX_NO_CLAMP_SENTINEL, KV_FIT_CTX_MULTIPLE, KV_FIT_MIN_CTX,
+            KV_FIT_RESERVE_FRACTION, KV_FIT_RESERVE_GB,
+        )
         bpt = self._kv_bytes_per_token(model_path)
         if not bpt or bpt <= 0:
-            return 1_000_000
+            return CTX_NO_CLAMP_SENTINEL
         total = ram_gb * (1024 ** 3)
         weights = self._model_file_bytes(model_path)
         # Reserve the larger of 3 GB or 15% of RAM for OS + app + activations.
-        reserve = max(3 * 1024 ** 3, int(total * 0.15))
+        reserve = max(KV_FIT_RESERVE_GB * 1024 ** 3, int(total * KV_FIT_RESERVE_FRACTION))
         kv_budget = total - weights - reserve
         if kv_budget <= 0:
-            return 2048  # weights barely fit; give the minimum workable ctx
+            return KV_FIT_MIN_CTX  # weights barely fit; give the minimum workable ctx
         max_ctx = int(kv_budget / bpt)
         # Round down to a 2048 multiple; never below a 2048 floor.
-        return max(2048, (max_ctx // 2048) * 2048)
+        return max(KV_FIT_MIN_CTX, (max_ctx // KV_FIT_CTX_MULTIPLE) * KV_FIT_CTX_MULTIPLE)
 
     def _system_ram_gb(self) -> int:
         try:
@@ -1016,8 +1010,9 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
         # Lift only on >=32 GB machines (lots of headroom regardless of KV
         # type). Below that we keep the chars-based value to avoid an OOM on
         # an unvalidated small-RAM × KV-type combination.
+        from .model_config import BALANCED_RAM_LIFT_MIN_GB
         ram_gb = self._system_ram_gb()
-        if ram_gb >= 32:
+        if ram_gb >= BALANCED_RAM_LIFT_MIN_GB:
             num_ctx = max(num_ctx, self._ram_ctx_ceiling(ram_gb))
         # Never exceed the model's trained context length (degrades past it).
         return min(num_ctx, self._model_max_ctx(model_path))
@@ -1171,7 +1166,8 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
         # so it can never approach the (already-bounded) context window.
         # This only TIGHTENS an otherwise-unlimited/oversized budget.
         if self._is_cohere_gguf():
-            cap = min(8192, max(2048, self._target_num_ctx() // 2))
+            from .model_config import cohere_generation_cap
+            cap = cohere_generation_cap(self._target_num_ctx())
             cur = opts.get("num_predict")
             if not isinstance(cur, int) or cur <= 0 or cur > cap:
                 opts["num_predict"] = cap

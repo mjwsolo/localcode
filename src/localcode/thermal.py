@@ -144,39 +144,17 @@ def recommended_thermal_caps(
 
     laptop = bool(machine and machine.tier in {"small", "medium"})
 
-    if pressure == "nominal":
-        return ThermalCaps(
-            pressure=pressure,
-            throttle=False,
-            thread_scale=1.0,
-            batch_scale=1.0,
-            cooldown_seconds=0,
-            reason="No thermal pressure; run at full configured speed.",
-        )
-    if pressure == "fair":
-        return ThermalCaps(
-            pressure=pressure,
-            throttle=True,
-            thread_scale=0.75 if laptop else 0.85,
-            batch_scale=0.75,
-            cooldown_seconds=1,
-            reason="Mild thermal pressure; trim parallelism slightly.",
-        )
-    if pressure == "serious":
-        return ThermalCaps(
-            pressure=pressure,
-            throttle=True,
-            thread_scale=0.5,
-            batch_scale=0.5,
-            cooldown_seconds=3,
-            reason="Notable thermal pressure; halve parallelism and pause between requests.",
-        )
-    # critical
+    # Cap values live in the central per-Mac config (model_config.THERMAL_CAPS);
+    # this assembles the ThermalCaps dataclass from that table so the levels
+    # are edited in one place.
+    from .model_config import THERMAL_CAPS
+    spec = THERMAL_CAPS[pressure]
+    thread_scale = spec["thread_scale_laptop"] if laptop else spec["thread_scale_other"]
     return ThermalCaps(
         pressure=pressure,
-        throttle=True,
-        thread_scale=0.25 if laptop else 0.35,
-        batch_scale=0.25,
-        cooldown_seconds=8,
-        reason="Critical thermal pressure; minimise load and cool down between requests.",
+        throttle=bool(spec["throttle"]),
+        thread_scale=float(thread_scale),
+        batch_scale=float(spec["batch_scale"]),
+        cooldown_seconds=int(spec["cooldown_seconds"]),
+        reason=str(spec["reason"]),
     )

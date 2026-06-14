@@ -25,41 +25,19 @@ from __future__ import annotations
 
 from typing import Any
 
-
-# Rough 4:1 char:token ratio. Good enough for thresholding — we don't
-# need tokenizer-exact counts for a "should I compact?" decision.
-_CHARS_PER_TOKEN = 4
-
-# Reserve space in the context window for: (a) new user input,
-# (b) new assistant generation, (c) tool results on the next round.
-# Compacting must leave this much breathing room below context_window.
-RESERVE_TOKENS_DEFAULT = 4096
-
-# Keep this many tokens of most-recent history verbatim after a compact.
-# Picked so the last few tool results + the user's latest ask + the
-# in-progress assistant turn all survive intact. This is a FLOOR — on a
-# big-RAM machine with a 128K/256K window we keep proportionally more
-# verbatim (see `_keep_recent_for_window`), because crushing a huge
-# window's history down to 6K recent tokens throws away context the
-# model still has room to hold.
-KEEP_RECENT_TOKENS_DEFAULT = 6144
-KEEP_RECENT_TOKENS_MAX = 49152
-
-# Trigger compaction when estimated prompt exceeds this fraction of
-# (context_window - reserve). 0.70 leaves enough margin for compaction
-# itself to not blow the window.
-COMPACT_THRESHOLD_FRACTION = 0.70
-
-# Below this much system RAM we do NOT spend an LLM generation on the
-# summary. Rationale (matches the per-machine policy used everywhere
-# else — context window, model rec, tok/s): summarizing with the model
-# means feeding the entire old history back through it (a big prefill)
-# plus ~1500 tokens of decode. On a small machine that's a multi-second
-# stall mid-task, the resident model is the weak/quantized one (so the
-# summary is poor anyway), AND the tight window can't spare the room. So
-# small RAM uses the instant deterministic structured summary; capable
-# machines (≥32 GB) spend the generation for a richer summary.
-LLM_SUMMARY_MIN_RAM_GB = 32
+# Central per-model × per-Mac config — the single source of truth for the
+# compaction tiers/thresholds below. Re-exported here under their historical
+# names so call sites and tests that import them from `compaction` are
+# unchanged. The window→keep-recent scaling helper also delegates.
+from .model_config import (
+    CHARS_PER_TOKEN as _CHARS_PER_TOKEN,
+    COMPACT_THRESHOLD_FRACTION,
+    KEEP_RECENT_TOKENS_DEFAULT,
+    KEEP_RECENT_TOKENS_MAX,
+    LLM_SUMMARY_MIN_RAM_GB,
+    RESERVE_TOKENS_DEFAULT,
+    keep_recent_for_window as _model_config_keep_recent_for_window,
+)
 
 
 def _keep_recent_for_window(context_window: int) -> int:
@@ -69,11 +47,10 @@ def _keep_recent_for_window(context_window: int) -> int:
     for more. Big windows (128 GB, 256K) keep up to ~48K verbatim so a
     long session preserves far more raw recent history instead of being
     crushed to the same tiny tail as a small machine.
+
+    Delegates to `model_config.keep_recent_for_window` (the central config).
     """
-    if not context_window or context_window <= 0:
-        return KEEP_RECENT_TOKENS_DEFAULT
-    scaled = context_window // 5
-    return max(KEEP_RECENT_TOKENS_DEFAULT, min(KEEP_RECENT_TOKENS_MAX, scaled))
+    return _model_config_keep_recent_for_window(context_window)
 
 
 _SUMMARIZATION_SYSTEM = (
