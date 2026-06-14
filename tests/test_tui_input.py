@@ -389,3 +389,17 @@ def test_bang_bash_empty_shows_hint_runs_nothing(monkeypatch):
     stub = _BashScreenStub("/tmp")
     ChatScreen._run_bash(stub, "")
     assert ran["n"] == 0 and stub._log.infos, "bare ! shows a hint, runs nothing"
+
+
+def test_chat_textarea_autosize_grows_and_clamps():
+    # The input must grow with content (Codex-style) up to _MAX_INPUT_LINES,
+    # then stop (scrolls internally). TextArea doesn't auto-grow from CSS, so
+    # autosize_height() drives the row count.
+    ta = ChatScreen  # ensure import
+    from localcode.tui.screens.chat import _ChatTextArea
+    small = _ChatTextArea(text="one\ntwo\nthree")
+    small.autosize_height()
+    assert 1 <= small.styles.height.value <= _ChatTextArea._MAX_INPUT_LINES
+    big = _ChatTextArea(text="\n".join(f"line {i}" for i in range(40)))
+    big.autosize_height()
+    assert big.styles.height.value == _ChatTextArea._MAX_INPUT_LINES  # clamped

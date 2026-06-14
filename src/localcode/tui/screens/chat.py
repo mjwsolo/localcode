@@ -421,6 +421,25 @@ class _ChatTextArea(TextArea):
     def insert_text_at_cursor(self, text: str) -> None:
         """Input-API compatibility: TextArea uses `insert()`."""
         self.insert(text)
+        self.autosize_height()
+
+    # ── auto-grow (Codex-style) ──
+    # Textual's TextArea does NOT grow from `height: auto` alone — it keeps a
+    # fixed height and scrolls. So a big pasted prompt showed as a single row.
+    # We drive the row count from the wrapped document: grow up to
+    # _MAX_INPUT_LINES, then it scrolls internally (max-height in CSS) instead
+    # of pushing the layout. Called on every content change + on mount.
+    _MAX_INPUT_LINES = 10
+
+    def autosize_height(self) -> None:
+        try:
+            rows = self.wrapped_document.height  # visual rows incl. soft-wrap
+        except Exception:
+            try:
+                rows = self.document.line_count
+            except Exception:
+                rows = 1
+        self.styles.height = max(1, min(self._MAX_INPUT_LINES, int(rows or 1)))
 
     # ── input history (per-session, in-memory) ──
     # Same shell-style behaviour as the old Input: ↑ recalls older
@@ -449,6 +468,7 @@ class _ChatTextArea(TextArea):
     def _set_text_and_cursor_end(self, text: str) -> None:
         self.text = text or ""
         self.move_cursor(self.document.end)
+        self.autosize_height()
 
     def _hist_navigate(self, direction: int) -> bool:
         self._hist_init()
@@ -1546,6 +1566,10 @@ class ChatScreen(Screen):
                 return
         except Exception:
             return
+        try:
+            event.text_area.autosize_height()  # grow/shrink with content
+        except Exception:
+            pass
         self._on_chat_text_changed(event.text_area.text)
 
     def _on_chat_text_changed(self, text: str) -> None:

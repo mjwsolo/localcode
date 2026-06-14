@@ -618,8 +618,11 @@ def test_model_identity_line_friendly_name_and_quant():
     }
     for filename, friendly in cases.items():
         line = model_identity_line(filename)
-        assert line == f"You are running locally as {friendly} via LocalCode.\n"
+        # An explicit directive (not a passive statement) so a small model
+        # actually reports its identity when asked.
         assert friendly in line
+        assert "answer exactly" in line and "LocalCode" in line
+        assert line.endswith("\n")
 
     # Full paths resolve to the same friendly name as the bare filename.
     assert "Qwen 3.6 35B-A3B (Q8)" in model_identity_line(
@@ -659,7 +662,8 @@ def test_assembled_system_prompt_contains_model_identity():
         use_thinking=False,
     )
     assert "Gemma 4 12B (Q4)" in result.system_prompt
-    assert "running locally as Gemma 4 12B (Q4) via LocalCode" in result.system_prompt
+    assert "Gemma 4 12B (Q4)" in result.system_prompt
+    assert "answer exactly" in result.system_prompt
 
 
 def test_recovery_callable():
