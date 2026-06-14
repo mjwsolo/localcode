@@ -13,7 +13,7 @@ import types
 import pytest
 
 from localcode import entrypoint
-from localcode.headless_json import JsonlEmitter
+from localcode.headless_json import JsonlEmitter, run_headless_json
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -103,7 +103,7 @@ def _parse_lines(captured: str) -> list[dict]:
 
 def test_jsonl_stream_is_all_valid_json(monkeypatch, capsys):
     _patch_backend(monkeypatch)
-    code = entrypoint._run_headless_json(_make_config(), _make_args())
+    code = run_headless_json(_make_config(), _make_args())
     assert code == 0
 
     events = _parse_lines(capsys.readouterr().out)
@@ -113,7 +113,7 @@ def test_jsonl_stream_is_all_valid_json(monkeypatch, capsys):
 
 def test_expected_event_types_present(monkeypatch, capsys):
     _patch_backend(monkeypatch)
-    entrypoint._run_headless_json(_make_config(), _make_args())
+    run_headless_json(_make_config(), _make_args())
     events = _parse_lines(capsys.readouterr().out)
     types_seen = [e["type"] for e in events]
     for expected in ("content", "tool_start", "tool_result", "turn_tokens", "result"):
@@ -124,7 +124,7 @@ def test_expected_event_types_present(monkeypatch, capsys):
 
 def test_result_event_summary(monkeypatch, capsys):
     _patch_backend(monkeypatch)
-    code = entrypoint._run_headless_json(_make_config(), _make_args())
+    code = run_headless_json(_make_config(), _make_args())
     events = _parse_lines(capsys.readouterr().out)
     result = events[-1]
     assert result["type"] == "result"
@@ -140,7 +140,7 @@ def test_result_event_summary(monkeypatch, capsys):
 
 def test_no_model_emits_error_result(monkeypatch, capsys):
     _patch_backend(monkeypatch, model_on_disk=False)
-    code = entrypoint._run_headless_json(_make_config(), _make_args())
+    code = run_headless_json(_make_config(), _make_args())
     assert code == 1
     events = _parse_lines(capsys.readouterr().out)
     assert len(events) == 1
@@ -155,7 +155,7 @@ def test_ask_exception_becomes_error_result(monkeypatch, capsys):
             raise ValueError("boom")
 
     _patch_backend(monkeypatch, app_cls=_BoomApp)
-    code = entrypoint._run_headless_json(_make_config(), _make_args())
+    code = run_headless_json(_make_config(), _make_args())
     assert code == 1
     events = _parse_lines(capsys.readouterr().out)
     result = events[-1]
@@ -170,7 +170,7 @@ def test_keyboard_interrupt_exit_130(monkeypatch, capsys):
             raise KeyboardInterrupt
 
     _patch_backend(monkeypatch, app_cls=_IntApp)
-    code = entrypoint._run_headless_json(_make_config(), _make_args())
+    code = run_headless_json(_make_config(), _make_args())
     assert code == 130
     events = _parse_lines(capsys.readouterr().out)
     assert events[-1]["status"] == "interrupted"
