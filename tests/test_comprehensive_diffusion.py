@@ -448,3 +448,35 @@ def test_ensure_diffusion_cli_short_circuits_on_cached(tmp_path, monkeypatch):
     cached.write_text("#!/bin/sh\n")
     ok, path = bootstrap.ensure_diffusion_cli()
     assert ok is True and Path(path) == cached
+
+
+def test_diffusion_preempts_oversized_prompt(tmp_path, monkeypatch):
+    # A prompt large enough to reliably collapse the small canvas must
+    # short-circuit to E3107 WITHOUT burning the 3 CLI retries (~75s).
+    gw = _gateway(tmp_path, "printf 'should not run'\n")
+    called = {"n": 0}
+
+    def _counting_cli(*_a, **_k):
+        called["n"] += 1
+        return ""
+    monkeypatch.setattr(gw, "_run_diffusion_cli", _counting_cli)
+
+    big = "x" * 20000  # > the 16000-char pre-empt limit
+    events = list(gw.stream_chat_events([{"role": "user", "content": big}]))
+    content = "".join(e["content"] for e in events if e["type"] == "content")
+    assert "E3107" in content
+    assert called["n"] == 0, "oversized prompt must not invoke the CLI retries"
+
+
+def test_diffusion_normal_prompt_still_runs_cli(tmp_path, monkeypatch):
+    # A normal-size prompt must NOT be pre-empted — the CLI still runs.
+    gw = _gateway(tmp_path, "printf 'hi there'\n")
+    called = {"n": 0}
+
+    def _counting_cli(*_a, **_k):
+        called["n"] += 1
+        return "hi there"
+    monkeypatch.setattr(gw, "_run_diffusion_cli", _counting_cli)
+
+    list(gw.stream_chat_events([{"role": "user", "content": "hello"}]))
+    assert called["n"] >= 1, "normal prompt must still run the CLI"
