@@ -154,7 +154,15 @@ def model_identity_line(model: str) -> str:
         # ".gguf" but otherwise pass it through unchanged — better to
         # echo the real configured identifier than invent a name.
         friendly = filename[:-5] if filename.lower().endswith(".gguf") else filename
-    return f"You are running locally as {friendly} via LocalCode.\n"
+    # Phrase as an explicit DIRECTIVE, not a passive statement. A small local
+    # model asked "which model are you?" otherwise answers from its training
+    # priors (e.g. "I'm Gemma by Google") and ignores a passive line. Telling
+    # it exactly what to say when asked makes it actually report its identity.
+    return (
+        f"You are {friendly}, running locally via LocalCode. If the user asks "
+        f"which model, version, or quant you are, answer exactly \"{friendly}\" "
+        f"— never say you are unsure or name a different model/provider.\n"
+    )
 
 
 def project_stack_line(repo_root: Path) -> str:
