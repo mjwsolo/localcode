@@ -18,6 +18,7 @@ from localcode.agent.constants import (
     CHURN_FILE_WRITE_LIMIT,
     CHURN_COMMAND_FAIL_LIMIT,
     CHURN_READONLY_STREAK_LIMIT,
+    CHURN_PLANNING_STREAK_LIMIT,
 )
 
 
@@ -46,6 +47,41 @@ def test_command_failure_churn_fires_at_threshold():
 def test_investigation_spin_fires_at_threshold():
     sig = detect_churn({}, {}, CHURN_READONLY_STREAK_LIMIT)
     assert sig is not None and sig.mode is ChurnMode.INVESTIGATION_SPIN
+
+
+def test_planning_spin_fires_at_threshold():
+    sig = detect_churn({}, {}, 0, planning_streak=CHURN_PLANNING_STREAK_LIMIT)
+    assert sig is not None and sig.mode is ChurnMode.PLANNING_SPIN
+    assert sig.count == CHURN_PLANNING_STREAK_LIMIT
+
+
+def test_planning_spin_below_threshold_does_not_fire():
+    assert detect_churn({}, {}, 0, planning_streak=CHURN_PLANNING_STREAK_LIMIT - 1) is None
+
+
+def test_planning_streak_defaults_to_zero_for_legacy_callers():
+    # Callers that don't pass planning_streak keep the prior three-signal
+    # behaviour — no PLANNING_SPIN without the new input.
+    assert detect_churn({}, {}, 0) is None
+    assert detect_churn({}, {}, CHURN_READONLY_STREAK_LIMIT - 1) is None
+
+
+def test_investigation_spin_outranks_planning_spin():
+    # Both soft signals tripped → INVESTIGATION_SPIN wins (keeps its distinct
+    # "stop reading in circles" framing for the pure read-only case).
+    sig = detect_churn(
+        {}, {},
+        CHURN_READONLY_STREAK_LIMIT,
+        planning_streak=CHURN_PLANNING_STREAK_LIMIT + 3,
+    )
+    assert sig.mode is ChurnMode.INVESTIGATION_SPIN
+
+
+def test_planning_spin_nudge_is_actionable():
+    sig = detect_churn({}, {}, 0, planning_streak=CHURN_PLANNING_STREAK_LIMIT)
+    text = churn_nudge_for(sig)
+    assert "planned enough" in text.lower()
+    assert "concrete action" in text.lower() or "execute" in text.lower()
 
 
 def test_command_failure_takes_precedence_over_file_rewrite():

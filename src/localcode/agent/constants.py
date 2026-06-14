@@ -32,6 +32,7 @@ __all__ = [
     "CHURN_FILE_WRITE_LIMIT",
     "CHURN_COMMAND_FAIL_LIMIT",
     "CHURN_READONLY_STREAK_LIMIT",
+    "CHURN_PLANNING_STREAK_LIMIT",
 ]
 
 
@@ -225,3 +226,22 @@ generic streak of 10: a 10-round read-only run is already 5+ minutes
 of the user staring at a frozen screen. 6 still allows reading the
 handful of files needed to understand a redesign before committing,
 but interrupts a genuine investigation spin sooner."""
+
+CHURN_PLANNING_STREAK_LIMIT = 4
+"""Consecutive rounds of PLANNING-WITHOUT-PROGRESS before we nudge
+"you've planned enough; take a concrete action now."
+
+A round counts toward this streak when ALL of:
+  • it changed NO new file this turn (changed_files count didn't grow),
+  • it ran NO build/test/verify command, and
+  • it produced thinking or narration content (i.e. the model was
+    reasoning/planning, not idle).
+
+This catches the model that re-derives the SAME plan across many rounds
+— lots of thinking, no concrete action — which the read-only-spin
+signal misses because that streak resets on any round with zero tool
+calls (a pure think-then-read-then-think alternation never accumulates
+a pure read-only streak). Set to 4 (one higher than the read-only
+limit's effective reach) so legitimate "read two files, think, read a
+third, then edit" flows do NOT trip: as soon as a round changes a file
+or runs a build, the streak resets to 0."""

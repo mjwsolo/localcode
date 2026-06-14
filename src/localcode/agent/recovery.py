@@ -271,6 +271,7 @@ from .constants import (  # noqa: E402  (kept near the churn logic it parameteri
     CHURN_FILE_WRITE_LIMIT,
     CHURN_COMMAND_FAIL_LIMIT,
     CHURN_READONLY_STREAK_LIMIT,
+    CHURN_PLANNING_STREAK_LIMIT,
 )
 
 
@@ -283,6 +284,7 @@ class ChurnMode(str, Enum):
     FILE_REWRITE = "repeated file rewrite"
     COMMAND_FAILURE = "repeated failing command"
     INVESTIGATION_SPIN = "read-only investigation spin"
+    PLANNING_SPIN = "re-planning without progress"
 
 
 class ChurnSignal:
@@ -323,10 +325,11 @@ def detect_churn(
     file_write_counts: dict[str, int],
     command_fail_counts: dict[str, int],
     readonly_streak: int,
+    planning_streak: int = 0,
 ) -> ChurnSignal | None:
     """Decide whether the turn-so-far is churning, and how.
 
-    Pure function. Caller maintains the three inputs across the turn:
+    Pure function. Caller maintains the inputs across the turn:
 
       file_write_counts   — path → number of write/edit/append calls
                             targeting it this turn (any content).
@@ -334,12 +337,19 @@ def detect_churn(
                             runs this turn.
       readonly_streak     — consecutive rounds of pure read-only
                             investigation with no mutating/server action.
+      planning_streak     — consecutive rounds that changed no new file,
+                            ran no build/verify, and produced thinking/
+                            narration (re-planning without progress).
+                            Defaults to 0 so callers that don't track it
+                            keep the prior three-signal behaviour.
 
-    Precedence: COMMAND_FAILURE > FILE_REWRITE > INVESTIGATION_SPIN.
-    A failing command is the most actionable (there's a concrete error
-    to read); a file rewritten N times is next; a read-only spin is the
-    softest signal (legitimately reading several files looks the same
-    until it goes long), so it loses ties.
+    Precedence:
+      COMMAND_FAILURE > FILE_REWRITE > INVESTIGATION_SPIN > PLANNING_SPIN.
+    A failing command is the most actionable (there's a concrete error to
+    read); a file rewritten N times is next; a read-only spin is softer
+    (reading several files looks the same until it goes long); a planning
+    spin is the softest of all (lots of thinking is sometimes legitimate),
+    so it loses every tie.
 
     Returns None when nothing crosses its threshold.
     """
@@ -361,9 +371,16 @@ def detect_churn(
     if worst_file_n >= CHURN_FILE_WRITE_LIMIT:
         return ChurnSignal(ChurnMode.FILE_REWRITE, worst_file, worst_file_n)
 
-    # INVESTIGATION_SPIN — softest.
+    # INVESTIGATION_SPIN — pure read-only tool spin.
     if readonly_streak >= CHURN_READONLY_STREAK_LIMIT:
         return ChurnSignal(ChurnMode.INVESTIGATION_SPIN, "", readonly_streak)
+
+    # PLANNING_SPIN — softest. Re-planning across rounds with no file
+    # change and no build/verify. Caught here (not by INVESTIGATION_SPIN)
+    # because the model may mix think-only rounds with read rounds, which
+    # never accumulates a pure read-only streak.
+    if planning_streak >= CHURN_PLANNING_STREAK_LIMIT:
+        return ChurnSignal(ChurnMode.PLANNING_SPIN, "", planning_streak)
 
     return None
 
@@ -389,6 +406,14 @@ def churn_nudge_for(signal: ChurnSignal) -> str:
             "turn. Re-running it will not help. Read its error output line by "
             "line, fix the ROOT CAUSE (a missing dependency, a syntax error in "
             "a config/source file, a wrong path), and only then run it again."
+        )
+    if signal.mode is ChurnMode.PLANNING_SPIN:
+        return (
+            "SYSTEM: You've spent several rounds planning and re-deriving the "
+            "same approach without changing a single file or running a build. "
+            "You've planned enough. Take ONE concrete action NOW: create or "
+            "edit the most important file for the next step, then build/run to "
+            "verify it. Do not restate the plan — execute the first step of it."
         )
     # INVESTIGATION_SPIN
     return (
