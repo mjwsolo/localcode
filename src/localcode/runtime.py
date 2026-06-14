@@ -2024,7 +2024,28 @@ class LocalCodeRuntimeGateway:
         # error instead of thrashing.
         _MAX_STREAM_RESTARTS = 1
         _restarts_done = 0
-        for attempt in range(max(1, self.config.max_retries + 1)):
+        # Gemma-4 token-soup collapse is INTERMITTENT (the same "hi" that
+        # collapses now answers cleanly on a re-sample). The collapse path
+        # used to hard-fail with E3108 and no retry. Instead, re-generate
+        # the SAME completion up to _MAX_COLLAPSE_RETRIES times before
+        # giving up — mirroring the diffusion path's adaptive retry loop.
+        # We only retry a collapse that fires BEFORE any real content has
+        # been streamed to the consumer (the soup tokens are stripped, so
+        # the consumer has seen nothing yet) — that keeps the retry clean
+        # with no double-emit, and the "hi" collapse always falls in this
+        # window. A collapse mid-answer (rare) still surfaces E3108 rather
+        # than re-streaming a partially-consumed turn.
+        _MAX_COLLAPSE_RETRIES = 2
+        _collapse_retries_done = 0
+        # The attempt budget must cover BOTH connection retries and collapse
+        # retries — otherwise a low `max_retries` would starve collapse
+        # recovery. Collapse retries are gated separately by
+        # `_collapse_retries_done` so this only RAISES the ceiling; it never
+        # forces extra connection attempts.
+        _attempt_budget = max(
+            1, self.config.max_retries + 1, _MAX_COLLAPSE_RETRIES + 1
+        )
+        for attempt in range(_attempt_budget):
             try:
                 if attempt == 0 and _restarts_done < _MAX_STREAM_RESTARTS and not self._quick_server_probe():
                     _restarts_done += 1
@@ -2069,6 +2090,11 @@ class LocalCodeRuntimeGateway:
                 raw_content_tail = ""  # last 500 chars of `content` deltas
                 _collapse_hits = 0     # raw <unusedNN>/[multimodal] tokens seen
                 _collapsed = False     # known llama.cpp Gemma-4 token-soup loop
+                # True once a real (non-soup) content/thinking/tool delta has
+                # been yielded downstream this attempt. Gates collapse-retry:
+                # we can only cleanly re-generate a collapse that fired before
+                # anything reached the consumer (no double-emit).
+                _emitted_real = False
                 # Timing markers — captured here, surfaced on stream_done.
                 # `_stream_started_at` lets us compute total stream wall.
                 # `_first_token_at` is the moment the first usable token
@@ -2229,6 +2255,7 @@ class LocalCodeRuntimeGateway:
                                 # call is unchanged — it still fires the real
                                 # `tool_start` once we're ready to execute.
                                 if not prev_name and pending_tools[idx]["function"]["name"]:
+                                    _emitted_real = True
                                     yield {
                                         "type": "tool_preview",
                                         "index": idx,
@@ -2302,6 +2329,7 @@ class LocalCodeRuntimeGateway:
                         # reasoning delta has no content).
                         thinking = message.get("thinking")
                         if thinking and think:
+                            _emitted_real = True
                             yield {"type": "thinking", "content": thinking}
                         content = message.get("content", "")
                         if not content:
@@ -2324,6 +2352,7 @@ class LocalCodeRuntimeGateway:
                                 after = content.split(_open, 1)[1]
                                 cleaned = _strip_thinking_tokens(after, _family)
                                 if cleaned.strip():
+                                    _emitted_real = True
                                     yield {"type": "thinking", "content": cleaned}
                                 continue
                             if in_thinking:
@@ -2332,20 +2361,24 @@ class LocalCodeRuntimeGateway:
                                     before = content.split(_close, 1)[0]
                                     cleaned = _strip_thinking_tokens(before, _family)
                                     if cleaned.strip():
+                                        _emitted_real = True
                                         yield {"type": "thinking", "content": cleaned}
                                     in_thinking = False
                                     after = content.split(_close, 1)[1]
                                     cleaned_after = _strip_thinking_tokens(after, _family)
                                     if cleaned_after.strip():
+                                        _emitted_real = True
                                         yield {"type": "content", "content": cleaned_after}
                                 else:
                                     # Still inside thinking block
                                     cleaned = _strip_thinking_tokens(content, _family)
                                     if cleaned.strip():
+                                        _emitted_real = True
                                         yield {"type": "thinking", "content": cleaned}
                                 continue
                         cleaned = _strip_thinking_tokens(content)
                         if cleaned:
+                            _emitted_real = True
                             yield {"type": "content", "content": cleaned}
                     # If stream ends while still in thinking, that's fine —
                     # thinking_done will be emitted by the agent loop
@@ -2357,6 +2390,39 @@ class LocalCodeRuntimeGateway:
                                 for ft in final_tools:
                                     idx = ft.get("index", len(pending_tools))
                                     pending_tools[idx] = ft
+                # Gemma-4 collapse recovery. The collapse is intermittent, so
+                # re-generate the SAME request before surfacing E3108 — but
+                # only while nothing real has reached the consumer yet, so the
+                # retry can't double-emit content. (The collapse-on-"hi" case
+                # always lands here: the soup is stripped, so _emitted_real is
+                # still False when the collapse trips.) On the retry we nudge
+                # sampling slightly to break out of the bad sample: a small
+                # temperature bump plus the existing repeat_penalty knob. Only
+                # if EVERY attempt collapses do we fall through to E3108.
+                if (
+                    _collapsed
+                    and not _emitted_real
+                    and _collapse_retries_done < _MAX_COLLAPSE_RETRIES
+                ):
+                    _collapse_retries_done += 1
+                    yield {
+                        "type": "stage",
+                        "name": "collapse_retry",
+                        "message": (
+                            "The model produced repeated junk tokens — "
+                            "re-generating the response."
+                        ),
+                    }
+                    # Conservative anti-collapse nudge: bump temperature a
+                    # little so the retry samples a different path. We clamp
+                    # to a sane ceiling so we never push the model into
+                    # incoherence. repeat_penalty already lives in _payload.
+                    try:
+                        _t = float(payload.get("temperature", 0.7) or 0.7)
+                    except (TypeError, ValueError):
+                        _t = 0.7
+                    payload["temperature"] = min(1.0, _t + 0.1 * _collapse_retries_done)
+                    continue
                 # Diagnostic event for the agent loop — outcome of THIS
                 # stream (per-round, not per-turn). Lets round_end log
                 # WHY the model stopped (clean EOS / length cap / tool
