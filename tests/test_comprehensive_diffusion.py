@@ -89,6 +89,46 @@ def test_prompt_format_includes_full_system_verbatim():
     assert "<start_of_turn>user\n" in p and p.endswith("<start_of_turn>model\n")
 
 
+def test_diffusion_clean_strips_unused_collapse_soup():
+    # On a large prompt the entropy-bound-off retry can collapse into a stream
+    # of <unused42> tokens. They're non-empty, so they were surfaced as "text"
+    # (the `<unused26><unused27>…` soup in the chat). The cleaner must strip
+    # them: mixed content keeps the real words; a collapse-ONLY turn cleans to
+    # empty so _diffusion_turn_usable rejects it (-> honest E3107, not garbage).
+    G = LocalCodeRuntimeGateway
+    assert G._clean_diffusion_output("<unused26><unused27> hello <unused10>", "") == "hello"
+    assert G._clean_diffusion_output("<unused26><unused27><unused30>", "") == ""
+    assert G._diffusion_turn_usable(
+        G._clean_diffusion_output("<unused1><unused2>", ""), [], None
+    ) is False
+
+
+def test_diffusion_adaptive_retry_forces_eb_off(monkeypatch, tmp_path):
+    # The first attempt uses the fast entropy-bound `auto` decoder; a retry
+    # after an unusable turn must force `--diffusion-eb off` (verified to
+    # recover large-prompt turns the auto decoder denoises to empty). Re-running
+    # the identical command could never recover a deterministic empty.
+    G = LocalCodeRuntimeGateway
+    cfg = RuntimeConfig()
+    cfg.provider = "llama_cpp"
+    cfg.model = str(tmp_path / DIFF_FILENAME)
+    cfg.diffusion_cli_binary = str(tmp_path / "cli")
+    gw = G(cfg)
+    seen_cmds: list[list] = []
+
+    def fake_run(cmd, timeout):
+        seen_cmds.append(cmd)
+        # First call (no eb flag) returns empty; second (eb off) returns text.
+        return "" if "--diffusion-eb" not in cmd else "recovered answer"
+
+    monkeypatch.setattr(gw, "_run_diffusion_cli", fake_run)
+    events = list(gw._stream_diffusion_events([{"role": "user", "content": "hi"}]))
+    text = "".join(e["content"] for e in events if e["type"] == "content")
+    assert text == "recovered answer"
+    assert "--diffusion-eb" not in seen_cmds[0], "first attempt is the fast auto path"
+    assert seen_cmds[1][-2:] == ["--diffusion-eb", "off"], "retry forces eb off"
+
+
 def test_prompt_format_renders_tool_call_turn_and_labeled_result():
     # THE post-tool-result E3107 bug: an assistant turn that ONLY made tool
     # calls has empty content. The old formatter skipped it, leaving the
