@@ -554,6 +554,154 @@ class LocalCodeRuntimeGateway:
         cache[path] = result
         return result
 
+    # ── General RAM-aware KV-cache cap (model-agnostic OOM guard) ───────
+    #
+    # The per-model `_cohere_ctx_ceiling` was a point-fix. The systematic
+    # guard: never launch a `--ctx-size` whose KV cache won't fit in RAM,
+    # for ANY model present or future. We compute the KV bytes/token from
+    # the GGUF's own attention metadata × the dtype actually launched, then
+    # cap ctx so weights + KV-at-full-ctx + headroom fit in unified memory.
+    #
+    # CRITICAL design choice — fail OPEN, only tighten when CONFIDENT:
+    # the cap is applied only when the launched KV dtype has a known byte
+    # size (f16/f32/q8_0/…). The TurboQuant path uses compressed KV types
+    # (turbo4-V etc.) whose exact byte size we don't model; for those the
+    # cap is a NO-OP and the existing hardware-validated ceilings
+    # (`_ram_ctx_ceiling`) govern — so this never regresses the tuned
+    # 64K/128K/256K turbo tiers, it only catches the uncompressed-f16
+    # stock-path class that actually OOM'd (cohere/North-Mini).
+
+    # Bytes per KV element by quant type. None-on-miss is deliberate:
+    # an unknown (e.g. "turbo4") type means "don't clamp — defer to the
+    # validated ceilings", never "guess and risk a wrong cap".
+    _KV_DTYPE_BYTES = {
+        "f32": 4.0, "f16": 2.0, "bf16": 2.0,
+        "q8_0": 1.0625, "q8_1": 1.125,
+        "q5_1": 0.875, "q5_0": 0.8125,
+        "q4_1": 0.625, "q4_0": 0.5625,
+    }
+
+    def _effective_kv_dtypes(self, model_path: str | None) -> tuple[str, str]:
+        """The KV (K, V) dtypes the server is ACTUALLY launched with for this
+        model — not just config, which can disagree with the launch path.
+        The cohere2moe stock path ignores --cache-type and runs uncompressed
+        f16; every other path uses the configured types (default f16)."""
+        if self._is_cohere_gguf(model_path):
+            return ("f16", "f16")
+        k = (getattr(self.config, "kv_cache_type_k", "") or "f16").lower()
+        v = (getattr(self.config, "kv_cache_type_v", "") or "f16").lower()
+        return (k, v)
+
+    def _gguf_kv_meta(self, model_path: str | None = None) -> dict | None:
+        """Read the attention metadata needed to size the KV cache:
+        n_layers (block_count), n_kv_heads (head_count_kv, falling back to
+        head_count), and head_dim (key_length, falling back to
+        embedding_length // head_count). Returns None if the file can't be
+        read or the keys are missing. Cached per path."""
+        import struct
+        from pathlib import Path as _Path
+        path = str(model_path or getattr(self.config, "model", "") or "")
+        if not path:
+            return None
+        cache = getattr(self, "_gguf_meta_cache", None)
+        if cache is None:
+            cache = self._gguf_meta_cache = {}
+        if path in cache:
+            return cache[path]
+        meta: dict | None = None
+        found: dict[str, int] = {}
+        try:
+            if _Path(path).is_file():
+                with open(path, "rb") as f:
+                    if f.read(4) == b"GGUF":
+                        f.read(4); f.read(8)
+                        n_kv, = struct.unpack("<Q", f.read(8))
+                        _S = {0: "<B", 1: "<b", 2: "<H", 3: "<h", 4: "<I",
+                              5: "<i", 6: "<f", 7: "<?", 10: "<Q", 11: "<q", 12: "<d"}
+
+                        def _rs():
+                            ln, = struct.unpack("<Q", f.read(8))
+                            return f.read(ln).decode("utf-8", "replace")
+
+                        def _rv(t):
+                            if t == 8:
+                                return _rs()
+                            if t == 9:
+                                et, = struct.unpack("<I", f.read(4))
+                                ln, = struct.unpack("<Q", f.read(8))
+                                return [_rv(et) for _ in range(ln)]
+                            fmt = _S[t]
+                            return struct.unpack(fmt, f.read(struct.calcsize(fmt)))[0]
+
+                        wanted = (
+                            ".block_count", ".attention.head_count_kv",
+                            ".attention.head_count", ".attention.key_length",
+                            ".embedding_length",
+                        )
+                        for _ in range(n_kv):
+                            k = _rs()
+                            t, = struct.unpack("<I", f.read(4))
+                            v = _rv(t)
+                            for suf in wanted:
+                                if k.endswith(suf) and isinstance(v, int):
+                                    found[suf] = v
+                        n_layers = found.get(".block_count")
+                        n_heads = found.get(".attention.head_count")
+                        n_kv_heads = found.get(".attention.head_count_kv", n_heads)
+                        head_dim = found.get(".attention.key_length")
+                        if head_dim is None and n_heads and found.get(".embedding_length"):
+                            head_dim = found[".embedding_length"] // n_heads
+                        if n_layers and n_kv_heads and head_dim:
+                            meta = {
+                                "n_layers": n_layers,
+                                "n_kv_heads": n_kv_heads,
+                                "head_dim": head_dim,
+                            }
+        except Exception:
+            meta = None
+        cache[path] = meta
+        return meta
+
+    def _kv_bytes_per_token(self, model_path: str | None = None) -> float | None:
+        """KV-cache bytes per token = n_layers × n_kv_heads × head_dim ×
+        (bytes_K + bytes_V). Returns None when the metadata or the launched
+        KV dtype is unknown (→ caller does not clamp)."""
+        meta = self._gguf_kv_meta(model_path)
+        if not meta:
+            return None
+        kt, vt = self._effective_kv_dtypes(model_path)
+        kb = self._KV_DTYPE_BYTES.get(kt)
+        vb = self._KV_DTYPE_BYTES.get(vt)
+        if kb is None or vb is None:
+            return None  # compressed/unknown (e.g. turbo) → defer to ceilings
+        return meta["n_layers"] * meta["n_kv_heads"] * meta["head_dim"] * (kb + vb)
+
+    def _model_file_bytes(self, model_path: str | None = None) -> int:
+        from pathlib import Path as _Path
+        try:
+            return _Path(str(model_path or self.config.model or "")).stat().st_size
+        except Exception:
+            return 0
+
+    def _kv_aware_ctx_ceiling(self, model_path: str | None, ram_gb: int) -> int:
+        """Largest context whose KV cache fits in RAM beside the weights, with
+        headroom for the OS, the app, and compute activations. Returns a large
+        sentinel (no clamp) when KV size isn't confidently computable, so the
+        existing validated ceilings govern the turbo-compressed path."""
+        bpt = self._kv_bytes_per_token(model_path)
+        if not bpt or bpt <= 0:
+            return 1_000_000
+        total = ram_gb * (1024 ** 3)
+        weights = self._model_file_bytes(model_path)
+        # Reserve the larger of 3 GB or 15% of RAM for OS + app + activations.
+        reserve = max(3 * 1024 ** 3, int(total * 0.15))
+        kv_budget = total - weights - reserve
+        if kv_budget <= 0:
+            return 2048  # weights barely fit; give the minimum workable ctx
+        max_ctx = int(kv_budget / bpt)
+        # Round down to a 2048 multiple; never below a 2048 floor.
+        return max(2048, (max_ctx // 2048) * 2048)
+
     def _system_ram_gb(self) -> int:
         try:
             import subprocess
@@ -723,6 +871,22 @@ class LocalCodeRuntimeGateway:
         return [m["name"] for m in data.get("models", []) if "name" in m]
 
     def _target_num_ctx(
+        self,
+        num_ctx_override: int | None = None,
+        model_path: str | None = None,
+    ) -> int:
+        raw = self._target_num_ctx_uncapped(num_ctx_override, model_path)
+        if num_ctx_override is not None:
+            return raw  # explicit, deliberate value — respect it as-is
+        # Universal RAM-aware KV cap on EVERY computed path: no model, present
+        # or future, gets a `--ctx-size` whose KV cache can't fit (the OOM
+        # never-again guard). No-op when KV size isn't confidently computable
+        # (turbo-compressed KV) — the validated ceilings govern there.
+        return min(
+            raw, self._kv_aware_ctx_ceiling(model_path, self._system_ram_gb())
+        )
+
+    def _target_num_ctx_uncapped(
         self,
         num_ctx_override: int | None = None,
         model_path: str | None = None,
