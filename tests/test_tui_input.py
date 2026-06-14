@@ -309,3 +309,58 @@ def test_model_swap_auto_inits_backend_and_restarts(monkeypatch) -> None:
     assert screen._log.errors == []
     assert any("ready" in m.lower() for m in screen._log.infos)
     assert screen._server_restarting is False
+
+
+# ── `!` bash-mode runs at the repo root (recovered fix) ──────────────
+
+class _BashLog:
+    def __init__(self):
+        self.users, self.results, self.infos = [], [], []
+    def append_user(self, m): self.users.append(m)
+    def append_tool_result(self, m, error=False): self.results.append((m, error))
+    def append_info(self, m): self.infos.append(m)
+    def scroll_end(self, *a, **k): pass
+
+
+class _BashEngine:
+    def __init__(self, repo_root): self.repo_root = repo_root
+
+
+class _BashTui:
+    def __init__(self, repo_root): self.engine = _BashEngine(repo_root)
+
+
+class _BashScreenStub:
+    def __init__(self, repo_root):
+        self.tui = _BashTui(repo_root)
+        self.app = _FakeApp()
+        self._log = _BashLog()
+    def query_one(self, *_a, **_k): return self._log
+    def run_worker(self, fn, *_a, **_k): return fn()  # inline
+
+
+def test_bang_bash_runs_at_repo_root(tmp_path, monkeypatch):
+    captured = {}
+    import subprocess as _sp
+
+    def _fake_run(argv, **kw):
+        captured["cwd"] = kw.get("cwd")
+        class _R: stdout, stderr, returncode = "ok", "", 0
+        return _R()
+
+    monkeypatch.setattr(_sp, "run", _fake_run)
+    stub = _BashScreenStub(str(tmp_path))
+    ChatScreen._run_bash(stub, "echo hi")
+    assert captured["cwd"] == str(tmp_path), "user !command must run at the repo root"
+    assert stub._log.users == ["! echo hi"]
+    assert stub._log.results and stub._log.results[0][1] is False  # rendered, not error
+
+
+def test_bang_bash_empty_shows_hint_runs_nothing(monkeypatch):
+    import subprocess as _sp
+    ran = {"n": 0}
+    def _fake_run(*a, **k): ran["n"] += 1; raise AssertionError("should not run")
+    monkeypatch.setattr(_sp, "run", _fake_run)
+    stub = _BashScreenStub("/tmp")
+    ChatScreen._run_bash(stub, "")
+    assert ran["n"] == 0 and stub._log.infos, "bare ! shows a hint, runs nothing"
