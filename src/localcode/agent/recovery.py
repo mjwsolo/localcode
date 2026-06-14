@@ -45,6 +45,10 @@ __all__ = [
     "detect_stall",
     "nudge_for",
     "MAX_EMPTY_ROUND_RETRIES",
+    "ChurnMode",
+    "ChurnSignal",
+    "detect_churn",
+    "churn_nudge_for",
 ]
 
 
@@ -248,3 +252,149 @@ def nudge_for(mode: StallMode) -> str:
     guidance matches what actually went wrong.
     """
     return _NUDGE_TEXT[mode]
+
+
+# ── Semantic churn (thrashing without converging) ───────────────────
+#
+# The stall detectors above catch rounds that produced NO action
+# (empty / narration / gave-up). Churn is the opposite failure: the
+# model keeps ACTING — rewriting the same file, re-running the same
+# failing command — but never converges because it isn't reading the
+# error and making a targeted fix. The byte-identical-call breakers
+# (`recent_tool_sigs`, `success_counts`) miss this because each write
+# has DIFFERENT content and each failing re-run may have slightly
+# different output. We normalize a tool signature to its KEY ARG
+# — (write_file, path) or (bash, first-token-of-command) — and count
+# repeats across the turn.
+
+from .constants import (  # noqa: E402  (kept near the churn logic it parameterizes)
+    CHURN_FILE_WRITE_LIMIT,
+    CHURN_COMMAND_FAIL_LIMIT,
+    CHURN_READONLY_STREAK_LIMIT,
+)
+
+
+class ChurnMode(str, Enum):
+    """Which churn pattern the turn-so-far exhibits.
+
+    String values double as the telemetry label and as a piece of the
+    user-visible nudge.
+    """
+    FILE_REWRITE = "repeated file rewrite"
+    COMMAND_FAILURE = "repeated failing command"
+    INVESTIGATION_SPIN = "read-only investigation spin"
+
+
+class ChurnSignal:
+    """The chosen churn nudge plus the raw counters behind it.
+
+    Returned by `detect_churn` so the loop can both inject the nudge
+    AND emit the counters in round_end telemetry. Not a dataclass to
+    keep recovery.py dependency-free; three plain attrs is enough.
+    """
+
+    __slots__ = ("mode", "subject", "count")
+
+    def __init__(self, mode: ChurnMode, subject: str, count: int) -> None:
+        self.mode = mode
+        self.subject = subject  # the file path / command token / "" for spin
+        self.count = count
+
+
+def command_token(command: str) -> str:
+    """Normalize a shell command to the family key we count by — its
+    first meaningful token (e.g. `npm`, `node`, `pytest`). Strips a
+    leading env-assignment prefix (`FOO=bar npm i` → `npm`) and a
+    `sudo` prefix so `sudo npm i` and `npm i` count as the same
+    family. Returns "" for an empty command.
+    """
+    parts = str(command or "").strip().split()
+    for tok in parts:
+        if "=" in tok and not tok.startswith("-"):
+            # env assignment prefix, skip
+            continue
+        if tok in {"sudo", "command", "exec", "time", "nohup"}:
+            continue
+        return tok
+    return ""
+
+
+def detect_churn(
+    file_write_counts: dict[str, int],
+    command_fail_counts: dict[str, int],
+    readonly_streak: int,
+) -> ChurnSignal | None:
+    """Decide whether the turn-so-far is churning, and how.
+
+    Pure function. Caller maintains the three inputs across the turn:
+
+      file_write_counts   — path → number of write/edit/append calls
+                            targeting it this turn (any content).
+      command_fail_counts — command-family token → number of FAILED
+                            runs this turn.
+      readonly_streak     — consecutive rounds of pure read-only
+                            investigation with no mutating/server action.
+
+    Precedence: COMMAND_FAILURE > FILE_REWRITE > INVESTIGATION_SPIN.
+    A failing command is the most actionable (there's a concrete error
+    to read); a file rewritten N times is next; a read-only spin is the
+    softest signal (legitimately reading several files looks the same
+    until it goes long), so it loses ties.
+
+    Returns None when nothing crosses its threshold.
+    """
+    # COMMAND_FAILURE — most specific / actionable.
+    worst_cmd = ""
+    worst_cmd_n = 0
+    for tok, n in command_fail_counts.items():
+        if tok and n > worst_cmd_n:
+            worst_cmd, worst_cmd_n = tok, n
+    if worst_cmd_n >= CHURN_COMMAND_FAIL_LIMIT:
+        return ChurnSignal(ChurnMode.COMMAND_FAILURE, worst_cmd, worst_cmd_n)
+
+    # FILE_REWRITE.
+    worst_file = ""
+    worst_file_n = 0
+    for path, n in file_write_counts.items():
+        if path and n > worst_file_n:
+            worst_file, worst_file_n = path, n
+    if worst_file_n >= CHURN_FILE_WRITE_LIMIT:
+        return ChurnSignal(ChurnMode.FILE_REWRITE, worst_file, worst_file_n)
+
+    # INVESTIGATION_SPIN — softest.
+    if readonly_streak >= CHURN_READONLY_STREAK_LIMIT:
+        return ChurnSignal(ChurnMode.INVESTIGATION_SPIN, "", readonly_streak)
+
+    return None
+
+
+def churn_nudge_for(signal: ChurnSignal) -> str:
+    """Short, actionable synthetic user message for a churn signal.
+
+    Each mode names the concrete subject (file path / command) and the
+    count so the model sees exactly what it's been thrashing on, then
+    tells it the ONE thing to do instead of repeating.
+    """
+    if signal.mode is ChurnMode.FILE_REWRITE:
+        return (
+            f"SYSTEM: You've rewritten {signal.subject} {signal.count} times "
+            "this turn. Stop rewriting it. Read the ACTUAL error output from "
+            "the last failure, identify the specific line/cause, and make ONE "
+            "targeted edit_file change to fix that — do not overwrite the whole "
+            "file again."
+        )
+    if signal.mode is ChurnMode.COMMAND_FAILURE:
+        return (
+            f"SYSTEM: `{signal.subject}` has failed {signal.count} times this "
+            "turn. Re-running it will not help. Read its error output line by "
+            "line, fix the ROOT CAUSE (a missing dependency, a syntax error in "
+            "a config/source file, a wrong path), and only then run it again."
+        )
+    # INVESTIGATION_SPIN
+    return (
+        "SYSTEM: You've spent several rounds reading and searching files "
+        "without taking any concrete action. You're investigating in circles. "
+        "Take a concrete action NOW: make a specific edit, run the build/tests, "
+        "or — if you genuinely lack information only the user has — ask ONE "
+        "focused question. Do not read or grep more files this round."
+    )

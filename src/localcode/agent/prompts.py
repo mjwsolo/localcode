@@ -16,7 +16,27 @@ __all__ = [
     "SYSTEM_PROMPT_V2",
     "REASONING_RULES",
     "model_identity_line",
+    "project_stack_line",
 ]
+
+
+# Marker file -> (stack label, ordered most-specific first). Detection is
+# deliberately a cheap top-level directory check: presence of these files
+# in the repo root is a strong signal of the project's primary language.
+# Order matters — the first matching entry names the stack so we emit a
+# single, unambiguous line rather than enumerating every config file.
+_STACK_MARKERS: tuple[tuple[str, str], ...] = (
+    ("package.json", "JavaScript/TypeScript (Node)"),
+    ("tsconfig.json", "TypeScript"),
+    ("go.mod", "Go"),
+    ("Cargo.toml", "Rust"),
+    ("pyproject.toml", "Python"),
+    ("setup.py", "Python"),
+    ("pom.xml", "Java (Maven)"),
+    ("build.gradle", "Java/Kotlin (Gradle)"),
+    ("Gemfile", "Ruby"),
+    ("composer.json", "PHP"),
+)
 
 
 SYSTEM_PROMPT = """\
@@ -34,6 +54,7 @@ How to work:
 - Use real, repo-relative paths. Don't improvise `/Users/...` paths unless the user gave one.
 - Write complete code. No TODOs, stubs, fake data, empty dirs, or skeleton files. Never end with "should I do X or Y next?" — once started, finish.
 - Execute every named requirement in this turn until 100% complete. If a piece is too large for one tool call, split across more — never drop it. Never declare a requirement out of scope, over the limit, or needing external assets.
+- MATCH THE PROJECT'S LANGUAGE AND CONVENTIONS. Code MUST be valid for the file's actual language. Never write Python syntax (triple-quoted docstrings, snake_case, `import x`/`from x import y`) in a .ts/.tsx/.js/.jsx/.go/.rs or other non-Python file. Use that language's real comment, naming, and import/module syntax, and mirror the patterns already present in the project (imports, formatting, framework idioms).
 - For new projects, create a small multi-file structure by default. Keep entrypoints thin; move reusable logic, styles, data/config, templates, and assets into focused files. Use one large file only if requested.
 - Prefer edit_file for existing files. Use write_file when creating a new file or doing a deliberate full rewrite.
 - When a tool returns an error, read it, fix the specific problem, and retry. Don't give up after one failed call.
@@ -134,6 +155,34 @@ def model_identity_line(model: str) -> str:
         # echo the real configured identifier than invent a name.
         friendly = filename[:-5] if filename.lower().endswith(".gguf") else filename
     return f"You are running locally as {friendly} via LocalCode.\n"
+
+
+def project_stack_line(repo_root: Path) -> str:
+    """Render a one-line "Project stack:" hint from repo-root marker files.
+
+    Scans `repo_root` for well-known dependency/config files
+    (package.json, tsconfig.json, go.mod, Cargo.toml, pyproject.toml, …)
+    and names the detected stack so the model writes code in the
+    project's actual language and conventions rather than defaulting to
+    Python idioms. The first matching marker (most-specific first) names
+    the stack; any additional present markers are listed parenthetically.
+
+    Returns a single line ending in a newline, or "" when nothing is
+    detected (keeps the prompt prefix byte-identical for that case).
+    """
+    try:
+        present = [
+            (fname, label)
+            for fname, label in _STACK_MARKERS
+            if (repo_root / fname).is_file()
+        ]
+    except Exception:
+        return ""
+    if not present:
+        return ""
+    label = present[0][1]
+    files = ", ".join(fname for fname, _ in present)
+    return f"Project stack: {label} ({files} present) — follow its conventions.\n"
 
 
 def _load_project_instructions(repo_root: Path) -> str:

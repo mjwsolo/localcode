@@ -9,6 +9,7 @@ from .prompts import (
     SYSTEM_PROMPT,
     _load_project_instructions,
     model_identity_line,
+    project_stack_line,
 )
 from .sections import Section, SectionContext, compose_system_prompt, default_sections
 __all__ = [
@@ -55,7 +56,16 @@ def build_agent_system_prompt(
         identity_line = model_identity_line(str(app.config.runtime.model or ""))
     except Exception:
         identity_line = ""
-    network_status_with_identity = identity_line + network_status
+    # Name the detected project stack (one line) so the model writes code
+    # in the project's actual language/conventions instead of falling back
+    # to Python idioms. Cheap, marker-file based, and best-effort: any
+    # failure leaves the slot empty so the cached prefix is unaffected.
+    stack_line = ""
+    try:
+        stack_line = project_stack_line(app.repo_root)
+    except Exception:
+        stack_line = ""
+    network_status_with_identity = identity_line + stack_line + network_status
 
     def _render_caller_template(ctx: SectionContext) -> str:
         return base_system_prompt.format(

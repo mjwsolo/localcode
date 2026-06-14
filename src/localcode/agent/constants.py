@@ -29,6 +29,9 @@ __all__ = [
     "REDACT_MIN_CONTENT_CHARS",
     "PROJECT_FILES",
     "READ_UNCHANGED_STUB_PREFIX",
+    "CHURN_FILE_WRITE_LIMIT",
+    "CHURN_COMMAND_FAIL_LIMIT",
+    "CHURN_READONLY_STREAK_LIMIT",
 ]
 
 
@@ -184,3 +187,41 @@ READ_UNCHANGED_STUB_PREFIX = (
 """Replacement text for older duplicate read_file results, so the
 model sees "the content exists further down" rather than the raw
 bytes twice. `_redact_duplicate_reads` inserts this prefix."""
+
+
+# ── Semantic-churn thresholds ───────────────────────────────────────
+#
+# These catch the "thrashing without converging" pattern that the
+# byte-identical-call breakers miss: the model keeps WRITING a file
+# (different content each time) or keeps RE-RUNNING a failing command,
+# never reading the actual error and making a targeted fix. Distinct
+# from the exact-repeat guards (`recent_tool_sigs`, `success_counts`)
+# which only trip on identical args. Tuned conservatively so normal
+# multi-step flows (a couple of edits to one file, running a build
+# command twice while iterating) do NOT trip — only sustained churn.
+
+CHURN_FILE_WRITE_LIMIT = 3
+"""How many times the SAME path may be written/edited in one turn
+before we nudge "stop rewriting it, read the error and make a
+targeted fix." Counts every write/edit/append to the path regardless
+of whether content differs — semantic churn, not byte-identical
+repeats. 3 chosen because a legit flow is typically write-once then
+one corrective edit (2); a 3rd full rewrite of the same file in a
+turn is the churn signal (the real incident rewrote package.json ~5×)."""
+
+CHURN_COMMAND_FAIL_LIMIT = 3
+"""How many times the SAME command (keyed by its first token, e.g.
+`npm`) may FAIL in one turn before we nudge "read its error output
+and fix the root cause before re-running." 3 (not 2) so running a
+build/install command, fixing, and one more failure while iterating
+is tolerated; the 3rd failure of the same command family means the
+model is re-running without absorbing the error."""
+
+CHURN_READONLY_STREAK_LIMIT = 6
+"""Consecutive rounds of PURE read-only investigation (read_file /
+grep / glob / list_files / web_*) with no mutating or server action
+before we nudge "take a concrete action now." Tighter than the prior
+generic streak of 10: a 10-round read-only run is already 5+ minutes
+of the user staring at a frozen screen. 6 still allows reading the
+handful of files needed to understand a redesign before committing,
+but interrupts a genuine investigation spin sooner."""

@@ -71,6 +71,10 @@ from .recovery import (
     detect_stall,
     nudge_for,
     MAX_EMPTY_ROUND_RETRIES,
+    ChurnMode,
+    detect_churn,
+    churn_nudge_for,
+    command_token,
 )
 from .tool_orchestration import prefetch_parallel_tool_calls
 from .streaming import finish_thinking_display, stream_model_round
@@ -443,6 +447,17 @@ def run_agent_loop(
     _edit_failures_this_turn = 0
     _write_existing_rejections_this_turn = 0
     _edit_context_seen = False
+    # ── Semantic-churn counters (see recovery.detect_churn) ──
+    # Per-turn signals the byte-identical breakers miss:
+    #   _file_write_counts   path → # write/edit/append calls (any content)
+    #   _command_fail_counts cmd-family-token → # failed runs
+    # _readonly_streak (defined above) is reused as the spin signal.
+    # _churn_nudge_done caps the churn nudge to ONE per turn so we don't
+    # pile SYSTEM messages on a model that's already mid-recovery.
+    _file_write_counts: dict[str, int] = {}
+    _command_fail_counts: dict[str, int] = {}
+    _churn_nudge_done = False
+    _last_churn_mode = ""
     # Generalized dedup for cacheable read-only investigations:
     # list_files / glob / grep with identical args within a turn return
     # the same content (modulo external file-system changes we can't
@@ -463,14 +478,13 @@ def run_agent_loop(
     # accumulated "do not call read tools" instructions, not the
     # current user intent. Ephemeral cleanup at end-of-turn.
     _ephemeral_nudge_indices: list[int] = []
-    # Bumped from 5 → 10 on 2026-04-26. Threshold of 5 false-positived
-    # on legitimate "redesign this section" investigations where the
-    # agent reasonably reads ~6-8 files (UI, JS, backend route, data,
-    # data shape probes) before having enough context to commit to a
-    # design. The looks_fine_streak signal still catches the higher-
-    # confidence spin pattern ("X looks fine, let me check Y" repeated)
-    # which is the genuinely-stuck failure mode worth interrupting.
-    _MAX_READONLY_STREAK = 10
+    # The PURE read-only streak threshold moved to
+    # constants.CHURN_READONLY_STREAK_LIMIT (6) and is enforced by the
+    # semantic-churn detector — tighter than the old local value of 10,
+    # which let an investigation spin run 5+ minutes before tripping.
+    # `_looks_fine_streak` keeps its own threshold here because it's a
+    # higher-confidence, distinctly-framed signal ("X looks fine, let me
+    # check Y" repeated) that warrants its specific runtime-bug nudge.
     _MAX_LOOKS_FINE_STREAK = 3
     _deterministic_launch_done = False
     _verified_launch_summary = ""
@@ -819,6 +833,24 @@ def run_agent_loop(
                     else ""
                 ),
                 content_tail=content[-200:] if content else "",
+                # ── Churn snapshot ──
+                # Cumulative semantic-churn signals for the turn so we can
+                # SEE thrashing in events.jsonl instead of inferring it.
+                # Captured BEFORE this round's tools run, so values reflect
+                # rounds 0..round_num-1; the next round_end includes this
+                # round's calls. `max_file_writes` = the worst single path's
+                # write count; `file_write_counts` = the full per-path map
+                # (only paths written >1×, to keep the record small);
+                # `command_fail_counts` = per-command-family failure counts;
+                # `readonly_streak` = current pure-investigation run length;
+                # `churn_nudge` = which churn nudge has fired this turn (if any).
+                max_file_writes=(max(_file_write_counts.values()) if _file_write_counts else 0),
+                file_write_counts={
+                    p: n for p, n in _file_write_counts.items() if n > 1
+                },
+                command_fail_counts=dict(_command_fail_counts),
+                readonly_streak=_readonly_streak,
+                churn_nudge=_last_churn_mode,
             )
         except Exception:
             pass
@@ -991,16 +1023,18 @@ def run_agent_loop(
             _looks_fine_streak += 1
         else:
             _looks_fine_streak = 0
-        # Trip when EITHER the streak crosses its threshold AND we
-        # haven't nudged this turn yet. Two thresholds because some
-        # spins fire one signal but not the other:
-        #   - a model that reads 6 different files without commenting
-        #     ("let me check X" without "looks fine") trips readonly_streak
-        #   - a model that says "looks fine" 3× and then bash-curls a
-        #     new endpoint trips looks_fine_streak
-        if not _spin_nudge_done and (
-            _readonly_streak >= _MAX_READONLY_STREAK
-            or _looks_fine_streak >= _MAX_LOOKS_FINE_STREAK
+        # Trip on the "looks fine" spin — a model that says "looks fine"
+        # repeatedly while only reading. The PURE read-only streak (read
+        # N files without commenting) is now owned by the semantic-churn
+        # detector below at CHURN_READONLY_STREAK_LIMIT (6), which is
+        # TIGHTER than the old _MAX_READONLY_STREAK of 10 — so we drop the
+        # readonly-streak clause here to avoid a double nudge. This
+        # detector keeps its distinctive "files are fine, bug is runtime"
+        # framing for the looks_fine case; the churn detector handles the
+        # generic "investigating in circles" case. `_churn_nudge_done` is
+        # shared so only ONE spin/churn nudge fires per turn.
+        if not _spin_nudge_done and not _churn_nudge_done and (
+            _looks_fine_streak >= _MAX_LOOKS_FINE_STREAK
         ):
             _spin_nudge_done = True
             try:
@@ -1494,6 +1528,18 @@ def run_agent_loop(
                 state=_tool_exec_state,
                 dedup_stub=_dedup_stub,
             )
+            # ── Semantic-churn counters ──
+            # Count EVERY write/edit to a path (content-agnostic) and
+            # every FAILED command by its family token. These feed
+            # recovery.detect_churn after the round's tools all run.
+            if tool_name in {"write_file", "append_file", "edit_file", "multi_edit", "edit_diff"}:
+                _churn_path = args.get("path") or args.get("file_path") or ""
+                if isinstance(_churn_path, str) and _churn_path:
+                    _file_write_counts[_churn_path] = _file_write_counts.get(_churn_path, 0) + 1
+            elif tool_name == "bash" and tool_result_is_error(str(tool_result)):
+                _cmd_tok = command_token(str(args.get("command", "")))
+                if _cmd_tok:
+                    _command_fail_counts[_cmd_tok] = _command_fail_counts.get(_cmd_tok, 0) + 1
             _failure_count = 0
             if tool_result_is_error(str(tool_result)):
                 _failure_count = _tool_exec_state.failed_calls.get(
@@ -1622,6 +1668,42 @@ def run_agent_loop(
                 full_response.append(grounded_access)
                 _loop_exit_reason = "verified_run_or_launch" if _verified else "run_or_launch_ready"
                 break
+
+        # ── Semantic-churn nudge ──
+        # After the round's tools all ran, check whether the turn-so-far
+        # is thrashing: same file rewritten N times, same command failing
+        # N times, or a long pure read-only spin. The byte-identical-call
+        # breakers miss these (different content / different output each
+        # time). ONE nudge per turn — if the model ignores it, the normal
+        # exit paths (repeated-failure guard, stall, completion gate)
+        # still apply. Gated on the same recovery feature flag as stalls.
+        if not _churn_nudge_done and not _spin_nudge_done and _is_enabled(Feature.AUTO_NUDGE_RECOVERY):
+            _churn = detect_churn(
+                file_write_counts=_file_write_counts,
+                command_fail_counts=_command_fail_counts,
+                readonly_streak=_readonly_streak,
+            )
+            if _churn is not None:
+                _churn_nudge_done = True
+                _last_churn_mode = _churn.mode.value
+                try:
+                    from ..events import emit as _emit_churn
+                    _emit_churn(
+                        "auto_nudge",
+                        signal="semantic_churn",
+                        churn_mode=_churn.mode.value,
+                        subject=_churn.subject,
+                        count=_churn.count,
+                        round_idx=round_num,
+                    )
+                except Exception:
+                    pass
+                out.print_info(
+                    f"Detected churn ({_churn.mode.value}) — nudging it to "
+                    "stop thrashing and make a targeted fix."
+                )
+                messages.append({"role": "user", "content": churn_nudge_for(_churn)})
+                _ephemeral_nudge_indices.append(len(messages) - 1)
 
         # Break outer loop if loop was detected
         if loop_detected:
