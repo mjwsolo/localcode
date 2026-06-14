@@ -217,9 +217,14 @@ class ModelPickerScreen(Screen):
 
     def _footer_markup(self) -> str:
         if self._level == self._LEVEL_QUANTS:
+            # Name the open model family in the footer too — the in-list
+            # header (g.display_name) scrolls off the top on long quant lists,
+            # so without this the user can't tell which model the quants are for.
+            fam = self._open_group.display_name if self._open_group else ""
+            fam_bit = f"[dim]·[/] [bold]{fam}[/] " if fam else ""
             return (
-                f"[{C.primary}]LocalCode[/] · "
-                "[dim]↑/↓ + Enter to select a quant · "
+                f"[{C.primary}]LocalCode[/] {fam_bit}"
+                "[dim]· ↑/↓ + Enter to select a quant · "
                 "Esc/← back to models[/]"
             )
         return self._default_footer_markup()
