@@ -291,6 +291,76 @@ class TestTargetNumCtx:
         assert ctx == 2048  # max(2048, 4000//4=1000) -> 2048
 
 
+COHERE_GGUF = "North-Mini-Code-1.0-UD-Q4_K_M.gguf"  # catalog filename (cohere2_moe)
+
+
+class TestCohereBounds:
+    """North-Mini-Code (cohere2moe) must be RAM-bounded in BOTH context and
+    per-turn generation so its unconditional reasoning can't grow the
+    (uncompressed f16) KV cache until the stock server OOM-kills."""
+
+    def _make_gw(self, ram_gb: int, **overrides) -> LocalCodeRuntimeGateway:
+        defaults = dict(
+            provider="llama_cpp",
+            base_url="http://localhost:8081",
+            model=COHERE_GGUF,
+            max_context_chars=2_000_000,   # huge knob → exercises the ceiling
+            quant_preset="balanced",
+            kv_cache_type_v="turbo4",
+            laptop_26b_runtime_mode="turbo",
+        )
+        defaults.update(overrides)
+        gw = LocalCodeRuntimeGateway(RuntimeConfig(**defaults))
+        gw._system_ram_gb = lambda: ram_gb  # type: ignore[assignment]
+        return gw
+
+    def test_detected_by_catalog_architecture(self) -> None:
+        gw = self._make_gw(96)
+        assert gw._is_cohere_gguf() is True
+        assert gw._is_cohere_gguf("/models/" + COHERE_GGUF) is True
+        assert gw._is_cohere_gguf("/models/gemma-4-26B-A4B-it.gguf") is False
+
+    def test_ctx_bounded_well_below_turbo_ceiling(self) -> None:
+        # On a 96 GB Mac the TurboQuant ceiling is 256K; cohere (f16 KV) must
+        # be clamped far lower. Model path unreadable → _model_max_ctx doesn't
+        # interfere, so the cohere RAM ceiling is the binding cap.
+        for ram, expected in [(16, 16384), (32, 32768), (48, 49152), (128, 65536)]:
+            gw = self._make_gw(ram)
+            assert gw._target_num_ctx(model_path=COHERE_GGUF) == expected, ram
+
+    def test_ctx_never_exceeds_turbo_ceiling_for_cohere(self) -> None:
+        gw = self._make_gw(128)
+        assert gw._target_num_ctx(model_path=COHERE_GGUF) < gw._ram_ctx_ceiling(128)
+
+    def test_launch_ctx_size_is_bounded(self) -> None:
+        # The actual --ctx-size handed to the stock cohere server must reflect
+        # the conservative ceiling, not the 500K trained length / 256K turbo cap.
+        gw = self._make_gw(128)
+        cmd = gw.llama_server_command("/models/" + COHERE_GGUF, port=8081)
+        ctx = int(cmd[cmd.index("--ctx-size") + 1])
+        assert ctx == 65536
+
+    def test_unlimited_generation_is_capped(self) -> None:
+        # The agent loop passes num_predict=-1 (MAX_OUTPUT_TOKENS). For the
+        # unconditionally-reasoning cohere model this MUST become a bounded
+        # positive cap so a single thinking turn can't run to OOM.
+        gw = self._make_gw(128)
+        opts = gw._options(num_predict_override=-1)
+        np = opts["num_predict"]
+        assert isinstance(np, int) and 0 < np <= 8192
+
+    def test_generation_cap_scales_with_small_ctx(self) -> None:
+        # On a 16 GB machine ctx is 16K, so the per-turn cap is ctx//2 = 8192
+        # (clamped at the 8192 ceiling). Always bounded, never -1.
+        gw = self._make_gw(16)
+        assert gw._options(num_predict_override=-1)["num_predict"] == 8192
+
+    def test_non_cohere_generation_stays_unlimited(self) -> None:
+        # Regression guard: the cap is cohere-only; other models keep -1.
+        gw = self._make_gw(128, model="gemma-4-26B-A4B-it.gguf")
+        assert gw._options(num_predict_override=-1)["num_predict"] == -1
+
+
 class TestFindOllamaBlob:
     """Verify _find_ollama_blob resolves Ollama model names to GGUF paths."""
 
