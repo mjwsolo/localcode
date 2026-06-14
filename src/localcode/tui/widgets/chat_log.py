@@ -1161,6 +1161,18 @@ class ChatLog(RichLog):
         # it to skip height-only resize events (no reflow needed).
         self._render_width = self._content_width()
         saved_scroll = self.scroll_offset.y
+        # Expanding/collapsing a thinking block re-renders the whole buffer.
+        # With auto_scroll on, every write() below queues a scroll-to-bottom
+        # that wins the race against the final scroll restore — so a manual
+        # toggle yanked the view to the end of chat. Suppress auto-scroll for
+        # the rebuild, then restore the user's position. If they were already
+        # at the bottom, stay pinned (so live-streaming follow is unaffected).
+        try:
+            was_at_bottom = self.scroll_offset.y >= self.max_scroll_y - 2
+        except Exception:
+            was_at_bottom = True
+        _prev_auto = self.auto_scroll
+        self.auto_scroll = False
         super().clear()
         self._thinking_line_map.clear()
         self._line_counter = 0
@@ -1203,7 +1215,11 @@ class ChatLog(RichLog):
         del self._rerendering
         # Force layout recalculation then restore scroll
         self.refresh(layout=True)
-        self.scroll_to(y=saved_scroll, animate=False)
+        self.auto_scroll = _prev_auto
+        if was_at_bottom:
+            self.scroll_end(animate=False)
+        else:
+            self.scroll_to(y=saved_scroll, animate=False)
 
     # ── Render methods (write to display, no history recording) ──
 
