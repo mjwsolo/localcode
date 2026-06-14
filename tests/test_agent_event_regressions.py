@@ -5,6 +5,7 @@ from localcode.agent.goal import infer_goal_state
 from localcode.agent.hooks import EvidenceLedger, TurnState, completion_gate, quality_monitor
 from localcode.agent.app_tasks import is_focused_blocking_question
 from localcode.agent.prompt_context import (
+    build_incremental_milestones_block,
     build_target_grounding_block,
     build_task_goal_block,
     is_placeholder_segment,
@@ -445,6 +446,18 @@ def test_target_grounding_block_pins_root_and_forbids_placeholders(tmp_path: Pat
     assert "weather-dashboard" in block  # suggested concrete name
     # Non-build goals get no block (keeps the cached prefix unchanged).
     assert build_target_grounding_block(tmp_path, infer_goal_state("what is 2+2")) == ""
+
+
+def test_incremental_milestones_guidance_present_for_build_app() -> None:
+    block = build_incremental_milestones_block(_BuildGoal())
+    low = block.lower()
+    # Must steer toward incremental, verified milestones — not a whole app.
+    assert "milestone" in low
+    assert "scaffold" in low
+    assert "one feature at a time" in low
+    assert "build" in low and ("run" in low or "verify" in low)
+    # Non-build goals get nothing (cached prefix unaffected).
+    assert build_incremental_milestones_block(infer_goal_state("what is 2+2")) == ""
 
 
 def test_quality_monitor_rejects_placeholder_url() -> None:
