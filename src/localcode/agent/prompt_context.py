@@ -4,7 +4,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .prompts import REASONING_RULES, SYSTEM_PROMPT, _load_project_instructions
+from .prompts import (
+    REASONING_RULES,
+    SYSTEM_PROMPT,
+    _load_project_instructions,
+    model_identity_line,
+)
 from .sections import Section, SectionContext, compose_system_prompt, default_sections
 __all__ = [
     "PromptBuildResult",
@@ -38,6 +43,20 @@ def build_agent_system_prompt(
     skills_block, skill_names, skill_origins, skill_chars, skill_candidates = (
         build_dynamic_skills_block(app, user_text)
     )
+    # Tell the model which local model/quant it's actually running on, so
+    # "which model are you using?" gets a correct answer instead of a guess.
+    # Derived per-session from the active model (config.runtime.model →
+    # catalog friendly name + quant). Folded into the front of the
+    # network_status slot so it renders right after the "Working directory"
+    # line, with no change to the section registry. Empty when no model is
+    # configured (keeps the prompt prefix byte-identical for that case).
+    identity_line = ""
+    try:
+        identity_line = model_identity_line(str(app.config.runtime.model or ""))
+    except Exception:
+        identity_line = ""
+    network_status_with_identity = identity_line + network_status
+
     def _render_caller_template(ctx: SectionContext) -> str:
         return base_system_prompt.format(
             cwd=ctx.cwd,
@@ -50,7 +69,7 @@ def build_agent_system_prompt(
     section_ctx = SectionContext(
         cwd=app.repo_root,
         project_instructions=project_instructions,
-        network_status=network_status,
+        network_status=network_status_with_identity,
         skills_block=skills_block,
         reasoning_rules=REASONING_RULES if use_thinking else "",
     )
