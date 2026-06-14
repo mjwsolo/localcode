@@ -640,6 +640,21 @@ def _clean_display_text(text: str) -> str:
     return text.strip()
 
 
+def reconcile_live_tokens(live_estimate: int, real_completion_cumulative: int) -> int:
+    """Pick the value for the live "↓ N tokens" badge.
+
+    `live_estimate` is the running char/4 estimate of streamed output for the
+    turn so far; `real_completion_cumulative` is llama-server's real completion
+    count summed over every round that has closed. The estimate undercounts a
+    multi-round turn badly (it only really tracks the round currently
+    decoding), so once real usage is available we snap up to it. max() keeps
+    whichever is larger so (a) the badge never regresses and (b) the in-flight
+    char estimate for the round still decoding — for which no real usage has
+    arrived yet — keeps the badge advancing live between rounds.
+    """
+    return max(int(live_estimate or 0), int(real_completion_cumulative or 0))
+
+
 def _is_diff_result(text: str) -> bool:
     """Check if tool result contains a diff."""
     lines = text.strip().splitlines()[:10]
@@ -3566,6 +3581,21 @@ class ChatScreen(Screen):
                 total = int(p.get("total_tokens", 0) or 0)
                 if total > 0:
                     self._turn_total_tokens += total
+                # Reconcile the live "↓ N tokens" counter with REAL usage.
+                # Between rounds `_turn_tokens` only holds a char/4 estimate of
+                # the LATEST round's streamed output (content + thinking + tool
+                # args). Across a multi-round turn that estimate undercounts the
+                # cumulative decode badly — the user watches "↓ 200 tokens" all
+                # turn, then the final summary reports e.g. "out: 2.3k". Once a
+                # round closes we have llama-server's real completion count for
+                # every round so far (`_turn_completion_tokens`); snap the live
+                # counter up to it so the badge tracks the same cumulative total
+                # the summary will show. max() keeps the in-flight char estimate
+                # for the round currently decoding (no real usage yet) so the
+                # badge still advances live, and never regresses.
+                self._turn_tokens = reconcile_live_tokens(
+                    self._turn_tokens, self._turn_completion_tokens
+                )
             except (TypeError, ValueError):
                 pass
         elif t == "tool_preview":
