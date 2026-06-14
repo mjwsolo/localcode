@@ -43,6 +43,7 @@ from .constants import (
     MAX_THINKING_SECONDS,
     MAX_THINKING_CHARS,
     MAX_AGGREGATE_PER_TURN,
+    CROSS_ROUND_REPEAT_LIMIT,
 )
 from .goal import GoalState, infer_goal_state
 from .context import (
@@ -469,6 +470,12 @@ def run_agent_loop(
     _planning_streak = 0
     # Build-verification gate: capped at ONE nudge per turn (loop-safe).
     _build_verify_nudges = 0
+    # Cross-round repeated-call breaker: count identical (tool, args) calls
+    # across the WHOLE turn (the in-round breaker only catches one round).
+    # NUDGE-only — never withholds a tool result (avoids the read-dedup-stub
+    # starvation regression). One nudge per turn.
+    _turn_call_sigs: dict[tuple, int] = {}
+    _xround_repeat_nudge_done = False
     # Generalized dedup for cacheable read-only investigations:
     # list_files / glob / grep with identical args within a turn return
     # the same content (modulo external file-system changes we can't
@@ -1594,6 +1601,17 @@ def run_agent_loop(
                 _cmd_tok = command_token(str(args.get("command", "")))
                 if _cmd_tok:
                     _command_fail_counts[_cmd_tok] = _command_fail_counts.get(_cmd_tok, 0) + 1
+            # Cross-round repeated-call tracking. A write/edit to a path resets
+            # that path's read counts (read-after-edit is legitimate, not a
+            # repeat). Idempotent read-only tools + bash/web are counted.
+            if tool_name in {"write_file", "append_file", "edit_file", "multi_edit", "edit_diff"}:
+                _wp = args.get("path") or args.get("file_path")
+                if _wp:
+                    for _k in [k for k in _turn_call_sigs if k[0] == "read_file" and str(_wp) in k[1]]:
+                        del _turn_call_sigs[_k]
+            if tool_name in {"read_file", "grep", "glob", "list_files", "bash", "web_fetch", "web_search"}:
+                _sig = (tool_name, canonical_args(args))
+                _turn_call_sigs[_sig] = _turn_call_sigs.get(_sig, 0) + 1
             _failure_count = 0
             if tool_result_is_error(str(tool_result)):
                 _failure_count = _tool_exec_state.failed_calls.get(
@@ -1722,6 +1740,43 @@ def run_agent_loop(
                 full_response.append(grounded_access)
                 _loop_exit_reason = "verified_run_or_launch" if _verified else "run_or_launch_ready"
                 break
+
+        # ── Cross-round repeated-call nudge ──
+        # The dominant waste in the logs: the model calls the SAME (tool, args)
+        # over and over across rounds (read_file same path 53x; pkill->curl->read
+        # spins). The in-round breaker misses it and these calls SUCCEED so the
+        # failure breakers don't trip. NUDGE only — the model already has every
+        # result, so we never withhold content (no read-dedup-stub starvation).
+        if (
+            not _xround_repeat_nudge_done
+            and not _churn_nudge_done
+            and not _spin_nudge_done
+            and _is_enabled(Feature.AUTO_NUDGE_RECOVERY)
+        ):
+            _hot = [(k, c) for k, c in _turn_call_sigs.items() if c >= CROSS_ROUND_REPEAT_LIMIT]
+            if _hot:
+                _hk, _hc = max(_hot, key=lambda kc: kc[1])
+                _xround_repeat_nudge_done = True
+                try:
+                    from ..events import emit as _emit_xr
+                    _emit_xr("auto_nudge", signal="cross_round_repeat",
+                             tool=_hk[0], count=_hc, round_idx=round_num)
+                except Exception:
+                    pass
+                out.print_info(
+                    f"Detected a cross-round loop ({_hk[0]} called {_hc}x with the "
+                    "same args) — nudging it to use the result it has."
+                )
+                messages.append({"role": "user", "content": (
+                    f"SYSTEM: You've already called {_hk[0]} with the SAME arguments "
+                    f"{_hc} times this turn — its result is unchanged and already "
+                    "above. Do NOT call it again. Use the result you have and take "
+                    "the next concrete step (make an edit, run the build, or finish). "
+                    "If a server/port check keeps failing, the server is on a "
+                    "different port or not running — read its startup log instead of "
+                    "re-checking."
+                )})
+                _ephemeral_nudge_indices.append(len(messages) - 1)
 
         # ── Semantic-churn nudge ──
         # After the round's tools all ran, check whether the turn-so-far

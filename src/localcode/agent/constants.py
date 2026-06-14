@@ -33,6 +33,7 @@ __all__ = [
     "CHURN_COMMAND_FAIL_LIMIT",
     "CHURN_READONLY_STREAK_LIMIT",
     "CHURN_PLANNING_STREAK_LIMIT",
+    "CROSS_ROUND_REPEAT_LIMIT",
 ]
 
 
@@ -245,3 +246,16 @@ a pure read-only streak). Set to 4 (one higher than the read-only
 limit's effective reach) so legitimate "read two files, think, read a
 third, then edit" flows do NOT trip: as soon as a round changes a file
 or runs a build, the streak resets to 0."""
+
+CROSS_ROUND_REPEAT_LIMIT = 4
+"""How many times the SAME (tool, canonical-args) call may run ACROSS the
+turn before we nudge "you already have this result — stop repeating it."
+
+The in-round breaker catches identical calls within ONE round; this catches
+the cross-ROUND spin the logs show — read_file on the same path 53x over many
+rounds, or a pkill->curl->read loop where each command succeeds (so the
+command-FAILURE breaker never trips). Crucially this only NUDGES — it never
+withholds the tool result (the 2026-04-29 read-dedup STUB starved legitimate
+debug re-reads and hung a turn 17 min; we do not repeat that). A write/edit to
+a path resets that path's read counts, so a legitimate read-after-edit isn't
+counted. 4 tolerates a couple of genuine re-looks before flagging a true loop."""
