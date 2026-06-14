@@ -8,19 +8,13 @@ if stalled → else proceed" instead of a forest of booleans.
 
 Three recovery failure modes we handle:
 
-  EMPTY          — round produced only internal reasoning. No user-
-                   visible content, no tool calls. Model got stuck
-                   thinking and never emitted anything.
-
+  EMPTY          — round produced only internal reasoning: no user-
+                   visible content, no tool calls.
   NARRATION      — model DESCRIBED what it was about to do ("I'll
-                   create the file now…") but did not emit the
-                   tool call. Classic IQ2/IQ3 failure: the intro
-                   sentence is generated, then decode ends before
-                   the `<|tool_call>` marker.
-
-  POST_REJECTION — previous tool_call was REJECTED / returned
-                   "Error" / "[E3…]" etc. Model saw the rejection
-                   and silently gave up instead of reading the
+                   create the file now…") but never emitted the tool
+                   call. Classic IQ2/IQ3 decode-ends-early failure.
+  POST_REJECTION — previous tool_call was REJECTED / errored and the
+                   model silently gave up instead of reading the
                    actionable feedback and retrying.
 
 All three get the same recovery: append a synthetic user message
@@ -256,16 +250,12 @@ def nudge_for(mode: StallMode) -> str:
 
 # ── Semantic churn (thrashing without converging) ───────────────────
 #
-# The stall detectors above catch rounds that produced NO action
-# (empty / narration / gave-up). Churn is the opposite failure: the
-# model keeps ACTING — rewriting the same file, re-running the same
-# failing command — but never converges because it isn't reading the
-# error and making a targeted fix. The byte-identical-call breakers
-# (`recent_tool_sigs`, `success_counts`) miss this because each write
-# has DIFFERENT content and each failing re-run may have slightly
-# different output. We normalize a tool signature to its KEY ARG
-# — (write_file, path) or (bash, first-token-of-command) — and count
-# repeats across the turn.
+# The stall detectors above catch rounds that produced NO action. Churn
+# is the opposite: the model keeps ACTING — rewriting the same file,
+# re-running the same failing command — but never converges because it
+# isn't reading the error and making a targeted fix. The byte-identical
+# breakers miss this (different content/output each time); we key on the
+# KEY ARG — (write_file, path) / (bash, first-token) — and count repeats.
 
 from .constants import (  # noqa: E402  (kept near the churn logic it parameterizes)
     CHURN_FILE_WRITE_LIMIT,
@@ -276,11 +266,8 @@ from .constants import (  # noqa: E402  (kept near the churn logic it parameteri
 
 
 class ChurnMode(str, Enum):
-    """Which churn pattern the turn-so-far exhibits.
-
-    String values double as the telemetry label and as a piece of the
-    user-visible nudge.
-    """
+    """Which churn pattern the turn-so-far exhibits. String values double
+    as the telemetry label and a piece of the user-visible nudge."""
     FILE_REWRITE = "repeated file rewrite"
     COMMAND_FAILURE = "repeated failing command"
     INVESTIGATION_SPIN = "read-only investigation spin"
@@ -329,27 +316,15 @@ def detect_churn(
 ) -> ChurnSignal | None:
     """Decide whether the turn-so-far is churning, and how.
 
-    Pure function. Caller maintains the inputs across the turn:
+    Pure function. Caller maintains across the turn: file_write_counts
+    (path → write/edit/append calls), command_fail_counts (command-family
+    token → FAILED runs), readonly_streak (consecutive pure read-only
+    rounds), planning_streak (consecutive rounds that changed no new file,
+    ran no build/verify, but produced thinking/narration — re-planning
+    without progress; defaults to 0 so legacy callers keep prior behaviour).
 
-      file_write_counts   — path → number of write/edit/append calls
-                            targeting it this turn (any content).
-      command_fail_counts — command-family token → number of FAILED
-                            runs this turn.
-      readonly_streak     — consecutive rounds of pure read-only
-                            investigation with no mutating/server action.
-      planning_streak     — consecutive rounds that changed no new file,
-                            ran no build/verify, and produced thinking/
-                            narration (re-planning without progress).
-                            Defaults to 0 so callers that don't track it
-                            keep the prior three-signal behaviour.
-
-    Precedence:
-      COMMAND_FAILURE > FILE_REWRITE > INVESTIGATION_SPIN > PLANNING_SPIN.
-    A failing command is the most actionable (there's a concrete error to
-    read); a file rewritten N times is next; a read-only spin is softer
-    (reading several files looks the same until it goes long); a planning
-    spin is the softest of all (lots of thinking is sometimes legitimate),
-    so it loses every tie.
+    Precedence (most→least actionable, ties lose rightward):
+    COMMAND_FAILURE > FILE_REWRITE > INVESTIGATION_SPIN > PLANNING_SPIN.
 
     Returns None when nothing crosses its threshold.
     """
@@ -375,10 +350,9 @@ def detect_churn(
     if readonly_streak >= CHURN_READONLY_STREAK_LIMIT:
         return ChurnSignal(ChurnMode.INVESTIGATION_SPIN, "", readonly_streak)
 
-    # PLANNING_SPIN — softest. Re-planning across rounds with no file
-    # change and no build/verify. Caught here (not by INVESTIGATION_SPIN)
-    # because the model may mix think-only rounds with read rounds, which
-    # never accumulates a pure read-only streak.
+    # PLANNING_SPIN — softest. Re-planning (think/narrate) across rounds
+    # with no file change and no build/verify; the read-only streak misses
+    # this because think-only rounds (zero tools) reset it.
     if planning_streak >= CHURN_PLANNING_STREAK_LIMIT:
         return ChurnSignal(ChurnMode.PLANNING_SPIN, "", planning_streak)
 
@@ -388,9 +362,8 @@ def detect_churn(
 def churn_nudge_for(signal: ChurnSignal) -> str:
     """Short, actionable synthetic user message for a churn signal.
 
-    Each mode names the concrete subject (file path / command) and the
-    count so the model sees exactly what it's been thrashing on, then
-    tells it the ONE thing to do instead of repeating.
+    Names the concrete subject (file path / command) + count so the model
+    sees what it's thrashing on, then tells it the ONE thing to do instead.
     """
     if signal.mode is ChurnMode.FILE_REWRITE:
         return (
