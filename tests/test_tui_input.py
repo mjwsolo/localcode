@@ -1,4 +1,4 @@
-from localcode.tui.screens.chat import _NoTintInput
+from localcode.tui.screens.chat import _NoTintInput, ChatScreen
 from localcode.tui.widgets.chat_log import ChatLog
 
 
@@ -127,3 +127,165 @@ def test_thinking_gutter_click_far_from_header_does_not_toggle() -> None:
 
     assert handled is False
     assert log._thinking_states[0] is False
+
+
+# --- /model swap auto-restart (regression for "Backend not initialized") ---
+
+class _FakeLog:
+    def __init__(self) -> None:
+        self.infos: list[str] = []
+        self.errors: list[str] = []
+
+    def append_info(self, msg: str) -> None:
+        self.infos.append(msg)
+
+    def append_error(self, msg: str) -> None:
+        self.errors.append(msg)
+
+
+class _FakeInnerEngine:
+    """Stands in for LocalCodeRuntimeGateway: owns _restart_server."""
+
+    def __init__(self) -> None:
+        self.restart_calls = 0
+
+        class _Cfg:
+            model = ""
+
+        self.config = _Cfg()
+
+    def _restart_server(self) -> bool:
+        self.restart_calls += 1
+        return True
+
+
+class _FakeBackend:
+    """Stands in for LocalCodeApp: holds the inner gateway as `.engine`."""
+
+    def __init__(self) -> None:
+        self.engine = _FakeInnerEngine()
+
+        class _RT:
+            model = ""
+
+        class _Cfg:
+            runtime = _RT()
+
+        self.config = _Cfg()
+        self.runtime_model = ""
+
+        class _Sess:
+            model = ""
+
+        self.session = _Sess()
+
+
+class _FakeTui:
+    """Stands in for LocalCodeTUI app. ensure_backend lazy-inits engine."""
+
+    def __init__(self, config) -> None:
+        self.config = config
+        self.engine = None  # not initialized — the bug's precondition
+        self.ensure_backend_calls = 0
+
+    def ensure_backend(self) -> bool:
+        self.ensure_backend_calls += 1
+        if self.engine is None:
+            self.engine = _FakeBackend()
+        return True
+
+
+class _FakeApp:
+    def call_from_thread(self, fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+
+class _SwapScreenStub:
+    """Minimal stand-in so we can drive ChatScreen._apply_model_choice
+    without spinning up Textual. run_worker executes the worker inline."""
+
+    def __init__(self, tui) -> None:
+        self.tui = tui
+        self.app = _FakeApp()
+        self._log = _FakeLog()
+        self._server_restarting = False
+        self._pending_messages: list = []
+
+    def query_one(self, *_a, **_k):
+        return self._log
+
+    def _update_status(self) -> None:
+        pass
+
+    def _update_queue(self) -> None:
+        pass
+
+    def _set_download_line(self, *_a, **_k) -> None:
+        pass
+
+    def _clear_download_line(self, *_a, **_k) -> None:
+        pass
+
+    def _drain_next_queued(self) -> None:
+        pass
+
+    # Reuse the real handlers — they're plain UI-thread methods.
+    def _on_server_ready(self, model_name):
+        return ChatScreen._on_server_ready(self, model_name)
+
+    def _on_server_restart_failed(self, msg):
+        return ChatScreen._on_server_restart_failed(self, msg)
+
+    def run_worker(self, fn, *_, **__):
+        fn()  # run synchronously
+
+
+class _Choice:
+    def __init__(self) -> None:
+        self.name = "New Model"
+        self.key = "new-model"
+        self.architecture = "qwen3"
+        from pathlib import Path
+        self.local_path = Path("/tmp/new-model.gguf")
+
+
+class _RuntimeCfg:
+    model = "/tmp/old-model.gguf"
+
+
+class _AppCfg:
+    runtime = _RuntimeCfg()
+
+
+def test_model_swap_auto_inits_backend_and_restarts(monkeypatch) -> None:
+    """Regression: /model swap before the first message must auto-init the
+    backend and restart the server, NOT emit "Backend not initialized" and
+    defer to the next typed message."""
+    import localcode.models_catalog as catalog_mod
+    import localcode.config as config_mod
+    import localcode.bootstrap as bootstrap_mod
+
+    # _apply_model_choice imports these names locally, so patch them at the
+    # source modules. Current model differs from the chosen one (no
+    # short-circuit) and the chosen GGUF is treated as fully downloaded so
+    # we reach the restart path.
+    monkeypatch.setattr(catalog_mod, "current", lambda _cfg: None)
+    monkeypatch.setattr(config_mod, "save_config", lambda _cfg: None)
+    monkeypatch.setattr(
+        bootstrap_mod, "is_download_complete", lambda _choice: True
+    )
+
+    tui = _FakeTui(_AppCfg())
+    screen = _SwapScreenStub(tui)
+
+    ChatScreen._apply_model_choice(screen, _Choice())
+
+    # Backend was lazily initialized during the swap...
+    assert tui.ensure_backend_calls >= 1
+    assert tui.engine is not None
+    # ...and the server actually restarted with the new model.
+    assert tui.engine.engine.restart_calls == 1
+    # No "Backend not initialized" error was surfaced; restart succeeded.
+    assert screen._log.errors == []
+    assert any("ready" in m.lower() for m in screen._log.infos)
+    assert screen._server_restarting is False
