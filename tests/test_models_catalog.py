@@ -68,6 +68,77 @@ def test_north_mini_code_profile_and_aliases() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Capability surface tests
+# ---------------------------------------------------------------------------
+
+# Expected per-key vision capability. Vision is declared iff the entry ships an
+# mmproj sidecar; this is the contract the runtime relies on.
+_EXPECTED_VISION = {
+    "gemma": True,
+    "gemma-12b": True,
+    "gemma-12b-bf16": True,
+    "qwen": True,
+    "gemma-q8": True,
+    "qwen-q8": True,
+    "diffusiongemma": False,
+    "north-mini-code": False,
+}
+
+
+class TestCapabilitySurface:
+    def test_every_catalog_entry_has_expected_vision(self) -> None:
+        for choice in CHOICES:
+            assert choice.key in _EXPECTED_VISION, (
+                f"new catalog entry {choice.key!r} missing from _EXPECTED_VISION "
+                "— add its expected vision flag"
+            )
+            assert choice.supports_vision is _EXPECTED_VISION[choice.key], (
+                f"{choice.key} vision={choice.supports_vision}, "
+                f"expected {_EXPECTED_VISION[choice.key]}"
+            )
+
+    def test_vision_derived_from_mmproj(self) -> None:
+        # supports_vision must stay equivalent to the original inference.
+        for choice in CHOICES:
+            assert choice.supports_vision == (choice.mmproj_filename is not None)
+
+    def test_vision_models_have_mmproj_path(self) -> None:
+        for choice in CHOICES:
+            if choice.supports_vision:
+                assert choice.mmproj_path is not None
+            else:
+                assert choice.mmproj_path is None
+
+    def test_audio_in_out_default_true_for_all(self) -> None:
+        # Audio is hardware-gated (voice.py), not model-gated — every entry
+        # declares both audio capabilities.
+        for choice in CHOICES:
+            assert choice.supports_audio_in is True
+            assert choice.supports_audio_out is True
+
+    def test_capabilities_rollup_matches_properties(self) -> None:
+        for choice in CHOICES:
+            expected = set()
+            if choice.supports_vision:
+                expected.add("vision")
+            expected.add("audio_in")
+            expected.add("audio_out")
+            assert choice.capabilities == frozenset(expected)
+
+    def test_vision_entry_capability_set(self) -> None:
+        gemma = by_key("gemma")
+        assert gemma is not None
+        assert gemma.capabilities == frozenset({"vision", "audio_in", "audio_out"})
+
+    def test_text_only_entry_capability_set(self) -> None:
+        for key in ("diffusiongemma", "north-mini-code"):
+            choice = by_key(key)
+            assert choice is not None
+            assert choice.capabilities == frozenset({"audio_in", "audio_out"})
+            assert "vision" not in choice.capabilities
+
+
+# ---------------------------------------------------------------------------
 # estimate_decode_tok_s and _parse_total_active_b tests
 # ---------------------------------------------------------------------------
 
