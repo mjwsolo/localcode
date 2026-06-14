@@ -621,8 +621,9 @@ class _DiffusionMixin:
         # -n alone controls length and the entropy-bound decoder still stops
         # early on short turns, so simple replies stay fast. 2048 leaves room
         # for a reasoning preamble AND a complete tool call on agentic turns.
-        _n = int(num_predict) if (num_predict and int(num_predict) > 0) else 2048
-        _canvas = min(_n, 2048)
+        from .model_config import DIFFUSION_DEFAULT_CANVAS, DIFFUSION_MAX_CANVAS
+        _n = int(num_predict) if (num_predict and int(num_predict) > 0) else DIFFUSION_DEFAULT_CANVAS
+        _canvas = min(_n, DIFFUSION_MAX_CANVAS)
 
         cmd = [
             binary,
@@ -655,7 +656,7 @@ class _DiffusionMixin:
         # eb-off retry (verified ~16K+ chars). Don't burn ~75s on 3 futile
         # retries — surface E3107 with the model-switch guidance immediately,
         # and record WHY in telemetry so the threshold is tunable from data.
-        _DIFFUSION_PROMPT_CHAR_LIMIT = 16000
+        from .model_config import DIFFUSION_PROMPT_CHAR_LIMIT as _DIFFUSION_PROMPT_CHAR_LIMIT
         if len(prompt) > _DIFFUSION_PROMPT_CHAR_LIMIT:
             self._log_diffusion_telemetry(
                 model_path=model_path, prompt=prompt, n_canvas=_canvas,

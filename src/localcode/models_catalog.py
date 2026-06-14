@@ -682,16 +682,27 @@ def estimate_decode_tok_s(size_gb: float, name: str, bandwidth_gbps: float) -> i
     if effective_gb <= 0:
         return None
 
+    # tok/s estimate inputs live in the central per-Mac config (model_config)
+    # so the calibration constants are edited in one place.
+    from .model_config import (
+        DECODE_COMPUTE_OVERHEAD_DENSE_S,
+        DECODE_COMPUTE_OVERHEAD_MOE_S,
+        DECODE_MOE_ACTIVE_FRAC_THRESHOLD,
+        DECODE_REALIZED_BW_FRACTION,
+    )
+
     # Apple Silicon realises roughly 65-75% of advertised peak bandwidth
     # during LLM decode (cache misses, memory controller overhead, etc.).
-    realized_bw = bandwidth_gbps * 0.70
+    realized_bw = bandwidth_gbps * DECODE_REALIZED_BW_FRACTION
 
     # Per-token compute overhead (seconds) — the irreducible floor that
     # prevents tiny-active MoE quants from predicting unrealistic speeds.
     # MoE models have significant routing/dispatch overhead (~8 ms/token);
     # dense models are lower (~2 ms/token) so bandwidth dominates there.
-    is_moe = frac < 0.5
-    compute_overhead_s = 0.008 if is_moe else 0.002
+    is_moe = frac < DECODE_MOE_ACTIVE_FRAC_THRESHOLD
+    compute_overhead_s = (
+        DECODE_COMPUTE_OVERHEAD_MOE_S if is_moe else DECODE_COMPUTE_OVERHEAD_DENSE_S
+    )
 
     tok_s = 1.0 / (effective_gb / realized_bw + compute_overhead_s)
 
