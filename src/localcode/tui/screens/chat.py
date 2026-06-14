@@ -1710,6 +1710,18 @@ class ChatScreen(Screen):
         log.append_user(f"! {cmd}")
         log.scroll_end(animate=False)
 
+        # Run at the repo root (the user's `!cmd` should behave like the
+        # agent's bash tool, which cwds to the repo), falling back to the
+        # process cwd before the backend is initialized.
+        _cwd = None
+        try:
+            _eng = getattr(self.tui, "engine", None)
+            _rr = getattr(_eng, "repo_root", None) if _eng is not None else None
+            if _rr:
+                _cwd = str(_rr)
+        except Exception:
+            _cwd = None
+
         def _work() -> None:
             import subprocess as _sp
             shell = os.environ.get("SHELL") or "/bin/sh"
@@ -1717,7 +1729,7 @@ class ChatScreen(Screen):
                 r = _sp.run(
                     [shell, "-c", cmd],
                     capture_output=True, text=True, errors="replace",
-                    timeout=120,
+                    timeout=120, cwd=_cwd,
                 )
                 out = r.stdout or ""
                 if r.stderr:
