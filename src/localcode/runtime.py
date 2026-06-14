@@ -152,6 +152,49 @@ def _clear_pressure_kill_marker() -> None:
         pass
 
 
+def _log_disconnect_context(stage: str, error: Any, *, mid_stream: bool = False) -> dict:
+    """Capture the disconnect CLASS around a lost-connection event.
+
+    Pulls a snapshot from ServerManager (exit code, memory-guard fired?,
+    running state) and records it to the structured event log
+    (events.jsonl, type server_disconnect) AND as a human-readable line in
+    last_error.log, so the disconnect class is visible next time instead of
+    a bare "[E3102] Lost connection". Returns the diag dict. Never raises.
+    """
+    diag: dict = {}
+    try:
+        from .server_manager import ServerManager as _SM
+        diag = _SM.get().disconnect_diagnostics()
+    except Exception:
+        diag = {}
+    err_str = _error_message(error)
+    diag["stage"] = stage
+    diag["mid_stream"] = mid_stream
+    diag["error"] = err_str[:500]
+    try:
+        from .server_manager import _lifecycle_log as _ll
+        _ll("server_disconnect", **diag)
+    except Exception:
+        pass
+    try:
+        import time as _t
+        from .paths import last_error_log_path
+        path = last_error_log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(
+                f"[{_t.strftime('%Y-%m-%dT%H:%M:%S')}] server_disconnect "
+                f"stage={stage} class={diag.get('disconnect_class', 'unknown')} "
+                f"exit_code={diag.get('exit_code')} "
+                f"pressure_kill={diag.get('pressure_kill')} "
+                f"running={diag.get('running')} mid_stream={mid_stream} "
+                f"free_mb={diag.get('free_mb')} error={err_str[:300]}\n"
+            )
+    except Exception:
+        pass
+    return diag
+
+
 class RuntimeErrorWithContext(RuntimeError):
     pass
 
@@ -1203,12 +1246,23 @@ class LocalCodeRuntimeGateway:
                 return data
             except Exception as exc:
                 last_error = exc
-                # Server error or connection lost — try restarting
+                # Server error or connection lost — try restarting. chat_once
+                # is NON-streaming: nothing has been handed to the caller yet,
+                # so a clean restart + full retry is always safe here (unlike
+                # the streaming path, which must guard a partial stream).
                 is_500 = hasattr(exc, 'response') and getattr(exc.response, 'status_code', 0) == 500
                 is_conn_err = "connect" in str(exc).lower() or "refused" in str(exc).lower()
                 if is_500 or is_conn_err:
+                    if is_conn_err:
+                        # Capture the disconnect class before restarting so
+                        # the cause is visible later.
+                        _log_disconnect_context("chat_once", exc)
                     try:
-                        self._restart_server()
+                        # _restart_server() blocks on the health probe, so by
+                        # the time it returns the model is loaded and the retry
+                        # lands on a ready server (not a still-loading 503).
+                        if self._restart_server():
+                            _clear_pressure_kill_marker()
                     except Exception:
                         pass
         raise RuntimeErrorWithContext(str(last_error) if last_error else "runtime request failed")
@@ -2188,6 +2242,13 @@ class LocalCodeRuntimeGateway:
         # error instead of thrashing.
         _MAX_STREAM_RESTARTS = 1
         _restarts_done = 0
+        # STREAM-LEVEL "have we handed real content to the consumer yet?"
+        # flag. The per-attempt `_emitted_real` is reset each try; this one
+        # survives across attempts and is the streaming-safety gate for
+        # connection-drop recovery: a drop BEFORE any content was yielded is
+        # safe to restart+retry; a drop MID-STREAM (content already emitted)
+        # must NOT silently replay — we surface E3102 instead.
+        _emitted_real_stream = False
         # Gemma-4 token-soup collapse is INTERMITTENT (the same "hi" that
         # collapses now answers cleanly on a re-sample). The collapse path
         # used to hard-fail with E3108 and no retry. Instead, re-generate
@@ -2663,6 +2724,14 @@ class LocalCodeRuntimeGateway:
                 return
             except Exception as exc:
                 last_error = exc
+                # Carry this attempt's emission state up to the stream level.
+                # `_emitted_real` is defined at the top of the try; if the
+                # exception fired before that line it won't exist, so guard.
+                try:
+                    if _emitted_real:
+                        _emitted_real_stream = True
+                except NameError:
+                    pass
                 # Memory-pressure recovery. The pressure monitor SIGTERMs
                 # llama-server when macOS reports CRITICAL memory pressure
                 # (kern.memorystatus_vm_pressure_level >= 4) for ~2s. The
@@ -2690,6 +2759,28 @@ class LocalCodeRuntimeGateway:
                 # e2e run 2026-04-23T23:54, long_coding_session failed
                 # 25/25 turns at 0.5 s each on a dead server).
                 _pressure_related = _pressure_kill_recent()
+                # STREAMING-SAFETY RULE: a connection drop AFTER we've already
+                # yielded real content cannot be recovered by restart+retry —
+                # re-running the stream would re-emit content the consumer
+                # already saw (double answer / corrupted turn). Restart+retry
+                # is only safe when nothing has been handed downstream yet
+                # (drop before first token). Mid-stream → surface E3102 with
+                # diagnostic context instead of silently replaying.
+                if is_conn_err:
+                    # Capture the disconnect class regardless of recoverability
+                    # so the cause is visible in last_error.log / events.jsonl.
+                    _diag = _log_disconnect_context(
+                        "stream_chat_events", exc, mid_stream=_emitted_real_stream
+                    )
+                    if _emitted_real_stream:
+                        _cls = _diag.get("disconnect_class", "unknown") if isinstance(_diag, dict) else "unknown"
+                        last_error = RuntimeErrorWithContext(
+                            "Lost connection to the model server mid-stream "
+                            f"(class={_cls}); partial output was already shown, "
+                            "so the request cannot be safely retried — "
+                            f"{_error_message(exc)}"
+                        )
+                        break
                 if is_conn_err and attempt < self.config.max_retries and _restarts_done < _MAX_STREAM_RESTARTS:
                     _restarts_done += 1
                     recovery_label = (

@@ -46,10 +46,8 @@ process reads it, killpg's it, and deletes the file.
 
 Why port-based last-resort kill
 -------------------------------
-If the PID file is missing (user deleted ~/.localcode, or first-run with an
-already-running server from a different install), we fall back to killing
-whatever is bound to :8081. Covers the "I downloaded Ollama last week and
-it's on our port" case.
+If the PID file is missing, we fall back to killing whatever is bound to
+:8081 (covers an already-running server from a different install).
 """
 from __future__ import annotations
 
@@ -81,15 +79,9 @@ from .paths import (
 # global-vs-project split rationale.
 PID_FILE = server_pid_file()
 DEFAULT_PORT = 8081
-# Preferred-range scan before falling through to an OS-assigned ephemeral
-# port. 19 covers 8081-8099 — wide enough to survive a handful of other
-# services on nearby ports (Ollama on 8080 next door, a VS Code port-
-# forward, another llama-server from a sibling install) without giving
-# up. If *all* 19 are occupied, `find_free_port()` falls back to
-# `bind(('', 0))` which lets the kernel pick a truly free port in the
-# ephemeral range (typically 49152-65535 on macOS). That fallback means
-# localcode cannot be shut out by port contention — there is always a
-# port we can actually bind to.
+# Preferred-range scan (8081-8099) before falling through to an OS-assigned
+# ephemeral port. If all 19 are occupied, `find_free_port()` falls back to
+# `bind(('', 0))` so localcode can never be shut out by port contention.
 PORT_FALLBACK_RANGE = 19
 HEALTH_TIMEOUT_S = 120  # a 10 GB model can take ~60s cold on slower disks
 
@@ -312,6 +304,8 @@ class ServerManager:
         self._port: int = DEFAULT_PORT
         self._pressure_thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
+        self._last_exit_code: Optional[int] = None  # disconnect diagnostics
+        self._last_death_was_pressure: bool = False
         # Idle auto-suspend: track wall-clock of the most recent chat
         # activity. A background watchdog thread shuts the server down
         # after `_idle_timeout_s` seconds of inactivity to stop the GPU
@@ -495,6 +489,8 @@ class ServerManager:
         if ok:
             self.mark_activity()
             self._ensure_idle_thread()
+            self._last_exit_code = None
+            self._last_death_was_pressure = False
         return ok
 
     def restart(self, cmd: list[str], model_path: str, port: int = DEFAULT_PORT,
@@ -561,6 +557,32 @@ class ServerManager:
     @property
     def current_model(self) -> Optional[str]:
         return self._model_path
+
+    def disconnect_diagnostics(self) -> dict:
+        """Snapshot of WHY the server is unreachable (disconnect CLASS:
+        memory-guard kill / crash / not-running / wedged) for recovery
+        logging. exit_code is `-signal` on POSIX. Never raises."""
+        running = False
+        try:
+            if self._process is not None:
+                rc = self._process.poll()
+                running = rc is None
+                if rc is not None:
+                    self._last_exit_code = rc
+        except Exception:
+            pass
+        ec = None if running else self._last_exit_code
+        cls = (
+            "memory_guard_kill" if self._last_death_was_pressure
+            else "sigkill_or_jetsam" if ec == -9
+            else "sigterm" if ec == -15
+            else "crash_exit" if isinstance(ec, int) and ec > 0
+            else "wedged_listener" if running else "not_running"
+        )
+        return {"running": running, "exit_code": ec,
+                "pressure_kill": bool(self._last_death_was_pressure),
+                "disconnect_class": cls, "port": self._port,
+                "free_mb": _system_free_memory_mb()}
 
     # ────────────────────────────────────────────────────────────────
     # Internals
@@ -660,13 +682,21 @@ class ServerManager:
         True for a process that had already been pressure-killed.
         """
         killed_pid = self._process.pid if self._process is not None else 0
+        if self._process is not None:  # breadcrumb: OOM-guard reap, not a crash
+            try:
+                self._last_exit_code = self._process.poll()
+            except Exception:
+                pass
+        self._last_death_was_pressure = True
         try:
             marker = pressure_kill_marker_path()
             marker.parent.mkdir(parents=True, exist_ok=True)
             marker.write_text(f"level={level}\ntime={time.time():.0f}\n")
         except Exception:
             pass
+        # Logged DISTINCTLY as `pressure_kill` (OOM-guard reap vs a crash).
         _lifecycle_log("pressure_kill", level=level, pid=killed_pid,
+                       guard="memory_pressure", exit_code=self._last_exit_code,
                        free_mb=_system_free_memory_mb())
         # Clear internal state so subsequent code paths see "no server
         # running" rather than a phantom Popen handle. Safe to do from

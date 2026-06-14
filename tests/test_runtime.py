@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 from localcode.config import RuntimeConfig
@@ -735,3 +736,154 @@ class TestCollapseRetry:
             for e in events
         )
         assert sum(1 for e in events if e["type"] == "stream_done") == 1
+
+
+class _MidStreamDropResponse:
+    """Streaming response that yields real content lines then raises a
+    connection error mid-iteration — server dying MID-STREAM after content
+    already reached the consumer."""
+
+    def __init__(self, good_lines: list[str]) -> None:
+        self._lines = good_lines
+        self.status_code = 200
+
+    def __enter__(self) -> "_MidStreamDropResponse":
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+    def iter_lines(self):
+        for ln in self._lines:
+            yield ln
+        raise httpx.ConnectError("Connection refused")
+
+
+class _EarlyDropResponse:
+    """Streaming response that raises a connection error BEFORE any content
+    is yielded — the safe-to-retry case (drop before first token)."""
+
+    status_code = 200
+
+    def __enter__(self) -> "_EarlyDropResponse":
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+    def iter_lines(self):
+        raise httpx.ConnectError("Connection refused")
+        yield  # pragma: no cover — makes this a generator
+
+
+class TestStreamConnectionRecovery:
+    """Lost-connection auto-recovery for the streaming + non-streaming paths.
+
+    Drop BEFORE content yielded -> restart + retry (no E3102).
+    Drop AFTER content yielded -> surface E3102, never silently replay.
+    """
+
+    def _gw(self) -> LocalCodeRuntimeGateway:
+        cfg = RuntimeConfig(
+            provider="llama_cpp",
+            base_url="http://localhost:8081",
+            model="gemma4.gguf",
+            max_retries=3,
+        )
+        return LocalCodeRuntimeGateway(cfg)
+
+    def test_early_drop_restarts_and_retries_without_e3102(self, monkeypatch) -> None:
+        gw = self._gw()
+        prepared = [_EarlyDropResponse(), _FakeStreamResponse(_good_lines("Recovered!"))]
+        fake_client = MagicMock()
+        fake_client.is_closed = False
+        fake_client.stream = MagicMock(side_effect=prepared)
+        gw._client = fake_client
+
+        restart_calls = {"n": 0}
+        monkeypatch.setattr(
+            gw, "_restart_server",
+            lambda: (restart_calls.__setitem__("n", restart_calls["n"] + 1) or True),
+        )
+        monkeypatch.setattr(gw, "_quick_server_probe", lambda: True)
+        import time as _t
+        monkeypatch.setattr(_t, "sleep", lambda *_a, **_k: None)
+
+        events = list(gw.stream_chat_events([{"role": "user", "content": "hi"}]))
+        joined = "".join(e["content"] for e in events if e["type"] == "content")
+
+        assert "Recovered!" in joined
+        assert "E3102" not in joined
+        assert restart_calls["n"] == 1, "exactly one restart should have fired"
+        assert any(
+            e["type"] == "stage"
+            and e.get("name") in ("server_reconnect", "memory_pressure_recovery")
+            for e in events
+        )
+        assert sum(1 for e in events if e["type"] == "stream_done") == 1
+
+    def test_mid_stream_drop_surfaces_e3102_and_does_not_replay(self, monkeypatch) -> None:
+        gw = self._gw()
+        second = _FakeStreamResponse(_good_lines("SHOULD NOT APPEAR"))
+        prepared = [_MidStreamDropResponse([_sse("partial answer ")]), second]
+        fake_client = MagicMock()
+        fake_client.is_closed = False
+        fake_client.stream = MagicMock(side_effect=prepared)
+        gw._client = fake_client
+
+        restart_calls = {"n": 0}
+        monkeypatch.setattr(
+            gw, "_restart_server",
+            lambda: (restart_calls.__setitem__("n", restart_calls["n"] + 1) or True),
+        )
+        monkeypatch.setattr(gw, "_quick_server_probe", lambda: True)
+        import time as _t
+        monkeypatch.setattr(_t, "sleep", lambda *_a, **_k: None)
+
+        collected = []
+        with pytest.raises(Exception) as excinfo:
+            for ev in gw.stream_chat_events([{"role": "user", "content": "hi"}]):
+                collected.append(ev)
+
+        joined = "".join(e["content"] for e in collected if e["type"] == "content")
+        assert "partial answer" in joined
+        assert "SHOULD NOT APPEAR" not in joined
+        assert restart_calls["n"] == 0
+        assert "mid-stream" in str(excinfo.value).lower()
+
+    def test_chat_once_restarts_and_retries_on_conn_error(self, monkeypatch) -> None:
+        gw = self._gw()
+        good = {"choices": [{"message": {"content": "ok", "role": "assistant"}}]}
+
+        class _Resp:
+            status_code = 200
+
+            def raise_for_status(self) -> None:
+                pass
+
+            def json(self):
+                return good
+
+        calls = {"n": 0}
+
+        def _post(endpoint, json):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise httpx.ConnectError("Connection refused")
+            return _Resp()
+
+        fake_client = MagicMock()
+        fake_client.is_closed = False
+        fake_client.post = MagicMock(side_effect=_post)
+        gw._client = fake_client
+
+        restart_calls = {"n": 0}
+        monkeypatch.setattr(
+            gw, "_restart_server",
+            lambda: (restart_calls.__setitem__("n", restart_calls["n"] + 1) or True),
+        )
+
+        result = gw.chat_once([{"role": "user", "content": "hi"}])
+        assert result["message"]["content"] == "ok"
+        assert restart_calls["n"] == 1
+        assert calls["n"] == 2
