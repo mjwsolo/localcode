@@ -2479,11 +2479,25 @@ class ChatScreen(Screen):
         self._update_status()
 
         def _worker() -> None:
+            # Auto-init the backend if it hasn't been touched yet — a
+            # /model swap should restart the server straight away, never
+            # ask the user to type a message first. Mirrors the /vision
+            # toggle path above; ensure_backend is idempotent + cheap
+            # when the engine is already up.
+            try:
+                self.app.call_from_thread(self.tui.ensure_backend)
+                import time as _t
+                # Give the call_from_thread a tick to land before we
+                # read engine. 50ms is enough; engine init is in-process.
+                _t.sleep(0.05)
+            except Exception:
+                pass
             engine = self.tui.engine.engine if self.tui.engine is not None else None
             if engine is None:
                 self.app.call_from_thread(
                     self._on_server_restart_failed,
-                    "Backend not initialized — can't restart server. Type a message to trigger a fresh start.",
+                    "Backend couldn't initialize — can't restart server. "
+                    "Check ~/.localcode/last_error.log.",
                 )
                 return
             # cohere2moe (North-Mini-Code) needs its dedicated PR-#24260

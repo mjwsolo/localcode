@@ -15,6 +15,7 @@ __all__ = [
     "SYSTEM_PROMPT",
     "SYSTEM_PROMPT_V2",
     "REASONING_RULES",
+    "model_identity_line",
 ]
 
 
@@ -97,6 +98,42 @@ INTERNAL DECISION DISCIPLINE
 - Do not enumerate large data internally; put it directly in files.
 - After deciding, act with a tool or answer.
 """
+
+
+def model_identity_line(model: str) -> str:
+    """Render the one-line model self-identity for the system prompt.
+
+    `model` is the active `config.runtime.model` value, which may be a
+    GGUF filename ("gemma-4-12b-it-UD-Q4_K_XL.gguf"), a full path, or a
+    short runtime tag ("gemma26b-iq3"). We resolve it to the catalog's
+    friendly name + quant (e.g. "Gemma 4 12B (Q4)") via
+    `models_catalog.by_filename`, which already embeds the quant in its
+    `.name`. If the value isn't a catalog filename (e.g. a bare tag), we
+    fall back to the stripped filename stem so the model still names
+    *something* concrete rather than guessing.
+
+    Returns a single line ending in a newline, or "" when no model is
+    set (keeps the prompt prefix byte-identical for that case).
+    """
+    name = (model or "").strip()
+    if not name:
+        return ""
+    # `by_filename` wants the bare filename; tolerate a full path.
+    filename = Path(name).name
+    try:
+        from ..models_catalog import by_filename
+
+        choice = by_filename(filename)
+    except Exception:
+        choice = None
+    if choice is not None:
+        friendly = choice.name
+    else:
+        # Not a catalog filename (likely a short tag). Strip a trailing
+        # ".gguf" but otherwise pass it through unchanged — better to
+        # echo the real configured identifier than invent a name.
+        friendly = filename[:-5] if filename.lower().endswith(".gguf") else filename
+    return f"You are running locally as {friendly} via LocalCode.\n"
 
 
 def _load_project_instructions(repo_root: Path) -> str:

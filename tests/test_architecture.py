@@ -587,6 +587,65 @@ def test_sections_compose_callable():
     assert isinstance(rendered, str) and len(rendered) > 50
 
 
+def test_model_identity_line_friendly_name_and_quant():
+    """The model self-identity line must name the active model + quant so
+    "which model are you using?" can be answered correctly. Derived from
+    config.runtime.model via the catalog, not hardcoded.
+    """
+    sys.path.insert(0, str(REPO / "src"))
+    from localcode.agent.prompts import model_identity_line
+
+    cases = {
+        "gemma-4-12b-it-UD-Q4_K_XL.gguf": "Gemma 4 12B (Q4)",
+        "Qwen3.6-35B-A3B-UD-IQ2_M.gguf": "Qwen 3.6 35B-A3B (Q2)",
+        "diffusiongemma-26B-A4B-it-Q4_K_M.gguf": "DiffusionGemma 26B-A4B (Q4)",
+    }
+    for filename, friendly in cases.items():
+        line = model_identity_line(filename)
+        assert line == f"You are running locally as {friendly} via LocalCode.\n"
+        assert friendly in line
+
+    # Full paths resolve to the same friendly name as the bare filename.
+    assert "Qwen 3.6 35B-A3B (Q8)" in model_identity_line(
+        "/models/Qwen3.6-35B-A3B-UD-Q8_K_XL.gguf"
+    )
+    # An unknown short tag falls back to the configured identifier (no
+    # invented name); empty model yields an empty line (prefix-stable).
+    assert "gemma26b-iq3" in model_identity_line("gemma26b-iq3")
+    assert model_identity_line("") == ""
+
+
+def test_assembled_system_prompt_contains_model_identity():
+    """End-to-end: the assembled system prompt embeds the friendly model
+    name + quant, derived from app.config.runtime.model.
+    """
+    sys.path.insert(0, str(REPO / "src"))
+    from types import SimpleNamespace
+
+    from localcode.agent import prompt_context
+    from localcode.agent.prompts import SYSTEM_PROMPT
+
+    app = SimpleNamespace(
+        repo_root=Path("/tmp/x"),
+        config=SimpleNamespace(
+            runtime=SimpleNamespace(model="gemma-4-12b-it-UD-Q4_K_XL.gguf")
+        ),
+        _recent_tool_names=[],
+        _last_failed_tool_name="",
+    )
+    result = prompt_context.build_agent_system_prompt(
+        app=app,
+        user_text="which model are you using?",
+        goal_state=SimpleNamespace(goal_type="question"),
+        task_state=None,
+        base_system_prompt=SYSTEM_PROMPT,
+        network_status="Network: ONLINE",
+        use_thinking=False,
+    )
+    assert "Gemma 4 12B (Q4)" in result.system_prompt
+    assert "running locally as Gemma 4 12B (Q4) via LocalCode" in result.system_prompt
+
+
 def test_recovery_callable():
     """`detect_stall` + `nudge_for` run on every stalled turn in
     production. Smoke-test the full path (both functions, all three
