@@ -308,56 +308,34 @@ def apple_silicon_bandwidth_gbps() -> float:
 
     Conservative 150 GB/s fallback for non-Apple or unparseable brand strings.
     """
+    # The per-chip (generation, tier) bandwidth table + fallback live in the
+    # central per-Mac config (model_config) so chip figures are edited in one
+    # place. This function keeps the brand-string parsing / tier-detection.
+    from .model_config import (
+        APPLE_GENERATIONS,
+        APPLE_SILICON_BANDWIDTH_GBPS as _TABLE,
+        BANDWIDTH_FALLBACK_GBPS as _FALLBACK,
+    )
     if platform.system().lower() != "darwin":
-        return 150.0
+        return _FALLBACK
     try:
         brand = subprocess.run(
             ["sysctl", "-n", "machdep.cpu.brand_string"],
             capture_output=True, text=True, timeout=2,
         ).stdout.strip().lower()
     except Exception:
-        return 150.0
+        return _FALLBACK
     if not brand:
-        return 150.0
+        return _FALLBACK
 
-    # Per-chip lookup table keyed on (generation, tier).
-    # Generation is the first "m<N>" token; tier is ultra/max/pro/base.
-    # The M3 Pro is a known regression vs M2 Pro (150 vs 200 GB/s) so
-    # simple base×multiplier tables silently overstate it; explicit values
+    # The M3 Pro is a known regression vs M2 Pro (150 vs 200 GB/s) so simple
+    # base×multiplier tables silently overstate it; the explicit table values
     # avoid that class of bug.
     #
     # Ordering: check for the most-descriptive tier first (ultra > max > pro)
     # so "m1 ultra" doesn't match the "max" branch.
-    _TABLE: dict[tuple[str, str], float] = {
-        # M1 family
-        ("m1", "ultra"): 800.0,   # Apple spec: 800 GB/s
-        ("m1", "max"):   400.0,   # Apple spec: 400 GB/s
-        ("m1", "pro"):   200.0,   # Apple spec: 200 GB/s
-        ("m1", "base"):   68.0,   # Apple spec:  68 GB/s (LPDDR4X; notable outlier)
-        # M2 family
-        ("m2", "ultra"): 800.0,   # Apple spec: 800 GB/s
-        ("m2", "max"):   400.0,   # Apple spec: 400 GB/s
-        ("m2", "pro"):   200.0,   # Apple spec: 200 GB/s
-        ("m2", "base"):  100.0,   # Apple spec: 100 GB/s
-        # M3 family — M3 Pro regressed to 150 GB/s (vs 200 on M2 Pro)
-        ("m3", "ultra"): 819.0,   # Apple spec: 819 GB/s
-        ("m3", "max"):   400.0,   # Apple spec: 400 GB/s (16-core GPU config)
-        ("m3", "pro"):   150.0,   # Apple spec: 150 GB/s (↓ from M2 Pro's 200)
-        ("m3", "base"):  100.0,   # Apple spec: 100 GB/s
-        # M4 family — significant bandwidth uplift at Pro/Max tiers
-        # (No M4 Ultra was released.)
-        ("m4", "max"):   546.0,   # Apple spec: 546 GB/s (40-core GPU)
-        ("m4", "pro"):   273.0,   # Apple spec: 273 GB/s
-        ("m4", "base"):  120.0,   # Apple spec: 120 GB/s
-        # M5 family
-        ("m5", "ultra"): 1100.0,  # Expected ~1100 GB/s (unreleased; 2× M5 Max)
-        ("m5", "max"):   614.0,   # Apple spec: 614 GB/s
-        ("m5", "pro"):   307.0,   # Apple spec: 307 GB/s
-        ("m5", "base"):  153.0,   # Apple spec: 153 GB/s
-    }
-
     gen = ""
-    for g in ("m1", "m2", "m3", "m4", "m5"):
+    for g in APPLE_GENERATIONS:
         # Match "m5" but not "m5 pro" inside the generation check — just
         # look for the token anywhere in the brand string.
         if g in brand:
@@ -365,7 +343,7 @@ def apple_silicon_bandwidth_gbps() -> float:
             break  # brand strings are unique per generation
 
     if not gen:
-        return 150.0  # non-Apple or future unrecognised generation
+        return _FALLBACK  # non-Apple or future unrecognised generation
 
     if "ultra" in brand:
         tier = "ultra"
@@ -376,7 +354,7 @@ def apple_silicon_bandwidth_gbps() -> float:
     else:
         tier = "base"
 
-    return _TABLE.get((gen, tier), 150.0)
+    return _TABLE.get((gen, tier), _FALLBACK)
 
 
 # ── Thermal awareness (detection + advisory only) ──────────────────
