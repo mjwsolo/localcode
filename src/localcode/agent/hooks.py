@@ -18,6 +18,8 @@ __all__ = [
     "after_tool",
     "quality_monitor",
     "completion_gate",
+    "ran_build_or_test",
+    "_changed_code_files",
 ]
 
 
@@ -249,6 +251,25 @@ def _recent_unresolved_verification_signals(state: TurnState) -> list[str]:
             unresolved.append("zero-runtime-data")
             continue
     return list(dict.fromkeys(unresolved))
+
+
+_BUILD_TEST_TOKENS = (
+    "tsc", "vitest", "jest", "pytest", "mypy", "ruff", "eslint", "cargo",
+    "go build", "go test", "make ", "make\t", "gradle", "mvn", "compile",
+    "npm run build", "yarn build", "pnpm build", "npm test", "npm run test",
+    "vite build", "next build", "ng build", "go vet", "rustc", "javac",
+)
+
+
+def ran_build_or_test(bash_history: list[tuple[str, str]]) -> bool:
+    """True if any command this turn was a build / typecheck / test / lint —
+    evidence the model actually compiled its code (vs just writing files).
+    Deliberately narrow: a dev-server launch (`npm run dev`) is NOT a build."""
+    for command, _ in bash_history:
+        c = str(command).lower()
+        if any(tok in c for tok in _BUILD_TEST_TOKENS):
+            return True
+    return False
 
 
 def _changed_code_files(paths: list[str]) -> bool:
