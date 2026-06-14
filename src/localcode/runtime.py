@@ -476,6 +476,29 @@ class LocalCodeRuntimeGateway:
             return 98304    # 96K
         return 65536        # 16-47 GB: 64K (validated on 16 GB)
 
+    @staticmethod
+    def _cohere_ctx_ceiling(ram_gb: int) -> int:
+        """Conservative per-RAM context ceiling for the cohere2moe
+        (North-Mini-Code) model.
+
+        Why MUCH tighter than `_ram_ctx_ceiling`: that ladder is sized for
+        the TurboQuant path, where the KV cache is compressed (q8_0 K +
+        turbo4 V). North-Mini runs on the STOCK PR-#24260 server with
+        *uncompressed f16* KV, so per-token KV is ~4x heavier, and there's
+        no -fit guard. A 256K f16 KV on this model is multiple-tens-of-GB
+        and OOM-kills the server mid-turn (the observed `zsh: killed` after
+        the agent "thinking..." for 11 minutes). These tiers keep the
+        allocated KV well within unified memory while still leaving plenty
+        of room for this model's long unconditional reasoning. Monotonic.
+        """
+        if ram_gb >= 96:
+            return 65536    # 64K
+        if ram_gb >= 48:
+            return 49152    # 48K
+        if ram_gb >= 32:
+            return 32768    # 32K
+        return 16384        # <32 GB: 16K (32 GB+ is the recommended floor)
+
     def _model_max_ctx(self, model_path: str | None = None) -> int:
         """The model's trained context length (`*.context_length` in the GGUF
         header) — the hard cap we must never exceed, else the model decodes
@@ -552,6 +575,30 @@ class LocalCodeRuntimeGateway:
 
     def _is_large_local_gguf(self, model_path: str | None = None) -> bool:
         return self._is_large_qwen_gguf(model_path) or self._is_large_gemma_gguf(model_path)
+
+    def _is_cohere_gguf(self, model_path: str | None = None) -> bool:
+        """True for the cohere2moe (North-Mini-Code) model.
+
+        This model is served by the STOCK PR-#24260 llama-server, NOT the
+        TurboQuant fork — so it gets f16 KV (no q8_0-K / turbo4-V
+        compression) and no -fit/ctx-checkpoint memory management. Combined
+        with its 500K trained context and UNCONDITIONAL reasoning (every
+        turn emits a long <think> preamble), it needs its own conservative
+        context + generation caps so a single long turn can't grow the KV
+        cache until the OS OOM-kills the server. Detection is architecture-
+        based (catalog), with a name fallback for unreadable/renamed files.
+        """
+        try:
+            from .models_catalog import by_filename as _bf
+            from pathlib import Path as _P
+            name = (model_path or self.config.model or "")
+            choice = _bf(_P(name).name) if name else None
+            if choice is not None and "cohere" in str(getattr(choice, "architecture", "")):
+                return True
+        except Exception:
+            pass
+        name = (model_path or self.config.model or "").lower()
+        return "north-mini" in name or "cohere2" in name
 
     def _effective_llama_batch_size(self, model_path: str | None = None) -> int:
         configured = self.config.llama_cpp_batch_size
@@ -687,6 +734,20 @@ class LocalCodeRuntimeGateway:
         # approximate token budget without forcing a large 16k floor that
         # defeats the small-machine presets.
         num_ctx = max(2048, self.config.max_context_chars // 4)
+
+        # cohere2moe (North-Mini-Code): served by the STOCK server with
+        # UNCOMPRESSED f16 KV, so it must NOT inherit the large TurboQuant
+        # context ceilings (256K on a big Mac). Clamp to a conservative
+        # RAM-aware ceiling BEFORE the preset branches — this bounds the
+        # KV cache the launched `--ctx-size` allocates and is the primary
+        # OOM guard for this model's long unconditional-reasoning turns.
+        # Still never exceed the model's trained length.
+        if self._is_cohere_gguf(model_path):
+            return min(
+                num_ctx,
+                self._cohere_ctx_ceiling(self._system_ram_gb()),
+                self._model_max_ctx(model_path),
+            )
 
         if self.config.quant_preset == "smallest":
             return min(num_ctx, 2048)
@@ -893,6 +954,19 @@ class LocalCodeRuntimeGateway:
                 opts["num_predict"] = -1  # unlimited — model stops at EOS
             else:
                 opts["num_predict"] = max(64, int(num_predict_override))
+        # cohere2moe (North-Mini-Code) reasons UNCONDITIONALLY — every turn
+        # emits a long <think> preamble — so an unbounded ("-1") per-turn
+        # budget lets a single "thinking" turn grow the KV cache until the
+        # OS OOM-kills the stock server (observed: 11 min of "thinking..."
+        # then `zsh: killed`). Cap each turn to a generous-but-bounded
+        # ceiling that still fits reasoning + a complete tool call, scaled
+        # so it can never approach the (already-bounded) context window.
+        # This only TIGHTENS an otherwise-unlimited/oversized budget.
+        if self._is_cohere_gguf():
+            cap = min(8192, max(2048, self._target_num_ctx() // 2))
+            cur = opts.get("num_predict")
+            if not isinstance(cur, int) or cur <= 0 or cur > cap:
+                opts["num_predict"] = cap
         return opts
 
     def chat_once(
