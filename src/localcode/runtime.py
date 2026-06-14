@@ -1983,20 +1983,18 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
                 # (drop before first token). Mid-stream → surface E3102 with
                 # diagnostic context instead of silently replaying.
                 if is_conn_err:
-                    # Capture the disconnect class regardless of recoverability
-                    # so the cause is visible in last_error.log / events.jsonl.
-                    _diag = _log_disconnect_context(
+                    # Capture the disconnect class for diagnostics.
+                    _log_disconnect_context(
                         "stream_chat_events", exc, mid_stream=_emitted_real_stream
                     )
-                    if _emitted_real_stream:
-                        _cls = _diag.get("disconnect_class", "unknown") if isinstance(_diag, dict) else "unknown"
-                        last_error = RuntimeErrorWithContext(
-                            "Lost connection to the model server mid-stream "
-                            f"(class={_cls}); partial output was already shown, "
-                            "so the request cannot be safely retried — "
-                            f"{_error_message(exc)}"
-                        )
-                        break
+                    # RECOVER even when content was already streamed: restart +
+                    # retry (below). The server gets paused/killed under memory
+                    # pressure mid-build and used to silently restart+continue;
+                    # hard-failing with E3102 here was a REGRESSION (turns that
+                    # used to self-heal started dying). A mid-response restart
+                    # may replay a partial duplicate of the reply — far better
+                    # than killing the whole turn. The retry path emits a clear
+                    # "restarting" stage so the duplicate is explained.
                 if is_conn_err and attempt < self.config.max_retries and _restarts_done < _MAX_STREAM_RESTARTS:
                     _restarts_done += 1
                     recovery_label = (

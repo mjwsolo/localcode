@@ -780,7 +780,10 @@ class TestStreamConnectionRecovery:
     """Lost-connection auto-recovery for the streaming + non-streaming paths.
 
     Drop BEFORE content yielded -> restart + retry (no E3102).
-    Drop AFTER content yielded -> surface E3102, never silently replay.
+    Drop AFTER content yielded -> ALSO restart + retry (recover). Hard-failing
+    mid-stream drops with E3102 was a REGRESSION — the server gets paused under
+    memory pressure mid-build and must self-heal, even if a partial reply is
+    replayed.
     """
 
     def _gw(self) -> LocalCodeRuntimeGateway:
@@ -822,9 +825,11 @@ class TestStreamConnectionRecovery:
         )
         assert sum(1 for e in events if e["type"] == "stream_done") == 1
 
-    def test_mid_stream_drop_surfaces_e3102_and_does_not_replay(self, monkeypatch) -> None:
+    def test_mid_stream_drop_restarts_and_recovers(self, monkeypatch) -> None:
+        # A drop AFTER content was streamed must RECOVER (restart + retry), not
+        # hard-fail with E3102 (that was the regression that killed builds).
         gw = self._gw()
-        second = _FakeStreamResponse(_good_lines("SHOULD NOT APPEAR"))
+        second = _FakeStreamResponse(_good_lines("Recovered after drop"))
         prepared = [_MidStreamDropResponse([_sse("partial answer ")]), second]
         fake_client = MagicMock()
         fake_client.is_closed = False
@@ -840,16 +845,18 @@ class TestStreamConnectionRecovery:
         import time as _t
         monkeypatch.setattr(_t, "sleep", lambda *_a, **_k: None)
 
-        collected = []
-        with pytest.raises(Exception) as excinfo:
-            for ev in gw.stream_chat_events([{"role": "user", "content": "hi"}]):
-                collected.append(ev)
+        events = list(gw.stream_chat_events([{"role": "user", "content": "hi"}]))
+        joined = "".join(e["content"] for e in events if e["type"] == "content")
 
-        joined = "".join(e["content"] for e in collected if e["type"] == "content")
-        assert "partial answer" in joined
-        assert "SHOULD NOT APPEAR" not in joined
-        assert restart_calls["n"] == 0
-        assert "mid-stream" in str(excinfo.value).lower()
+        # The turn recovered: it restarted once and the retried reply came through.
+        assert restart_calls["n"] == 1, "a mid-stream drop must restart + retry"
+        assert "Recovered after drop" in joined
+        assert "E3102" not in joined
+        assert any(
+            e["type"] == "stage"
+            and e.get("name") in ("server_reconnect", "memory_pressure_recovery")
+            for e in events
+        )
 
     def test_chat_once_restarts_and_retries_on_conn_error(self, monkeypatch) -> None:
         gw = self._gw()
