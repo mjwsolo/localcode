@@ -379,6 +379,21 @@ def apple_silicon_bandwidth_gbps() -> float:
     return _TABLE.get((gen, tier), 150.0)
 
 
+# ── Thermal awareness (detection + advisory only) ──────────────────
+#
+# The implementation lives in localcode.thermal to keep this file within
+# its size budget. Re-exported here so callers can keep importing the
+# thermal helpers from localcode.performance (the historical home of all
+# machine-profiling / hardware-introspection code). These are advisory
+# readings only; nothing here changes runtime behaviour.
+from .thermal import (  # noqa: E402
+    ThermalCaps,
+    read_cpu_speed_limit,
+    read_thermal_pressure,
+    recommended_thermal_caps,
+)
+
+
 def detect_machine_profile() -> MachineProfile:
     system = platform.system().lower()
     cpu_cores = os.cpu_count() or 4
