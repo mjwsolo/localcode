@@ -22,6 +22,7 @@ __all__ = [
     "is_placeholder_segment",
     "sanitize_placeholder_path",
     "build_target_grounding_block",
+    "build_incremental_milestones_block",
 ]
 
 
@@ -119,6 +120,7 @@ def build_agent_system_prompt(
     project_instructions = _load_project_instructions(app.repo_root)
     task_goal_block = build_task_goal_block(user_text, goal_state, task_state)
     target_grounding_block = build_target_grounding_block(app.repo_root, goal_state)
+    milestones_block = build_incremental_milestones_block(goal_state)
     skills_block, skill_names, skill_origins, skill_chars, skill_candidates = (
         build_dynamic_skills_block(app, user_text)
     )
@@ -170,7 +172,7 @@ def build_agent_system_prompt(
         emit_cache_marker=using_default_prompt,
     )
     return PromptBuildResult(
-        system_prompt=system + task_goal_block + target_grounding_block,
+        system_prompt=system + task_goal_block + target_grounding_block + milestones_block,
         selected_skills=skill_names,
         selected_skill_origins=skill_origins,
         selected_skill_chars=skill_chars,
@@ -210,6 +212,38 @@ def build_target_grounding_block(repo_root: Any, goal_state: Any) -> str:
         "- NEVER write a path containing a literal placeholder such as "
         "`[insert your model name]`, `<your app>`, `{project-name}`, or `...`."
         f"{name_hint} never leave the placeholder text in the path.\n"
+    )
+
+
+def build_incremental_milestones_block(goal_state: Any) -> str:
+    """Lightweight guidance to build a large app in verifiable milestones.
+
+    For a build_app goal, instruct the model to make incremental, verified
+    progress — scaffold first, then one feature at a time, building/running
+    between steps — instead of emitting an entire app in a single giant
+    write (which is what hits the per-round token wall and lands unverified
+    code). This is intentionally a prompt-context guidance block rather than
+    a mechanism: cheap, no per-round bookkeeping, and the build-verification
+    nudge in the loop already enforces the "build before finishing" half.
+
+    Empty for non-build_app goals so the cached prompt prefix is unaffected.
+    """
+    goal_type = str(getattr(goal_state, "goal_type", "") or "")
+    if goal_type != "build_app":
+        return ""
+    return (
+        "\n\nBuild in verifiable milestones (do not emit the whole app at once):\n"
+        "1. SCAFFOLD: create the minimal runnable skeleton first — entrypoint, "
+        "project/config file, and a placeholder that starts. Run it to confirm "
+        "it launches before adding features.\n"
+        "2. ONE FEATURE AT A TIME: add a single feature per step, in small files. "
+        "After each feature, build/typecheck or run the relevant check and FIX "
+        "any error before moving to the next.\n"
+        "3. KEEP IT RUNNABLE: never leave the project in a broken state between "
+        "steps. If a step is too large for one tool call, split it across calls; "
+        "don't drop scope.\n"
+        "4. FINISH: only report done after a final build/run passes with no "
+        "errors. Don't claim it works without having run it.\n"
     )
 
 
