@@ -85,9 +85,71 @@ class ModelChoice:
             return None
         return model_dir() / self.mmproj_filename
 
+    # ------------------------------------------------------------------
+    # Declarative capability surface.
+    #
+    # These properties make a model's intended modalities EXPLICIT so the
+    # picker/runtime can reason about them and a misconfigured future entry
+    # can't silently lose a capability. They describe the model's INTENT,
+    # not whether the host can currently exercise it — the actual gates are:
+    #   * vision: requires an mmproj sidecar AND the launch path passing
+    #     `--mmproj` to llama-server (see runtime.py / mmproj_path below).
+    #   * audio in/out: hardware-gated only (macOS mic/speakers, handled in
+    #     voice.py). It is model-AGNOSTIC today — every text model can be
+    #     spoken to / read aloud because audio is transcribed to / synthesized
+    #     from text at the voice layer, not inside the model. So we default
+    #     both audio flags True for all entries and let voice.py do the real
+    #     hardware gating.
+    # ------------------------------------------------------------------
+
     @property
     def supports_vision(self) -> bool:
+        """True iff the model ships a vision projector (mmproj) sidecar.
+
+        Derived from `mmproj_filename` — this is the single, obvious place
+        that defines vision capability. Unchanged in behavior from the
+        original inference (`mmproj_filename is not None`); now documented
+        as the declarative source of truth. Note the runtime must still pass
+        `--mmproj` at launch for image input to actually work.
+        """
         return self.mmproj_filename is not None
+
+    @property
+    def supports_audio_in(self) -> bool:
+        """True if the model may be addressed by voice (speech -> text).
+
+        Model-agnostic today: speech is transcribed to text before it reaches
+        the model, so every entry supports it. The real gate is microphone
+        hardware availability (macOS), enforced in voice.py.
+        """
+        return True
+
+    @property
+    def supports_audio_out(self) -> bool:
+        """True if the model's replies may be spoken (text -> speech).
+
+        Model-agnostic today: replies are synthesized from text after the
+        model produces them, so every entry supports it. The real gate is
+        speaker/TTS hardware availability (macOS), enforced in voice.py.
+        """
+        return True
+
+    @property
+    def capabilities(self) -> frozenset[str]:
+        """The set of capability tags this model declares.
+
+        A convenience rollup of the individual `supports_*` properties for
+        callers that prefer set membership (e.g. `"vision" in choice.capabilities`).
+        Always derived from the properties above so the two views can't drift.
+        """
+        caps = set()
+        if self.supports_vision:
+            caps.add("vision")
+        if self.supports_audio_in:
+            caps.add("audio_in")
+        if self.supports_audio_out:
+            caps.add("audio_out")
+        return frozenset(caps)
 
 
 CHOICES: list[ModelChoice] = [
