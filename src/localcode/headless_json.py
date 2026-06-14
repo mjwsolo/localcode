@@ -95,6 +95,110 @@ def _as_int(value: Any) -> int:
         return 0
 
 
+def run_headless_json(config, args) -> int:
+    """Headless run that emits the agent event stream as JSONL on stdout.
+
+    Same backend as entrypoint._run_headless (LocalCodeApp + `.ask`, full-auto
+    approvals) but with all human/Rich output suppressed: model-resolution
+    chatter goes to a silent Console, the agent's own raw ANSI writes
+    (OutputManager pokes sys.stdout directly) are redirected to /dev/null, and
+    structured events are written as JSON Lines to a private duplicate of the
+    original stdout via the OutputManager event callback.
+
+    Exit codes match _run_headless: 0 ok · 1 error · 124 timeout · 130
+    interrupted. The final line is always a `result` event carrying the
+    status, exit reason, and accumulated token counts.
+    """
+    import os
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    from rich.console import Console as _Console
+
+    out_stream = open_clean_stdout()
+    emitter = JsonlEmitter(out_stream)
+
+    def _emit_result(status: str, code: int, reason: str, text: str = "") -> int:
+        emitter.result(status=status, exit_code=code, reason=reason, final_text=text)
+        return code
+
+    _Console(file=open(os.devnull, "w"), quiet=True)  # silence resolve/start chatter
+
+    from .app import LocalCodeApp
+    from .server_manager import _probe_health
+    from .bootstrap import get_model_path
+    from .models_catalog import CHOICES
+
+    resolved: _Path | None = None
+    for candidate in (args.model, config.runtime.model):
+        name = _Path(candidate).name if candidate else None
+        if name and name.endswith(".gguf"):
+            resolved = get_model_path(name)
+            if resolved:
+                break
+    if resolved is None:
+        downloaded = [c for c in CHOICES if c.local_path.exists()]
+        if downloaded:
+            resolved = min(downloaded, key=lambda c: c.size_gb).local_path
+    if resolved is None:
+        return _emit_result("error", 1, "no model found on disk")
+    config.runtime.model = str(resolved)
+    if args.binary:
+        config.runtime.llama_cpp_binary = args.binary
+
+    app = LocalCodeApp(config, profile_name=args.profile)
+    app.out.set_event_callback(emitter.emit)
+
+    if not any(_probe_health(p, timeout=1.0) for p in range(8081, 8100)):
+        if not app.engine._restart_server():
+            return _emit_result("error", 1, "could not start the model server")
+
+    if args.timeout and args.timeout > 0:
+        import signal
+
+        def _on_timeout(_sig, _frame):
+            raise TimeoutError(f"run exceeded {args.timeout}s")
+
+        signal.signal(signal.SIGALRM, _on_timeout)
+        signal.alarm(args.timeout)
+
+    devnull = open(os.devnull, "w")
+    saved_stdout = _sys.stdout
+    saved_fd = None
+    try:
+        saved_fd = os.dup(1)
+        os.dup2(devnull.fileno(), 1)
+    except Exception:
+        saved_fd = None
+    _sys.stdout = devnull
+
+    try:
+        result_text = app.ask(args.goal, stream=True)
+    except TimeoutError:
+        return _emit_result("timeout", 124, f"run exceeded {args.timeout}s")
+    except KeyboardInterrupt:
+        return _emit_result("interrupted", 130, "keyboard interrupt")
+    except Exception as e:  # noqa: BLE001 — headless: surface any failure as exit 1
+        return _emit_result("error", 1, f"{type(e).__name__}: {e}")
+    finally:
+        if args.timeout and args.timeout > 0:
+            import signal
+            signal.alarm(0)
+        _sys.stdout = saved_stdout
+        if saved_fd is not None:
+            try:
+                os.dup2(saved_fd, 1)
+                os.close(saved_fd)
+            except Exception:
+                pass
+        try:
+            devnull.close()
+        except Exception:
+            pass
+
+    return _emit_result("ok", 0, "completed", result_text or "")
+
+
 def open_clean_stdout() -> TextIO:
     """Return a writable text stream bound to the *original* stdout fd.
 
