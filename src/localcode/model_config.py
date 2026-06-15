@@ -158,6 +158,25 @@ def keep_recent_for_window(context_window: int) -> int:
     return max(KEEP_RECENT_TOKENS_DEFAULT, min(KEEP_RECENT_TOKENS_MAX, scaled))
 
 
+# ── Progress-ledger budget (per-window, i.e. per-Mac-RAM) ───────────────
+# The always-injected "what I've already done" ledger (Codex-style tool-state
+# awareness) must be COMPACT on a 16 GB Mac (64K window — the window is
+# precious, the ledger is the model's primary surviving memory) and can be
+# RICHER on a 128 GB Mac (256K window — plenty of room, it's a safety net).
+# A single ladder keyed on the launched window covers every RAM tier
+# (8/16/24/32/36/48/64/96/128/192 GB → 64K…256K via _ram_ctx_ceiling).
+def progress_ledger_budget_chars(context_window_tokens: int) -> int:
+    """Max chars for the per-round progress ledger, scaled to the window."""
+    w = context_window_tokens or 0
+    if w >= 262144:   # 96 GB+ → 256K
+        return 3500
+    if w >= 131072:   # 64 GB → 128K
+        return 2200
+    if w >= 98304:    # 48 GB → 96K
+        return 1600
+    return 1200       # 16–47 GB → 64K: tight but essential
+
+
 # Compaction thresholds.
 CHARS_PER_TOKEN = 4
 RESERVE_TOKENS_DEFAULT = 4096
