@@ -70,7 +70,7 @@ def test_small_ram_uses_deterministic_no_model_call():
     out = compact(msgs, rt, context_window=65536, ram_gb=16, keep_recent_tokens=_KEEP)
     assert rt.called == 0, "small RAM must NOT spend a model generation on the summary"
     # A summary memo was still inserted.
-    memos = [m for m in out if m.get("role") == "system" and "Prior conversation summary" in (m.get("content") or "")]
+    memos = [m for m in out if m.get("role") == "system" and "compacted to save context" in (m.get("content") or "")]
     assert memos, "deterministic summary memo should be present"
     # The deterministic summary preserves files touched.
     assert "file_" in memos[0]["content"]
@@ -81,7 +81,7 @@ def test_big_ram_spends_llm_generation():
     msgs = _long_history()
     out = compact(msgs, rt, context_window=262144, ram_gb=128, keep_recent_tokens=_KEEP)
     assert rt.called == 1, "capable RAM should call the model once for the summary"
-    memo = next(m for m in out if "Prior conversation summary" in (m.get("content") or ""))
+    memo = next(m for m in out if "compacted to save context" in (m.get("content") or ""))
     assert "rich llm summary" in memo["content"]
 
 
@@ -91,7 +91,7 @@ def test_llm_failure_falls_back_to_deterministic():
     msgs = _long_history()
     out = compact(msgs, rt, context_window=262144, ram_gb=128, keep_recent_tokens=_KEEP)
     assert rt.called == 1
-    memo = next((m for m in out if "Prior conversation summary" in (m.get("content") or "")), None)
+    memo = next((m for m in out if "compacted to save context" in (m.get("content") or "")), None)
     assert memo is not None, "must fall back to deterministic summary, not bail"
     assert "file_" in memo["content"]
 

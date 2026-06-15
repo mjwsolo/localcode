@@ -52,6 +52,7 @@ from .context import (
     _truncate_result,
     _estimate_tokens,
     _compact_messages,
+    build_progress_ledger,
 )
 from .helpers import (
     _execute_tool,
@@ -692,6 +693,28 @@ def run_agent_loop(
                 _prepare_model_messages(messages, ctx_window_chars=_ctx_chars),
                 _hook_state,
             )
+            # Inject a window-scaled progress ledger (Codex-style tool-state
+            # awareness): the model always sees what it has already done, so it
+            # stops re-reading files / restarting from scratch. Built from
+            # DURABLE loop state (not the compacted messages), so it survives
+            # compaction — which is exactly what a small-RAM machine needs.
+            # Appended LAST (after the cached history) to minimize prefix-cache
+            # invalidation; ephemeral (model_messages is a per-round copy).
+            try:
+                from ..model_config import progress_ledger_budget_chars
+                _win_tokens = int((_ctx_chars or 0) / 3.5)
+                _ledger = build_progress_ledger(
+                    changed_files,
+                    bash_history,
+                    list(getattr(_tool_exec_state, "files_read", {}) or {}),
+                    progress_ledger_budget_chars(_win_tokens),
+                )
+                if _ledger:
+                    model_messages = list(model_messages) + [
+                        {"role": "user", "content": _ledger}
+                    ]
+            except Exception:
+                pass
             round_tool_schemas = schemas_for_goal(
                 _goal_state.goal_type,
                 user_text,

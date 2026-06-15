@@ -518,7 +518,16 @@ def _prepare_model_messages(
     before = _msg_bytes(messages)
     after_writes = _redact_old_write_args(messages)
     bytes_writes = before - _msg_bytes(after_writes)
-    after_reads = _redact_duplicate_reads(after_writes)
+    # RAM-tier the duplicate-read stubbing: on a big window (≥128K chars ≈
+    # 36K tokens, i.e. 48 GB+) there's room to KEEP prior reads so the model
+    # retains what it saw (less "re-read because it scrolled away"). Only stub
+    # duplicate reads on smaller windows where the space is actually needed.
+    # The progress ledger covers the small-window case where reads must be
+    # dropped. Codex similarly re-hydrates rather than aggressively stubbing.
+    if ctx_window_chars and ctx_window_chars >= 128_000:
+        after_reads = after_writes
+    else:
+        after_reads = _redact_duplicate_reads(after_writes)
     bytes_reads = _msg_bytes(after_writes) - _msg_bytes(after_reads)
     after_tools = _compact_old_tool_results(after_reads, keep_recent=keep_recent)
     after_budget = _microcompact_for_prompt_budget(after_tools, target_bytes=budget_bytes)
@@ -646,6 +655,61 @@ def _compact_history_summary(messages: list[dict]) -> str:
         lines.append("Recent prior tool actions: " + "; ".join(actions[-8:]))
     lines.append("If exact file content is needed, call read_file on the relevant path.")
     return "\n".join(lines)
+
+def build_progress_ledger(
+    changed_files: list[str],
+    bash_history: list[tuple[str, str]],
+    files_read: list[str],
+    budget_chars: int,
+) -> str:
+    """A compact, always-current 'what I've already done this task' ledger.
+
+    Ported from Codex's design (handoff summary + tool-state awareness + an
+    explicit 'build on this, don't duplicate work' instruction). Built from the
+    loop's DURABLE state (changed_files / bash_history / files_read) — NOT the
+    message history — so it survives compaction: on a small-RAM machine the raw
+    tool results get compacted to placeholders, but this ledger persists, which
+    is exactly what stops the model re-reading files and "starting from scratch."
+
+    `budget_chars` is window-scaled (see model_config.progress_ledger_budget_chars):
+    compact on a 16 GB Mac, richer on a 128 GB Mac. Returns "" when nothing has
+    happened yet (keeps the prompt prefix stable on the first round).
+    """
+    if not (changed_files or bash_history or files_read):
+        return ""
+
+    def _uniq(seq: list[str]) -> list[str]:
+        return list(dict.fromkeys(s for s in seq if s))
+
+    lines = [
+        "## Work already done this task — build on it. Do NOT re-read a file or "
+        "re-run a command listed below unless you have CHANGED it since; you "
+        "already have the result.",
+    ]
+    rd = _uniq(files_read)
+    if rd:
+        lines.append("Files read: " + ", ".join(rd[-12:]))
+    cf = _uniq(changed_files)
+    if cf:
+        lines.append("Files created/edited: " + ", ".join(cf[-12:]))
+    if bash_history:
+        cmds: list[str] = []
+        for cmd, res in bash_history[-8:]:
+            r = str(res)
+            bad = (
+                r.startswith("[exit code ") or r.startswith("Error:")
+                or r.startswith("REJECTED:") or "Traceback " in r
+            )
+            cmds.append(f"{'x' if bad else 'ok'} {str(cmd).strip().splitlines()[0][:70]}"
+                        if str(cmd).strip() else "")
+        cmds = [c for c in cmds if c]
+        if cmds:
+            lines.append("Commands run: " + " | ".join(cmds))
+    text = "\n".join(lines)
+    if budget_chars and len(text) > budget_chars:
+        text = text[: max(0, budget_chars - 2)].rstrip() + " …"
+    return text
+
 
 def _estimate_tokens(messages: list[dict]) -> int:
     """Rough token estimate: chars / 4."""

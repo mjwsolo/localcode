@@ -252,9 +252,13 @@ def compact(
 
     # Prepend a clear header so the downstream model knows this is a
     # compressed earlier-session note, not a direct instruction.
+    # Codex-style resume framing: tell the model it has prior work + tool state
+    # and must BUILD ON it, not redo it (the anti-duplication prefix that stops
+    # "start from scratch" after a compaction).
     memo = (
-        "Prior conversation summary (older turns were compacted to save "
-        "context; the original messages are no longer in this prompt):\n\n"
+        "Earlier turns of THIS task were compacted to save context. The summary "
+        "below is the work already done — build on it and do NOT re-read files or "
+        "redo steps it already covers:\n\n"
         f"{summary_text}"
     )
     compacted: list[dict[str, Any]] = list(sys_msgs)
