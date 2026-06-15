@@ -159,9 +159,11 @@ def model_identity_line(model: str) -> str:
     # priors (e.g. "I'm Gemma by Google") and ignores a passive line. Telling
     # it exactly what to say when asked makes it actually report its identity.
     return (
-        f"You are {friendly}, running locally via LocalCode. If the user asks "
-        f"which model, version, or quant you are, answer exactly \"{friendly}\" "
-        f"— never say you are unsure or name a different model/provider.\n"
+        f"YOUR MODEL NAME IS \"{friendly}\" — you are {friendly}, running locally "
+        f"via LocalCode. Whenever you refer to yourself, your model/version/quant, "
+        f"are asked which model you are, OR are asked to name something (a file, "
+        f"folder, project) after your model — use EXACTLY \"{friendly}\". Never say "
+        f"you are unsure and never use a different name or provider.\n"
     )
 
 

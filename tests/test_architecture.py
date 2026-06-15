@@ -621,7 +621,7 @@ def test_model_identity_line_friendly_name_and_quant():
         # An explicit directive (not a passive statement) so a small model
         # actually reports its identity when asked.
         assert friendly in line
-        assert "answer exactly" in line and "LocalCode" in line
+        assert "exactly" in line.lower() and "LocalCode" in line
         assert line.endswith("\n")
 
     # Full paths resolve to the same friendly name as the bare filename.
@@ -663,7 +663,7 @@ def test_assembled_system_prompt_contains_model_identity():
     )
     assert "Gemma 4 12B (Q4)" in result.system_prompt
     assert "Gemma 4 12B (Q4)" in result.system_prompt
-    assert "answer exactly" in result.system_prompt
+    assert "exactly" in result.system_prompt.lower()
 
 
 def test_recovery_callable():
