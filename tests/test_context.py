@@ -159,3 +159,31 @@ def test_window_aware_compaction_scales_with_ram():
     assert small_b == 36_000 and small_k == 4   # small stays aggressive
     assert big_b > 200_000 and big_k >= 16      # big keeps much more
     assert big_b > small_b and big_k > small_k  # strictly scales up
+
+
+def test_progress_ledger_dedups_and_shows_outcomes():
+    from localcode.agent.context import build_progress_ledger
+    led = build_progress_ledger(
+        changed_files=["src/types.ts"],
+        bash_history=[("npm i", "added 5 pkgs"), ("npm run build", "[exit code 1] TS2304")],
+        files_read=["a.ts", "b.ts", "a.ts", "a.ts"],  # a.ts re-read
+        budget_chars=3500,
+    )
+    assert "build on it" in led.lower() and "do not re-read" in led.lower()
+    assert led.count("a.ts") == 1  # deduped
+    assert "src/types.ts" in led
+    assert "ok npm i" in led and "x npm run build" in led  # outcomes flagged
+    # Empty state -> empty ledger (stable first-round prefix).
+    assert build_progress_ledger([], [], [], 3500) == ""
+
+
+def test_progress_ledger_budget_is_ram_tiered():
+    from localcode.model_config import progress_ledger_budget_chars
+    assert progress_ledger_budget_chars(65536) == 1200    # 16 GB / 64K: tight
+    assert progress_ledger_budget_chars(98304) == 1600    # 48 GB / 96K
+    assert progress_ledger_budget_chars(131072) == 2200   # 64 GB / 128K
+    assert progress_ledger_budget_chars(262144) == 3500   # 128 GB / 256K: rich
+    # Budget actually trims.
+    from localcode.agent.context import build_progress_ledger
+    big = build_progress_ledger(["f"], [("c" * 300, "ok")], ["p" * 300], 100)
+    assert len(big) <= 102
