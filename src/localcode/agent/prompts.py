@@ -154,16 +154,21 @@ def model_identity_line(model: str) -> str:
         # ".gguf" but otherwise pass it through unchanged — better to
         # echo the real configured identifier than invent a name.
         friendly = filename[:-5] if filename.lower().endswith(".gguf") else filename
-    # Phrase as an explicit DIRECTIVE, not a passive statement. A small local
-    # model asked "which model are you?" otherwise answers from its training
-    # priors (e.g. "I'm Gemma by Google") and ignores a passive line. Telling
-    # it exactly what to say when asked makes it actually report its identity.
+    # Two-part directive. Default identity is LocalCode — the model must refer
+    # to itself as "LocalCode" in greetings and ordinary replies, NOT announce
+    # the raw model name (which changes per backend). But it must still know and
+    # report the underlying model EXACTLY when asked — a small local model left
+    # to its training priors otherwise answers "I'm Gemma by Google". So: lead
+    # with LocalCode, disclose the model only on request.
     return (
-        f"YOUR MODEL NAME IS \"{friendly}\" — you are {friendly}, running locally "
-        f"via LocalCode. Whenever you refer to yourself, your model/version/quant, "
-        f"are asked which model you are, OR are asked to name something (a file, "
-        f"folder, project) after your model — use EXACTLY \"{friendly}\". Never say "
-        f"you are unsure and never use a different name or provider.\n"
+        f"You are LocalCode — that is your name and how you refer to yourself in "
+        f"conversation (say \"I'm LocalCode\", never lead with the model name). "
+        f"Do NOT volunteer the underlying model in greetings or ordinary replies. "
+        f"The model currently powering you is \"{friendly}\"; report it as EXACTLY "
+        f"\"{friendly}\" — and only — when the user specifically asks which "
+        f"model / version / quant you are, or asks to name something (a file, "
+        f"folder, project) after your model. When asked, never say you are unsure "
+        f"and never name a different model or provider.\n"
     )
 
 
