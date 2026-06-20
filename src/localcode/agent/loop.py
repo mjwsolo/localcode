@@ -1487,7 +1487,12 @@ def run_agent_loop(
                 _tool_result_obj = _ToolResult(text=_oversize_stub, ok=False, facts={"tool": tool_name, "ok": False, "oversize": True})
             elif _dedup_stub is not None:
                 from ..tools import ToolResult as _ToolResult
-                _dedup_is_error = str(_dedup_stub).startswith("REJECTED:")
+                # Match BOTH the soft "REJECTED:" and the hard
+                # "REJECTED — HARD STOP:" stubs (same as tool_result_is_error).
+                # The old colon-only check mislabeled hard-stop rejections as
+                # ok=True / repeated_failed_call=False, corrupting the regression
+                # telemetry used to tune these thresholds.
+                _dedup_is_error = str(_dedup_stub).startswith("REJECTED")
                 _tool_result_obj = _ToolResult(
                     text=_dedup_stub,
                     ok=not _dedup_is_error,
