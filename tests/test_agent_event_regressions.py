@@ -44,6 +44,8 @@ from localcode.agent.context import _prepare_model_messages, _semantic_tool_summ
 from localcode.agent.tool_execution import (
     _HARD_STOP_THRESHOLD,
     ToolExecutionState,
+    bash_cmd_key,
+    canonical_args,
     dedup_stub_for_tool,
     track_tool_result,
     tool_result_is_error,
@@ -412,6 +414,52 @@ def test_repeated_failed_bash_cd_steers_with_concrete_cause() -> None:
     # The underlying cause survives even though later results were REJECTED
     # stubs (which must not overwrite the real diagnosis).
     assert "does NOT exist" in stub
+
+
+def test_whitespace_varying_bash_reemission_keeps_breaker_and_nudge_aligned() -> None:
+    """Regression for F2: the bash breaker keys on the whitespace-normalized
+    `bash_failures`, but the loop's steering nudge used to key on the raw
+    `failed_calls` (tool, canonical_args). When the model re-emitted the same
+    command with cosmetic whitespace differences each variant became a
+    distinct `failed_calls` key, so the nudge undercounted and never fired
+    while the breaker still hard-stopped — a block with no steering.
+
+    The fix routes the nudge through `bash_cmd_key` too. This test pins the
+    invariant: whitespace variants collapse to ONE bash_failures key (the
+    nudge's source of truth) while splitting failed_calls.
+    """
+    state = ToolExecutionState()
+    # Same logical command, re-emitted with cosmetic whitespace drift.
+    variants = [
+        "cd /tmp/nope && ls",
+        "cd  /tmp/nope  &&  ls",
+        "cd /tmp/nope &&  ls",
+        "cd /tmp/nope\t&& ls",
+    ]
+    err = "[exit code 1] cd: /tmp/nope: No such file or directory"
+    for round_num, cmd in enumerate(variants, start=1):
+        track_tool_result(
+            tool_name="bash",
+            args={"command": cmd},
+            tool_result=err,
+            round_num=round_num,
+            state=state,
+            dedup_stub=None,
+        )
+
+    # All variants share one normalized key — the count the nudge reads.
+    assert len(state.bash_failures) == 1
+    norm_key = bash_cmd_key({"command": variants[0]})
+    assert state.bash_failures[norm_key] == len(variants)
+    # The nudge now reads this >= _HARD_STOP_THRESHOLD count, matching the
+    # breaker — even though raw failed_calls splintered into separate keys.
+    assert state.bash_failures[norm_key] >= _HARD_STOP_THRESHOLD
+    assert len({canonical_args({"command": c}) for c in variants}) == len(variants)
+    assert all(v == 1 for v in state.failed_calls.values())
+
+    # The breaker hard-stops on the normalized count for any variant.
+    stub = dedup_stub_for_tool("bash", {"command": variants[-1]}, state)
+    assert stub is not None and "HARD STOP" in stub
 
 
 def test_repeated_failed_bash_syntax_error_steers_on_quoting() -> None:

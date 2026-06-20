@@ -83,6 +83,7 @@ from .streaming import finish_thinking_display, stream_model_round
 from .tool_execution import (
     _HARD_STOP_THRESHOLD,
     ToolExecutionState,
+    bash_cmd_key,
     canonical_args,
     dedup_stub_for_tool,
     oversize_stub_for_tool,
@@ -1646,10 +1647,21 @@ def run_agent_loop(
                 _turn_call_sigs[_sig] = _turn_call_sigs.get(_sig, 0) + 1
             _failure_count = 0
             if tool_result_is_error(str(tool_result)):
-                _failure_count = _tool_exec_state.failed_calls.get(
-                    (tool_name, canonical_args(args)),
-                    0,
-                )
+                # For bash use the whitespace-normalized cmd_key so this
+                # count agrees with the breaker (`dedup_stub_for_tool` keys
+                # on `bash_failures`). Keying on raw `failed_calls` here let
+                # whitespace-varying re-emissions slip the steering nudge
+                # while the breaker still hard-stopped — F2.
+                if tool_name == "bash":
+                    _failure_count = _tool_exec_state.bash_failures.get(
+                        bash_cmd_key(args),
+                        0,
+                    )
+                else:
+                    _failure_count = _tool_exec_state.failed_calls.get(
+                        (tool_name, canonical_args(args)),
+                        0,
+                    )
                 # Hard-stop nudge: once an identical failing call crosses the
                 # backstop threshold, inject ONE strong corrective that bypasses
                 # the soft nudge cap. Without this, the cap (2) is exhausted and
