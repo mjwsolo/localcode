@@ -7,6 +7,7 @@ import re
 from typing import Any
 __all__ = [
     "ToolExecutionState",
+    "bash_cmd_key",
     "canonical_args",
     "dedup_stub_for_tool",
     "repeat_stub_for_tool",
@@ -32,12 +33,12 @@ class ToolExecutionState:
     # times in a row and nothing stopped it. Telemetry behind the
     # removal didn't include info-fetch loops.
     success_counts: dict[tuple[str, str], int] = field(default_factory=dict)
-    # Last error text seen for a failed (bash cmd_key) / (tool,args) call.
-    # Lets the rejection stub name the ACTUAL cause ("No such file or
-    # directory", syntax error, …) instead of a generic "read the error"
-    # the model has already ignored N times.
+    # Last error text seen for a failed bash command, keyed by the same
+    # whitespace-normalized cmd_key as `bash_failures`. Lets the rejection
+    # stub name the ACTUAL cause ("No such file or directory", syntax error,
+    # …) instead of a generic "read the error" the model has already ignored
+    # N times.
     last_bash_error: dict[str, str] = field(default_factory=dict)
-    last_call_error: dict[tuple[str, str], str] = field(default_factory=dict)
 
 
 # After this many identical failed attempts the breaker stops emitting a
@@ -84,6 +85,20 @@ def _diagnose_bash_error(err: str) -> str | None:
     return None
 
 
+def bash_cmd_key(args: dict[str, Any]) -> str:
+    """Whitespace-normalized key for a bash command.
+
+    `bash_failures` / `last_bash_error` are keyed this way so that
+    re-emissions differing only in whitespace collapse to the same key.
+    Callers that want their failure count to agree with the bash breaker
+    (e.g. the steering nudge in loop.py) must use THIS key, not the raw
+    ``canonical_args`` of the call — otherwise each whitespace variant is a
+    distinct ``failed_calls`` key and the nudge undercounts while the
+    breaker still fires.
+    """
+    return re.sub(r"\s+", " ", str(args.get("command", "") or "").strip())
+
+
 def canonical_args(args: dict[str, Any]) -> str:
     try:
         return json.dumps(args, sort_keys=True, default=str)
@@ -97,7 +112,7 @@ def dedup_stub_for_tool(
     state: ToolExecutionState,
 ) -> str | None:
     if tool_name == "bash":
-        cmd_key = re.sub(r"\s+", " ", str(args.get("command", "") or "").strip())
+        cmd_key = bash_cmd_key(args)
         failures = state.bash_failures.get(cmd_key, 0)
         if cmd_key and failures >= 2:
             diagnosis = _diagnose_bash_error(state.last_bash_error.get(cmd_key, ""))
@@ -256,16 +271,10 @@ def track_tool_result(
     if failed:
         key = (tool_name, canonical_args(args))
         state.failed_calls[key] = state.failed_calls.get(key, 0) + 1
-        # Record the latest error text so the rejection stub can name the
-        # real cause. A previously-rejected stub is NOT a fresh diagnosis,
-        # so don't let it overwrite the underlying shell error.
-        if not tool_result.startswith("REJECTED"):
-            state.last_call_error[key] = tool_result
 
     if tool_name == "bash":
-        cmd = str(args.get("command", ""))
         if failed:
-            cmd_key = re.sub(r"\s+", " ", cmd.strip())
+            cmd_key = bash_cmd_key(args)
             if cmd_key:
                 state.bash_failures[cmd_key] = state.bash_failures.get(cmd_key, 0) + 1
                 if not tool_result.startswith("REJECTED"):
