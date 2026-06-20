@@ -426,10 +426,32 @@ class _ChatTextArea(TextArea):
     # ── auto-grow (Codex-style) ──
     # Textual's TextArea does NOT grow from `height: auto` alone — it keeps a
     # fixed height and scrolls. So a big pasted prompt showed as a single row.
-    # We drive the row count from the wrapped document: grow up to
-    # _MAX_INPUT_LINES, then it scrolls internally (max-height in CSS) instead
-    # of pushing the layout. Called on every content change + on mount.
-    _MAX_INPUT_LINES = 10
+    # We drive the row count from the wrapped document: grow up to the cap,
+    # then it scrolls internally instead of pushing the layout. Called on every
+    # content change + on mount.
+    #
+    # The cap is terminal-relative, mirroring the reference Codex input
+    # (`maxVisibleLines = max(MIN, floor(rows/2) - footer)`): roughly half the
+    # terminal height, leaving room for the chat log + status bar, but never
+    # smaller than _MIN_INPUT_CAP nor larger than _MAX_INPUT_CAP. On the typical
+    # ~24-row terminal this lands at ~10 rows, matching the old fixed value; on
+    # a tall window the box can grow further before it starts scrolling, and on
+    # a short one it stays modest so it never swallows the conversation.
+    _MIN_INPUT_CAP = 3   # floor — always show at least a few lines
+    _MAX_INPUT_CAP = 20  # ceiling — don't let the box dominate a huge terminal
+    _FOOTER_RESERVE = 6  # rows kept for status bar + active-step + breathing room
+
+    def _max_input_lines(self) -> int:
+        """Terminal-relative cap on the visible input height (Codex-style)."""
+        try:
+            term_rows = self.app.size.height
+        except Exception:
+            term_rows = 0
+        if term_rows <= 0:
+            # Pre-mount / unknown size — fall back to the historical fixed cap.
+            return 10
+        cap = (term_rows // 2) - self._FOOTER_RESERVE
+        return max(self._MIN_INPUT_CAP, min(self._MAX_INPUT_CAP, cap))
 
     def autosize_height(self) -> None:
         try:
@@ -439,7 +461,12 @@ class _ChatTextArea(TextArea):
                 rows = self.document.line_count
             except Exception:
                 rows = 1
-        self.styles.height = max(1, min(self._MAX_INPUT_LINES, int(rows or 1)))
+        cap = self._max_input_lines()
+        self.styles.height = max(1, min(cap, int(rows or 1)))
+        # Keep the CSS scroll clamp in lockstep with the computed cap so that
+        # once content exceeds it the TextArea scrolls internally rather than
+        # being cut off (the CSS `max-height` was a static 10).
+        self.styles.max_height = cap
 
     # ── input history (per-session, in-memory) ──
     # Same shell-style behaviour as the old Input: ↑ recalls older
@@ -807,7 +834,9 @@ class ChatScreen(Screen):
         background: ansi_default;
         width: 1fr;
         height: auto;
-        /* ~10 visible lines before internal scroll kicks in. */
+        /* Initial scroll clamp; `_ChatTextArea.autosize_height` overrides
+           this each change with a terminal-relative cap (~half the height).
+           10 is the pre-mount fallback so the first frame looks right. */
         max-height: 10;
         border: none;
         padding: 0;

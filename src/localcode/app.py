@@ -1608,17 +1608,86 @@ class LocalCodeApp:
     def _retrieval_context(self, query: str) -> str:
         if not query.strip():
             return ""
+        budget = self.profile.retrieval_budget
+
+        # Leg 1 — lexical chunk index (keyword match, exact identifiers).
+        # Lazily built; always available. Failures degrade to empty, not fatal.
         if load_index(self.repo_root) is None:
             try:
                 count, _ = build_index(self.repo_root)
                 self.store.append_event(self.session, "index_build", f"{count} files")
             except Exception:
-                return ""
-        results = search_index(self.repo_root, query, limit=self.profile.retrieval_budget)
-        if not results:
+                pass
+        try:
+            lexical = search_index(self.repo_root, query, limit=budget) or []
+        except Exception:
+            lexical = []
+
+        # Leg 2 — semantic index (embeddings: intent match, not just keywords).
+        # The embedding index used to be dead weight: built nowhere, queried
+        # nowhere. We now query it when it exists and trigger a one-time
+        # BACKGROUND build when it doesn't (build can take 10-30s / pull a
+        # model, so never on the chat hot path). First turn is lexical-only;
+        # later turns pick up the semantic leg once the index lands on disk.
+        semantic: list[dict] = []
+        try:
+            if self.embedding_search.is_indexed():
+                for r in self.embedding_search.search(query, top_k=budget):
+                    semantic.append({
+                        "path": r.file,
+                        "chunk_id": r.start_line,
+                        "preview": r.preview,
+                    })
+            else:
+                self._ensure_embedding_index()
+        except Exception:
+            semantic = []
+
+        # Merge: interleave semantic + lexical, dedup by file path (keeps
+        # coverage diverse within a small budget), cap at the budget. Falls
+        # back to pure lexical when the semantic leg is empty — byte-identical
+        # to the old behaviour in the no-index / deps-missing case.
+        from itertools import zip_longest
+        merged: list[dict] = []
+        seen: set[str] = set()
+        for s, l in zip_longest(semantic, lexical):
+            for item in (s, l):
+                if item is None:
+                    continue
+                path = item.get("path")
+                if path in seen:
+                    continue
+                seen.add(path)
+                merged.append(item)
+                if len(merged) >= budget:
+                    break
+            if len(merged) >= budget:
+                break
+        if not merged:
             return ""
-        lines = [f"{item['path']}#chunk{item['chunk_id']}: {item['preview']}" for item in results]
+        lines = [f"{item['path']}#chunk{item['chunk_id']}: {item['preview']}" for item in merged]
         return "\n\n".join(lines)
+
+    def _ensure_embedding_index(self) -> None:
+        """Kick off a one-time, non-blocking background build of the semantic
+        embedding index. Embedding builds can take 10-30s and may download a
+        model on first run, so we never do this on the chat hot path. Guarded
+        by a once-flag; failures (missing deps, etc.) are swallowed so the
+        agent silently stays on the lexical leg. With `sentence-transformers`
+        installed this is true neural retrieval; otherwise it falls back to a
+        sklearn TF-IDF index (still better ranking than raw keyword match)."""
+        if getattr(self, "_embed_build_started", False):
+            return
+        self._embed_build_started = True
+        import threading
+
+        def _build() -> None:
+            try:
+                self.embedding_search.build_index()
+            except Exception:
+                pass
+
+        threading.Thread(target=_build, name="lc-embed-index", daemon=True).start()
 
     def plan_for_task(self, task: str):
         """Simplified plan — planner module removed."""

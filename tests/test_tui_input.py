@@ -392,14 +392,49 @@ def test_bang_bash_empty_shows_hint_runs_nothing(monkeypatch):
 
 
 def test_chat_textarea_autosize_grows_and_clamps():
-    # The input must grow with content (Codex-style) up to _MAX_INPUT_LINES,
-    # then stop (scrolls internally). TextArea doesn't auto-grow from CSS, so
-    # autosize_height() drives the row count.
+    # The input must grow with content (Codex-style) up to the terminal-relative
+    # cap, then stop (scrolls internally). TextArea doesn't auto-grow from CSS,
+    # so autosize_height() drives the row count. Unmounted (no app) the cap
+    # falls back to the historical fixed value of 10.
     ta = ChatScreen  # ensure import
     from localcode.tui.screens.chat import _ChatTextArea
+    cap = 10  # _max_input_lines() fallback when there's no mounted app
     small = _ChatTextArea(text="one\ntwo\nthree")
     small.autosize_height()
-    assert 1 <= small.styles.height.value <= _ChatTextArea._MAX_INPUT_LINES
+    assert small._max_input_lines() == cap
+    assert 1 <= small.styles.height.value <= cap
     big = _ChatTextArea(text="\n".join(f"line {i}" for i in range(40)))
     big.autosize_height()
-    assert big.styles.height.value == _ChatTextArea._MAX_INPUT_LINES  # clamped
+    assert big.styles.height.value == cap  # clamped
+
+
+def test_chat_textarea_max_lines_is_terminal_relative(monkeypatch):
+    # The cap mirrors the reference Codex input: ~half the terminal height,
+    # floored at _MIN_INPUT_CAP and ceilinged at _MAX_INPUT_CAP. `app` is a
+    # Textual property, so patch it at the class level to feed a fake size.
+    from localcode.tui.screens.chat import _ChatTextArea
+
+    class _FakeSize:
+        def __init__(self, h):
+            self.height = h
+
+    class _FakeApp:
+        def __init__(self, h):
+            self.size = _FakeSize(h)
+
+    ta = _ChatTextArea(text="x")
+    holder = {"h": 24}
+    monkeypatch.setattr(
+        type(ta), "app",
+        property(lambda self: _FakeApp(holder["h"])),
+        raising=False,
+    )
+    # Short terminal → floored at the minimum (8//2 - 6 = -2 → MIN).
+    holder["h"] = 8
+    assert ta._max_input_lines() == _ChatTextArea._MIN_INPUT_CAP
+    # Mid terminal (~24 rows) → ~half minus footer ≈ 6 (24//2 - 6 = 6).
+    holder["h"] = 24
+    assert ta._max_input_lines() == 6
+    # Tall terminal → ceilinged at the maximum (80//2 - 6 = 34 → MAX).
+    holder["h"] = 80
+    assert ta._max_input_lines() == _ChatTextArea._MAX_INPUT_CAP
