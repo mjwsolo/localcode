@@ -410,6 +410,16 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
             cmd.extend(["--cache-type-k", ctk])
         if ctv and ctv != "f16":
             cmd.extend(["--cache-type-v", ctv])
+        # Prefix-cache reuse: llama-server already reuses the longest common
+        # prefix of the KV cache per slot, so an unchanged system-prompt prefix
+        # is free across turns. But this agent mutates mid-context (compaction,
+        # read/write redaction in agent/context.py) which shifts every token
+        # after the edit point and defeats naive prefix matching. --cache-reuse
+        # lets llama-server salvage KV chunks AFTER such a gap instead of
+        # re-prefilling the whole tail — directly cuts time-to-first-token on
+        # turns that follow a compaction. 0 disables.
+        if self.config.llama_cpp_cache_reuse and self.config.llama_cpp_cache_reuse > 0:
+            cmd.extend(["--cache-reuse", str(self.config.llama_cpp_cache_reuse)])
         # Speculative decoding (mutual exclusion: draft model > lookup > ngram).
         # Speculative decoding is LOSSLESS — every drafted token is verified
         # against the real model, so output is identical, just faster.
