@@ -81,6 +81,7 @@ from .recovery import (
 from .tool_orchestration import prefetch_parallel_tool_calls
 from .streaming import finish_thinking_display, stream_model_round
 from .tool_execution import (
+    _HARD_STOP_THRESHOLD,
     ToolExecutionState,
     canonical_args,
     dedup_stub_for_tool,
@@ -375,6 +376,9 @@ def run_agent_loop(
     _edit_recovery_nudges = 0
     _MAX_CONSECUTIVE_CORRECTIONS = 2
     _generic_correction_nudges = 0
+    # Fires at most once per turn when an identical failing call crosses the
+    # hard-stop threshold — bypasses the soft correction cap above.
+    _hard_stop_nudge_fired = False
     # Per-tool caps removed 2026-04-26 (commits ce8a714 → this one).
     # Telemetry showed `3-in-a-row` exact-repeat guard fired 0 times
     # ever in observed sessions; `same-tool > 10` fired once and it
@@ -1641,6 +1645,31 @@ def run_agent_loop(
                     (tool_name, canonical_args(args)),
                     0,
                 )
+                # Hard-stop nudge: once an identical failing call crosses the
+                # backstop threshold, inject ONE strong corrective that bypasses
+                # the soft nudge cap. Without this, the cap (2) is exhausted and
+                # the loop emits the same REJECTED stub with no steering — the
+                # exact 6→11× spin observed 2026-06-19.
+                if (
+                    _failure_count >= _HARD_STOP_THRESHOLD
+                    and tool_name in {"bash", "write_file", "append_file", "edit_file", "multi_edit", "edit_diff"}
+                    and not _hard_stop_nudge_fired
+                ):
+                    _hard_stop_nudge_fired = True
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            f"SYSTEM — HARD STOP: you have sent the identical {tool_name} "
+                            f"call {_failure_count} times this turn and it is now permanently "
+                            "blocked. It will NOT run again. STOP narrating that you will retry. "
+                            "Pick a concrete DIFFERENT action right now: fix the actual cause "
+                            "named in the rejection (e.g. create the missing directory, fix "
+                            "quoting), or use a different tool. If a project directory does not "
+                            "exist, create files with write_file (it makes parent directories) "
+                            "instead of cd-ing into a path that isn't there."
+                        ),
+                    })
+                    _ephemeral_nudge_indices.append(len(messages) - 1)
                 if _failure_count >= 2 and tool_name in {
                     "write_file",
                     "append_file",

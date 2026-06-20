@@ -32,6 +32,56 @@ class ToolExecutionState:
     # times in a row and nothing stopped it. Telemetry behind the
     # removal didn't include info-fetch loops.
     success_counts: dict[tuple[str, str], int] = field(default_factory=dict)
+    # Last error text seen for a failed (bash cmd_key) / (tool,args) call.
+    # Lets the rejection stub name the ACTUAL cause ("No such file or
+    # directory", syntax error, …) instead of a generic "read the error"
+    # the model has already ignored N times.
+    last_bash_error: dict[str, str] = field(default_factory=dict)
+    last_call_error: dict[tuple[str, str], str] = field(default_factory=dict)
+
+
+# After this many identical failed attempts the breaker stops emitting a
+# soft "do not retry" and switches to a HARD stop: the call is treated as
+# permanently dead for the turn and the stub orders a concrete different
+# action. Real loop observed 2026-06-19: a `cd` into a not-yet-created
+# directory failed and the model re-emitted it 11× because the rejection
+# blocked but never steered.
+_HARD_STOP_THRESHOLD = 4
+
+
+def _diagnose_bash_error(err: str) -> str | None:
+    """Translate a raw shell error into a concrete corrective action.
+
+    Returns a one-line instruction tailored to the failure, or None when
+    the error isn't one of the known dead-end classes.
+    """
+    low = err.lower()
+    if "no such file or directory" in low:
+        return (
+            "The target path does NOT exist yet. Do NOT cd into it again. "
+            "Create the directory first (mkdir -p \"<path>\"), or run the "
+            "command from a path that exists, or use the structured file "
+            "tools (write_file) which create parent directories for you."
+        )
+    if "syntax error" in low and ("unexpected token" in low or "near" in low):
+        return (
+            "The command has a SHELL SYNTAX error — most likely an unquoted "
+            "path containing spaces or parentheses like (Q8). Wrap the whole "
+            "path in double quotes, e.g. cd \"/path/with (parens)/sub dir\". "
+            "Prefer the structured file tools (write_file/read_file) which "
+            "take a plain path and need no shell quoting."
+        )
+    if "permission denied" in low:
+        return (
+            "Permission denied — retrying the identical command will not help. "
+            "Choose a writable location or a different command."
+        )
+    if "command not found" in low:
+        return (
+            "The program is not installed / not on PATH — retrying is futile. "
+            "Use a different tool or install path."
+        )
+    return None
 
 
 def canonical_args(args: dict[str, Any]) -> str:
@@ -50,11 +100,34 @@ def dedup_stub_for_tool(
         cmd_key = re.sub(r"\s+", " ", str(args.get("command", "") or "").strip())
         failures = state.bash_failures.get(cmd_key, 0)
         if cmd_key and failures >= 2:
-            return (
+            diagnosis = _diagnose_bash_error(state.last_bash_error.get(cmd_key, ""))
+            if failures >= _HARD_STOP_THRESHOLD:
+                # HARD STOP: stop pretending a retry might work. The model
+                # ignored the soft rejection N times; escalate to a terminal,
+                # directive message that names the cause and forbids the call.
+                head = (
+                    f"REJECTED — HARD STOP: this exact bash command has failed "
+                    f"{failures} times this turn and is now permanently blocked "
+                    "for the rest of this turn. It WILL NOT be run again no "
+                    "matter how many times you send it; re-sending it only "
+                    "wastes the turn."
+                )
+                action = diagnosis or (
+                    "Take a DIFFERENT action: read the error above, then either "
+                    "run a materially different command or use a different tool. "
+                    "Do not narrate that you will retry — actually change course."
+                )
+                return f"{head}\nREQUIRED NEXT ACTION: {action}"
+            head = (
                 f"REJECTED: this exact bash command already failed {failures} "
-                "times this turn. Do not retry it unchanged. Read the error, "
-                "inspect the relevant config/file, or choose a different command."
+                "times this turn and will NOT succeed if retried unchanged. "
+                "Do not run it again."
             )
+            action = diagnosis or (
+                "Read the error, inspect the relevant config/file, or choose a "
+                "different command."
+            )
+            return f"{head}\nWHAT TO DO INSTEAD: {action}"
     elif tool_name == "read_file":
         # No DEDUP for read_file. Earlier we returned a "[DEDUP …]" stub
         # whenever the model re-read a path it had already read in this
@@ -83,13 +156,24 @@ def dedup_stub_for_tool(
         key = (tool_name, canonical_args(args))
         failures = state.failed_calls.get(key, 0)
         if failures >= 2:
+            if failures >= _HARD_STOP_THRESHOLD:
+                return (
+                    f"REJECTED — HARD STOP: this exact {tool_name} call has "
+                    f"failed {failures} times this turn and is permanently "
+                    "blocked for the rest of this turn. It WILL NOT be applied "
+                    "again; re-sending it wastes the turn.\n"
+                    "REQUIRED NEXT ACTION: read the current file state with "
+                    "read_file, copy a smaller EXACT old_string from that "
+                    "output, and apply a minimal targeted edit — or move on if "
+                    "the file is already correct."
+                )
             return (
                 f"REJECTED: this exact {tool_name} call already failed "
-                f"{failures} times this turn. Do not retry it unchanged. "
-                "Use a different tool or a materially different edit: read "
-                "the current file state, choose a smaller exact anchor, use "
-                "multi_edit/edit_diff where appropriate, or move on if the "
-                "file is already correct."
+                f"{failures} times this turn and will NOT succeed unchanged. "
+                "Do not retry it. Use a different tool or a materially "
+                "different edit: read the current file state, choose a smaller "
+                "exact anchor, use multi_edit/edit_diff where appropriate, or "
+                "move on if the file is already correct."
             )
     return None
 
@@ -172,6 +256,11 @@ def track_tool_result(
     if failed:
         key = (tool_name, canonical_args(args))
         state.failed_calls[key] = state.failed_calls.get(key, 0) + 1
+        # Record the latest error text so the rejection stub can name the
+        # real cause. A previously-rejected stub is NOT a fresh diagnosis,
+        # so don't let it overwrite the underlying shell error.
+        if not tool_result.startswith("REJECTED"):
+            state.last_call_error[key] = tool_result
 
     if tool_name == "bash":
         cmd = str(args.get("command", ""))
@@ -179,6 +268,8 @@ def track_tool_result(
             cmd_key = re.sub(r"\s+", " ", cmd.strip())
             if cmd_key:
                 state.bash_failures[cmd_key] = state.bash_failures.get(cmd_key, 0) + 1
+                if not tool_result.startswith("REJECTED"):
+                    state.last_bash_error[cmd_key] = tool_result
     elif tool_name == "read_file":
         read_path = args.get("path") or args.get("file_path") or ""
         if isinstance(read_path, str) and read_path:

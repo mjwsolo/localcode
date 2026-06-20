@@ -42,6 +42,7 @@ from localcode.tools import (
 )
 from localcode.agent.context import _prepare_model_messages, _semantic_tool_summary
 from localcode.agent.tool_execution import (
+    _HARD_STOP_THRESHOLD,
     ToolExecutionState,
     dedup_stub_for_tool,
     track_tool_result,
@@ -359,6 +360,76 @@ def test_read_file_dedup_is_disabled_to_unblock_debug_loops() -> None:
     stub = dedup_stub_for_tool("read_file", args, state)
 
     assert stub is None  # read_file dedup intentionally disabled
+
+
+def test_repeated_failed_bash_cd_steers_with_concrete_cause() -> None:
+    """Regression for the 2026-06-19 spin: a `cd` into a not-yet-created
+    directory failed and the model re-emitted it 11× because the rejection
+    blocked but never named the cause or escalated. The stub must (1) name
+    the real error ("does NOT exist") and (2) hard-stop after the threshold.
+    """
+    state = ToolExecutionState()
+    args = {
+        "command": 'cd "/Users/x/localcode_test/Anki/Qwen 3.6 35B-A3B (Q8)" && ls',
+    }
+    err = (
+        "[exit code 1] /bin/sh: line 0: cd: "
+        "/Users/x/localcode_test/Anki/Qwen 3.6 35B-A3B (Q8): "
+        "No such file or directory"
+    )
+
+    # First two real failures: stub should now name the concrete cause.
+    for round_num in (1, 2):
+        track_tool_result(
+            tool_name="bash",
+            args=args,
+            tool_result=err,
+            round_num=round_num,
+            state=state,
+            dedup_stub=None,
+        )
+    stub = dedup_stub_for_tool("bash", args, state)
+    assert stub is not None and stub.startswith("REJECTED")
+    assert "does NOT exist" in stub  # concrete steering, not generic
+    assert "HARD STOP" not in stub  # not terminal yet
+
+    # Keep re-emitting; the model ignores the rejection (each REJECTED stub
+    # counts as another failure, exactly like the live loop).
+    for round_num in range(3, _HARD_STOP_THRESHOLD + 2):
+        track_tool_result(
+            tool_name="bash",
+            args=args,
+            tool_result=stub,  # the rejected stub IS the result, like prod
+            round_num=round_num,
+            state=state,
+            dedup_stub=None,
+        )
+        stub = dedup_stub_for_tool("bash", args, state)
+        assert stub is not None
+
+    assert "HARD STOP" in stub
+    assert "permanently blocked" in stub
+    # The underlying cause survives even though later results were REJECTED
+    # stubs (which must not overwrite the real diagnosis).
+    assert "does NOT exist" in stub
+
+
+def test_repeated_failed_bash_syntax_error_steers_on_quoting() -> None:
+    state = ToolExecutionState()
+    args = {"command": "cd /Users/x/Qwen (Q8) && ls"}
+    err = "[exit code 2] /bin/sh: -c: syntax error near unexpected token `('"
+    for round_num in (1, 2):
+        track_tool_result(
+            tool_name="bash",
+            args=args,
+            tool_result=err,
+            round_num=round_num,
+            state=state,
+            dedup_stub=None,
+        )
+    stub = dedup_stub_for_tool("bash", args, state)
+    assert stub is not None and "SHELL SYNTAX" in stub
+    assert "double quotes" in stub
 
 
 def test_bash_rejects_shell_redirection_file_writes(tmp_path: Path) -> None:

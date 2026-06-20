@@ -117,7 +117,13 @@ class EmbeddingSearch:
 
         self.chunks = []
         skip_dirs = {".git", "node_modules", "__pycache__", "venv", ".venv",
-                     "dist", "build", ".egg-info", ".localcode"}
+                     "dist", "build", ".egg-info", ".localcode",
+                     # Vendored / generated trees that would otherwise drown
+                     # the user's own code in retrieval (the turboquant fork
+                     # alone is ~114k chunks of llama.cpp C++).
+                     "llama-cpp-turboquant", "llama.cpp-diffusion",
+                     "localcodevenv", "site-packages", "vendor",
+                     ".pytest_cache", ".ruff_cache"}
 
         for fpath in self.root.rglob("*"):
             if not fpath.is_file() or fpath.suffix not in extensions:
