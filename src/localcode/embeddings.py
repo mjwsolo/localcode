@@ -117,7 +117,13 @@ class EmbeddingSearch:
 
         self.chunks = []
         skip_dirs = {".git", "node_modules", "__pycache__", "venv", ".venv",
-                     "dist", "build", ".egg-info", ".localcode"}
+                     "dist", "build", ".egg-info", ".localcode",
+                     # Vendored / generated trees that would otherwise drown
+                     # the user's own code in retrieval (the turboquant fork
+                     # alone is ~114k chunks of llama.cpp C++).
+                     "llama-cpp-turboquant", "llama.cpp-diffusion",
+                     "localcodevenv", "site-packages", "vendor",
+                     ".pytest_cache", ".ruff_cache"}
 
         for fpath in self.root.rglob("*"):
             if not fpath.is_file() or fpath.suffix not in extensions:
@@ -322,23 +328,55 @@ class EmbeddingSearch:
             return prefix + text
         return text
 
-    def _tfidf_embed(self, texts: list[str]) -> np.ndarray:
-        """TF-IDF fallback embedding."""
-        from sklearn.feature_extraction.text import TfidfVectorizer
-        from sklearn.preprocessing import normalize
+    @staticmethod
+    def _make_tfidf_vectorizer():
+        """Single source of truth for the TF-IDF params.
 
-        self._tfidf_vectorizer = TfidfVectorizer(
+        The document fit (_tfidf_embed) and the query/restore fit
+        (_ensure_tfidf_vectorizer) MUST use identical params, or query
+        vectors land in a different space than the saved doc matrix.
+        """
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        return TfidfVectorizer(
             max_features=5000,
             sublinear_tf=True,
             analyzer="word",
             token_pattern=r"[a-zA-Z_][a-zA-Z0-9_]+",
         )
+
+    def _tfidf_embed(self, texts: list[str]) -> np.ndarray:
+        """TF-IDF fallback embedding."""
+        from sklearn.preprocessing import normalize
+
+        self._tfidf_vectorizer = self._make_tfidf_vectorizer()
         matrix = self._tfidf_vectorizer.fit_transform(texts)
         return normalize(matrix).toarray().astype(np.float32)
+
+    def _ensure_tfidf_vectorizer(self) -> None:
+        """Reconstruct the TF-IDF vectorizer after a cache load.
+
+        The fitted vectorizer lives only in memory — it is never persisted.
+        A restart restores the saved doc matrix (embeddings.npz) but loses the
+        vocabulary needed to embed queries, so _tfidf_query would return None
+        and the semantic leg silently goes dead on the fallback path. Re-fitting
+        on the same chunk texts is deterministic (same params, same texts →
+        same vocabulary/idf), so the query vectors land in the same space as
+        the saved matrix. Lazy: only paid on the first semantic query after a
+        load, and only on the tfidf path.
+        """
+        if self.model_name != "tfidf" or hasattr(self, "_tfidf_vectorizer"):
+            return
+        if not self.chunks:
+            return
+        texts = [self._prepare_text(c.text, mode="document") for c in self.chunks]
+        vec = self._make_tfidf_vectorizer()
+        vec.fit(texts)
+        self._tfidf_vectorizer = vec
 
     def _tfidf_query(self, text: str) -> np.ndarray | None:
         """TF-IDF query embedding."""
         from sklearn.preprocessing import normalize
+        self._ensure_tfidf_vectorizer()
         if not hasattr(self, "_tfidf_vectorizer"):
             return None
         matrix = self._tfidf_vectorizer.transform([text])
