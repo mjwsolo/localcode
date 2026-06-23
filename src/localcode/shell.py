@@ -12,7 +12,7 @@ DEFAULT_TIMEOUT = 120  # seconds
 MAX_OUTPUT_CHARS = 100_000
 
 
-@dataclass(slots=True)
+@dataclass
 class ShellResult:
     command: str
     returncode: int

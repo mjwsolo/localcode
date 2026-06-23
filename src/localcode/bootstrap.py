@@ -100,13 +100,13 @@ def runtime_command(_runtime_config) -> str | None:
 T = TypeVar("T")
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class InstallPlan:
     label: str
     command: list[str]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class SetupStep:
     key: str
     phase: str

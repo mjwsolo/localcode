@@ -4,7 +4,10 @@ import os
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python < 3.11
+    import tomli as tomllib
 
 # Serializes config writes. The setup worker thread and the model
 # picker can both call save_config concurrently; without this two
@@ -81,7 +84,7 @@ max_days = 30
 """
 
 
-@dataclass(slots=True)
+@dataclass
 class RuntimeConfig:
     provider: str = "llama_cpp"
     base_url: str = "http://localhost:8081"
@@ -127,7 +130,7 @@ class RuntimeConfig:
     max_retries: int = 3
 
 
-@dataclass(slots=True)
+@dataclass
 class SearchConfig:
     provider: str = "duckduckgo"
     google_api_key: str = ""
@@ -141,14 +144,14 @@ class SearchConfig:
 # voice stack (whisper.cpp / kokoro / piper) had no active consumer.
 
 
-@dataclass(slots=True)
+@dataclass
 class UIConfig:
     show_debug: bool = False
     thinking_mode: str = "full"
     sounds_enabled: bool = False  # afplay on turn-done + approval-needed
 
 
-@dataclass(slots=True)
+@dataclass
 class SafetyConfig:
     confirm_destructive: bool = True
     confirm_installs: bool = True
@@ -159,7 +162,7 @@ class SafetyConfig:
     auto_approve_agent: bool = False  # auto-approve all tools in agent mode
 
 
-@dataclass(slots=True)
+@dataclass
 class LoggingConfig:
     enabled: bool = True
     log_prompts: bool = True
@@ -167,7 +170,7 @@ class LoggingConfig:
     max_days: int = 30
 
 
-@dataclass(slots=True)
+@dataclass
 class AppConfig:
     runtime: RuntimeConfig
     search: SearchConfig

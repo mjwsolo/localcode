@@ -98,7 +98,7 @@ def sanitize_placeholder_path(path: str, default_name: str = "app") -> str:
     return sep.join(out_segments)
 
 
-@dataclass(slots=True)
+@dataclass
 class PromptBuildResult:
     system_prompt: str
     selected_skills: list[str]
