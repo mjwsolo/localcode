@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
 
+# Cancel an in-progress run when a newer commit lands on the same ref, so a
+# superseded run can't linger and report a confusing red ✗.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # ── Required gate: the comprehensive suite must pass on every push ──
   # Fast, deterministic, no model download. Covers agent loop + tools,
@@ -14,10 +20,11 @@ jobs:
   comprehensive:
     name: comprehensive (linux)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -27,11 +34,14 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e .
-          python -m pip install pytest ruff
+          python -m pip install pytest pytest-timeout ruff
       - name: Lint (syntax / undefined-name errors only)
         run: ruff check --select E9,F63,F7,F82 src tests
       - name: Comprehensive tests
-        run: pytest tests/test_comprehensive_*.py -v
+        # --timeout turns any future hang into a diagnosable per-test failure
+        # instead of an opaque runner SIGTERM (exit 143). Linux tests are all
+        # fast (mocked/pure-Python); 120s is a generous ceiling.
+        run: pytest tests/test_comprehensive_*.py -v --timeout=120
 
   # ── Same gate on macOS arm64 — users run Apple Silicon, so we test the
   # real platform. Also exercises the REAL fresh-venv install (packaging)

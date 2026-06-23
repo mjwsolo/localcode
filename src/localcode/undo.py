@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
-@dataclass(slots=True)
+@dataclass
 class FileSnapshot:
     """A before-snapshot of a file before it was changed."""
     path: str           # relative to repo root

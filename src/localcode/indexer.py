@@ -13,7 +13,7 @@ from .context import IGNORE_DIRS, list_repo_files, read_file
 TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{1,}")
 
 
-@dataclass(slots=True)
+@dataclass
 class Chunk:
     path: str
     chunk_id: int

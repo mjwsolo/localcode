@@ -42,7 +42,7 @@ class ToolContext:
         return self.app.repo_root
 
 
-@dataclass(slots=True)
+@dataclass
 class ToolResult:
     """Internal typed tool result.
 

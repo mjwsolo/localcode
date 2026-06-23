@@ -26,7 +26,7 @@ import re
 from dataclasses import dataclass, field
 
 
-@dataclass(slots=True)
+@dataclass
 class ParsedToolCall:
     name: str
     arguments: dict

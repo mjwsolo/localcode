@@ -10,13 +10,13 @@ from dataclasses import dataclass
 DIFF_BLOCK_RE = re.compile(r"```diff\s*(.*?)```", re.DOTALL)
 
 
-@dataclass(slots=True)
+@dataclass
 class DiffHunk:
     header: str
     lines: list[str]
 
 
-@dataclass(slots=True)
+@dataclass
 class DiffFile:
     old_path: str
     new_path: str

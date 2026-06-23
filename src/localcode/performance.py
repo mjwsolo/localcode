@@ -186,7 +186,7 @@ def _install_gpu_daemon() -> bool:
                 pass
 
 
-@dataclass(slots=True)
+@dataclass
 class MachineProfile:
     system: str
     cpu_cores: int
@@ -196,7 +196,7 @@ class MachineProfile:
     tier: str
 
 
-@dataclass(slots=True)
+@dataclass
 class PerformancePreset:
     mode: str
     runtime_provider: str

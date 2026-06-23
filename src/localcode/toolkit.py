@@ -27,7 +27,7 @@ from .undo import ChangeLog
 ToolHandler = Callable[[dict[str, Any]], str]
 
 
-@dataclass(slots=True)
+@dataclass
 class LocalCodeTool:
     name: str
     description: str

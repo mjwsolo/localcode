@@ -18,7 +18,7 @@ DEFAULT_VERIFY_COMMANDS = [
 ]
 
 
-@dataclass(slots=True)
+@dataclass
 class VerificationStep:
     command: str
     label: str

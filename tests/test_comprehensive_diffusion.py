@@ -18,11 +18,22 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import stat
 import sys
 from pathlib import Path
 
 import pytest
+
+# The DiffusionGemma runner is a macOS-only, cmake-built llama-diffusion-cli.
+# These tests exercise that subprocess path; on the Linux CI runner (no native
+# binary, 7 GB RAM) it hangs/OOMs and kills the runner (exit 143). The macOS CI
+# leg runs them in full. Skipping here keeps the multi-version Linux matrix green
+# without losing coverage.
+pytestmark = pytest.mark.skipif(
+    platform.system() != "Darwin",
+    reason="DiffusionGemma runner/subprocess path is macOS-only",
+)
 
 
 def _tool_args(call):

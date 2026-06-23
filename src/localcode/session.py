@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 import uuid
@@ -13,10 +13,10 @@ Message = dict[str, str]
 
 
 def utc_now() -> str:
-    return datetime.now(UTC).isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 
-@dataclass(slots=True)
+@dataclass
 class TaskState:
     task_id: str
     user_request: str
@@ -36,7 +36,7 @@ class TaskState:
     final_response: str = ""
 
 
-@dataclass(slots=True)
+@dataclass
 class SessionState:
     session_id: str
     repo_root: Path

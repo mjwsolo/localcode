@@ -104,7 +104,10 @@ def test_save_config_is_atomic(tmp_path, monkeypatch):
     assert seen["tmp_existed"] is True
     assert target.is_file()
     # And the result must be valid TOML (fully written).
-    import tomllib
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # Python < 3.11
+        import tomli as tomllib
     with open(target, "rb") as f:
         tomllib.load(f)
 

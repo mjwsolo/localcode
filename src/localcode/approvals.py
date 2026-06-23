@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-@dataclass(slots=True)
+@dataclass
 class ApprovalItem:
     label: str
     detail: str

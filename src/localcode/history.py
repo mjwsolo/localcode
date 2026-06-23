@@ -18,7 +18,7 @@ import sqlite3
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 from typing import Any
 
 from .config import ensure_home_dirs
@@ -223,7 +223,7 @@ class HistoryDB:
         self.conn.commit()
 
         # Update session record
-        now = datetime.now(UTC).isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         self.conn.execute("""
             INSERT INTO sessions (session_id, repo_root, started_at, last_active, model)
             VALUES (?, ?, ?, ?, ?)
