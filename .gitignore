@@ -32,6 +32,10 @@ tests/test_results.json
 .claude/
 CLAUDE.local.md
 
+# Local-only dev & eval workspace — eval harness, optimizer, benchmarks,
+# bench scripts, and eval-only tests. Never shipped, never pushed to GitHub.
+/dev/
+
 # Research archives (not shipped)
 .research-archive/
 research/

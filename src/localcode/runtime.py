@@ -214,6 +214,31 @@ class StreamEvent(dict):
     pass
 
 
+def apply_param_overrides(cmd: list[str], env: dict | None = None) -> list[str]:
+    """Rewrite llama-server flags from ``LOCALCODE_OVERRIDE_*`` env vars.
+
+    Lets the offline model-optimizer (eval/model_opt.py) sweep launch
+    parameters — GPU layers, context size, threads, batch — WITHOUT editing
+    config or the catalog. Only flags already present in ``cmd`` are
+    rewritten; an unset env var leaves the command untouched, so the default
+    path (and every existing test) is byte-for-byte unchanged.
+
+    Recognised: LOCALCODE_OVERRIDE_NGL / _NCTX / _THREADS / _BATCH.
+    """
+    import os
+    e = env if env is not None else os.environ
+    rewrites = {
+        "-ngl": e.get("LOCALCODE_OVERRIDE_NGL"),
+        "--ctx-size": e.get("LOCALCODE_OVERRIDE_NCTX"),
+        "--threads": e.get("LOCALCODE_OVERRIDE_THREADS"),
+        "-b": e.get("LOCALCODE_OVERRIDE_BATCH"),
+    }
+    for flag, val in rewrites.items():
+        if val and flag in cmd:
+            cmd[cmd.index(flag) + 1] = str(val)
+    return cmd
+
+
 class LocalCodeRuntimeGateway(_DiffusionMixin):
     """Talks to Ollama, llama.cpp, MLX, or HuggingFace local backends."""
 
@@ -489,7 +514,15 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
         ])
         # Single slot, disable fit check (we manage memory via sysctl)
         cmd.extend(["-np", "1", "-fit", "off"])
-        return cmd
+        # Tuned launch params: a stored model-opt recommendation applies first,
+        # then explicit LOCALCODE_OVERRIDE_* env vars win. Both no-op by
+        # default (no store file, no env), so the default path is unchanged.
+        try:
+            from .recommendations import load_overrides as _rec_overrides
+            merged_env = {**_rec_overrides(_P(model_path).name), **os.environ}
+        except Exception:
+            merged_env = dict(os.environ)
+        return apply_param_overrides(cmd, env=merged_env)
 
     @staticmethod
     def _find_ollama_blob(model_name: str) -> str:
