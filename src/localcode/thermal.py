@@ -95,7 +95,7 @@ def read_thermal_pressure() -> str:
     return _thermal_level_from_speed_limit(read_cpu_speed_limit())
 
 
-@dataclass(slots=True)
+@dataclass
 class ThermalCaps:
     """Advisory, conservative caps suggested for the current heat level.
 
