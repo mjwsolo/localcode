@@ -15,7 +15,7 @@ import time
 import urllib.request
 
 
-@dataclass(slots=True)
+@dataclass
 class ProcessRecord:
     pid: int
     pgid: int

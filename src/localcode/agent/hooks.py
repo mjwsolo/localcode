@@ -23,7 +23,7 @@ __all__ = [
 ]
 
 
-@dataclass(slots=True)
+@dataclass
 class TurnState:
     user_text: str
     goal_state: Any
@@ -34,7 +34,7 @@ class TurnState:
     evidence: "EvidenceLedger" = field(default_factory=lambda: EvidenceLedger())
 
 
-@dataclass(slots=True)
+@dataclass
 class EvidenceLedger:
     """Structured proof gathered during a turn.
 
@@ -78,7 +78,7 @@ class EvidenceLedger:
             items.append(value)
 
 
-@dataclass(slots=True)
+@dataclass
 class QualityVerdict:
     ok: bool
     reason: str = ""
