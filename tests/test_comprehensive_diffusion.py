@@ -123,7 +123,9 @@ def test_diffusion_adaptive_retry_forces_eb_off(monkeypatch, tmp_path):
     cfg = RuntimeConfig()
     cfg.provider = "llama_cpp"
     cfg.model = str(tmp_path / DIFF_FILENAME)
-    cfg.diffusion_cli_binary = str(tmp_path / "cli")
+    # Point at an EXISTING stub so the runtime uses it instead of trying to build
+    # the real llama-diffusion-cli (a slow cmake build that times out on clean CI).
+    cfg.diffusion_cli_binary = str(_stub_cli(tmp_path, "exit 0\n"))
     gw = G(cfg)
     seen_cmds: list[list] = []
 
