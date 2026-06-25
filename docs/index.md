@@ -18,7 +18,7 @@
   No cloud, no API keys, no data leaving your machine.
 </p>
 
-> ⚠️ **Alpha software.** Active development; expect rough edges, breaking changes between versions, and bugs. Production use is not recommended. Issues and feedback welcome.
+> ⚠️ **Alpha software.** Active development; expect rough edges, breaking changes between versions, and bugs. Issues and feedback welcome.
 
 ## Install
 

@@ -18,7 +18,7 @@
   No cloud, no API keys, no data leaving your machine.
 </p>
 
-> ⚠️ **Alpha software.** Active development; expect rough edges, breaking changes between versions, and bugs. Production use is not recommended. Issues and feedback welcome.
+> ⚠️ **Alpha software.** Active development; expect rough edges, breaking changes between versions, and bugs. Issues and feedback welcome.
 
 ## Install
 
@@ -38,13 +38,6 @@ That's it. First launch builds the inference server and downloads the model (~5 
 ## Docs
 
 Docs are published at [mjwsolo.github.io/localcode](https://mjwsolo.github.io/localcode/).
-
-To publish them manually from this repo:
-
-```bash
-pip install mkdocs mkdocs-material
-./scripts/deploy_docs.sh
-```
 
 ## What it does
 
