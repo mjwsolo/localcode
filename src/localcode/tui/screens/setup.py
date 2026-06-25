@@ -335,7 +335,7 @@ class SetupScreen(Screen):
             get_model_path,
             start_background_download, is_download_complete,
         )
-        from ...models_catalog import CHOICES, current as current_choice
+        from ...models_catalog import CHOICES, current as current_choice, recommend
 
         config = self.app.config
 
@@ -398,12 +398,12 @@ class SetupScreen(Screen):
         self._current_step = 1
         self._status_text = "Checking model..."
 
-        # Resolve which model to use. If the user ran `localcode setup` first and
-        # picked one, config.runtime.model points at that GGUF and current()
-        # returns the matching catalog entry. Otherwise we default to the
-        # first catalog entry (Gemma) — the in-TUI picker is queued for a
-        # follow-up; for now the CLI `localcode setup` is the interactive path.
-        chosen = current_choice(config) or CHOICES[0]
+        # Resolve which model to use. If the user already picked one,
+        # config.runtime.model points at that GGUF and current() returns it.
+        # Otherwise fall back to the RAM-appropriate recommendation for THIS
+        # machine — never a hardcoded default. (The model picker normally runs
+        # before setup, so this fallback only matters for odd/headless states.)
+        chosen = current_choice(config) or recommend()
 
         model_path = get_model_path(chosen.filename)
         if not model_path:

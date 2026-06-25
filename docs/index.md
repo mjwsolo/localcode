@@ -59,7 +59,7 @@ We are building for a world of truly democratized AI — where everyone has acce
 
 - **Mac with Apple Silicon**
 - **16 GB RAM** minimum
-- **Python 3.11+**
+- **Python 3.9+**
 - **~12 GB free disk** (10 GB model + server)
 
 ### Tested hardware
@@ -73,11 +73,28 @@ LocalCode is early software. Hardware support is expected to broaden, but only t
 | M4 Apple Silicon | 24 GB+ | Not yet tested | Expected to support larger contexts, but needs validation |
 | Intel Mac | Any | Not supported | LocalCode targets Apple Silicon |
 
+## Models
+
+On launch, LocalCode recommends the best model for **your Mac's RAM** — there's no fixed default. You can pick any of these (or a different quant) in the model picker.
+
+| Model | Size (quant) | Active params | Min RAM | Architecture |
+| --- | ---: | --- | ---: | --- |
+| Gemma 4 12B | 7.4 GB (Q4) | 12B (dense) | 16 GB | gemma4-iswa |
+| Gemma 4 26B-A4B | 11.2 GB (Q3) | 3.8B (8/128 experts) | 24 GB | gemma4-iswa |
+| Qwen 3.6 35B-A3B | 10.7 GB (Q2) | 3.0B (8+1/256) | 24 GB | qwen35moe |
+| DiffusionGemma 26B-A4B † | 15.7 GB (Q4) | 4B (diffusion MoE) | 32 GB | diffusion_gemma |
+| North-Mini-Code 30B-A3B † | 17.9 GB (Q4) | 3B (30B MoE) | 36 GB | cohere2_moe |
+| Gemma 4 12B (full) | 23.8 GB (BF16) | 12B (dense) | 48 GB | gemma4-iswa |
+| Gemma 4 26B-A4B | 28 GB (Q8) | 3.8B (8/128 experts) | 64 GB | gemma4-iswa |
+| Qwen 3.6 35B-A3B | 38.5 GB (Q8) | 3.0B (8+1/256) | 96 GB | qwen35moe |
+
+*Min RAM* is the threshold for auto-recommendation (weights ≤ ~55% of unified memory, leaving room for KV cache + OS); you can still pick a heavier model manually. **†** experimental — pickable but **not** auto-recommended (DiffusionGemma needs a separate runner; `cohere2_moe` is unvalidated on this stack).
+
 ## How LocalCode works
 
 LocalCode runs a custom [llama.cpp](https://github.com/ggerganov/llama.cpp) fork with **TurboQuant KV cache compression** — a technique from Google's ICLR 2026 paper that we patched into llama.cpp for Apple Silicon. This compresses the KV cache 3.8× — fitting 32K context in 355 MiB on a 16 GB MacBook.
 
-The default model (**Gemma 4 26B-A4B**) is a Mixture-of-Experts architecture — 25.2 B total parameters but only 3.8 B active per token. That's what makes ~27 tok/s possible on a laptop.
+LocalCode picks a model based on **your Mac's RAM** — there's no fixed default. It scales from Gemma 4 12B on 16 GB up to Qwen 3.6 35B-A3B on 64 GB+. The recommended models are Mixture-of-Experts — only ~3.8 B parameters active per token — which is what makes ~27 tok/s possible on a laptop.
 
 Under the hood:
 
