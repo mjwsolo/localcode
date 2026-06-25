@@ -172,14 +172,23 @@ class ModelPickerScreen(Screen):
         except Exception:
             self._bandwidth_gbps = 150.0
 
-        # Start Level 1 focus on the RAM-recommended group so the first thing
-        # a user sees highlighted is appropriate for their machine. We map the
-        # recommended ModelChoice back to its group via shared hf_repo.
-        from ...models_catalog import MODEL_GROUPS, recommend
+        # Start Level 1 focus on the user's CURRENTLY-configured model when there
+        # is one (so a returning user sees their model highlighted), else on the
+        # RAM-recommended group. Map the ModelChoice back to its group via hf_repo.
+        from ...models_catalog import MODEL_GROUPS, recommend, current
         try:
-            rec = recommend()
+            target_repo = None
+            try:
+                from ...config import load_config
+                cur = current(load_config())
+                if cur is not None:
+                    target_repo = getattr(cur, "hf_repo", None)
+            except Exception:
+                target_repo = None
+            if not target_repo:
+                target_repo = recommend().hf_repo
             self._focused_idx = next(
-                (i for i, g in enumerate(MODEL_GROUPS) if g.hf_repo == rec.hf_repo),
+                (i for i, g in enumerate(MODEL_GROUPS) if g.hf_repo == target_repo),
                 0,
             )
         except Exception:
