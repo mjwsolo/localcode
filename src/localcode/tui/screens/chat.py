@@ -406,6 +406,28 @@ class _ChatTextArea(TextArea):
     }
     """
 
+    # ── large-paste collapse (Claude-Code-style) ──
+    # A paste >= this many chars is replaced in the box by a compact
+    # "[#N pasted M lines]" placeholder; the full text is kept in
+    # `_pasted_blobs` and restored by `expanded_text()` at submit. Keeps the
+    # input readable instead of dumping a multi-thousand-line blob into it.
+    _PASTE_TRUNCATE_THRESHOLD = 10000
+    _PASTE_PLACEHOLDER_RE = re.compile(r"\[#(\d+) pasted [\d,]+ lines\]")
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._pasted_blobs: dict[int, str] = {}
+        self._paste_seq = 0
+
+    def expanded_text(self) -> str:
+        """`self.text` with every large-paste placeholder restored to its full
+        text — used at submit so the model receives the real content."""
+        if not self._pasted_blobs:
+            return self.text
+        def _restore(m):
+            return self._pasted_blobs.get(int(m.group(1)), m.group(0))
+        return self._PASTE_PLACEHOLDER_RE.sub(_restore, self.text)
+
     # ── value compatibility shim ──
     # The old call sites used Input's `.value`; TextArea exposes `.text`.
     # We migrated those call sites to `.text`, but keep a `value` alias so
@@ -535,6 +557,21 @@ class _ChatTextArea(TextArea):
         if not text:
             return
         joined = text.replace("\r\n", "\n").replace("\r", "\n")
+        # Large paste → collapse to a compact "[#N pasted M lines]" placeholder.
+        # The full text is kept in `_pasted_blobs` and restored at submit by
+        # `expanded_text()`, so a huge blob doesn't take over the input box.
+        if len(joined) >= self._PASTE_TRUNCATE_THRESHOLD:
+            self._paste_seq += 1
+            pid = self._paste_seq
+            self._pasted_blobs[pid] = joined
+            n_lines = joined.count("\n") + 1
+            prevent_default = getattr(event, "prevent_default", None)
+            if callable(prevent_default):
+                prevent_default()
+            self.insert(f"[#{pid} pasted {n_lines:,} lines]")
+            self.autosize_height()
+            event.stop()
+            return
         if joined != text:
             prevent_default = getattr(event, "prevent_default", None)
             if callable(prevent_default):
@@ -565,7 +602,8 @@ class _ChatTextArea(TextArea):
             event.stop()
             submit = getattr(self.screen, "_submit_message", None)
             if callable(submit):
-                submit(self.text)
+                submit(self.expanded_text())  # restore any collapsed pastes
+            self._pasted_blobs.clear()
             return
 
         # ── Shift+Enter / Ctrl+J insert a newline ──
