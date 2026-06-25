@@ -322,45 +322,25 @@ class LocalCodeTUI(App):
         self.config = load_config()
         self.bridge = TUIBridge(self)
 
-        # Show the model picker before setup when:
-        #   - no model has been configured yet (first launch), OR
-        #   - the configured model file isn't actually on disk yet (so the user
-        #     sees the options + save location before a multi-GB download begins).
-        # If the configured model is already downloaded, skip straight to setup
-        # — the user can still switch mid-session with the /model command.
-        from ..models_catalog import current as current_choice
-
-        cur = current_choice(self.config)
-        # need_picker fires when:
-        #   - no model is configured yet (first launch)
-        #   - the configured model file isn't on disk
-        #   - a partial download exists at the final filename (would
-        #     otherwise sneak past the picker and confuse setup/server)
-        from ..bootstrap import _is_complete_download
-        need_picker = (
-            cur is None
-            or not cur.local_path.is_file()
-            or not _is_complete_download(cur.local_path, cur)
-        )
-
-        if need_picker:
-            def _after_pick(choice) -> None:
-                if choice is None:
-                    self.exit()
-                    return
-                # Persist the selection so setup + runtime see it. The file
-                # doesn't need to exist yet; setup will download it.
-                self.config.runtime.model = str(choice.local_path)
-                try:
-                    from ..config import save_config
-                    save_config(self.config)
-                except Exception:
-                    pass
-                self.push_screen("setup")
-
-            self.push_screen("model_picker", _after_pick)
-        else:
+        # Always show the model picker on launch — never silently auto-load the
+        # last model. The picker highlights the currently-configured model, so a
+        # returning user can keep it, while a new user gets to CHOOSE before any
+        # multi-GB download begins. Mid-session, /model switches models too.
+        def _after_pick(choice) -> None:
+            if choice is None:
+                self.exit()
+                return
+            # Persist the selection so setup + runtime see it. The file
+            # doesn't need to exist yet; setup will download it.
+            self.config.runtime.model = str(choice.local_path)
+            try:
+                from ..config import save_config
+                save_config(self.config)
+            except Exception:
+                pass
             self.push_screen("setup")
+
+        self.push_screen("model_picker", _after_pick)
 
     def ensure_backend(self) -> bool:
         """Lazily initialize LocalCodeApp backend. Returns True if ready."""
