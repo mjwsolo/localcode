@@ -319,25 +319,57 @@ def _system_ram_gb() -> int:
     return 16
 
 
-def recommend(ram_gb: int | None = None) -> ModelChoice:
-    """Pick the catalog entry best suited to the host's RAM.
+# Architectures we never AUTO-recommend (users can still pick them explicitly in
+# the model picker): diffusion needs a separate one-shot runner — not the
+# standard llama-server — and cohere2_moe is unvalidated on this stack.
+_NO_AUTO_RECOMMEND_ARCHS = {"diffusion_gemma", "cohere2_moe"}
 
-    Rule of thumb: model weights + KV + OS headroom should fit in ~70% of
-    unified memory. We bias conservatively — being slightly under-quantized
-    is worse than crashing on load. Falls back to the first entry if nothing
-    matches (shouldn't happen with the current catalog).
+# Capability order for auto-recommend, best → worst for coding-agent use. This
+# is deliberately NOT raw file size: the big MoEs measure ~95% HumanEval here
+# (even at low bit) and must outrank the 12B dense, and a higher-bit quant of a
+# family wins. A 12B-BF16 must never be recommended over a 26B/35B MoE just
+# because its file happens to be larger.
+_RECOMMEND_ORDER = [
+    "qwen-q8",         # 35B-A3B MoE, near-lossless Q8
+    "gemma-q8",        # 26B-A4B MoE, near-lossless Q8
+    "qwen",            # 35B-A3B MoE Q2 — 94.7% HumanEval
+    "gemma",           # 26B-A4B MoE Q3 — 95.1% HumanEval
+    "gemma-12b-bf16",  # 12B dense, full precision
+    "gemma-12b",       # 12B dense Q4
+]
+
+
+def _capability_rank(choice) -> int:
+    """Lower = more capable. Curated models first; any other production model
+    sorts after them — so a newly-added quant is still recommendable, but never
+    outranks a curated MoE."""
+    order = {k: i for i, k in enumerate(_RECOMMEND_ORDER)}
+    return order.get(choice.key, len(_RECOMMEND_ORDER) + 1)
+
+
+def recommend(ram_gb: int | None = None) -> ModelChoice:
+    """Pick the best model for THIS machine's RAM — capability-ranked, never an
+    experimental architecture, and never a hardcoded default.
+
+    Weights must fit in ~55% of unified memory (leaves room for KV cache,
+    activations, OS). Among the production-ready models that fit, return the
+    most capable (see ``_RECOMMEND_ORDER``) so the recommendation scales with
+    the user's hardware instead of defaulting to any one model.
     """
     if ram_gb is None:
         ram_gb = _system_ram_gb()
-    # Sort candidates by size_gb; pick the biggest whose weights fit
-    # in ~55% of RAM (leaves room for KV cache, activations, OS).
     budget = ram_gb * 0.55
-    fits = [c for c in CHOICES if c.size_gb <= budget]
-    if fits:
-        return max(fits, key=lambda c: c.size_gb)
-    # Nothing fits the budget — return the smallest entry so at least
-    # something is suggested rather than a recommendation the user can't run.
-    return min(CHOICES, key=lambda c: c.size_gb)
+    candidates = [
+        c for c in CHOICES
+        if c.architecture not in _NO_AUTO_RECOMMEND_ARCHS and c.size_gb <= budget
+    ]
+    if candidates:
+        # Most capable that fits; tie-break toward the larger (better-quant) file.
+        return min(candidates, key=lambda c: (_capability_rank(c), -c.size_gb))
+    # Nothing fits the budget — smallest production-ready model so the user still
+    # gets something runnable rather than an impossible recommendation.
+    prod = [c for c in CHOICES if c.architecture not in _NO_AUTO_RECOMMEND_ARCHS]
+    return min(prod or CHOICES, key=lambda c: c.size_gb)
 
 
 def by_key(key: str) -> ModelChoice | None:

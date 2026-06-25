@@ -539,13 +539,16 @@ def download_model(
 ) -> tuple[bool, str]:
     """Download a GGUF model selected from `models_catalog.CHOICES`.
 
-    If `choice` is None, defaults to the first entry in CHOICES (Gemma 4 26B).
+    If `choice` is None, falls back to `recommend()` — the RAM-appropriate model
+    for this machine, not a hardcoded default.
     Returns (success, path_or_error_message).
     """
-    from .models_catalog import CHOICES
+    from .models_catalog import recommend
 
     if choice is None:
-        choice = CHOICES[0]
+        # No explicit choice → the RAM-appropriate model for THIS machine,
+        # not a hardcoded default.
+        choice = recommend()
 
     # Already present?
     existing = get_model_path(choice.filename)
