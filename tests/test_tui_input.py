@@ -1,4 +1,5 @@
 from localcode.tui.screens.chat import (
+    _ChatTextArea,
     _NoTintInput,
     _spinner_label,
     _SPINNER_GERUNDS,
@@ -96,6 +97,54 @@ def test_chat_input_paste_preserves_multiline_newlines() -> None:
     _NoTintInput._on_paste(target, event)
 
     assert target.inserted == "line one\nline two\nline three"
+
+
+class _TextAreaLike:
+    """Minimal stand-in for _ChatTextArea: enough state for _on_paste /
+    expanded_text to run without mounting a real Textual app."""
+
+    _PASTE_TRUNCATE_THRESHOLD = _ChatTextArea._PASTE_TRUNCATE_THRESHOLD
+    _PASTE_PLACEHOLDER_RE = _ChatTextArea._PASTE_PLACEHOLDER_RE
+
+    def __init__(self) -> None:
+        self.text = ""
+        self._pasted_blobs = {}
+        self._paste_seq = 0
+
+    def insert(self, s: str) -> None:
+        self.text += s
+
+    def autosize_height(self) -> None:
+        pass
+
+
+def test_large_paste_collapses_to_placeholder_and_expands_on_submit() -> None:
+    # A paste >= the threshold is replaced in the box by a compact
+    # "[#N pasted M lines]" placeholder; the full text is restored by
+    # expanded_text() (what the submit path sends to the model).
+    blob = "\n".join(f"line {i} " + "x" * 40 for i in range(400))  # ~18 KB / 400 lines
+    assert len(blob) >= _ChatTextArea._PASTE_TRUNCATE_THRESHOLD
+    target = _TextAreaLike()
+    event = _PasteEvent(blob)
+
+    _ChatTextArea._on_paste(target, event)
+
+    assert event.stopped
+    assert target.text == "[#1 pasted 400 lines]"          # box stays compact
+    assert _ChatTextArea.expanded_text(target) == blob      # submit gets full text
+
+
+def test_small_paste_is_not_collapsed() -> None:
+    # Below the threshold, paste behaves as before (CRLF normalized, inserted
+    # verbatim) — no placeholder, nothing stored.
+    target = _TextAreaLike()
+    event = _PasteEvent("a\nb\r\nc")  # tiny, has CRLF so the insert branch runs
+
+    _ChatTextArea._on_paste(target, event)
+
+    assert target.text == "a\nb\nc"
+    assert target._pasted_blobs == {}
+    assert _ChatTextArea.expanded_text(target) == "a\nb\nc"
 
 
 class _HistInputLike:
