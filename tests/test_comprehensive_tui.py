@@ -139,3 +139,33 @@ def test_tui_slash_clear_command(tmp_path, project):
             assert app.screen.query_one("#chat-input").value == ""
 
     asyncio.run(scenario())
+
+
+def test_startup_always_shows_model_picker(monkeypatch):
+    """on_mount must ALWAYS land on the model picker — never silently auto-load
+    a configured model.
+
+    Regression: when ``config.runtime.model`` pointed at a downloaded, complete
+    model, ``need_picker`` was False so the app skipped the picker and instantly
+    started the server. Users expect to choose (or confirm) a model on launch.
+    """
+    import localcode.health as health
+
+    class _OK:
+        ok = True
+        stuck_servers = []  # type: ignore[var-annotated]
+        message = ""
+
+    monkeypatch.setattr(health, "check_system_health", lambda *a, **k: _OK())
+    from localcode.tui.app import LocalCodeTUI
+
+    async def scenario():
+        app = LocalCodeTUI(show_mode_picker=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.pause()
+            landed = type(app.screen).__name__
+            app.exit()
+            return landed
+
+    assert asyncio.run(scenario()) == "ModelPickerScreen"
