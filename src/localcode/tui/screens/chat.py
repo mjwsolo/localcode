@@ -528,20 +528,27 @@ class _ChatTextArea(TextArea):
         return True
 
     def _on_paste(self, event) -> None:  # type: ignore[override]
-        # Normalize CRLF/CR → LF; TextArea inserts the text natively
-        # (and keeps newlines), so we just clean line endings and let
-        # the default insertion run.
+        # Insert the paste ourselves (normalizing CRLF/CR → LF) and grow the
+        # box. We do NOT defer to TextArea's stock paste: that path skipped our
+        # autosize, so a long single-line paste that should soft-wrap stayed one
+        # row in a live terminal.
         text = getattr(event, "text", "") or ""
         if not text:
             return
         joined = text.replace("\r\n", "\n").replace("\r", "\n")
-        if joined != text:
-            prevent_default = getattr(event, "prevent_default", None)
-            if callable(prevent_default):
-                prevent_default()
-            self.insert(joined)
-            event.stop()
-        # else: identical text — let TextArea's stock paste handle it.
+        prevent_default = getattr(event, "prevent_default", None)
+        if callable(prevent_default):
+            prevent_default()
+        self.insert(joined)
+        event.stop()
+        # Grow now AND after the next render: a single-line paste only knows its
+        # wrapped row-count once the document re-wraps on the following frame,
+        # so the synchronous measure can read a stale height of 1.
+        self.autosize_height()
+        try:
+            self.call_after_refresh(self.autosize_height)
+        except Exception:
+            pass
 
     async def _on_key(self, event) -> None:  # type: ignore[override]
         # Runs BEFORE TextArea's own _on_key insertion (we call super at
@@ -1597,6 +1604,11 @@ class ChatScreen(Screen):
             return
         try:
             event.text_area.autosize_height()  # grow/shrink with content
+            # Re-measure after the next render too: a long single-line paste
+            # only knows its soft-wrapped row count once the document re-wraps
+            # on the following frame, so the synchronous call above can read a
+            # stale height of 1 in a live terminal.
+            event.text_area.call_after_refresh(event.text_area.autosize_height)
         except Exception:
             pass
         self._on_chat_text_changed(event.text_area.text)
