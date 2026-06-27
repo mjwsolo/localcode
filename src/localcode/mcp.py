@@ -42,6 +42,15 @@ from typing import Any
 MCP_CONFIG_PATH = Path.home() / ".localcode" / "mcp.json"
 
 
+def _config_path() -> Path:
+    """Resolve the mcp.json path, honoring LOCALCODE_HOME like the rest of
+    the app (config.get_home_dir). Falls back to ~/.localcode."""
+    override = os.environ.get("LOCALCODE_HOME")
+    if override:
+        return Path(override).expanduser() / "mcp.json"
+    return MCP_CONFIG_PATH
+
+
 class MCPClient:
     """One stdio-spoken MCP server connection."""
 
@@ -129,6 +138,14 @@ class MCPClient:
                 out.append(block.get("text", ""))
         return "\n".join(out) or "(MCP tool returned no text content)"
 
+    def health(self) -> tuple[bool, str]:
+        """Lightweight liveness check used by Toolkit.diagnostics()."""
+        if self._proc is None:
+            return False, "no process"
+        if self._proc.poll() is not None:
+            return False, f"exited (code {self._proc.returncode})"
+        return True, "running"
+
     def close(self) -> None:
         if self._proc is not None and self._proc.poll() is None:
             try:
@@ -147,10 +164,11 @@ _clients: dict[str, MCPClient] = {}
 
 def load_mcp_config() -> dict[str, dict]:
     """Read ~/.localcode/mcp.json. Returns the `mcpServers` dict."""
-    if not MCP_CONFIG_PATH.is_file():
+    path = _config_path()
+    if not path.is_file():
         return {}
     try:
-        return json.loads(MCP_CONFIG_PATH.read_text()).get("mcpServers", {})
+        return json.loads(path.read_text()).get("mcpServers", {})
     except Exception:
         return {}
 
@@ -174,6 +192,11 @@ def connect_all() -> tuple[int, list[str]]:
         except Exception as e:
             errors.append(f"{name}: {e}")
     return len(_clients), errors
+
+
+def get_client(name: str) -> "MCPClient | None":
+    """Return the connected MCPClient for `name`, or None if not connected."""
+    return _clients.get(name)
 
 
 def list_connected() -> list[tuple[str, list[dict]]]:
