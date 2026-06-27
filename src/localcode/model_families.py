@@ -31,7 +31,7 @@ Scope we DO NOT cover here:
     override yet).
   - Prompt rendering differences — the SYSTEM_PROMPT content itself
     is still one string, and word-level per-family variants would live
-    in eval/prompt_variants.py, not here.
+    in dev/eval/prompt_variants.py, not here.
 """
 from __future__ import annotations
 

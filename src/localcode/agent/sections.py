@@ -14,14 +14,14 @@ Problems with the monolith:
     session, which means every new session re-evaluates the whole
     prompt. Our benchmark shows prompt_ms of ~48 ms warm; the
     theoretical floor with a stable prefix cache is ~5-10 ms.
-  • No way to A/B sections individually. `eval/prompt_variants.py`
+  • No way to A/B sections individually. `dev/eval/prompt_variants.py`
     only supports coarse "strip rule N" mutations. You can't
     answer "what if we drop the build-app rules for debugging
     tasks?" because there's no boundary between them.
   • No way to gate sections on trigger phrases. Every session ships
     rule 10 (open browser) whether or not a web app is in scope.
 
-This module is **Phase 1** of T0.11 (see eval/OPTIMIZATION_PLAN.md):
+This module is **Phase 1** of T0.11 (see dev/eval/OPTIMIZATION_PLAN.md):
 introduce the section-registry concept with behaviour-neutral
 defaults. The composer produces the same output as the old
 `SYSTEM_PROMPT.format(...)` for the default all-sections-on case.
@@ -55,11 +55,9 @@ work is an add-only operation.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Callable
 
 from .prompts import SYSTEM_PROMPT
-from .prompts import _load_project_instructions
 
 
 __all__ = [
@@ -241,10 +239,3 @@ def compose_system_prompt(
         parts.insert(-1, CACHE_BOUNDARY_MARKER)
 
     return "".join(parts)
-
-
-def load_project_instructions(repo_root: Path) -> str:
-    """Convenience re-export so callers outside agent/ that don't
-    want to depend on `agent.prompts` internals can build a
-    SectionContext purely from this module."""
-    return _load_project_instructions(repo_root)

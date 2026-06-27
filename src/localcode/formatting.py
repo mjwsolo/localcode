@@ -56,15 +56,6 @@ def truncate_with_tail(
     return "\n".join(head_block + [ellipsis] + tail_block)
 
 
-def truncate_one_line(text: str, max_chars: int = 80) -> str:
-    """Truncate to a single line for inline display (e.g. tool-call
-    args summary). Replaces newlines with spaces, hard-caps length."""
-    s = (text or "").replace("\n", " ").strip()
-    if len(s) <= max_chars:
-        return s
-    return s[: max_chars - 1] + "…"
-
-
 def split_stdout_stderr(text: str) -> tuple[str, str]:
     """Heuristic split of bash output into (stdout, stderr).
 
