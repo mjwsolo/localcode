@@ -636,6 +636,7 @@ _SLASH_COMMANDS = [
     ("/status", "Show runtime: server health, current model, perf config"),
     ("/restart", "Restart the model server (use when /status shows 'unreachable')"),
     ("/mcp", "List or reload MCP servers from ~/.localcode/mcp.json"),
+    ("/skills", "List loaded skills and where they're from"),
     ("/model", "List available models / switch (e.g. /model qwen)"),
     ("/thinking", "Show / set hidden reasoning policy (off|auto)"),
     ("/sounds", "Toggle completion + approval notification sounds"),
@@ -1933,6 +1934,8 @@ class ChatScreen(Screen):
             self._restart_for_vision_change(reason="Server restarted")
         elif text == "/mcp" or text.startswith("/mcp "):
             self._handle_mcp_command(text)
+        elif text == "/skills":
+            self._handle_skills_command(text)
         elif text == "/voice" or text.startswith("/voice "):
             self._handle_voice_command(text)
         elif text == "/audio" or text.startswith("/audio "):
@@ -2222,6 +2225,30 @@ class ChatScreen(Screen):
                 step.remove_class("active")
         except Exception:
             pass
+
+    def _handle_skills_command(self, text: str) -> None:
+        """List the skills the agent can use, grouped by origin, with token cost.
+
+        Skills are auto-discovered markdown files (frontmatter + body). Add one
+        by dropping a `.md` into ~/.localcode/skills/ (global) or
+        ./.localcode/skills/ (project); user/project override bundled by name.
+        """
+        from pathlib import Path as _Path
+        from ...skills import load_registry
+        log = self.query_one("#chat-log", ChatLog)
+        reg = load_registry(_Path.cwd())
+        skills = sorted(reg.skills.values(), key=lambda s: (s.origin, s.name))
+        if not skills:
+            log.append_info(
+                "No skills loaded. Drop a .md with `name:`/`description:` frontmatter "
+                "into ~/.localcode/skills/ (global) or ./.localcode/skills/ (project)."
+            )
+            return
+        log.append_info(f"{len(skills)} skill(s) loaded (auto-activated or via the skill tool):")
+        for s in skills:
+            tokens = max(1, (len(s.body) + len(s.description)) // 4)
+            where = "(bundled)" if s.origin == "bundled" else str(s.source_path)
+            log.append_info(f"  {s.name}  ·  {s.origin}  ·  ~{tokens} tok  ·  {where}")
 
     def _handle_mcp_command(self, text: str) -> None:
         """List + reload MCP servers configured in ~/.localcode/mcp.json.
