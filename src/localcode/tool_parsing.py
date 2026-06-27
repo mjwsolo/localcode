@@ -365,14 +365,3 @@ def inject_tool_schemas_into_prompt(system_prompt: str, tools: list[dict]) -> st
     )
 
     return system_prompt + tool_block
-
-
-def build_tool_result_message(tool_calls: list[ParsedToolCall], results: list[str]) -> str:
-    """Build a message containing tool responses in Gemma 4 format.
-
-    This is what gets fed back to the model after tool execution.
-    """
-    parts = []
-    for tc, result in zip(tool_calls, results):
-        parts.append(build_tool_response(tc.name, result))
-    return "\n".join(parts)

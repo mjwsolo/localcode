@@ -4,7 +4,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
 import logging
 from pathlib import Path
-import re
 
 from rich.console import Console
 from rich.panel import Panel
@@ -41,7 +40,7 @@ from .autonomy import AutonomyLevel, apply_autonomy_to_permissions, get_policy
 from .hooks import HookRunner
 from .snapshots import SnapshotStore, create_snapshot
 from .turn_diff import TurnDiffTracker, print_turn_diff
-from .agent.goal import GoalState, infer_goal_state
+from .agent.goal import infer_goal_state
 from .performance import detect_machine_profile, benchmark_report, apply_preset, should_promote_legacy_default_to_laptop_26b
 
 
@@ -60,67 +59,6 @@ _FOLLOWUP_CHAT_ONLY = {
 
 
 _CODING_TASK_KINDS = {"new_app", "existing_app_edit", "run_or_launch"}
-
-
-def _looks_like_task_followup(user_text: str, current_task: object | None) -> bool:
-    """Return true when a short correction should continue the task.
-
-    This is deliberately conservative: it only attaches to a coding task
-    and only for short correction/addition wording. The actual feature
-    remains model/tool-driven; LocalCode does not classify domain terms.
-    """
-    if current_task is None:
-        return False
-    if getattr(current_task, "task_kind", "") not in _CODING_TASK_KINDS:
-        return False
-    text = (user_text or "").strip().lower()
-    if not text:
-        return False
-    first = next(iter(re.findall(r"[a-z0-9]+", text)), "")
-    if text in _FOLLOWUP_CHAT_ONLY:
-        return False
-    if len(text) <= 80 and "?" not in text and first not in {"what", "why", "how", "where", "when", "who"}:
-        return True
-    return any(
-        phrase in text
-        for phrase in (
-            "i meant",
-            "you forgot",
-            "missing",
-            "add ",
-            "also add",
-            "it should",
-            "should have",
-            "doesn't have",
-            "didn't add",
-        )
-    )
-
-
-def _continue_goal_for_task_followup(goal_state: GoalState, user_text: str, current_task: object) -> GoalState:
-    criteria = list(getattr(current_task, "success_criteria", []) or goal_state.success_criteria)
-    criteria.extend([
-        "Follow-up correction is implemented in the existing task context",
-        "Assistant does not stop with a permission question when the requested implementation is local and feasible",
-    ])
-    current_kind = getattr(current_task, "task_kind", goal_state.task_kind)
-    if current_kind in {"new_app", "existing_app_edit"}:
-        goal_type = "edit_existing"
-        task_kind = "existing_app_edit"
-    else:
-        goal_type = getattr(current_task, "goal_type", goal_state.goal_type)
-        task_kind = current_kind
-    # Preserve task identity; this turn is a correction on existing work,
-    # not a fresh task name.
-    return replace(
-        goal_state,
-        goal_type=goal_type,
-        task_kind=task_kind,
-        task_slug=getattr(current_task, "task_slug", goal_state.task_slug),
-        goal_summary=f"{getattr(current_task, 'goal_summary', '')}\nFollow-up: {user_text}".strip()[:240],
-        success_criteria=tuple(dict.fromkeys(criteria)),
-        allows_blocking_question=False,
-    )
 
 
 def _canonical_project_dir_has_files(repo_root: Path, slug: str) -> bool:

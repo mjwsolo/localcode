@@ -1,9 +1,6 @@
 from __future__ import annotations
 
 import re
-import subprocess
-import tempfile
-from pathlib import Path
 from dataclasses import dataclass
 
 
@@ -22,13 +19,6 @@ class DiffFile:
     new_path: str
     headers: list[str]
     hunks: list[DiffHunk]
-
-
-def extract_last_diff_block(text: str) -> str | None:
-    matches = DIFF_BLOCK_RE.findall(text)
-    if not matches:
-        return None
-    return matches[-1].strip()
 
 
 def parse_diff(diff_text: str) -> list[DiffFile]:
@@ -73,18 +63,3 @@ def build_diff(selected_files: list[DiffFile]) -> str:
             blocks.append(hunk.header)
             blocks.extend(hunk.lines)
     return "\n".join(blocks) + ("\n" if blocks else "")
-
-
-def apply_diff(repo_root: Path, diff_text: str) -> tuple[bool, str]:
-    with tempfile.NamedTemporaryFile("w", suffix=".diff", delete=False) as handle:
-        handle.write(diff_text)
-        patch_path = Path(handle.name)
-    result = subprocess.run(
-        ["git", "apply", "--reject", "--whitespace=nowarn", str(patch_path)],
-        cwd=repo_root,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    output = (result.stdout + "\n" + result.stderr).strip()
-    return result.returncode == 0, output or "Patch applied."

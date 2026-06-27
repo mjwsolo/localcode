@@ -101,18 +101,3 @@ def apply_autonomy_to_permissions(permissions, policy: AutonomyPolicy) -> None:
 
     if policy.level == AutonomyLevel.FULL_AUTO:
         permissions.approve_all()
-
-
-def format_autonomy_status(level: AutonomyLevel) -> str:
-    """Format current autonomy level for display."""
-    policy = POLICIES[level]
-    icons = {True: "✓", False: "✗"}
-    return (
-        f"Autonomy: {level.value}\n"
-        f"  {policy.description}\n"
-        f"  reads:    {icons[policy.auto_approve_reads]}\n"
-        f"  writes:   {icons[policy.auto_approve_writes]}\n"
-        f"  bash:     {icons[policy.auto_approve_bash]}\n"
-        f"  installs: {icons[policy.auto_approve_installs]}\n"
-        f"  git:      {icons[policy.auto_approve_git]}"
-    )

@@ -436,39 +436,6 @@ def current(config) -> ModelChoice | None:
     return by_filename(name)
 
 
-def format_choice_long(c: ModelChoice, *, downloaded: bool, current_marker: bool = False) -> str:
-    """Multi-line formatted description for the picker UI."""
-    marker = " (current)" if current_marker else ""
-    status = "downloaded" if downloaded else f"will download {c.size_gb:.1f} GB"
-    if c.humaneval_pass_at_1 is not None:
-        bench = f"{c.humaneval_pass_at_1*100:.1f}% HumanEval pass@1 (measured on this stack)"
-    else:
-        bench = "no benchmark (untested on this stack)"
-    # Warn if this model is too big for the current Mac's RAM budget.
-    # Short inline warning; the picker screen also dims models with a
-    # bad fit so users can see at a glance.
-    try:
-        from .health import estimate_fit
-        fits, reason = estimate_fit(c.size_gb)
-    except Exception:
-        fits, reason = True, ""
-    fit_line = "" if fits else f"  ⚠ fit:      {reason}\n"
-    return (
-        f"[{c.key}] {c.name}{marker}\n"
-        f"  source:    {c.hf_repo}\n"
-        f"  url:       {c.hf_url}\n"
-        f"  filename:  {c.filename}\n"
-        f"  size:      {c.size_gb:.1f} GB ({status})\n"
-        f"{fit_line}"
-        f"  active:    {c.active_params}\n"
-        f"  arch:      {c.architecture}\n"
-        f"  license:   {c.license}\n"
-        f"  benchmark: {bench}\n"
-        f"  download path: {c.local_path}\n"
-        f"  note:      {c.notes}"
-    )
-
-
 # ---------------------------------------------------------------------------
 # Curated MODEL-GROUP layer (ADDITIVE — built on top of the catalog above).
 #

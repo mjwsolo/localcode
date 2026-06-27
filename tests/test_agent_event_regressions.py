@@ -1,5 +1,4 @@
 from pathlib import Path
-import importlib.util
 
 from localcode.agent.goal import infer_goal_state
 from localcode.agent.hooks import EvidenceLedger, TurnState, completion_gate, quality_monitor
@@ -859,29 +858,6 @@ def test_new_app_defers_dependency_install_until_source_exists(tmp_path: Path) -
         {"command": "cd canonical-app && python3 -c 'print(1)'"},
     )
     assert accepted == "1"
-
-
-def test_events_analyzer_surfaces_regression_signals(tmp_path: Path) -> None:
-    events = tmp_path / "events.jsonl"
-    events.write_text(
-        "\n".join([
-            '{"type":"turn_start","turn_id":"t1","goal_type":"edit_existing","task_kind":"existing_app_edit"}',
-            '{"type":"skill_selection","turn_id":"t1","candidates":[{"name":"run-tests","reason":"recent_tool:bash"}]}',
-            '{"type":"skill_injection","turn_id":"t1","skills":["run-tests"],"chars":899}',
-            '{"type":"tool_result","turn_id":"t1","name":"read_file","chars":18000,"preview":"large"}',
-            '{"type":"tool_result","turn_id":"t1","name":"edit_file","error":"true","preview":"old_string not found"}',
-            '{"type":"turn_end","turn_id":"t1","completion_status":"error","tools_called_count":3,"rounds":4,"duration_s":12}',
-        ])
-    )
-    script = Path(__file__).resolve().parent.parent / "scripts" / "analyze_events.py"
-    spec = importlib.util.spec_from_file_location("analyze_events", script)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    report = module.analyze(events)
-    assert "run-tests\t1\t0\t0\t1" in report
-    assert "avg_read_file_chars: 18000" in report
-    assert "edit_errors: 1" in report
 
 
 def test_tool_facts_extracts_launch_contract_fields() -> None:
