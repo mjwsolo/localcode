@@ -1,6 +1,6 @@
 """Per-machine model launch recommendations — the output of the model-opt loop.
 
-The offline optimizer (eval/model_opt.py) sweeps quants/params, scores each
+The offline optimizer (dev/eval/model_opt.py) sweeps quants/params, scores each
 combo on the eval suite, and writes the winner here. At launch,
 ``runtime.llama_server_command`` consults ``load_overrides`` so the tuned
 params are applied automatically.

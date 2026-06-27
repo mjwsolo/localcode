@@ -9,7 +9,7 @@
 <p align="center">
   <img src="https://img.shields.io/pypi/v/localcode?style=flat-square&color=7c4dff" alt="PyPI">
   <img src="https://img.shields.io/badge/license-Apache_2.0-4caf50?style=flat-square" alt="License">
-  <img src="https://img.shields.io/badge/python-3.11+-3776ab?style=flat-square" alt="Python">
+  <img src="https://img.shields.io/badge/python-3.9+-3776ab?style=flat-square" alt="Python">
   <img src="https://img.shields.io/badge/platform-Apple%20Silicon-999999?style=flat-square" alt="Platform">
 </p>
 
@@ -101,7 +101,7 @@ Under the hood:
 - **TurboQuant KV cache** — asymmetric q8\_0-K + turbo4-V quantization, 3.8× compression vs. f16
 - **Multi-region mmap patch** — fixes a Metal OOM crash where llama.cpp's loader spanned the entire GGUF file into one Metal buffer
 - **GPU memory unlock** — auto-prompts to raise `iogpu.wired_limit_mb` for full Metal offload
-- **Agent loop** — phased CREATE/EDIT/CHAT/RUN/SEARCH routing with task state, evidence-driven completion, and recovery modes for small-model failure patterns
+- **Agent loop** — goal-typed routing (build / edit / run / chat) with task state, evidence-driven completion, and recovery modes for small-model failure patterns
 
 ## Sponsors
 

@@ -217,7 +217,7 @@ class StreamEvent(dict):
 def apply_param_overrides(cmd: list[str], env: dict | None = None) -> list[str]:
     """Rewrite llama-server flags from ``LOCALCODE_OVERRIDE_*`` env vars.
 
-    Lets the offline model-optimizer (eval/model_opt.py) sweep launch
+    Lets the offline model-optimizer (dev/eval/model_opt.py) sweep launch
     parameters — GPU layers, context size, threads, batch — WITHOUT editing
     config or the catalog. Only flags already present in ``cmd`` are
     rewritten; an unset env var leaves the command untouched, so the default

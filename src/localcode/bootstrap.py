@@ -1250,18 +1250,6 @@ def _ensure_ollama() -> bool:
     return result.returncode == 0
 
 
-def ensure_model_downloaded(model_tag: str, on_progress: Callable[[str], None] | None = None) -> tuple[bool, str]:
-    """Ensure the model is downloaded via Ollama. Installs Ollama if needed."""
-    if not _ensure_ollama():
-        return False, "Could not install Ollama. Install manually: https://ollama.com/download"
-    # Start Ollama service if not running
-    if platform.system().lower() == "darwin":
-        subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                        start_new_session=True)
-        import time; time.sleep(2)
-    return pull_model(model_tag, on_progress=on_progress)
-
-
 def build_turboquant(on_progress: Callable[[str], None] | None = None) -> tuple[bool, str]:
     """Build the TurboQuant llama.cpp fork from source with Metal support."""
     source = _find_turboquant_source()
