@@ -58,7 +58,6 @@ manually or add a rotator later.
 """
 from __future__ import annotations
 
-import json
 import os
 import time
 import uuid
@@ -197,23 +196,6 @@ def log_turn(trace: TurnTrace) -> None:
     except Exception:
         # Deliberately swallow.
         pass
-
-
-def iter_turns(path: Path | None = None):
-    """Read back the JSONL log. Yields one dict per turn. Consumer-side
-    analysis utilities (future /review command, offline scripts) use this."""
-    p = path or _TURNS_LOG
-    if not p.is_file():
-        return
-    with p.open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                yield json.loads(line)
-            except json.JSONDecodeError:
-                continue  # skip malformed — don't halt the whole read
 
 
 # ── internals ──

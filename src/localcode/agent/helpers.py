@@ -53,16 +53,6 @@ __all__: list[str] = []
 _SHRINK_GUARD_SOURCE_EXTS = {".py", ".js", ".jsx", ".ts", ".tsx", ".css", ".html"}
 
 
-def _canonical_creation_root(app: "LocalCodeApp") -> Path | None:
-    task = getattr(getattr(app, "session", None), "current_task", None)
-    if getattr(task, "task_kind", "") != "new_app":
-        return None
-    slug = str(getattr(task, "task_slug", "") or "").strip()
-    if not slug:
-        return None
-    return (app.repo_root / slug).resolve()
-
-
 def _path_within(path: Path, root: Path) -> bool:
     try:
         path.resolve().relative_to(root)

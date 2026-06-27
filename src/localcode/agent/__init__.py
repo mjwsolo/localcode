@@ -16,7 +16,7 @@ re-exported here so external callers can continue to import from
 Background: before T0.1, agent.py was a 1792-line monolith. The split
 broke it into focused modules (each ≤ ~720 LoC), with __init__.py
 reduced to this re-export surface — well under the 400-LoC cap the
-plan sets for god modules (see eval/OPTIMIZATION_PLAN.md § T0).
+plan sets for god modules (see dev/eval/OPTIMIZATION_PLAN.md § T0).
 
 Unused-import warnings in this file are expected — every imported
 name is intentionally re-exported. The `# noqa: F401` comments
@@ -140,7 +140,7 @@ from .helpers import (  # noqa: F401
 
 # ── Prompt templates + project-instructions loader ────────────────────────
 # Moved to agent/prompts.py during the T0.1-b split. Re-exported here so
-# external callers (eval/prompt_variants.py, tests/promptfoo, app.py,
+# external callers (dev/eval/prompt_variants.py, tests/promptfoo, app.py,
 # tests/test_context_pipeline_e2e.py) that do
 #   `from localcode.agent import SYSTEM_PROMPT`
 # keep working unchanged. See agent/prompts.py for the commented
@@ -160,7 +160,6 @@ from .prompts import (  # noqa: F401 — re-exports for back-compat
 # and the dispatcher (for _execute_tool). Plan-mode gating still lives
 # here because it's cross-tool policy, not tool-specific logic.
 
-from ..tools import ALL_SCHEMAS as TOOL_SCHEMAS  # for agent-loop tool registry injection
 
 
 # ── Result Management ────────────────────────────────────────────────────
