@@ -104,14 +104,6 @@ def read_plan(slug: str) -> str | None:
         return None
 
 
-def write_plan(slug: str, content: str) -> Path:
-    """Persist the plan. Returns the path on disk so callers can surface it."""
-    ensure_plans_dir()
-    p = plan_path(slug)
-    p.write_text(content, encoding="utf-8")
-    return p
-
-
 def new_slug() -> str:
     """Generate a fresh slug, retrying up to 10 times if a file already
     exists (very unlikely but keeps us honest)."""

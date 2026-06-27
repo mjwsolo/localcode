@@ -40,7 +40,7 @@ The macOS CI job runs the install test automatically (real platform check).
 
 ## CI layout (`.github/workflows/ci.yml`)
 
-- **comprehensive (linux)** — required, py 3.11–3.13.
+- **comprehensive (linux)** — required, py 3.9–3.13.
 - **comprehensive (macos-arm64)** — required, runs on Apple Silicon (the user
   platform) + real isolated install.
 - **build** — packaging must build.

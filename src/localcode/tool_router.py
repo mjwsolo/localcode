@@ -233,66 +233,6 @@ def route_tools(
     )
 
 
-def expand_tools_for_retry(
-    current_tools: set[str],
-    model_response: str,
-    available_tools: list[str],
-) -> set[str] | None:
-    """If the model said it can't do something, figure out which tool to add.
-
-    Returns expanded tool set, or None if no expansion needed.
-
-    This is the "progressive disclosure" step — if the model says
-    "I don't have access to X", we add the relevant tool and retry.
-    """
-    response_lower = model_response.lower()
-
-    expansion_triggers: dict[str, list[str]] = {
-        "search": ["web_search", "web_fetch", "grep"],
-        "browse": ["web_search", "web_fetch"],
-        "internet": ["web_search", "web_fetch"],
-        "file": ["read_file", "write_file", "edit_file", "glob"],
-        "time": ["web_search", "bash"],
-        "run": ["bash"],
-        "test": ["bash"],
-        "commit": ["git_commit", "git_status", "git_diff"],
-        "diff": ["git_diff"],
-    }
-
-    # Check if model expressed inability
-    inability_patterns = [
-        r"i (?:don.t|do not|cannot|can.t) have access",
-        r"i (?:don.t|do not|cannot|can.t) (?:search|browse|access|run)",
-        r"i (?:am|'m) (?:unable|not able) to",
-        r"(?:no|not) (?:available|capable|able)",
-        r"beyond my (?:capabilities|ability)",
-    ]
-
-    expressed_inability = any(
-        re.search(p, response_lower) for p in inability_patterns
-    )
-
-    if not expressed_inability:
-        return None
-
-    # Find which tools to add
-    new_tools = set(current_tools)
-    added = False
-    for keyword, tools in expansion_triggers.items():
-        if keyword in response_lower:
-            for t in tools:
-                if t in available_tools and t not in current_tools:
-                    new_tools.add(t)
-                    added = True
-
-    # Generic expansion: add web_search if not present
-    if not added and "web_search" not in current_tools and "web_search" in available_tools:
-        new_tools.add("web_search")
-        added = True
-
-    return new_tools if added else None
-
-
 def _extract_recent_tool_names(history: list[dict], lookback: int = 4) -> list[str]:
     """Extract tool names from recent conversation for continuity."""
     tool_names = []

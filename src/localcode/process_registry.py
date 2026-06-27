@@ -151,26 +151,6 @@ def process_summary(repo_root: Path | str) -> str:
     return "\n".join(lines)
 
 
-def stop_all_records(repo_root: Path | str) -> str:
-    records = load_records(repo_root)
-    if not records:
-        return "No LocalCode-managed processes recorded."
-    stopped = 0
-    skipped = 0
-    for record in list(records):
-        if record.stopped_at:
-            skipped += 1
-            continue
-        if record.pid <= 0 or not _pid_alive(record.pid):
-            skipped += 1
-            continue
-        if stop_record(repo_root, record):
-            stopped += 1
-        else:
-            skipped += 1
-    return f"Stopped {stopped} LocalCode-managed process group(s). Skipped {skipped}."
-
-
 def _pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)

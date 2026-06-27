@@ -117,12 +117,6 @@ _LEGACY_HEX_TO_SEMANTIC = {
 }
 
 
-def lookup_legacy(hex_value: str) -> str | None:
-    """For migration scripts: given a hex literal, return the semantic
-    palette key (or None if the color isn't in the palette)."""
-    return _LEGACY_HEX_TO_SEMANTIC.get(hex_value.lower())
-
-
 # ── Theme switching scaffolding ──────────────────────────────────────
 # Light theme stub — fill in when we ship light mode. The shape mirrors
 # Palette so the swap is a single assignment.
@@ -141,16 +135,3 @@ LIGHT: Palette = Palette(
     diff_add="#16a34a",
     diff_remove="#dc2626",
 )
-
-
-def set_theme(name: str) -> None:
-    """Swap the active theme. Currently 'dark' (default) or 'light'.
-    Mutates the module-level `C` and `on` so existing imports see
-    the new colors after the call returns."""
-    global C, on, THEME
-    if name == "light":
-        THEME = LIGHT
-    else:
-        THEME = Palette()  # dark default
-    C = THEME
-    on = THEME

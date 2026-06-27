@@ -59,7 +59,6 @@ site/
 # Per-project LocalCode state — sessions, test results, lifecycle log, notebook
 .localcode/
 .gem/
-eval/results/
 
 # Eval scaffolding the model creates while running benchmarks
 # (HumanEval-style apps, throwaway scripts, todo-app demos)
@@ -86,7 +85,6 @@ app.log
 backend.log
 *.log
 nohup.out
-eval/results/
 
 # Local benchmark result artifacts (scratch)
 bench_*.json

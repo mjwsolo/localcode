@@ -193,21 +193,3 @@ def create_snapshot(session_id: str, repo_root: str, messages: list[dict],
     store = SnapshotStore()
     store.save(snapshot)
     return snapshot
-
-
-def restore_snapshot(snapshot: GhostSnapshot) -> dict:
-    """Restore file system state from a snapshot.
-
-    Returns dict of files restored.
-    """
-    restored = {}
-    root = Path(snapshot.repo_root)
-    for rel_path, content in snapshot.file_snapshots.items():
-        full = root / rel_path
-        try:
-            full.parent.mkdir(parents=True, exist_ok=True)
-            full.write_text(content)
-            restored[rel_path] = "restored"
-        except Exception as e:
-            restored[rel_path] = f"error: {e}"
-    return restored
