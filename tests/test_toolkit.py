@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -265,3 +266,115 @@ class TestExecuteToolCalls:
         ])
         assert len(results) == 1
         assert "error" in results[0]["content"].lower() or "unknown" in results[0]["content"].lower() or "not" in results[0]["content"].lower()
+
+
+# Minimal stdio MCP server script used by the MCP wiring tests below. Speaks
+# just enough JSON-RPC: initialize, tools/list (one tool), tools/call (echo).
+_FAKE_MCP_SERVER = '''#!/usr/bin/env python3
+import sys, json
+
+def reply(rid, result):
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": rid, "result": result}) + "\\n")
+    sys.stdout.flush()
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        msg = json.loads(line)
+    except Exception:
+        continue
+    method = msg.get("method")
+    rid = msg.get("id")
+    if method == "initialize":
+        reply(rid, {"protocolVersion": "2024-11-05", "capabilities": {},
+                    "serverInfo": {"name": "fake", "version": "1.0"}})
+    elif method == "tools/list":
+        reply(rid, {"tools": [{
+            "name": "echo",
+            "description": "Echo the arguments back",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"text": {"type": "string"}},
+                "required": ["text"],
+            },
+        }]})
+    elif method == "tools/call":
+        args = (msg.get("params") or {}).get("arguments") or {}
+        reply(rid, {"content": [{"type": "text", "text": "ECHO:" + json.dumps(args)}]})
+    else:
+        reply(rid, {})
+'''
+
+
+class TestMCPWiring:
+    """Verify MCP servers connect and their tools become callable."""
+
+    def _setup_fake_mcp(self, tmp_path: Path, monkeypatch) -> str:
+        import stat
+        from localcode import mcp as mcp_mod
+
+        # Reset the process-wide client registry so prior tests don't leak.
+        mcp_mod.shutdown_all()
+
+        home = tmp_path / "lc_home"
+        home.mkdir()
+        server_py = home / "fake_server.py"
+        server_py.write_text(_FAKE_MCP_SERVER)
+        server_py.chmod(server_py.stat().st_mode | stat.S_IEXEC)
+
+        config = {
+            "mcpServers": {
+                "fake": {
+                    "command": sys.executable,
+                    "args": [str(server_py)],
+                    "env": {},
+                }
+            }
+        }
+        (home / "mcp.json").write_text(__import__("json").dumps(config))
+        monkeypatch.setenv("LOCALCODE_HOME", str(home))
+        return "mcp_fake_echo"
+
+    def test_mcp_tool_registered_and_callable(self, tmp_repo: Path, tmp_path: Path, monkeypatch) -> None:
+        from localcode import mcp as mcp_mod
+        tool_name = self._setup_fake_mcp(tmp_path, monkeypatch)
+        try:
+            tk = _make_toolkit(tmp_repo)
+
+            # Appears in schemas()
+            names_in_schema = {s["function"]["name"] for s in tk.schemas()}
+            assert tool_name in names_in_schema, names_in_schema
+
+            # Appears in list_tool_names()
+            assert tool_name in tk.list_tool_names()
+
+            # Schema carries the MCP tool's inputSchema
+            schema = next(s for s in tk.schemas() if s["function"]["name"] == tool_name)
+            assert "text" in schema["function"]["parameters"]["properties"]
+
+            # execute_tool_calls actually invokes the server and echoes args
+            results = tk.execute_tool_calls([
+                {"function": {"name": tool_name, "arguments": {"text": "hi"}}}
+            ])
+            assert len(results) == 1
+            assert "ECHO:" in results[0]["content"]
+            assert "hi" in results[0]["content"]
+        finally:
+            mcp_mod.shutdown_all()
+
+    def test_ensure_mcp_tools_runs_once(self, tmp_repo: Path, tmp_path: Path, monkeypatch) -> None:
+        from localcode import mcp as mcp_mod
+        self._setup_fake_mcp(tmp_path, monkeypatch)
+        try:
+            tk = _make_toolkit(tmp_repo)
+            assert tk._mcp_loaded is False
+            tk.ensure_mcp_tools()
+            assert tk._mcp_loaded is True
+            n_after_first = len(tk.tools)
+            tk.ensure_mcp_tools()  # idempotent — no duplicate registration
+            assert len(tk.tools) == n_after_first
+            assert "fake" in tk.mcp_clients
+        finally:
+            mcp_mod.shutdown_all()

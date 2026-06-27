@@ -18,9 +18,9 @@ except ImportError:
 from .config import AppConfig
 from .context import IGNORE_DIRS, list_repo_files
 from .indexer import build_index, search_index
-# MCP client module removed in T0.9 purge — nobody configured MCP servers,
-# the dispatch loop was dead code. Reintroduce as a proper plugin system
-# (T0.9-followup) if a real MCP use case lands.
+# MCP tools are lazily wired in via ensure_mcp_tools() (the `mcp` module is
+# imported there, on demand, so a missing/broken MCP setup never affects
+# toolkit import). See ensure_mcp_tools() below.
 from .shell import run_shell
 from .undo import ChangeLog
 
@@ -1063,10 +1063,64 @@ class LocalCodeToolkit:
         """Plugin system removed — no-op."""
         pass
 
-    # MCP registration functions removed during T0.9 purge. Reintroduce
-    # alongside a real plugin system if needed; the prior implementation
-    # was never configured by any user, so keeping it as dead dispatch
-    # code was pure surface area for drift.
+    @staticmethod
+    def _make_mcp_handler(client: Any, tool_name: str) -> ToolHandler:
+        """Build a handler bound to a specific client + tool name.
+
+        Defined as its own method (not a lambda inside a loop) so the
+        client/tool_name are captured per-tool — no late-binding bug where
+        every registered MCP tool would point at the last loop iteration.
+        """
+        def handler(args: dict[str, Any]) -> str:
+            try:
+                return client.call_tool(tool_name, args or {})
+            except Exception as exc:  # never let a bad MCP call crash dispatch
+                return f"MCP tool {tool_name!r} call failed: {exc}"
+        return handler
+
+    def ensure_mcp_tools(self) -> None:
+        """Lazily connect configured MCP servers and register their tools.
+
+        Runs at most once per toolkit (guarded by self._mcp_loaded). Each
+        connected server's tools are registered as `mcp_<server>_<tool>`
+        LocalCodeTools so the model can call them like any builtin. Fully
+        defensive: a bad/missing MCP server never crashes the toolkit.
+        """
+        if self._mcp_loaded:
+            return
+        self._mcp_loaded = True  # set first so we only ever attempt once
+        try:
+            from . import mcp as _mcp
+        except Exception as exc:
+            self.mcp_errors.append(f"mcp import failed: {exc}")
+            return
+        try:
+            _count, errors = _mcp.connect_all()
+            if errors:
+                self.mcp_errors.extend(errors)
+            for server, tools in _mcp.list_connected():
+                client = _mcp.get_client(server)
+                if client is None:
+                    continue
+                self.mcp_clients[server] = client
+                for t in tools:
+                    tool_name = (t.get("name") or "").strip()
+                    if not tool_name:
+                        continue
+                    schema = t.get("inputSchema") or {"type": "object", "properties": {}}
+                    if not isinstance(schema, dict):
+                        schema = {"type": "object", "properties": {}}
+                    description = (
+                        f"[MCP {server}] " + (t.get("description") or "")
+                    ).strip()[:1000]
+                    self._register(LocalCodeTool(
+                        name=f"mcp_{server}_{tool_name}",
+                        description=description,
+                        parameters=schema,
+                        handler=self._make_mcp_handler(client, tool_name),
+                    ))
+        except Exception as exc:  # connect_all/list shouldn't raise, but be safe
+            self.mcp_errors.append(f"mcp wiring failed: {exc}")
 
     # ── Public API ───────────────────────────────────────────────────────
 
@@ -1084,7 +1138,7 @@ class LocalCodeToolkit:
         compact: only core tools
         minimal: ultra-short descriptions for small models (saves ~500 tokens)
         """
-        # self.ensure_mcp_tools() removed during T0.9 purge
+        self.ensure_mcp_tools()
         if compact:
             tools = [tool for tool in self.tools.values() if tool.name in self.CORE_TOOLS]
         else:
@@ -1117,7 +1171,7 @@ class LocalCodeToolkit:
         }
 
     def list_tool_names(self) -> list[str]:
-        # self.ensure_mcp_tools() removed during T0.9 purge
+        self.ensure_mcp_tools()
         return sorted(self.tools.keys())
 
     def summarize_tool_calls(self, tool_calls: list[dict[str, Any]]) -> list[str]:
@@ -1145,7 +1199,7 @@ class LocalCodeToolkit:
     def execute_tool_calls(self, tool_calls: list[dict[str, Any]]) -> list[dict[str, str]]:
         """Execute tool calls — read-only tools run concurrently, writes run serially."""
         from concurrent.futures import ThreadPoolExecutor, as_completed
-        # self.ensure_mcp_tools() removed during T0.9 purge
+        self.ensure_mcp_tools()
 
         if len(tool_calls) <= 1:
             return self._execute_serial(tool_calls)
