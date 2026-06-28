@@ -9,7 +9,7 @@
 <p align="center">
   <img src="https://img.shields.io/pypi/v/localcode?style=flat-square&color=7c4dff" alt="PyPI">
   <img src="https://img.shields.io/badge/license-Apache_2.0-4caf50?style=flat-square" alt="License">
-  <img src="https://img.shields.io/badge/python-3.9+-3776ab?style=flat-square" alt="Python">
+  <img src="https://img.shields.io/badge/python-3.10+-3776ab?style=flat-square" alt="Python">
   <img src="https://img.shields.io/badge/platform-Apple%20Silicon-999999?style=flat-square" alt="Platform">
 </p>
 
@@ -63,7 +63,7 @@ We are building for a world of truly democratized AI — where everyone has acce
 
 - **Mac with Apple Silicon**
 - **16 GB RAM** minimum
-- **Python 3.9+**
+- **Python 3.10+**
 - **~12 GB free disk** (10 GB model + server)
 
 ### Tested hardware

@@ -268,44 +268,33 @@ class TestExecuteToolCalls:
         assert "error" in results[0]["content"].lower() or "unknown" in results[0]["content"].lower() or "not" in results[0]["content"].lower()
 
 
-# Minimal stdio MCP server script used by the MCP wiring tests below. Speaks
-# just enough JSON-RPC: initialize, tools/list (one tool), tools/call (echo).
+# A REAL MCP server (official SDK) used by the MCP wiring tests below.
+# Built with mcp.server.fastmcp.FastMCP, exposing one `echo` tool, run over
+# stdio. The toolkit connects to it through the SDK client (localcode.mcp).
 _FAKE_MCP_SERVER = '''#!/usr/bin/env python3
-import sys, json
+from mcp.server.fastmcp import FastMCP
 
-def reply(rid, result):
-    sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": rid, "result": result}) + "\\n")
-    sys.stdout.flush()
+mcp = FastMCP("fake")
 
-for line in sys.stdin:
-    line = line.strip()
-    if not line:
-        continue
-    try:
-        msg = json.loads(line)
-    except Exception:
-        continue
-    method = msg.get("method")
-    rid = msg.get("id")
-    if method == "initialize":
-        reply(rid, {"protocolVersion": "2024-11-05", "capabilities": {},
-                    "serverInfo": {"name": "fake", "version": "1.0"}})
-    elif method == "tools/list":
-        reply(rid, {"tools": [{
-            "name": "echo",
-            "description": "Echo the arguments back",
-            "inputSchema": {
-                "type": "object",
-                "properties": {"text": {"type": "string"}},
-                "required": ["text"],
-            },
-        }]})
-    elif method == "tools/call":
-        args = (msg.get("params") or {}).get("arguments") or {}
-        reply(rid, {"content": [{"type": "text", "text": "ECHO:" + json.dumps(args)}]})
-    else:
-        reply(rid, {})
+
+@mcp.tool()
+def echo(text: str) -> str:
+    """Echo the arguments back."""
+    import json
+    return "ECHO:" + json.dumps({"text": text})
+
+
+if __name__ == "__main__":
+    mcp.run()
 '''
+
+# OAuth / HTTP / SSE transports are hard to exercise live in CI (they need a
+# running remote server and, for OAuth, an interactive browser). The tests
+# below therefore only validate that those config paths construct a client
+# of the right transport — they are explicitly NOT live-tested end to end.
+_HTTP_CONFIG = {"transport": "http", "url": "https://example.com/mcp",
+                "headers": {"Authorization": "Bearer x"}, "oauth": True}
+_SSE_CONFIG = {"transport": "sse", "url": "https://example.com/sse", "headers": {}}
 
 
 class TestMCPWiring:
@@ -378,3 +367,47 @@ class TestMCPWiring:
             assert "fake" in tk.mcp_clients
         finally:
             mcp_mod.shutdown_all()
+
+
+class TestMCPTransportConfig:
+    """HTTP / SSE / OAuth config paths.
+
+    These transports need a live remote server (and OAuth an interactive
+    browser), so they are NOT live-tested. We only assert the config parses
+    into a client of the right transport and that the SDK transport context
+    can be constructed without raising.
+    """
+
+    def test_http_config_builds_http_client(self) -> None:
+        from localcode import mcp as mcp_mod
+        cli = mcp_mod._client_from_config("h", _HTTP_CONFIG)
+        assert cli.transport == "http"
+        assert cli.url == "https://example.com/mcp"
+        assert cli.headers["Authorization"] == "Bearer x"
+        assert cli.oauth is True
+        # Constructing the transport context manager must not raise (it does
+        # not connect until entered). This also exercises the OAuth provider
+        # construction path.
+        cm = cli._make_transport()
+        assert cm is not None
+
+    def test_sse_config_builds_sse_client(self) -> None:
+        from localcode import mcp as mcp_mod
+        cli = mcp_mod._client_from_config("s", _SSE_CONFIG)
+        assert cli.transport == "sse"
+        assert cli.url == "https://example.com/sse"
+        assert cli.oauth is False
+        cm = cli._make_transport()
+        assert cm is not None
+
+    def test_default_transport_is_stdio(self) -> None:
+        from localcode import mcp as mcp_mod
+        cli = mcp_mod._client_from_config("d", {"command": "echo", "args": []})
+        assert cli.transport == "stdio"
+
+    def test_unknown_transport_raises_on_build(self) -> None:
+        from localcode import mcp as mcp_mod
+        cli = mcp_mod._client_from_config("u", {"transport": "carrier-pigeon",
+                                                "url": "https://x"})
+        with pytest.raises(RuntimeError):
+            cli._make_transport()
