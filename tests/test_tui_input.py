@@ -438,3 +438,139 @@ def test_chat_textarea_max_lines_is_terminal_relative(monkeypatch):
     # Tall terminal → ceilinged at the maximum (80//2 - 6 = 34 → MAX).
     holder["h"] = 80
     assert ta._max_input_lines() == _ChatTextArea._MAX_INPUT_CAP
+
+
+# ---------------------------------------------------------------------------
+# Live-pilot regressions for the multi-line input + output-copy + /thinking
+# gating. These mount the real app on Textual's headless driver so the
+# message loop, layout, and call_after_refresh deferral all run for real.
+# ---------------------------------------------------------------------------
+import asyncio
+import os
+
+
+def _new_app():
+    from localcode.tui.app import LocalCodeTUI
+    os.environ["LOCALCODE_AUTONOMY"] = "full_auto"
+    app = LocalCodeTUI()
+    app._preview_screen = "chat"  # skip health/server/model-picker → chat
+    return app
+
+
+def test_chat_input_grows_on_typing_and_paste_live():
+    """Regression: the TextArea must auto-grow as content wraps to more
+    than one visual row, on BOTH typing and paste — measured after a refresh
+    (call_after_refresh) so the wrapped-row count is current, not stale."""
+    from textual.events import Paste
+
+    async def scenario():
+        app = _new_app()
+        async with app.run_test(size=(80, 40)) as pilot:
+            await pilot.pause()
+            ta = app.screen.query_one("#chat-input")
+            ta.focus()
+            await pilot.pause()
+            assert int(ta.styles.height.value) == 1, "starts at one row"
+
+            # Typed multi-line content (Ctrl+J inserts a newline).
+            await pilot.press("a", "b", "c", "ctrl+j", "d", "e", "f", "ctrl+j", "g")
+            await pilot.pause()
+            await pilot.pause()
+            assert ta.text == "abc\ndef\ng"
+            assert int(ta.styles.height.value) == 3, (
+                f"typed 3 lines should grow to 3 rows, got {ta.styles.height.value}"
+            )
+
+            # A long single-line paste must soft-wrap and grow past one row.
+            ta.text = ""
+            await pilot.pause()
+            ta.post_message(Paste("x" * 400))
+            await pilot.pause()
+            await pilot.pause()
+            assert int(ta.styles.height.value) > 1, (
+                "a 400-char paste must wrap and grow the box past one row"
+            )
+
+    asyncio.run(scenario())
+
+
+def test_chat_log_output_is_selectable_and_copies_live():
+    """Regression: agent output in the chat log can be selected by
+    click-drag and the selected text is extracted + pushed to the clipboard
+    (OSC52 / pbcopy), since Textual's mouse capture blocks native selection."""
+
+    async def scenario():
+        app = _new_app()
+        copied = {}
+        async with app.run_test(size=(80, 40)) as pilot:
+            await pilot.pause()
+            from localcode.tui.widgets.chat_log import ChatLog as _CL
+            log = app.screen.query_one("#chat-log", _CL)
+            # Capture whatever the widget tries to put on the clipboard.
+            log._set_clipboard_osc52 = lambda text: copied.update(text=text)
+            for i in range(6):
+                log.append_info(f"agent output row {i}")
+            await pilot.pause()
+
+            class _E:
+                def __init__(self, x, y):
+                    self.x, self.y = x, y
+
+            log.on_mouse_down(_E(2, 1))
+            log.on_mouse_move(_E(40, 3))
+            log.on_mouse_up(_E(40, 3))
+
+            assert log.get_selection().strip(), "drag must yield selected text"
+            assert copied.get("text", "").strip(), "selection must reach the clipboard"
+
+    asyncio.run(scenario())
+
+
+def test_thinking_command_disabled_for_non_reasoning_model_live():
+    """Regression: /thinking is greyed-out + non-selectable + a no-op
+    on models without a hidden-reasoning channel (diffusion), and fully works
+    on a reasoning model."""
+
+    async def scenario():
+        from localcode.models_catalog import by_key, current
+
+        app = _new_app()
+        async with app.run_test(size=(80, 40)) as pilot:
+            await pilot.pause()
+            scr = app.screen
+
+            # Diffusion model → no thinking channel.
+            app.config.runtime.model = by_key("diffusiongemma").filename
+            assert current(app.config).key == "diffusiongemma"
+            assert scr._model_supports_thinking() is False
+            assert scr._slash_cmd_disabled("/thinking") is True
+            assert scr._slash_cmd_disabled("/model") is False
+
+            # Menu renders /thinking as unavailable, not as a usable row.
+            scr._slash_matches = [
+                ("/permissions", "x"),
+                ("/thinking", "Show / set hidden reasoning policy"),
+                ("/model", "y"),
+            ]
+            scr._slash_selected = 0
+            scr._render_slash_menu()
+            menu_text = str(scr.query_one("#slash-menu").render())
+            assert "unavailable for this model" in menu_text
+
+            # Navigation skips the disabled /thinking row (1 → 2).
+            assert scr._next_selectable_slash(0, +1) == 2
+
+            # Direct command is a no-op on a non-reasoning model.
+            app.config.runtime.internal_thinking_mode = "off"
+            scr._handle_thinking_command("/thinking auto")
+            assert app.config.runtime.internal_thinking_mode == "off"
+
+            # Reasoning model → enabled + selectable + functional.
+            app.config.runtime.model = by_key("qwen").filename
+            assert scr._model_supports_thinking() is True
+            assert scr._slash_cmd_disabled("/thinking") is False
+            assert scr._next_selectable_slash(0, +1) == 1
+            scr._handle_thinking_command("/thinking auto")
+            assert app.config.runtime.internal_thinking_mode == "auto"
+
+    asyncio.run(scenario())

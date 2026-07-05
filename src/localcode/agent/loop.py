@@ -24,6 +24,7 @@ you hit them.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import time
@@ -1328,8 +1329,12 @@ def run_agent_loop(
             fn = tc.get("function", {})
             tool_name = fn.get("name", "unknown")
             try:
-                args = json.loads(fn.get("arguments", "{}"))
-            except json.JSONDecodeError:
+                _raw_args = fn.get("arguments", "{}")
+                # `arguments` is normally a JSON string, but some providers/
+                # parsers hand back an already-decoded dict — json.loads on a
+                # dict raises TypeError, so accept both shapes.
+                args = _raw_args if isinstance(_raw_args, dict) else json.loads(_raw_args)
+            except (json.JSONDecodeError, TypeError, ValueError):
                 args = {}
                 out.print_info(f"Warning: malformed args for {tool_name}")
 
@@ -1337,6 +1342,16 @@ def run_agent_loop(
             stage = _tool_stage_label(tool_name, args)
             out.set_stage(stage)
             idx = out.log_tool(tool_name, _summarize_args(args))
+            # The normal `tool_start` event carries only a summarized,
+            # 200-char-truncated arg preview. LOCALCODE_TRACE_FULL_ARGS=1
+            # additionally emits the full arguments (e.g. the whole
+            # write_file body) for external trace consumers; normal
+            # TUI/headless runs are unaffected.
+            if os.environ.get("LOCALCODE_TRACE_FULL_ARGS"):
+                out._emit_event(
+                    "tool_call_full", index=str(idx),
+                    name=tool_name, arguments=args,
+                )
 
             # Safety: confirm destructive commands (honors current autonomy
             # level so /permissions toggles take effect immediately).

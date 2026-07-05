@@ -129,6 +129,9 @@ def run_headless_json(config, args) -> int:
     from .bootstrap import get_model_path
     from .models_catalog import CHOICES
 
+    # Resolve a GGUF on disk for the llama_cpp path (which needs a server
+    # probe/start). Ollama pulls its own models, but headless run is the
+    # llama_cpp/CI harness path.
     resolved: _Path | None = None
     for candidate in (args.model, config.runtime.model):
         name = _Path(candidate).name if candidate else None

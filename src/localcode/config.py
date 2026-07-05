@@ -31,10 +31,6 @@ escalation_enabled = false
 low_overhead_mode = true
 laptop_26b_runtime_mode = "turbo"
 internal_thinking_mode = "off"
-huggingface_model_id = ""
-huggingface_device = "auto"
-huggingface_dtype = "auto"
-mlx_model_id = ""
 quant_preset = "balanced"
 cache_policy = "adaptive"
 rolling_window_messages = 24
@@ -101,10 +97,6 @@ class RuntimeConfig:
     low_overhead_mode: bool = True
     laptop_26b_runtime_mode: str = "turbo"
     internal_thinking_mode: str = "off"
-    huggingface_model_id: str = ""
-    huggingface_device: str = "auto"
-    huggingface_dtype: str = "auto"
-    mlx_model_id: str = ""
     quant_preset: str = "balanced"
     cache_policy: str = "adaptive"
     rolling_window_messages: int = 24
@@ -231,10 +223,6 @@ def save_config(config: AppConfig) -> Path:
         f"low_overhead_mode = {'true' if config.runtime.low_overhead_mode else 'false'}\n"
         f'laptop_26b_runtime_mode = "{config.runtime.laptop_26b_runtime_mode}"\n'
         f'internal_thinking_mode = "{config.runtime.internal_thinking_mode}"\n'
-        f'huggingface_model_id = "{config.runtime.huggingface_model_id}"\n'
-        f'huggingface_device = "{config.runtime.huggingface_device}"\n'
-        f'huggingface_dtype = "{config.runtime.huggingface_dtype}"\n'
-        f'mlx_model_id = "{config.runtime.mlx_model_id}"\n'
         f'quant_preset = "{config.runtime.quant_preset}"\n'
         f'cache_policy = "{config.runtime.cache_policy}"\n'
         f"rolling_window_messages = {config.runtime.rolling_window_messages}\n"
@@ -249,6 +237,10 @@ def save_config(config: AppConfig) -> Path:
         f'kv_cache_type_k = "{config.runtime.kv_cache_type_k}"\n'
         f'kv_cache_type_v = "{config.runtime.kv_cache_type_v}"\n'
         f'llama_cpp_binary = "{config.runtime.llama_cpp_binary}"\n'
+        f"llama_cpp_cache_reuse = {config.runtime.llama_cpp_cache_reuse}\n"
+        f'diffusion_cli_binary = "{config.runtime.diffusion_cli_binary}"\n'
+        f'cohere_server_binary = "{config.runtime.cohere_server_binary}"\n'
+        f'model_dir = "{config.runtime.model_dir}"\n'
         f"temperature = {config.runtime.temperature}\n"
         f"max_context_chars = {config.runtime.max_context_chars}\n"
         f"request_timeout_seconds = {config.runtime.request_timeout_seconds}\n"
@@ -301,8 +293,8 @@ def load_config() -> AppConfig:
     # browser / voice sections removed during T0.9 purge
     ui_data = data.get("ui", {})
     runtime = RuntimeConfig(
-        provider=os.environ.get("LOCALCODE_PROVIDER", runtime_data.get("provider", "ollama")),
-        base_url=os.environ.get("LOCALCODE_BASE_URL", runtime_data.get("base_url", "http://localhost:11434")),
+        provider=os.environ.get("LOCALCODE_PROVIDER", runtime_data.get("provider", "llama_cpp")),
+        base_url=os.environ.get("LOCALCODE_BASE_URL", runtime_data.get("base_url", "http://localhost:8081")),
         profile=os.environ.get("LOCALCODE_PROFILE", runtime_data.get("profile", "e4b")),
         model=os.environ.get("LOCALCODE_MODEL", runtime_data.get("model", "")),
         mode=os.environ.get("LOCALCODE_MODE", runtime_data.get("mode", "balanced")),
@@ -316,16 +308,19 @@ def load_config() -> AppConfig:
         low_overhead_mode=str(os.environ.get("LOCALCODE_LOW_OVERHEAD_MODE", runtime_data.get("low_overhead_mode", False))).lower() in {"1", "true", "yes", "on"},
         laptop_26b_runtime_mode=os.environ.get("LOCALCODE_LAPTOP_26B_RUNTIME_MODE", runtime_data.get("laptop_26b_runtime_mode", "auto")),
         internal_thinking_mode=os.environ.get("LOCALCODE_INTERNAL_THINKING_MODE", runtime_data.get("internal_thinking_mode", "off")),
-        huggingface_model_id=os.environ.get("LOCALCODE_HF_MODEL_ID", runtime_data.get("huggingface_model_id", "")),
-        huggingface_device=os.environ.get("LOCALCODE_HF_DEVICE", runtime_data.get("huggingface_device", "auto")),
-        huggingface_dtype=os.environ.get("LOCALCODE_HF_DTYPE", runtime_data.get("huggingface_dtype", "auto")),
-        mlx_model_id=os.environ.get("LOCALCODE_MLX_MODEL_ID", runtime_data.get("mlx_model_id", "")),
         quant_preset=os.environ.get("LOCALCODE_QUANT_PRESET", runtime_data.get("quant_preset", "balanced")),
         cache_policy=os.environ.get("LOCALCODE_CACHE_POLICY", runtime_data.get("cache_policy", "adaptive")),
         rolling_window_messages=int(os.environ.get("LOCALCODE_ROLLING_WINDOW_MESSAGES", runtime_data.get("rolling_window_messages", 24))),
         llama_cpp_gpu_layers=int(os.environ.get("LOCALCODE_LLAMA_CPP_GPU_LAYERS", runtime_data.get("llama_cpp_gpu_layers", 0))),
         llama_cpp_threads=int(os.environ.get("LOCALCODE_LLAMA_CPP_THREADS", runtime_data.get("llama_cpp_threads", 8))),
         llama_cpp_batch_size=int(os.environ.get("LOCALCODE_LLAMA_CPP_BATCH_SIZE", runtime_data.get("llama_cpp_batch_size", 128))),
+        # Load back everything save_config persists: custom model dir,
+        # cache-reuse tuning, and the on-demand-built diffusion/cohere
+        # binary paths.
+        llama_cpp_cache_reuse=int(os.environ.get("LOCALCODE_LLAMA_CPP_CACHE_REUSE", runtime_data.get("llama_cpp_cache_reuse", 256))),
+        diffusion_cli_binary=os.environ.get("LOCALCODE_DIFFUSION_CLI_BINARY", runtime_data.get("diffusion_cli_binary", "")),
+        cohere_server_binary=os.environ.get("LOCALCODE_COHERE_SERVER_BINARY", runtime_data.get("cohere_server_binary", "")),
+        model_dir=os.environ.get("LOCALCODE_MODEL_DIR", runtime_data.get("model_dir", "")),
         # `llama_cpp_spec_type` migration (2026-04-26): old configs
         # auto-saved "ngram-mod" or "ngram-simple" from a benchmark
         # preset. N-gram speculative decoding looks up matching
@@ -369,6 +364,7 @@ def load_config() -> AppConfig:
     ui = UIConfig(
         show_debug=str(os.environ.get("LOCALCODE_SHOW_DEBUG", ui_data.get("show_debug", False))).lower() in {"1", "true", "yes", "on"},
         thinking_mode=os.environ.get("LOCALCODE_THINKING_MODE", ui_data.get("thinking_mode", "summary")),
+        sounds_enabled=str(ui_data.get("sounds_enabled", False)).lower() in {"1", "true", "yes", "on"},
     )
     safety_data = data.get("safety", {})
     safety = SafetyConfig(
@@ -387,6 +383,15 @@ def load_config() -> AppConfig:
         log_responses=str(logging_data.get("log_responses", True)).lower() in {"1", "true", "yes", "on"},
         max_days=int(logging_data.get("max_days", 30)),
     )
+    # Migration: llama_cpp (the tuned llama-server) is the sole HTTP runtime.
+    # A persisted `provider` pointing at a removed backend (mlx-local,
+    # huggingface-local, ollama) is coerced to llama_cpp, and a stale 11434
+    # (ollama) base_url is moved to the llama_cpp port so URLs stay correct.
+    if runtime.provider in ("mlx-local", "huggingface-local", "ollama"):
+        runtime.provider = "llama_cpp"
+        if not runtime.base_url or "11434" in runtime.base_url:
+            runtime.base_url = "http://localhost:8081"
+
     config = AppConfig(runtime=runtime, search=search,
                        ui=ui, safety=safety, logging=logging_cfg)
 
