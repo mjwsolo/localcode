@@ -245,11 +245,12 @@ def _semantic_tool_summary(content: str) -> str:
         or "Traceback " in content
     )
     if is_error:
-        tail = "\n".join([ln for ln in lines[-12:] if ln.strip()])[:1200]
-        return (
-            f"[older tool error preserved: {len(content)} chars, "
-            f"{len(lines)} lines]\n{first_line}\n{tail}"
-        )
+        # Self-conditioning (arXiv:2509.09677): echoing an OLD error's text
+        # pushes the model to repeat the mistake (scale-independent). Recent
+        # errors stay intact (kept above by keep_recent) so it can fix the
+        # immediate problem; older ones drop to a neutral note. The progress
+        # ledger still records the failure fact, minus the conditioning text.
+        return "[an earlier tool call errored and was handled — details dropped]"
     if facts:
         return (
             f"[older successful tool result summarized: {len(content)} chars, "
