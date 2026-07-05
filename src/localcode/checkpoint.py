@@ -339,12 +339,28 @@ def restore_files(plan: RevertPlan, repo_root: Path | str) -> dict[str, str]:
     a `{rel_path: status}` report. This is the ONLY function in the module that
     touches the filesystem — callers invoke it explicitly.
     """
-    root = Path(repo_root)
+    root = Path(repo_root).resolve()
     report: dict[str, str] = {}
     for fs in plan.files_to_restore:
-        full = root / fs.path
+        # Path safety: fs.path comes from a persisted JSON file. An absolute
+        # path or a `../..` component would write or UNLINK outside the repo
+        # (`Path("/repo") / "/etc/x"` resolves to /etc/x). Refuse anything
+        # that escapes the repo root.
+        try:
+            full = (root / fs.path).resolve()
+            full.relative_to(root)
+        except ValueError:
+            report[fs.path] = "skipped: path escapes repo root"
+            continue
         try:
             if fs.existed:
+                # Metadata-only snapshots (capture_content=False) store
+                # content="" but keep the REAL file's hash. Writing that ""
+                # back would zero the user's file — detect the mismatch
+                # and skip instead of destroying data.
+                if fs.content_hash and fs.content_hash != _hash(fs.content):
+                    report[fs.path] = "skipped: content not captured"
+                    continue
                 full.parent.mkdir(parents=True, exist_ok=True)
                 full.write_text(fs.content)
                 report[fs.path] = "restored"
