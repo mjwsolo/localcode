@@ -22,21 +22,74 @@ _TERMINAL_RESTORE = (
     "\x1b[?25h\x1b[?1049l\x1b[0m"
 )
 
+# Snapshot of the controlling tty's termios settings, captured BEFORE the
+# TUI puts the terminal into raw mode. The escape sequence above only undoes
+# escape-driven state (alt-screen, mouse tracking, hidden cursor); it does
+# NOT undo the kernel-level raw mode (ECHO/ICANON/ISIG off). If the TUI
+# crashes or hangs and its own teardown is skipped, the terminal is left in
+# raw mode — no echo, and Ctrl+C generates no SIGINT — which looks like a
+# dead terminal. Restoring this snapshot (or `stty sane`) brings it back.
+_ORIG_TERMIOS = None  # tuple[int fd, list attrs] | None
+
+
+def _snapshot_terminal_state() -> None:
+    """Capture the tty's termios attrs before the TUI mutates them."""
+    global _ORIG_TERMIOS
+    if _ORIG_TERMIOS is not None:
+        return
+    try:
+        import termios
+        for stream in (sys.__stdin__, sys.__stdout__):
+            try:
+                if stream is not None and stream.isatty():
+                    fd = stream.fileno()
+                    _ORIG_TERMIOS = (fd, termios.tcgetattr(fd))
+                    return
+            except Exception:
+                continue
+    except Exception:
+        pass
+
 
 def _reset_terminal_state() -> None:
     payload = _TERMINAL_RESTORE.encode()
+    wrote = False
     try:
         with open("/dev/tty", "wb", buffering=0) as tty:
             tty.write(payload)
-        return
+        wrote = True
     except Exception:
         pass
+    if not wrote:
+        try:
+            if sys.__stdout__.isatty():
+                sys.__stdout__.write(_TERMINAL_RESTORE)
+                sys.__stdout__.flush()
+        except Exception:
+            pass
+    # Undo raw mode at the kernel level — escape codes can't do this. Restore
+    # the snapshot if we have one; otherwise fall back to `stty sane`. Without
+    # this, a crashed/hung TUI leaves the shell with no echo and a dead
+    # Ctrl+C until the user blindly types `reset`.
     try:
-        if sys.__stdout__.isatty():
-            sys.__stdout__.write(_TERMINAL_RESTORE)
-            sys.__stdout__.flush()
+        import termios
+        if _ORIG_TERMIOS is not None:
+            fd, attrs = _ORIG_TERMIOS
+            termios.tcsetattr(fd, termios.TCSADRAIN, attrs)
+        else:
+            raise RuntimeError("no snapshot")
     except Exception:
-        pass
+        try:
+            import subprocess
+            subprocess.run(
+                ["stty", "sane"],
+                stdin=open("/dev/tty", "rb"),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=2,
+            )
+        except Exception:
+            pass
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -248,6 +301,9 @@ def _run_headless(config, args, console) -> int:
 
 def main(argv: list[str] | None = None) -> None:
     _harden_against_debugger_attach()
+    # Snapshot the terminal while it's still sane — before the TUI enters
+    # raw mode — so any exit path (crash, hang, kill) can restore it.
+    _snapshot_terminal_state()
     import os
     import signal
     import warnings
