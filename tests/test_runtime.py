@@ -149,6 +149,17 @@ class TestLlamaServerCommand:
         assert "--spec-type" in cmd
         assert "ngram-mod" in cmd
 
+    def test_default_emits_no_speculative_decoding(self) -> None:
+        """Regression: an empty spec_type (the default, force-disabled in
+        config.py to prevent n-gram repetition loops) must NOT silently emit
+        `--spec-type ngram-mod`. Speculative decoding ships OFF; it only turns
+        on with an explicit draft model, lookup cache, or spec_type."""
+        gw = self._make_gw()  # defaults: spec_type="", draft_model="", lookup off
+        cmd = gw.llama_server_command("/path/model.gguf")
+        assert "--spec-type" not in cmd
+        assert "--model-draft" not in cmd
+        assert "--lookup-cache-dynamic" not in cmd
+
     def test_context_mode_uses_10_threads(self) -> None:
         """Context mode should use 10 threads for expert computation."""
         gw = self._make_gw(laptop_26b_runtime_mode="context", llama_cpp_threads=4)
@@ -362,30 +373,6 @@ class TestCohereBounds:
         assert gw._options(num_predict_override=-1)["num_predict"] == -1
 
 
-class TestFindOllamaBlob:
-    """Verify _find_ollama_blob resolves Ollama model names to GGUF paths."""
-
-    def test_resolves_blob_path(self) -> None:
-        mock_output = "FROM /Users/test/.ollama/models/blobs/sha256-abc123\nTEMPLATE ...\n"
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(
-                stdout=mock_output, returncode=0
-            )
-            result = LocalCodeRuntimeGateway._find_ollama_blob("gemma4:e4b")
-        assert result == "/Users/test/.ollama/models/blobs/sha256-abc123"
-
-    def test_returns_model_name_on_failure(self) -> None:
-        with patch("subprocess.run", side_effect=Exception("not found")):
-            result = LocalCodeRuntimeGateway._find_ollama_blob("gemma4:e4b")
-        assert result == "gemma4:e4b"
-
-    def test_returns_model_name_when_no_match(self) -> None:
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(stdout="TEMPLATE ...\n", returncode=0)
-            result = LocalCodeRuntimeGateway._find_ollama_blob("gemma4:e4b")
-        assert result == "gemma4:e4b"
-
-
 class TestStripThinkingTokens:
     """Verify _strip_thinking_tokens removes Gemma 4 channel artifacts."""
 
@@ -424,18 +411,6 @@ class TestEndpoints:
         gw = LocalCodeRuntimeGateway(cfg)
         assert gw.endpoint == "http://localhost:8081/v1/chat/completions"
         assert gw.tags_endpoint == "http://localhost:8081/v1/models"
-
-    def test_ollama_endpoints(self) -> None:
-        cfg = RuntimeConfig(provider="ollama", base_url="http://localhost:11434")
-        gw = LocalCodeRuntimeGateway(cfg)
-        assert gw.endpoint == "http://localhost:11434/api/chat"
-        assert gw.tags_endpoint == "http://localhost:11434/api/tags"
-
-    def test_mlx_endpoints_empty(self) -> None:
-        cfg = RuntimeConfig(provider="mlx-local")
-        gw = LocalCodeRuntimeGateway(cfg)
-        assert gw.endpoint == ""
-        assert gw.tags_endpoint == ""
 
     def test_trailing_slash_stripped(self) -> None:
         """A trailing slash on base_url should not produce double slashes in the path."""
@@ -717,13 +692,61 @@ class TestCollapseRetry:
 
     def test_all_attempts_collapse_surfaces_e3108(self) -> None:
         gw = _collapse_test_gw()
-        # Initial attempt + 2 collapse retries = 3 collapsing streams.
+        # Initial attempt + 3 collapse retries (_MAX_COLLAPSE_RETRIES) =
+        # 4 collapsing streams before E3108 is surfaced.
         events = self._run(
-            gw, [_collapse_lines(), _collapse_lines(), _collapse_lines()]
+            gw,
+            [
+                _collapse_lines(),
+                _collapse_lines(),
+                _collapse_lines(),
+                _collapse_lines(),
+            ],
         )
         joined = "".join(e["content"] for e in events if e["type"] == "content")
         assert "E3108" in joined
         assert sum(1 for e in events if e["type"] == "stream_done") == 1
+
+    def test_retry_escalates_sampler_not_a_noop(self) -> None:
+        """Regression: the collapse retry must send a DIFFERENT payload than
+        the initial attempt. The old code only nudged temperature and clamped
+        it to 1.0 — but Gemma's base temperature is already 1.0, so every
+        retry re-sent a byte-identical request and reproduced the same
+        collapse. The retry must now escalate: a fresh seed + a higher
+        repeat_penalty than the base payload carries."""
+        import copy as _copy
+        gw = _collapse_test_gw()
+        # `payload` is mutated in place across attempts, so we must snapshot
+        # the json kwarg at call time — the stored MagicMock call_args would
+        # otherwise show every call pointing at the same final dict.
+        sent: list[dict] = []
+        prepared = iter(
+            [_FakeStreamResponse(_collapse_lines()),
+             _FakeStreamResponse(_good_lines("Recovered!"))]
+        )
+
+        def _stream(*_a, **kw):
+            sent.append(_copy.deepcopy(kw["json"]))
+            return next(prepared)
+
+        fake_client = MagicMock()
+        fake_client.is_closed = False
+        fake_client.stream = MagicMock(side_effect=_stream)
+        gw._client = fake_client
+        with patch.object(gw, "_quick_server_probe", return_value=True):
+            events = list(gw.stream_chat_events([{"role": "user", "content": "hi"}]))
+        # Two HTTP stream attempts: initial (collapsed) + one retry.
+        assert len(sent) == 2
+        initial, retry = sent[0], sent[1]
+        # The retry pins an explicit seed to force a different RNG path;
+        # the initial attempt does not.
+        assert "seed" not in initial
+        assert isinstance(retry.get("seed"), int)
+        # And it escalates repeat_penalty above whatever the base payload used.
+        assert retry["repeat_penalty"] > initial.get("repeat_penalty", 1.0)
+        # The recovery still succeeds and never surfaces the error.
+        joined = "".join(e["content"] for e in events if e["type"] == "content")
+        assert "Recovered!" in joined and "E3108" not in joined
 
     def test_normal_stream_unaffected_no_retry(self) -> None:
         gw = _collapse_test_gw()

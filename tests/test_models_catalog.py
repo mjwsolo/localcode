@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from localcode.models import MLX_MODEL_IDS, infer_profile_from_model, resolve_profile
+from localcode.models import infer_profile_from_model, resolve_profile
 from localcode.models_catalog import (
     CHOICES,
     _parse_total_active_b,
@@ -52,7 +52,6 @@ def test_diffusiongemma_profile_and_aliases() -> None:
     assert profile.tool_strategy == "prompt"
     assert profile.supports_native_system is False
     assert infer_profile_from_model("unsloth/diffusiongemma-26B-A4B-it-Q4_K_M.gguf") == profile
-    assert MLX_MODEL_IDS[profile.key] == "mlx-community/diffusiongemma-26B-A4B-it-4bit"
 
 
 def test_north_mini_code_profile_and_aliases() -> None:
@@ -64,7 +63,6 @@ def test_north_mini_code_profile_and_aliases() -> None:
     assert profile.tool_strategy == "prompt"
     assert profile.supports_native_system is False
     assert infer_profile_from_model("unsloth/North-Mini-Code-1.0-UD-Q4_K_M.gguf") == profile
-    assert MLX_MODEL_IDS[profile.key] == "mlx-community/North-Mini-Code-1.0-4bit"
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +119,8 @@ class TestCapabilitySurface:
             expected = set()
             if choice.supports_vision:
                 expected.add("vision")
+            if choice.supports_thinking:
+                expected.add("thinking")
             expected.add("audio_in")
             expected.add("audio_out")
             assert choice.capabilities == frozenset(expected)
@@ -128,14 +128,33 @@ class TestCapabilitySurface:
     def test_vision_entry_capability_set(self) -> None:
         gemma = by_key("gemma")
         assert gemma is not None
-        assert gemma.capabilities == frozenset({"vision", "audio_in", "audio_out"})
+        assert gemma.capabilities == frozenset(
+            {"vision", "thinking", "audio_in", "audio_out"}
+        )
 
     def test_text_only_entry_capability_set(self) -> None:
-        for key in ("diffusiongemma", "north-mini-code"):
-            choice = by_key(key)
-            assert choice is not None
-            assert choice.capabilities == frozenset({"audio_in", "audio_out"})
-            assert "vision" not in choice.capabilities
+        # diffusiongemma is text-only AND can't do hidden reasoning;
+        # north-mini-code is text-only but DOES support thinking.
+        diff = by_key("diffusiongemma")
+        assert diff is not None
+        assert diff.capabilities == frozenset({"audio_in", "audio_out"})
+        assert "vision" not in diff.capabilities
+        assert "thinking" not in diff.capabilities
+
+        nmc = by_key("north-mini-code")
+        assert nmc is not None
+        assert nmc.capabilities == frozenset({"thinking", "audio_in", "audio_out"})
+        assert "vision" not in nmc.capabilities
+
+    def test_thinking_support_gated_by_architecture(self) -> None:
+        # Only diffusion architectures lack a toggleable hidden-reasoning
+        # channel; every other catalog entry supports /thinking.
+        for choice in CHOICES:
+            is_diffusion = str(choice.architecture).lower().startswith("diffusion")
+            assert choice.supports_thinking is (not is_diffusion), (
+                f"{choice.key} ({choice.architecture}) "
+                f"supports_thinking={choice.supports_thinking}"
+            )
 
 
 # ---------------------------------------------------------------------------
