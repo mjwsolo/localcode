@@ -61,15 +61,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command")
 
-    subparsers.add_parser("config-init", help="create a default config file")
-    setup = subparsers.add_parser("setup", help="prepare local runtime and Ollama")
-    setup.add_argument("--install", action="store_true", help="attempt to install Ollama and pull the selected model")
-    setup.add_argument("--benchmark", action="store_true", help="benchmark the local machine and apply a recommended preset")
-    benchmark = subparsers.add_parser("benchmark", help="inspect the local machine and recommend a LocalCode performance preset")
-    benchmark.add_argument("--mode", choices=["fast", "balanced", "deep"])
-    # `status` / `doctor` were CLI subcommands; replaced with the
-    # in-TUI `/status` slash command. Run localcode and type `/status`
-    # in the chat input.
+    # The TUI (bare `localcode`) is the product — first-run setup, config,
+    # benchmarking, and model management all live inside it. Only two non-TUI
+    # entry points remain: `run` (headless) and `unstick` (recovery).
     run = subparsers.add_parser(
         "run",
         help="run a single coding goal headlessly (no TUI) and exit — "
@@ -88,7 +82,6 @@ def build_parser() -> argparse.ArgumentParser:
                           "per line) on stdout instead of human-readable output — for "
                           "editors / CI driving LocalCode programmatically")
 
-    subparsers.add_parser("models", help="list Gemma profiles and installed local models")
     subparsers.add_parser(
         "unstick",
         help="recover from a stuck llama-server without rebooting "
@@ -199,8 +192,8 @@ def _run_headless(config, args, console) -> int:
             resolved = min(downloaded, key=lambda c: c.size_gb).local_path
     if resolved is None:
         console.print(
-            "[red]error:[/] no model found on disk. Download one first "
-            "(`localcode setup`) or pass --model <downloaded.gguf>."
+            "[red]error:[/] no model found on disk. Launch `localcode` and "
+            "download one in the TUI, or pass --model <downloaded.gguf>."
         )
         return 1
     config.runtime.model = str(resolved)
@@ -275,13 +268,10 @@ def main(argv: list[str] | None = None) -> None:
     os.environ.pop("MallocStackLogging", None)
     os.environ.pop("MallocStackLoggingNoCompact", None)
     os.environ.pop("MallocNanoZone", None)
-    os.environ.setdefault("OLLAMA_FLASH_ATTENTION", "1")
-    os.environ.setdefault("OLLAMA_MAX_LOADED_MODELS", "1")
     warnings.filterwarnings("ignore", category=UserWarning)
     parser = build_parser()
     args = parser.parse_args(argv)
     config = load_config()
-    os.environ["OLLAMA_KV_CACHE_TYPE"] = config.runtime.kv_cache_type_k
     configure_logging(config.ui.show_debug)
     console = Console()
 
@@ -292,11 +282,10 @@ def main(argv: list[str] | None = None) -> None:
             sys.exit(1)
         os.chdir(project_dir)
 
-    # Subcommands
-    if args.command == "config-init":
-        path = init_config_file()
-        console.print(f"Config ready at {path}")
-        return
+    # Subcommands. The TUI (bare `localcode`) is the product; setup, config,
+    # benchmark, and model listing all happen inside it. The only non-TUI
+    # entry points kept are `run` (headless JSON API for CI/scripting) and
+    # `unstick` (stuck-server recovery).
     if args.command == "unstick":
         # Recovery path for the "llama-server is stuck in a kernel wait
         # that SIGKILL can't reach" scenario. Not a reboot — but still
@@ -305,42 +294,8 @@ def main(argv: list[str] | None = None) -> None:
         ok, msg = attempt_recovery(verbose=True)
         console.print(f"\n{'[green]✓[/]' if ok else '[yellow]⚠[/]'} {msg}")
         sys.exit(0 if ok else 1)
-    if args.command == "setup":
-        from .bootstrap import run_setup
-        raise SystemExit(run_setup(config, args.profile, args.model, args.install, args.benchmark))
-    if args.command == "benchmark":
-        from .performance import benchmark_report
-        from rich.panel import Panel
-        from rich.table import Table
-        machine, preset = benchmark_report(config, args.mode)
-        table = Table(show_header=False)
-        table.add_row("system", machine.system)
-        table.add_row("cpu_cores", str(machine.cpu_cores))
-        table.add_row("memory_gb", str(machine.memory_gb))
-        table.add_row("gpu", machine.gpu_summary)
-        table.add_row("tier", machine.tier)
-        table.add_row("recommended_mode", preset.mode)
-        table.add_row("profile", preset.profile)
-        console.print(table)
-        if preset.notes:
-            console.print(Panel("\n".join(preset.notes), title="Recommendations"))
-        return
     if args.command == "run":
         sys.exit(_run_headless(config, args, console))
-    if args.command == "models":
-        from .models import GEMMA_PROFILES
-        from rich.table import Table
-        table = Table("profile", "default_model", "variant", "context_window", "summary")
-        for profile in GEMMA_PROFILES.values():
-            table.add_row(
-                profile.key.replace("gemma4-", ""),
-                profile.default_model,
-                profile.feature_variant,
-                str(profile.advertised_context_window),
-                profile.summary,
-            )
-        console.print(table)
-        return
 
     # --preview-screen: visual-test a screen in isolation. Mocks the
     # minimal app state each screen needs and pushes only that one.

@@ -379,9 +379,10 @@ class ModelPickerScreen(Screen):
             lines.append(f" [dim]{chevron}[/] {star}{badge}  {label}{tail}")
 
         lines.append("")
+        # Compact single-line legend — the old "…for your chip   ·   Esc/← back"
+        # wrapped to a ragged 2nd line ("chip · Esc/← back") on normal widths.
         lines.append(
-            f"[dim]★ best for {ram} GB · ✓ fits · ⚠ tight · ✗ too big · "
-            "~tok/s est. for your chip   ·   Esc/← back[/]"
+            f"[dim]★ best@{ram}GB · ✓ fits · ⚠ tight · ✗ too big · ~tok/s est · Esc ←back[/]"
         )
         return "\n".join(lines)
 

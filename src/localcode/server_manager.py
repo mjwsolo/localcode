@@ -545,9 +545,9 @@ class ServerManager:
         self._model_path = None
         self._port = None
 
-    def is_healthy(self, port: int = DEFAULT_PORT) -> bool:
-        """Non-blocking health probe. Does not touch subprocess state."""
-        return _probe_health(port, timeout=1.0)
+    def is_healthy(self, port: int | None = None) -> bool:
+        """Non-blocking probe of the port the server ACTUALLY bound (default was 8081, wrong after port fallback)."""
+        return _probe_health(port if port is not None else self._port, timeout=1.0)
 
     def is_running(self) -> bool:
         """True if we have a tracked Popen and it hasn't exited."""

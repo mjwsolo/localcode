@@ -10,16 +10,13 @@ def compose_messages(
     conversation: list[dict[str, str]],
     user_text: str,
     images: list[str] | None = None,
-    provider: str = "ollama",
+    provider: str = "llama_cpp",
 ) -> list[dict]:
     """Compose the message list for the model.
 
     Args:
-        images: Optional list of base64-encoded image strings.
-        provider: Runtime provider — affects image message format.
-            - "ollama": uses {"images": [base64]} on the message dict
-            - "huggingface-local"/"mlx-local": uses multipart content
-              [{"type": "image", "image": base64}, {"type": "text", "text": ...}]
+        images: Optional list of base64-encoded image strings, sent as
+            llama-server's OpenAI-compatible `image_url` multipart content.
     """
     # Build the user message with appropriate image format
     user_msg = _build_user_message(user_text, images, profile, provider)
@@ -61,29 +58,15 @@ def _build_user_message(
     profile: ModelProfile,
     provider: str,
 ) -> dict:
-    """Build a user message, handling images per provider format."""
+    """Build a user message with llama-server's OpenAI-compatible image parts."""
     if not images or not profile.supports_vision:
         return {"role": "user", "content": text}
 
-    if provider in ("huggingface-local", "mlx-local"):
-        # HF/MLX: multipart content array
-        # Format: [{"type": "image", "image": base64}, {"type": "text", "text": "..."}]
-        content_parts: list[dict] = []
-        for img_b64 in images:
-            content_parts.append({"type": "image", "image": f"data:image/png;base64,{img_b64}"})
-        content_parts.append({"type": "text", "text": text})
-        return {"role": "user", "content": content_parts}
-
-    if provider == "llama_cpp":
-        # llama-server: OpenAI-compatible multipart content
-        content_parts: list[dict] = []
-        for img_b64 in images:
-            content_parts.append({
-                "type": "image_url",
-                "image_url": {"url": f"data:image/png;base64,{img_b64}"},
-            })
-        content_parts.append({"type": "text", "text": text})
-        return {"role": "user", "content": content_parts}
-
-    # Ollama: "images" field at message level
-    return {"role": "user", "content": text, "images": images}
+    content_parts: list[dict] = []
+    for img_b64 in images:
+        content_parts.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{img_b64}"},
+        })
+    content_parts.append({"type": "text", "text": text})
+    return {"role": "user", "content": content_parts}
