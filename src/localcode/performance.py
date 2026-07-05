@@ -246,8 +246,6 @@ def resolve_laptop_26b_runtime_mode(config: AppConfig, machine: MachineProfile) 
     explicit_provider = (config.runtime.provider or "").strip().lower()
     if explicit_provider == "llama_cpp":
         return "fit"
-    if explicit_provider == "ollama" and explicit_model and not explicit_model.endswith(".gguf"):
-        return "speed"
     if explicit_model.endswith(".gguf") or any(token in explicit_model for token in ("iq", "q2_", "q3_", "q4_", "q5_", "q6_", "q8_")):
         return "fit"
     telemetry = _load_runtime_telemetry()
@@ -258,8 +256,6 @@ def resolve_laptop_26b_runtime_mode(config: AppConfig, machine: MachineProfile) 
         fit_first = float(fit_stats.get("ema_first_token_s", 0.0) or 0.0)
         if speed_first and fit_first:
             return "fit" if fit_first <= speed_first * 0.9 else "speed"
-    if shutil.which("ollama") is not None:
-        return "speed"
     if shutil.which("llama-server") is not None or shutil.which("llama_cpp.server") is not None:
         return "fit"
     return "speed"
@@ -430,7 +426,7 @@ def recommend_preset(
     laptop_26b_runtime_mode: str = "auto",
 ) -> PerformancePreset:
     mode = requested_mode or ("fast" if machine.tier == "small" else "balanced")
-    runtime_provider = "ollama"
+    runtime_provider = "llama_cpp"
     notes: list[str] = []
     quant_preset = "balanced"
     cache_policy = "adaptive"
@@ -448,8 +444,8 @@ def recommend_preset(
     else:
         laptop_runtime_mode = "speed"
     if machine.system == "darwin" and machine.has_gpu:
-        runtime_provider = "ollama"
-        notes.append("Apple Silicon detected: prefer MLX-local quantized models when available.")
+        runtime_provider = "llama_cpp"
+        notes.append("Apple Silicon detected: prefer llama.cpp GGUF quantized models.")
     if machine.tier in {"small", "medium"}:
         use_laptop_26b = machine.system == "darwin" and machine.has_gpu
         profile = "gemma4-26b-laptop" if use_laptop_26b else ("gemma4-e2b" if mode == "fast" else "gemma4-e4b")
@@ -471,7 +467,7 @@ def recommend_preset(
             notes.append("Disciplined 26B A4B laptop mode: single-model path, tight context, early compaction, low-overhead runtime.")
             notes.append(
                 "Runtime preference: "
-                + ("speed-first MLX/Ollama path." if laptop_runtime_mode == "speed" else "fit-first llama.cpp mmap path.")
+                + ("speed-first llama.cpp path." if laptop_runtime_mode == "speed" else "fit-first llama.cpp mmap path.")
             )
         else:
             draft_model = "gemma4:e2b"
@@ -501,12 +497,11 @@ def recommend_preset(
         rolling_window_messages = 32 if mode != "deep" else 48
         notes.append("Large hardware can sustain deeper agent loops and larger context.")
     if machine.system != "darwin" and machine.has_gpu:
-        runtime_provider = "llama_cpp" if mode == "fast" else "ollama"
-        if runtime_provider == "llama_cpp":
-            llama_cpp_gpu_layers = 999
-            llama_cpp_threads = max(4, min(machine.cpu_cores, 12))
-            llama_cpp_batch_size = 256 if machine.tier in {"large", "workstation"} else 128
-            notes.append("llama.cpp server mode is recommended for aggressive low-latency tuning.")
+        runtime_provider = "llama_cpp"
+        llama_cpp_gpu_layers = 999
+        llama_cpp_threads = max(4, min(machine.cpu_cores, 12))
+        llama_cpp_batch_size = 256 if machine.tier in {"large", "workstation"} else 128
+        notes.append("llama.cpp server mode is recommended for aggressive low-latency tuning.")
     if mode == "deep":
         max_context_chars = max(max_context_chars, 32000)
 
@@ -533,13 +528,11 @@ def recommend_preset(
         laptop_runtime_mode = "turbo"
         notes.append("TurboQuant llama.cpp: full GPU offload, 32K context.")
 
-    # When using llama.cpp: enable n-gram speculation. Lookup-cache is
-    # left OFF by default — see comment below for the failure mode it
-    # causes on chat-style sessions.
-    if runtime_provider == "llama_cpp":
-        spec_type = "ngram-mod"
-        draft_max = 64
-        notes.append("N-gram speculative decoding enabled.")
+    # Speculative decoding is OFF by default. N-gram/lookup speculation was
+    # found to cause infinite verbatim repetition (the drafter re-proposes an
+    # already-emitted phrase and greedy verify accepts the whole block), and it
+    # is net-negative on small-active MoE decode anyway — so presets leave
+    # spec_type empty. Opt in explicitly via a real draft model if desired.
 
     # `lookup_cache` (--lookup-cache-dynamic on llama-server) DELIBERATELY
     # disabled by default as of 2026-04-26. It enables prompt-lookup
