@@ -68,12 +68,12 @@ class LocalCodeError(Exception):
 _REGISTRY: list[ErrorCode] = [
     # E1xxx — Setup / startup
     ErrorCode("E1001", "Server failed to start",
-              "Run `localcode setup` or check ~/.local/share/localcode/server.log",
+              "Restart LocalCode (setup re-runs automatically) or check ~/.local/share/localcode/server.log",
               cause="system"),
     ErrorCode("E1002", "Server didn't come up in time",
-              "Try again. If it persists, re-run `localcode setup`.", cause="system"),
+              "Try again. If it persists, restart LocalCode.", cause="system"),
     ErrorCode("E1003", "Model file not found",
-              "Run `localcode setup` to download the model, or pick another via /model.",
+              "Pick a model via /model — it downloads automatically.",
               cause="user"),
     ErrorCode("E1004", "Backend not initialized",
               "Type a message to trigger backend startup.", cause="user"),

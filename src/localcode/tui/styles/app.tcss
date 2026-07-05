@@ -1,8 +1,7 @@
 /* LocalCode Textual TUI — terminal-palette-driven styling.
 
    Background = `ansi_default`, the Textual color name that emits
-   SGR 49 — the terminal's "default background" escape code. Same
-   mechanism agent/terminal coding tools TUI use via `ansi:black`. The user's
+   SGR 49 — the terminal's "default background" escape code. The user's
    own terminal profile decides what the colours actually look like
    (light/dark/solarized/dracula/etc.); LocalCode just defers.
 
@@ -56,12 +55,10 @@ Screen {
 /* ── Input area ── */
 
 /* Rounded thin border — the input is the one boxed element on screen,
-   which makes it read as "type here" without any label. `round` +
-   a dim grey is the quiet, modern look (cf. current CLI agents);
-   the previous `heavy` top+bottom rules read as two solid walls.
-   The border lives on #input-box (preview + input row together) so a
-   long value that wraps to multiple lines GROWS INSIDE the field
-   instead of spilling above it into the chat area. */
+   which makes it read as "type here" without any label. The border
+   lives on #input-box (preview + input row together) so a long value
+   that wraps to multiple lines grows inside the field instead of
+   spilling above it into the chat area. */
 #input-box {
     height: auto;
     border: round #444444;
@@ -114,21 +111,10 @@ Screen {
     background-tint: transparent 0%;
 }
 
-/* Underline cursor. Terminals only render in 1-cell units, so a true
-   sub-cell `|` thin cursor isn't possible in pure CSS — the closest
-   approximation is `text-style: underline` on the cursor cell, which
-   styles just the bottom edge of the character at cursor position
-   instead of filling the whole cell with a block. Visually reads as
-   a thin marker rather than a solid white square. Background stays
-   ansi_default (terminal palette) so we don't paint a block at all.
-   Earlier we used `background: white` for a solid-block cursor —
-   user feedback was "make it narrower like |". */
-/* Cursor cell — pairs with `_NoTintInput.render_line` which
-   substitutes the cursor cell's character with `▏` (U+258F).
-   No `text-style: underline` here — that was leftover from an
-   earlier underline-cursor attempt and stacked under the bar
-   glyph, making the cursor look like `|_` instead of `|`.
-   White foreground on terminal-default background. */
+/* Cursor cell — pairs with `_NoTintInput.render_line`, which
+   substitutes the cursor cell's character with `▏` (U+258F) for a
+   thin bar rather than a solid block. Background stays ansi_default
+   (terminal palette); white foreground draws the bar glyph. */
 #chat-input > .input--cursor {
     background: ansi_default;
     color: white;

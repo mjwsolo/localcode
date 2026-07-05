@@ -116,8 +116,7 @@ class SetupScreen(Screen):
                 yield Static(self._render_steps(), id="setup-steps")
                 yield Static("", id="setup-status")
                 yield Static(
-                    "[dim italic]Note: one-time download — cached locally so future "
-                    "launches start in seconds without re-downloading.[/]",
+                    "[dim italic]one-time download · cached for future launches[/]",
                     id="setup-onetime-note",
                 )
                 yield Static(
@@ -379,13 +378,12 @@ class SetupScreen(Screen):
             binary_path = result
             config.runtime.llama_cpp_binary = str(binary_path)
 
-        # Set config for llama_cpp (GPU) or leave for Ollama fallback (decided later)
+        # llama_cpp is the only runtime now (ollama/mlx/hf removed).
         changed = False
         if not config.runtime.llama_cpp_binary and binary_path:
             config.runtime.llama_cpp_binary = str(binary_path)
             changed = True
-        # Default to llama_cpp — will be overridden to Ollama later if GPU unavailable
-        if config.runtime.provider not in ("llama_cpp", "ollama"):
+        if config.runtime.provider != "llama_cpp":
             config.runtime.provider = "llama_cpp"
             changed = True
         if config.runtime.provider == "llama_cpp" and "8081" not in config.runtime.base_url:
@@ -795,16 +793,11 @@ class SetupScreen(Screen):
                 self._status_text = f"Loading model... ({i+1}s)"
 
         if not server_ok:
-            # Server failed — fall back to Ollama IN MEMORY ONLY for this
-            # session. Previously we persisted provider="ollama" to
-            # config.toml — once a single setup retry hit a transient
-            # timeout (e.g. memory pressure during a model swap), the
-            # config was permanently rewritten and every subsequent
-            # launch ran through Ollama at ~0.5 tok/s instead of the
-            # 27 tok/s TurboQuant llama-server. The persisted fallback
-            # was the source of "Gemma got 50× slower this afternoon"
-            # — fix is to mutate the live config object only, never
-            # save_config() here. Next launch will re-attempt llama-server.
+            # The tuned llama-server is the ONLY runtime — no fallback. The old
+            # code degraded to Ollama at ~0.5-1.7 tok/s here (the source of
+            # "Gemma got 50× slower"); that fallback was removed. Fail fast with
+            # a clear [E1001] + the raw server log in ~/.localcode/last_error.log
+            # so the user fixes the real problem instead of running 50× slow.
             err = ""
             try:
                 log_fh.close()
@@ -815,33 +808,12 @@ class SetupScreen(Screen):
                 proc.kill()
             except Exception:
                 pass
-            self._status_text = "GPU server failed — using Ollama for this session..."
-            time.sleep(1)
-            config.runtime.provider = "ollama"
-            config.runtime.base_url = "http://localhost:11434"
-            if not config.runtime.model or config.runtime.model.endswith(".gguf"):
-                config.runtime.model = "gemma26b-iq3"
-            config.runtime.laptop_26b_runtime_mode = "speed"
-            # NOTE: deliberately NO save_config(config) here. See comment above.
-
-            # Check if Ollama is available as fallback
-            try:
-                import httpx
-                r = httpx.get("http://localhost:11434/api/tags", timeout=3)
-                server_ok = r.status_code == 200
-            except Exception:
-                pass
-            if not server_ok:
-                # Use the error-code system so the user sees a clear
-                # [E1001] prefix + remediation, with the raw server log
-                # tucked into ~/.localcode/last_error.log instead of
-                # being dumped into the screen box.
-                self.app.call_from_thread(lambda e=err: self._show_error(
-                    msg="The model server didn't start.",
-                    code="E1001",
-                    details=e,
-                ))
-                return
+            self.app.call_from_thread(lambda e=err: self._show_error(
+                msg="The model server didn't start.",
+                code="E1001",
+                details=e,
+            ))
+            return
 
         # Done
         self._current_step = 3

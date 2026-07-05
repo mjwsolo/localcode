@@ -173,9 +173,11 @@ class SpeculativeExecutor:
             for fname in file_matches[:3]:  # cap at 3 files to avoid over-fetching
                 predictions.append(("read_file", {"path": fname}))
 
-        # Web search
-        if "web_search" in tool_names and any(w in text_lower for w in ("search", "look up", "latest", "news", "documentation")):
-            predictions.append(("web_search", {"query": user_text}))
+        # NOTE: web_search is deliberately NOT speculated. Firing it on a regex
+        # guess would send the user's raw prompt to a network search provider
+        # BEFORE the model decides to search — an egress of prompt content from
+        # a local-first tool, bypassing the permission layer. Speculation stays
+        # limited to read-only LOCAL work.
 
         # Code search — extract likely search terms
         if "grep" in tool_names and any(w in text_lower for w in ("find", "search", "where", "locate", "grep")):

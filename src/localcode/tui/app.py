@@ -67,18 +67,6 @@ class LocalCodeTUI(App):
     CSS_PATH = "styles/app.tcss"
     TITLE = "localcode"
 
-    # Theme is set in __init__ — Textual reads `App.theme` (Reactive)
-    # at mount time. We pick `textual-ansi`, the built-in theme whose
-    # background/foreground/surface all resolve to the terminal's own
-    # palette (SGR 49 / 39). Mirrors how agent / terminal coding tools TUI use
-    # `ansi:black` — the terminal decides what the colours look like,
-    # not the app. Means LocalCode adopts the user's terminal profile
-    # (light/dark/solarized/etc.) automatically. The earlier hex-tuning
-    # attempts (#0d0d0d → #1e1e1e → #262626) were chasing a moving
-    # target — different terminals render `ansi:black` differently,
-    # and matching one user's screenshot was guaranteed to look wrong
-    # on a different setup.
-
     BINDINGS = [
         Binding("ctrl+c", "copy_or_quit", "Copy/Quit", show=False, priority=True),
     ]
@@ -90,51 +78,19 @@ class LocalCodeTUI(App):
         "setup": SetupScreen,
     }
 
-    # Textual-documented switch: when True, Textual does NOT convert
-    # ANSI colors into RGB before painting. The cells go out as raw
-    # SGR escape codes that EVERY terminal renders using ITS OWN
-    # palette — black on a black terminal, cream on a Solarized Light
-    # terminal, transparent over wallpaper on a translucent iTerm2,
-    # whatever the user has configured. This is the right answer for
-    # an app shipped to many users with different terminals: never
-    # assume what their bg is, defer entirely to their terminal
-    # settings. (Trade-off: hex colors in CSS lose their alpha-blend
-    # passes, but localcode doesn't rely on those.)
-    ansi_color = True
-
     def __init__(self, show_mode_picker: bool = True) -> None:
-        super().__init__()
-        # With ansi_color=True the theme variables are pass-through:
-        # any color value we set propagates as the ANSI code, not as
-        # blended RGB. Register a minimal custom theme so $background,
-        # $surface, $panel, $boost, $foreground all map to the SGR
-        # default (ansi_default) — which Textual now emits as the
-        # actual escape code rather than RGB-black. Brand accents
-        # (primary/accent) stay as hex because they MUST be a specific
-        # blue on every terminal, not "whatever your blue is".
-        try:
-            from textual.theme import Theme as _Theme
-            ansi_theme = _Theme(
-                name="localcode-ansi",
-                primary="#5f87ff",
-                background="ansi_default",
-                surface="ansi_default",
-                panel="ansi_default",
-                foreground="ansi_default",
-                boost="ansi_default",
-                dark=True,
-                accent="#5f87ff",
-            )
-            self.register_theme(ansi_theme)
-            self.theme = "localcode-ansi"
-        except Exception:
-            # If the custom-theme path fails on this textual version,
-            # fall back to whatever's available — better dark gray than
-            # an unhandled exception at TUI startup.
-            for _candidate in ("textual-ansi", "textual-dark"):
-                if _candidate in self.available_themes:
-                    self.theme = _candidate
-                    break
+        # ansi_color must be passed to __init__, not just set as a class
+        # attribute — App.__init__ calls set_reactive() with its own
+        # default (False), which would otherwise clobber it. With it True,
+        # Textual emits raw SGR escapes instead of converting ANSI colors
+        # to RGB, so `ansi_default` renders as the terminal's own default
+        # background/foreground rather than solid black.
+        super().__init__(ansi_color=True)
+        # textual-ansi is the built-in theme whose background, surface,
+        # panel, foreground and accents all resolve to the terminal's own
+        # palette. No custom theme — the terminal decides how it looks.
+        if "textual-ansi" in self.available_themes:
+            self.theme = "textual-ansi"
         self.show_mode_picker = show_mode_picker
         self.engine = None
         self.config = None

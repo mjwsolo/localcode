@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -88,6 +89,10 @@ class HistoryDB:
             db_path = str(ensure_home_dirs() / DB_NAME)
         self.db_path = db_path
         self._conn: sqlite3.Connection | None = None
+        # One shared connection (check_same_thread=False) is used from both the
+        # UI thread (reads) and agent worker threads (writes); serialize all
+        # access so multi-statement writes don't tear.
+        self._lock = threading.RLock()
         self._ensure_schema()
 
     @property
@@ -97,6 +102,12 @@ class HistoryDB:
             self._conn.row_factory = sqlite3.Row
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA synchronous=NORMAL")
+            # The TUI writes turns from worker threads while the UI thread
+            # reads history — `check_same_thread=False` shares ONE connection
+            # across them, so interleaved execute/commit tore transactions.
+            # busy_timeout also covers a second localcode instance sharing the
+            # same ~/.localcode/history.db. Callers must hold `self._lock`.
+            self._conn.execute("PRAGMA busy_timeout=5000")
         return self._conn
 
     def _ensure_schema(self) -> None:
@@ -184,6 +195,10 @@ class HistoryDB:
 
     def record_turn(self, entry: HistoryEntry) -> None:
         """Record a single conversation turn."""
+        with self._lock:
+            self._record_turn_locked(entry)
+
+    def _record_turn_locked(self, entry: HistoryEntry) -> None:
         self.conn.execute("""
             INSERT INTO history (
                 id, session_id, repo_root, timestamp, role, content,

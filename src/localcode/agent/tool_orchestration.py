@@ -31,7 +31,8 @@ def prefetch_parallel_tool_calls(
         fn = tc.get("function", {}) or {}
         name = (fn.get("name", "") or "").strip()
         try:
-            args = json.loads(fn.get("arguments", "{}"))
+            _raw = fn.get("arguments", "{}")
+            args = _raw if isinstance(_raw, dict) else json.loads(_raw)
         except Exception:
             continue
         if not is_concurrency_safe(name, args):
