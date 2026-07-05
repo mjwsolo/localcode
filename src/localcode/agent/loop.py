@@ -721,11 +721,9 @@ def run_agent_loop(
                     ]
             except Exception:
                 pass
-            # Inject the working-memory checklist (todo_write tool). Same
-            # rationale as the ledger: the model always sees its own plan —
-            # what's done, in-progress, and left — so it advances sequentially
-            # instead of re-deriving and repeating. Appended LAST, ephemeral
-            # (per-round copy), and empty-safe (renders "" when no list).
+            # Inject the working-memory checklist (todo_write tool): the model
+            # always sees its own plan (done / in-progress / left) so it
+            # advances instead of repeating. Appended LAST, ephemeral, empty-safe.
             try:
                 from ..tools.todo_write import render_todo_reminder
                 _todos = list(getattr(app.session, "todos", []) or [])
@@ -1221,7 +1219,11 @@ def run_agent_loop(
                 break
 
         # ── No tool calls = model is done ──
-        if not tool_calls:
+        # Also require no pending tool call: the runtime promotes pending
+        # tools into `tool_calls`, but if a future path doesn't, we keep
+        # looping instead of ending early (small models often emit a stop
+        # token with a call still pending).
+        if not tool_calls and not _round_pending_tool_count:
             # Match v0.2.12's no-tool-calls path exactly: render content,
             # render any grounded file summary, break. Nothing else.
             #
