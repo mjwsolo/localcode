@@ -721,6 +721,21 @@ def run_agent_loop(
                     ]
             except Exception:
                 pass
+            # Inject the working-memory checklist (todo_write tool). Same
+            # rationale as the ledger: the model always sees its own plan —
+            # what's done, in-progress, and left — so it advances sequentially
+            # instead of re-deriving and repeating. Appended LAST, ephemeral
+            # (per-round copy), and empty-safe (renders "" when no list).
+            try:
+                from ..tools.todo_write import render_todo_reminder
+                _todos = list(getattr(app.session, "todos", []) or [])
+                _todo_note = render_todo_reminder(_todos)
+                if _todo_note:
+                    model_messages = list(model_messages) + [
+                        {"role": "user", "content": _todo_note}
+                    ]
+            except Exception:
+                pass
             round_tool_schemas = schemas_for_goal(
                 _goal_state.goal_type,
                 user_text,

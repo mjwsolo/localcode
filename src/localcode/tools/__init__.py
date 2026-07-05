@@ -36,6 +36,7 @@ from . import (
     plan_mode,
     read_file,
     skill_tool,
+    todo_write,
     web_fetch,
     web_search,
     write_file,
@@ -60,6 +61,7 @@ _TOOLS: dict[str, tuple[dict, Callable[[ToolContext, dict], str]]] = {
     "web_search":     (web_search.SCHEMA,     web_search.execute),
     "web_fetch":      (web_fetch.SCHEMA,      web_fetch.execute),
     "skill":          (skill_tool.SCHEMA,     skill_tool.execute),
+    "todo_write":     (todo_write.SCHEMA,     todo_write.execute),
     "agent":          (agent.SCHEMA,          agent.execute),
     "enter_plan_mode": (plan_mode.ENTER_SCHEMA, plan_mode.execute_enter),
     "exit_plan_mode":  (plan_mode.EXIT_SCHEMA,  plan_mode.execute_exit),
@@ -80,6 +82,7 @@ _PUBLIC_TOOL_NAMES = [
     "web_search",
     "web_fetch",
     "skill",
+    "todo_write",
     "agent",
 ]
 
@@ -126,6 +129,9 @@ def schemas_for_goal(
         # Sub-agent — lets the model spawn focused sub-tasks (explore/plan/verify
         # /general-purpose) so it doesn't burn its own context on long searches.
         "agent",
+        # Working-memory checklist — lets the model record a plan and track
+        # done/in-progress/remaining across rounds so it stops repeating work.
+        "todo_write",
     }
     schemas = schemas_for_names(selected)
     # MCP tools — any tools exposed by user-configured MCP servers in
@@ -154,6 +160,7 @@ _MODULES = {
     "web_search": web_search,
     "web_fetch": web_fetch,
     "skill": skill_tool,
+    "todo_write": todo_write,
 }
 
 
