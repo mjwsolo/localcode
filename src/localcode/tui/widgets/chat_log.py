@@ -143,7 +143,21 @@ class ChatLog(RichLog):
         self._prompt_gap_pending: bool = False
 
     def write(self, content, *args, **kwargs) -> "ChatLog":
-        """Override to always constrain width to the visible area."""
+        """Override to constrain width AND to only follow the tail when the
+        user is already at the bottom.
+
+        RichLog's `auto_scroll=True` snaps to the bottom on EVERY write, so
+        new output (streaming prose, tool lines, info) yanked a user who had
+        scrolled up to read back down to the end. Gate it: stick to the
+        bottom only when already (near) there; otherwise leave the scroll
+        position alone. Skipped during `_rerender`, which manages
+        `auto_scroll` itself and restores the exact prior position.
+        """
+        if not getattr(self, "_rerendering", False):
+            try:
+                self.auto_scroll = self._at_bottom()
+            except Exception:
+                pass
         try:
             w = self._content_width()
             if w > 10 and "width" not in kwargs:
@@ -151,6 +165,14 @@ class ChatLog(RichLog):
         except Exception:
             pass
         return super().write(content, *args, **kwargs)
+
+    def _at_bottom(self) -> bool:
+        """True when the viewport is at (or within ~2 lines of) the bottom —
+        i.e. the user is following the tail rather than reading history."""
+        try:
+            return self.scroll_offset.y >= self.max_scroll_y - 2
+        except Exception:
+            return True
 
     def _content_width(self, *, fallback: int = 76) -> int:
         """Actual visible width for chat content.
