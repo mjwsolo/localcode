@@ -115,6 +115,17 @@ class ModelChoice:
         return self.mmproj_filename is not None
 
     @property
+    def supports_thinking(self) -> bool:
+        """True iff the model has a toggleable hidden-reasoning channel.
+
+        Gate for the `/thinking` policy. Block-diffusion models (`diffusion_*`)
+        generate spans in parallel, not token-by-token, so they have no
+        hidden-reasoning stream to toggle (the status bar shows `n/a`); every
+        other catalog arch supports it. Derived from the architecture.
+        """
+        return not str(self.architecture or "").lower().startswith("diffusion")
+
+    @property
     def supports_audio_in(self) -> bool:
         """True if the model may be addressed by voice (speech -> text).
 
@@ -145,6 +156,8 @@ class ModelChoice:
         caps = set()
         if self.supports_vision:
             caps.add("vision")
+        if self.supports_thinking:
+            caps.add("thinking")
         if self.supports_audio_in:
             caps.add("audio_in")
         if self.supports_audio_out:

@@ -337,16 +337,6 @@ def test_gemma_specific_literals_live_only_in_model_families():
 
     Allowed locations:
       • src/localcode/model_families.py (the adapter itself)
-      • src/localcode/tool_parsing.py (the parser still carries
-        Gemma regexes — grandfathered until the parser refactor
-        lands; see eval/OPTIMIZATION_PLAN.md)
-      • src/localcode/runtime.py (the MLX streaming path handles
-        `<|channel>` / `<channel|>` raw markers BEFORE tokenizer
-        decode turns them into `<unused25>`. Adapter currently
-        only exposes post-decode markers; extending it to cover
-        raw MLX markers is deferred T0.9 work. Until then, this
-        allowlist entry means "we know runtime.py has these; no
-        new ones should appear here or elsewhere.")
       • src/localcode/runtime_diffusion.py (the DiffusionGemma backend
         extracted from runtime.py — it cleans raw `<|channel>` /
         `<channel|>` / `<|tool_call>` markers out of llama-diffusion-cli
@@ -357,8 +347,6 @@ def test_gemma_specific_literals_live_only_in_model_families():
     """
     ALLOWED = {
         (SRC / "model_families.py").resolve(),
-        (SRC / "tool_parsing.py").resolve(),
-        (SRC / "runtime.py").resolve(),
         (SRC / "runtime_diffusion.py").resolve(),
     }
     violations: list[str] = []
