@@ -171,19 +171,6 @@ GEMMA_PROFILES: dict[str, ModelProfile] = {
 }
 
 
-# Default MLX model IDs — auto-selected on macOS when provider is mlx-local
-MLX_MODEL_IDS: dict[str, str] = {
-    "gemma4-e2b": "mlx-community/gemma-4-e4b-it-8bit",       # no e2b MLX exists, use e4b
-    "gemma4-e4b": "mlx-community/gemma-4-e4b-it-8bit",
-    "gemma4-12b": "mlx-community/gemma-4-12b-it-4bit",
-    "gemma4-26b-moe": "mlx-community/gemma-4-26b-a4b-it-4bit",
-    "gemma4-26b-laptop": "mlx-community/gemma-4-26b-a4b-it-4bit",
-    "gemma4-31b": "mlx-community/gemma-4-31b-it-4bit",
-    "diffusiongemma-26b-moe": "mlx-community/diffusiongemma-26B-A4B-it-4bit",
-    "north-mini-code-30b-moe": "mlx-community/North-Mini-Code-1.0-4bit",
-}
-
-
 ALIASES = {
     "e2b": "gemma4-e2b",
     "e4b": "gemma4-e4b",

@@ -412,7 +412,8 @@ def _redact_duplicate_reads(messages: list[dict]) -> list[dict]:
             if not tc_id:
                 continue
             try:
-                args = json.loads((tc.get("function") or {}).get("arguments") or "{}")
+                _raw = (tc.get("function") or {}).get("arguments") or "{}"
+                args = _raw if isinstance(_raw, dict) else json.loads(_raw)
             except Exception:
                 continue
             path = args.get("path")
@@ -629,7 +630,8 @@ def _compact_history_summary(messages: list[dict]) -> str:
             fn = tc.get("function") or {}
             name = str(fn.get("name") or "").strip()
             try:
-                args = json.loads(fn.get("arguments") or "{}")
+                _raw = fn.get("arguments") or "{}"
+                args = _raw if isinstance(_raw, dict) else json.loads(_raw)
             except Exception:
                 args = {}
             path = args.get("path") or args.get("file_path")
@@ -769,8 +771,13 @@ def _compact_messages(messages: list[dict], out: "OutputManager") -> list[dict]:
                 fn = tc.get("function", {})
                 name = fn.get("name", "")
                 try:
-                    args = json.loads(fn.get("arguments", "{}"))
-                except json.JSONDecodeError:
+                    # `arguments` may be a JSON string OR an already-decoded
+                    # dict (some providers/parsers do that) — json.loads on a
+                    # dict raises TypeError, which used to escape and kill the
+                    # turn with E3102 during compaction.
+                    _raw = fn.get("arguments", "{}")
+                    args = _raw if isinstance(_raw, dict) else json.loads(_raw)
+                except (json.JSONDecodeError, TypeError, ValueError):
                     args = {}
                 if name in ("write_file", "append_file", "edit_file"):
                     files_modified.add(args.get("path", "?"))

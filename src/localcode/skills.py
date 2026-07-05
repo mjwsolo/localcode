@@ -199,6 +199,11 @@ def _install_from_url(url: str) -> tuple[bool, str]:
 
 def remove_skill(name: str) -> tuple[bool, str]:
     """Remove an installed skill."""
+    # `name` comes from the command layer as a raw string; without this,
+    # remove_skill("../../Documents/notes") would unlink ~/Documents/notes.md.
+    import re as _re
+    if not _re.fullmatch(r"[A-Za-z0-9_-]+", name or ""):
+        return False, f"Invalid skill name: {name!r}"
     dest = _global_skill_dir() / f"{name}.md"
     if dest.exists():
         dest.unlink()

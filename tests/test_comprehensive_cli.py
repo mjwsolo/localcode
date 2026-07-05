@@ -32,33 +32,17 @@ def _run_cli(*args: str, home: Path, timeout: int = 60) -> subprocess.CompletedP
     )
 
 
-def test_help_lists_all_subcommands(tmp_path):
+def test_help_lists_subcommands(tmp_path):
+    # The TUI (bare `localcode`) is the product; only `run` (headless) and
+    # `unstick` (recovery) remain as non-TUI subcommands. setup/config-init/
+    # benchmark/models were removed — the TUI does all of those.
     r = _run_cli("--help", home=tmp_path)
     assert r.returncode == 0, r.stderr
-    for sub in ("config-init", "setup", "benchmark", "models", "unstick"):
-        assert sub in r.stdout, f"{sub} missing from --help"
-
-
-def test_models_command_lists_profiles(tmp_path):
-    r = _run_cli("models", home=tmp_path)
-    assert r.returncode == 0, r.stderr
-    # Every Gemma profile, including the newly-added 12B, should appear.
-    for profile in ("e2b", "e4b", "12b", "26b", "31b"):
-        assert profile in r.stdout, f"profile {profile} missing from `models`"
-
-
-def test_benchmark_command_runs(tmp_path):
-    r = _run_cli("benchmark", home=tmp_path)
-    assert r.returncode == 0, r.stderr
-    assert "profile" in r.stdout.lower()
-
-
-def test_config_init_writes_config(tmp_path):
-    r = _run_cli("config-init", home=tmp_path)
-    assert r.returncode == 0, r.stderr
-    # A config.toml should now exist somewhere under the sandboxed home.
-    configs = list(tmp_path.rglob("config.toml"))
-    assert configs, "config-init did not create a config.toml"
+    # The subcommand group renders as `{run,unstick}` — the ONLY two non-TUI
+    # entry points. setup/config-init/benchmark/models were removed (the TUI
+    # does all of those). Asserting the exact group is precise; the removed
+    # words still appear in prose (e.g. "benchmark harness", a "setup" screen).
+    assert "{run,unstick}" in r.stdout.replace(" ", ""), r.stdout
 
 
 def test_preview_screen_choices_advertised(tmp_path):

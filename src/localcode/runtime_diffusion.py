@@ -454,17 +454,46 @@ class _DiffusionMixin:
 
         _threading.Thread(target=_drain_stderr, daemon=True,
                           name="diffusion-stderr").start()
+
+        # Watchdog: `proc.stdout.read(4096)` below BLOCKS until 4096 bytes or
+        # EOF, so a silent/wedged child (e.g. hung loading the ~15 GB model)
+        # would never let the in-loop deadline check run — the turn hung on
+        # "thinking…" forever. Enforce the deadline from a timer thread that
+        # kills the process; the kill closes the pipe, read() returns "" (EOF),
+        # and the loop exits. `_timed_out` distinguishes it from a clean finish.
+        _timed_out = {"v": False}
+
+        def _watchdog() -> None:
+            while proc.poll() is None:
+                if _time.monotonic() > deadline:
+                    _timed_out["v"] = True
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                    return
+                _time.sleep(0.25)
+
+        _threading.Thread(target=_watchdog, daemon=True,
+                          name="diffusion-watchdog").start()
         raw_parts: list[str] = []
         try:
             assert proc.stdout is not None
             while True:
-                if _time.monotonic() > deadline:
-                    proc.kill()
+                if _timed_out["v"] or _time.monotonic() > deadline:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
                     raise RuntimeErrorWithContext(
                         f"diffusion generation timed out ({timeout_secs}s)"
                     )
                 chunk = proc.stdout.read(4096)
                 if not chunk:
+                    if _timed_out["v"]:
+                        raise RuntimeErrorWithContext(
+                            f"diffusion generation timed out ({timeout_secs}s)"
+                        )
                     break
                 raw_parts.append(chunk)
             rc = proc.wait(timeout=30)
