@@ -929,9 +929,11 @@ def stop_speaking() -> None:
             proc.terminate()
         except Exception:
             pass
-    if platform.system() == "Darwin":
+        # Kill only OUR `say`, not every `say` on the machine — the old
+        # machine-wide `pkill -9 say` killed the user's accessibility TTS,
+        # other scripts, and sibling localcode sessions on every speak().
         try:
-            subprocess.run(["pkill", "-9", "say"],
+            subprocess.run(["pkill", "-9", "-P", str(proc.pid), "say"],
                            check=False, capture_output=True)
         except Exception:
             pass
