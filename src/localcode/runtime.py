@@ -27,10 +27,6 @@ def _strip_thinking_tokens(text: str, family: ModelFamily | None = None) -> str:
     return _family_strip(text, family)
 
 
-from .tool_parsing import (
-    inject_tool_schemas_into_prompt,
-    parse_tool_calls,
-)
 
 
 def _estimate_token_count(value: Any) -> int:
@@ -240,25 +236,17 @@ def apply_param_overrides(cmd: list[str], env: dict | None = None) -> list[str]:
 
 
 class LocalCodeRuntimeGateway(_DiffusionMixin):
-    """Talks to Ollama, llama.cpp, MLX, or HuggingFace local backends."""
+    """Talks to the local llama.cpp (llama-server) backend."""
 
     def __init__(self, config: RuntimeConfig) -> None:
         self.config = config
-        self._hf_backend: Any | None = None
-        self._mlx_backend: Any | None = None
         self._client: httpx.Client | None = None
         self.last_response_meta: dict[str, Any] = {}  # for token tracking
-        self._last_thinking: str = ""  # thinking extracted from MLX output
+        # llama_cpp is the only HTTP runtime (ollama/mlx/hf removed); diffusion
+        # models are architecture-routed to the one-shot CLI, not this endpoint.
         base = self.config.base_url.rstrip("/")
-        if self.config.provider == "llama_cpp":
-            self.endpoint = f"{base}/v1/chat/completions"
-            self.tags_endpoint = f"{base}/v1/models"
-        elif self.config.provider in ("mlx-local", "huggingface-local"):
-            self.endpoint = ""
-            self.tags_endpoint = ""
-        else:
-            self.endpoint = f"{base}/api/chat"
-            self.tags_endpoint = f"{base}/api/tags"
+        self.endpoint = f"{base}/v1/chat/completions"
+        self.tags_endpoint = f"{base}/v1/models"
 
     @property
     def client(self) -> httpx.Client:
@@ -450,9 +438,6 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
         # against the real model, so output is identical, just faster.
         if self.config.llama_cpp_draft_model:
             draft_path = self.config.llama_cpp_draft_model
-            # Support Ollama blob paths (sha256-...)
-            if not draft_path.startswith("/") and "sha256" not in draft_path:
-                draft_path = self._find_ollama_blob(draft_path)
             cmd.extend(["--model-draft", draft_path,
                         "--draft-max", str(self.config.llama_cpp_draft_max)])
         elif self.config.llama_cpp_lookup_cache:
@@ -461,16 +446,16 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
         elif self.config.llama_cpp_spec_type and self.config.llama_cpp_spec_type != "none":
             cmd.extend(["--spec-type", self.config.llama_cpp_spec_type,
                         "--draft-max", str(self.config.llama_cpp_draft_max)])
-        elif self.config.llama_cpp_spec_type != "none":
-            # DEFAULT (nothing configured): in-context n-gram speculative
-            # decoding. Free and safe — no draft model (so none of the
-            # vocab-mismatch / double-bandwidth problems of --model-draft),
-            # no extra RAM, stateless (unlike lookup-cache's /tmp file).
-            # It accelerates the repetitive token runs that dominate coding
-            # output — identifiers, syntax, and re-emitted file content
-            # during edits. Opt out with llama_cpp_spec_type = "none".
-            cmd.extend(["--spec-type", "ngram-mod",
-                        "--draft-max", str(self.config.llama_cpp_draft_max)])
+        # NO speculative decoding by default. An empty `llama_cpp_spec_type`
+        # means OFF — NOT a cue to fall back to in-context n-gram decoding.
+        # The previous default here emitted `--spec-type ngram-mod`, which
+        # directly contradicted config.py's force-disable of spec_type (added
+        # 2026-04-26 because n-gram/lookup decoding causes INFINITE VERBATIM
+        # REPETITION: once the model emits a phrase, the n-gram drafter re-
+        # proposes it and greedy verification accepts the whole block, so the
+        # loop accelerates instead of breaking). config.py disabled it at the
+        # config layer; this branch silently re-enabled it at launch. Ship OFF;
+        # opt into a real draft model (lossless) or an explicit spec_type.
         # Batch sizes — GPU benefits from bigger batches for prompt eval,
         # but large hybrid/MoE GGUFs on 16 GB Macs can OOM during prefill
         # with 2K batches. Respect explicit config first; otherwise clamp
@@ -523,22 +508,6 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
         except Exception:
             merged_env = dict(os.environ)
         return apply_param_overrides(cmd, env=merged_env)
-
-    @staticmethod
-    def _find_ollama_blob(model_name: str) -> str:
-        """Find the GGUF blob path for an Ollama model."""
-        import subprocess
-        try:
-            result = subprocess.run(
-                ["ollama", "show", model_name, "--modelfile"],
-                capture_output=True, text=True, check=False,
-            )
-            for line in result.stdout.splitlines():
-                if line.startswith("FROM ") and ".ollama" in line:
-                    return line.split("FROM ", 1)[1].strip()
-        except Exception:
-            pass
-        return model_name  # fallback: return as-is
 
     @staticmethod
     def _ram_ctx_ceiling(ram_gb: int) -> int:
@@ -847,10 +816,7 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
     def generate_once(self, messages: list[dict[str, Any]], max_tokens: int | None = None) -> str:
         """Call model for a one-shot generation (no streaming, no tool calls).
 
-        Routes to the correct endpoint per provider:
-        - Ollama: /api/generate (bypasses chat template to avoid <|tool_response> tokens)
-        - llama.cpp: /v1/chat/completions (OpenAI-compatible)
-        - MLX/HF: in-process generation
+        Uses llama.cpp's /v1/chat/completions (OpenAI-compatible) endpoint.
         """
         if self.config.provider == "llama_cpp":
             from .thinking import should_use_thinking
@@ -877,59 +843,10 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
                 msg = result.get("message", {})
                 content = _strip_thinking_tokens((msg.get("content", "") or "").strip())
             return content
-
-        if self.config.provider == "mlx-local":
-            return self._mlx_generate(messages)
-
-        if self.config.provider == "huggingface-local":
-            return self._hf_generate(messages)
-
-        # Ollama: use /api/generate to bypass chat template
-        parts = []
-        for msg in messages:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            if role == "system":
-                parts.append(content)
-            elif role == "user":
-                parts.append(f"\nUser: {content}")
-            elif role == "assistant":
-                parts.append(f"\nAssistant: {content}")
-        prompt = "\n".join(parts) + "\nAssistant:"
-
-        base = self.config.base_url.rstrip("/")
-        opts = self._options(num_predict_override=max_tokens or 4096)
-
-        payload = {
-            "model": self.config.model,
-            "prompt": prompt,
-            "stream": False,
-            "think": False,
-            "options": opts,
-        }
-
-        # Long timeout for code generation — 26B at 8 tok/s needs ~5min for 150 lines
-        response = self.client.post(
-            f"{base}/api/generate", json=payload,
-            timeout=httpx.Timeout(connect=10, read=600, write=30, pool=10),
-        )
-        response.raise_for_status()
-        data = response.json()
-        return data.get("response", "").strip()
+        # llama_cpp is the only provider; the branch above always returns.
+        return ""
 
     def healthcheck(self) -> tuple[bool, str]:
-        if self.config.provider == "mlx-local":
-            try:
-                self._get_mlx_backend()
-                return True, self.config.mlx_model_id or self.config.model or "mlx local model"
-            except Exception as exc:
-                return False, str(exc)
-        if self.config.provider == "huggingface-local":
-            try:
-                self._get_hf_backend()
-                return True, self.config.huggingface_model_id or self.config.model or "local model"
-            except Exception as exc:
-                return False, str(exc)
         try:
             response = self.client.get(self.tags_endpoint)
             response.raise_for_status()
@@ -938,12 +855,6 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
             return False, str(exc)
 
     def list_models(self) -> list[str]:
-        if self.config.provider == "mlx-local":
-            model_id = self.config.mlx_model_id or self.config.model
-            return [model_id] if model_id else []
-        if self.config.provider == "huggingface-local":
-            model_id = self.config.huggingface_model_id or self.config.model
-            return [model_id] if model_id else []
         response = self.client.get(self.tags_endpoint)
         response.raise_for_status()
         data = response.json()
@@ -1237,27 +1148,6 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
                 elif ev.get("type") == "tool_calls":
                     tool_calls = ev.get("tool_calls") or []
             return {"message": {"content": "".join(content_parts), "tool_calls": tool_calls}}
-        if self.config.provider == "mlx-local":
-            # Inject tool schemas into system prompt for MLX
-            effective_messages = messages
-            if tools:
-                effective_messages = self._inject_tools_into_messages(messages, tools)
-            content = self._mlx_generate(effective_messages)
-            if tools:
-                parsed = parse_tool_calls(content)
-                if parsed.has_tools:
-                    return {"message": {"content": parsed.content, "tool_calls": parsed.to_ollama_format()}}
-            return {"message": {"content": content, "tool_calls": []}}
-        if self.config.provider == "huggingface-local":
-            effective_messages = messages
-            if tools:
-                effective_messages = self._inject_tools_into_messages(messages, tools)
-            content = self._hf_generate(effective_messages)
-            if tools:
-                parsed = parse_tool_calls(content)
-                if parsed.has_tools:
-                    return {"message": {"content": parsed.content, "tool_calls": parsed.to_ollama_format()}}
-            return {"message": {"content": content, "tool_calls": []}}
 
         # Reset idle-suspend countdown — a chat is incoming.
         try:
@@ -1359,7 +1249,7 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
                 if self.config.provider == "llama_cpp":
                     self.endpoint = f"{new_base}/v1/chat/completions"
                     self.tags_endpoint = f"{new_base}/v1/models"
-                elif self.config.provider not in ("mlx-local", "huggingface-local"):
+                else:
                     self.endpoint = f"{new_base}/api/chat"
                     self.tags_endpoint = f"{new_base}/api/tags"
             if self._client is not None and not self._client.is_closed:
@@ -1389,8 +1279,6 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
         actual `POST /v1/chat/completions` — the probe is ONLY a
         cold-start safety net.
         """
-        if self.config.provider in {"mlx-local", "huggingface-local"}:
-            return True
         import time as _time
         now = _time.monotonic()
         if now - self._LAST_PROBE_OK_TS < self._PROBE_FRESHNESS_SECONDS:
@@ -1424,71 +1312,6 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
                 messages, tools=tools, num_predict=num_predict
             )
             return
-        if self.config.provider == "mlx-local":
-            effective_messages = messages
-            if tools:
-                effective_messages = self._inject_tools_into_messages(messages, tools)
-            # Stream with thinking/content separation
-            raw_parts: list[str] = []
-            buffer = ""
-            in_thinking = False
-            self._last_thinking = ""
-            for chunk in self._mlx_stream_generate(effective_messages):
-                buffer += chunk
-                # Buffer partial special tokens
-                if "<|" in buffer and "|>" not in buffer:
-                    continue
-                if "<tool_call" in buffer and "tool_call|>" not in buffer:
-                    continue
-                if "<|channel>" in buffer and "<channel|>" not in buffer:
-                    # Inside thinking block — accumulate but don't yield as content
-                    if "<|channel>thought" in buffer:
-                        in_thinking = True
-                    continue
-                raw_parts.append(buffer)
-                # Check if thinking block ended in this chunk
-                if in_thinking and "<channel|>" in buffer:
-                    # Extract thinking text
-                    parts = buffer.split("<channel|>", 1)
-                    thinking_part = parts[0].replace("<|channel>thought", "").strip()
-                    if thinking_part:
-                        yield {"type": "thinking", "content": thinking_part}
-                    content_after = parts[1] if len(parts) > 1 else ""
-                    content_after = self._clean_mlx_output(content_after)
-                    in_thinking = False
-                    buffer = ""
-                    if content_after.strip():
-                        yield {"type": "content", "content": content_after}
-                    continue
-                if not in_thinking:
-                    cleaned = self._clean_mlx_output(buffer)
-                    buffer = ""
-                    if cleaned.strip():
-                        yield {"type": "content", "content": cleaned}
-                else:
-                    buffer = ""
-            # Flush
-            if buffer:
-                raw_parts.append(buffer)
-                if in_thinking:
-                    yield {"type": "thinking", "content": buffer}
-                else:
-                    cleaned = self._clean_mlx_output(buffer)
-                    if cleaned.strip():
-                        yield {"type": "content", "content": cleaned}
-            # Parse tool calls from raw
-            raw_full = "".join(raw_parts)
-            if tools:
-                parsed = parse_tool_calls(raw_full)
-                if parsed.has_tools:
-                    yield {"type": "tool_calls", "tool_calls": parsed.to_ollama_format()}
-            return
-        if self.config.provider == "huggingface-local":
-            content = self._hf_generate(messages)
-            for chunk in self._chunk_text(content, 180):
-                if chunk:
-                    yield {"type": "content", "content": chunk}
-            return
 
         payload = self._payload(messages, stream=True, tools=tools, think=think, num_ctx=num_ctx, num_predict=num_predict)
         last_error: Exception | None = None
@@ -1511,15 +1334,17 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
         # Gemma-4 token-soup collapse is INTERMITTENT (the same "hi" that
         # collapses now answers cleanly on a re-sample). The collapse path
         # used to hard-fail with E3108 and no retry. Instead, re-generate
-        # the SAME completion up to _MAX_COLLAPSE_RETRIES times before
-        # giving up — mirroring the diffusion path's adaptive retry loop.
-        # We only retry a collapse that fires BEFORE any real content has
-        # been streamed to the consumer (the soup tokens are stripped, so
-        # the consumer has seen nothing yet) — that keeps the retry clean
-        # with no double-emit, and the "hi" collapse always falls in this
-        # window. A collapse mid-answer (rare) still surfaces E3108 rather
-        # than re-streaming a partially-consumed turn.
-        _MAX_COLLAPSE_RETRIES = 2
+        # up to _MAX_COLLAPSE_RETRIES times before giving up — each retry
+        # ESCALATING the sampler (fresh seed + higher repeat_penalty +
+        # temperature push; see the collapse-retry block below) so the
+        # resample can't reproduce the same degenerate path. We only retry
+        # a collapse that fires BEFORE any real content has been streamed
+        # to the consumer (the soup tokens are stripped, so the consumer
+        # has seen nothing yet) — that keeps the retry clean with no
+        # double-emit, and the "hi" collapse always falls in this window.
+        # A collapse mid-answer (rare) still surfaces E3108 rather than
+        # re-streaming a partially-consumed turn.
+        _MAX_COLLAPSE_RETRIES = 3
         _collapse_retries_done = 0
         # The attempt budget must cover BOTH connection retries and collapse
         # retries — otherwise a low `max_retries` would starve collapse
@@ -1897,15 +1722,48 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
                             "re-generating the response."
                         ),
                     }
-                    # Conservative anti-collapse nudge: bump temperature a
-                    # little so the retry samples a different path. We clamp
-                    # to a sane ceiling so we never push the model into
-                    # incoherence. repeat_penalty already lives in _payload.
+                    # Actively break the collapse on the retry instead of
+                    # re-sending a byte-identical request. The old code only
+                    # bumped temperature and clamped it to 1.0 — but Gemma's
+                    # base temperature IS 1.0 (Unsloth spec, see _options), so
+                    # the clamp made the "nudge" a no-op: every retry re-sampled
+                    # the exact same degenerate path and we burned the whole
+                    # budget before surfacing E3108. Three independent levers:
+                    #   1. seed — force a different RNG trajectory so an
+                    #      intermittent collapse can't reproduce
+                    #      deterministically (defeats a pinned server seed).
+                    #   2. repeat_penalty — escalate hard (1.30 → 1.55 → 1.60);
+                    #      it divides the logit of the looping token directly,
+                    #      the exact antidote to "junk × N".
+                    #   3. temperature — allow a modest push ABOVE the 1.0
+                    #      quality ceiling. We're already collapsed, so trading
+                    #      a little coherence for escape velocity is correct.
+                    # Written both top-level (llama_cpp / OpenAI-compat payload)
+                    # and into `options` (ollama-style payload) so the escalation
+                    # lands whichever shape `_payload` produced.
+                    import random as _rand_mod
+                    _new_seed = _rand_mod.randint(1, 2**31 - 1)
+                    _new_rp = min(1.60, 1.05 + 0.25 * _collapse_retries_done)
+                    # Read the base temperature from whichever shape _payload
+                    # produced: top-level for llama_cpp/OpenAI-compat, nested
+                    # under `options` for ollama. Reading only top-level would
+                    # misread the ollama base as 1.0 and escalate off the wrong
+                    # anchor.
+                    _opts = payload.get("options")
+                    _base_t = payload.get("temperature")
+                    if _base_t is None and isinstance(_opts, dict):
+                        _base_t = _opts.get("temperature")
                     try:
-                        _t = float(payload.get("temperature", 0.7) or 0.7)
+                        _t = float(_base_t if _base_t is not None else 1.0)
                     except (TypeError, ValueError):
-                        _t = 0.7
-                    payload["temperature"] = min(1.0, _t + 0.1 * _collapse_retries_done)
+                        _t = 1.0
+                    _new_t = min(1.2, _t + 0.08 * _collapse_retries_done)
+                    for _tgt in (payload, _opts if isinstance(_opts, dict) else None):
+                        if _tgt is None:
+                            continue
+                        _tgt["seed"] = _new_seed
+                        _tgt["repeat_penalty"] = _new_rp
+                        _tgt["temperature"] = _new_t
                     continue
                 # Diagnostic event for the agent loop — outcome of THIS
                 # stream (per-round, not per-turn). Lets round_end log
@@ -2217,198 +2075,3 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
                 result["thinking"] = thinking
             return result
         return data.get("message", {})
-
-    # ── Local backends ───────────────────────────────────────────────────
-
-    def _get_hf_backend(self) -> Any:
-        if self._hf_backend is not None:
-            return self._hf_backend
-        model_id = self.config.huggingface_model_id or self.config.model
-        if not model_id:
-            raise RuntimeErrorWithContext("No Hugging Face model configured.")
-        try:
-            import torch
-            from transformers import AutoModelForMultimodalLM, AutoProcessor
-        except ImportError:
-            try:
-                import torch
-                from transformers import AutoModelForCausalLM as AutoModelForMultimodalLM, AutoTokenizer as AutoProcessor
-            except Exception as exc:
-                raise RuntimeErrorWithContext("transformers + torch required for HF backend.") from exc
-        torch_dtype = None
-        if self.config.huggingface_dtype not in {"", "auto"}:
-            torch_dtype = getattr(torch, self.config.huggingface_dtype, None)
-        model_kwargs: dict[str, Any] = {}
-        if torch_dtype is not None:
-            model_kwargs["torch_dtype"] = torch_dtype
-        else:
-            model_kwargs["dtype"] = "auto"
-        device_map = self.config.huggingface_device if self.config.huggingface_device else "auto"
-        processor = AutoProcessor.from_pretrained(model_id)
-        model = AutoModelForMultimodalLM.from_pretrained(model_id, device_map=device_map, **model_kwargs)
-        self._hf_backend = (model, processor)
-        return self._hf_backend
-
-    def _get_mlx_backend(self) -> Any:
-        if self._mlx_backend is not None:
-            return self._mlx_backend
-        model_id = self.config.mlx_model_id or self.config.model
-        if not model_id:
-            raise RuntimeErrorWithContext("No MLX model configured.")
-        try:
-            from mlx_lm import load, generate
-        except Exception as exc:
-            raise RuntimeErrorWithContext("mlx-lm required for MLX backend.") from exc
-        model, tokenizer = load(model_id)
-        self._mlx_backend = (model, tokenizer, generate)
-        return self._mlx_backend
-
-    def _mlx_generate(self, messages: list[dict[str, Any]]) -> str:
-        model, tokenizer, generate = self._get_mlx_backend()
-        prompt = self._messages_to_prompt(messages)
-        try:
-            if getattr(tokenizer, "chat_template", None) is not None:
-                prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
-        except Exception:
-            pass
-        return str(generate(
-            model, tokenizer, prompt=prompt,
-            max_tokens=max(512, min(8192, self.config.max_context_chars // 4)),
-            # temperature handled by mlx defaults
-            verbose=False,
-        )).strip()
-
-    # Gemma 4 special tokens to strip from MLX output
-    _GEMMA4_TOKENS = re.compile(
-        r'<\|tool_call\>.*?<tool_call\|>'
-        r'|<\|"\|>'
-        r'|<\|[^>]*\|>'
-        r'|<turn\|>'
-        r'|<\|turn\>',
-        re.DOTALL
-    )
-
-    def _clean_mlx_output(self, text: str) -> str:
-        """Strip Gemma 4 special tokens, split thinking from content."""
-        # Split on thinking channel markers
-        if "<|channel>thought" in text:
-            # Everything before <|channel>thought = content prefix (usually empty)
-            # Everything between <|channel>thought and <channel|> = thinking
-            # Everything after <channel|> = actual content
-            parts = re.split(r'<\|channel\>thought', text, maxsplit=1)
-            before = parts[0]
-            if len(parts) > 1:
-                rest = parts[1]
-                channel_end = rest.find("<channel|>")
-                if channel_end >= 0:
-                    thinking = rest[:channel_end]
-                    content = rest[channel_end + len("<channel|>"):]
-                    # Store thinking for the indicator
-                    self._last_thinking = thinking
-                    text = before + content
-                else:
-                    # Haven't seen end of thinking yet — buffer it
-                    self._last_thinking = rest
-                    text = before
-        # Clean remaining tokens
-        text = self._GEMMA4_TOKENS.sub('', text)
-        # Also strip <channel|> and <|channel> fragments
-        text = text.replace("<channel|>", "").replace("<|channel>", "")
-        return text
-
-    def _mlx_stream_generate(self, messages: list[dict[str, Any]]) -> Iterator[str]:
-        """True streaming generation for MLX."""
-        model, tokenizer, _ = self._get_mlx_backend()
-        prompt = self._messages_to_prompt(messages)
-        try:
-            if getattr(tokenizer, "chat_template", None) is not None:
-                prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
-        except Exception:
-            pass
-        try:
-            from mlx_lm import stream_generate
-            for response in stream_generate(
-                model, tokenizer, prompt=prompt,
-                max_tokens=max(512, min(8192, self.config.max_context_chars // 4)),
-            ):
-                text = response.text if hasattr(response, 'text') else (response.get("text", "") if isinstance(response, dict) else str(response))
-                if text:
-                    cleaned = self._clean_mlx_output(text)
-                    if cleaned:
-                        yield cleaned
-        except (ImportError, AttributeError):
-            content = self._mlx_generate(messages)
-            cleaned = self._clean_mlx_output(content)
-            for chunk in self._chunk_text(cleaned, 80):
-                yield chunk
-
-    def _hf_generate(self, messages: list[dict[str, Any]]) -> str:
-        model, processor = self._get_hf_backend()
-        try:
-            # Use Gemma 4's apply_chat_template for proper formatting
-            inputs = processor.apply_chat_template(
-                messages,
-                tokenize=True,
-                return_dict=True,
-                return_tensors="pt",
-                add_generation_prompt=True,
-            )
-            if hasattr(model, "device"):
-                inputs = {k: v.to(model.device) if hasattr(v, "to") else v for k, v in inputs.items()}
-            input_len = inputs["input_ids"].shape[-1]
-            outputs = model.generate(
-                **inputs,
-                max_new_tokens=max(256, min(4096, self.config.max_context_chars // 4)),
-                # temperature handled by mlx defaults
-            )
-            generated = outputs[0][input_len:]
-            # Try parse_response for thinking mode support
-            raw = processor.decode(generated, skip_special_tokens=False)
-            if hasattr(processor, "parse_response"):
-                parsed = processor.parse_response(raw)
-                return str(parsed.get("content", parsed.get("text", raw))).strip()
-            return processor.decode(generated, skip_special_tokens=True).strip()
-        except Exception:
-            # Fallback to simple prompt-based generation
-            prompt = self._messages_to_prompt(messages)
-            inputs = processor(prompt, return_tensors="pt")
-            if hasattr(model, "device"):
-                inputs = {k: v.to(model.device) if hasattr(v, "to") else v for k, v in inputs.items()}
-            outputs = model.generate(**inputs, max_new_tokens=2048)
-            return processor.decode(outputs[0], skip_special_tokens=True).strip()
-
-    @staticmethod
-    def _inject_tools_into_messages(
-        messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        """Inject tool schemas into the system/first message for non-native backends."""
-        result = list(messages)
-        for i, msg in enumerate(result):
-            if msg.get("role") == "system":
-                result[i] = {
-                    **msg,
-                    "content": inject_tool_schemas_into_prompt(msg["content"], tools),
-                }
-                return result
-        # No system message — prepend one
-        return [
-            {"role": "system", "content": inject_tool_schemas_into_prompt("", tools)},
-            *result,
-        ]
-
-    @staticmethod
-    def _messages_to_prompt(messages: list[dict[str, Any]]) -> str:
-        parts: list[str] = []
-        for msg in messages:
-            role = msg.get("role", "user").upper()
-            content = str(msg.get("content", ""))
-            if content:
-                parts.append(f"{role}:\n{content}")
-        parts.append("ASSISTANT:")
-        return "\n\n".join(parts)
-
-    @staticmethod
-    def _chunk_text(text: str, chunk_size: int) -> Iterator[str]:
-        for start in range(0, len(text), chunk_size):
-            yield text[start:start + chunk_size]

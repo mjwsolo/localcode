@@ -11,6 +11,10 @@ from __future__ import annotations
 
 from ...theme import C
 
+# Sentinel: lets _model_supports_thinking accept a pre-resolved ModelChoice
+# (the 2 s status tick already has one) vs. resolving it itself.
+_UNSET = object()
+
 
 import os
 import re
@@ -388,11 +392,23 @@ class _ChatTextArea(TextArea):
     # No `:focus` highlight; keep the terminal-native background and stay
     # full-brightness while disabled (during the approval prompt) — same
     # rationale as the old _NoTintInput CSS.
+    # Force the caret to blink. TextArea defaults to blink=True, but making it
+    # explicit guards against a theme/terminal resetting it.
+    cursor_blink = True
+
     DEFAULT_CSS = """
     _ChatTextArea {
         background: ansi_default;
         & .text-area--cursor-line {
             background: ansi_default;
+        }
+        /* The caret. Without an explicit style it inherits the ansi_default
+           theme where $foreground == $background, rendering an INVISIBLE
+           cursor. Give it concrete high-contrast colors so it shows (and
+           blinks) on every terminal, light or dark. */
+        & .text-area--cursor {
+            color: #1e1e1e;
+            background: #d0d0d0;
         }
         &:focus {
             background-tint: transparent 0%;
@@ -1129,8 +1145,14 @@ class ChatScreen(Screen):
         except Exception:
             self._build_commit = ""
         # Liveness loop. Probe IMMEDIATELY, then every 2 s — same cadence
-        # the status bar refreshes at.
+        # the status bar refreshes at. The cwd git branch (a `git` subprocess,
+        # too slow for the UI thread) is refreshed here too so the status bar's
+        # directory segment stays current if the user checks out a branch
+        # mid-session — but only every ~30 s, not every 2 s tick: a branch
+        # switch is rare and a fork per tick for the whole session is wasteful.
+        self._cwd_branch = ""
         stop = self._status_probe_stop
+        _tick = 0
         while True:
             try:
                 from ...server_manager import ServerManager as _SM
@@ -1141,6 +1163,14 @@ class ChatScreen(Screen):
                 self._server_alive = _mgr.is_running() or _mgr.is_healthy()
             except Exception:
                 self._server_alive = True  # can't probe → don't cry wolf
+            if _tick % 15 == 0:  # first tick, then every ~30 s
+                try:
+                    from ...telemetry import current_git_branch as _cgb
+                    from pathlib import Path as _P
+                    self._cwd_branch = _cgb(str(_P.cwd())) or ""
+                except Exception:
+                    self._cwd_branch = ""
+            _tick += 1
             if stop.wait(2.0):
                 return
 
@@ -1400,12 +1430,12 @@ class ChatScreen(Screen):
         from ...models_catalog import current as current_choice
         cur = current_choice(config)
         # Thinking indicator: reflects the `/thinking` policy
-        # (internal_thinking_mode), NOT the perf runtime mode. Block-diffusion
-        # models can't produce hidden reasoning, so show "n/a" there rather
-        # than a misleading on/off.
-        if cur is not None and str(
-            getattr(cur, "architecture", "")
-        ).startswith("diffusion"):
+        # (internal_thinking_mode), NOT the perf runtime mode. When the active
+        # model can't produce hidden reasoning (diffusion arch), show "n/a"
+        # rather than a misleading on/off — single source of truth:
+        # _model_supports_thinking. Reuse the `cur` resolved just above so the
+        # 2 s tick doesn't resolve the current model twice.
+        if not self._model_supports_thinking(cur):
             thinking_label = "n/a"
         else:
             _tm = (config.runtime.internal_thinking_mode or "off").strip().lower()
@@ -1431,10 +1461,8 @@ class ChatScreen(Screen):
                 task_stage = str(getattr(self.tui.engine, "_last_turn_task_stage", "")).strip()
         except Exception:
             task_stage = ""
-        # Server status — short, plain-English action label. The
-        # degraded path (Ollama at ~1.7 tok/s vs ~27 tok/s normally)
-        # tells the user EXACTLY what to do, not technical jargon
-        # like "fallback" or "turbo".
+        # Server status — short, plain-English action label ("ready",
+        # "loading", "stopped", "not connected") — the value word IS the state.
         provider = (config.runtime.provider or "").lower()
         # Plain `key: value` — the value word ("ready", "loading",
         # "degraded", "not connected") IS the state; a leading glyph
@@ -1461,8 +1489,6 @@ class ChatScreen(Screen):
             # non-blocking.
             _alive = getattr(self, "_server_alive", True)
             server_label = "server: ready" if _alive else "server: stopped"
-        elif provider == "ollama":
-            server_label = "server: degraded (restart to fix)"
         elif provider:
             server_label = f"server: {provider}"
         else:
@@ -1531,9 +1557,35 @@ class ChatScreen(Screen):
         # opened with an emoji + box-drawing divider and double-spaced
         # separators — decoration that ate ~10 columns and made the bar
         # the loudest thing on screen. Brand color on the name is enough.
+        # Working-directory segment (Zero-inspired orientation cue). The
+        # `git` branch is computed off the UI thread by the status probe;
+        # the path itself is cheap (no subprocess). Collapse $HOME to `~`,
+        # and show the full path only on wide terminals — on narrow ones
+        # the basename is enough and the rest of the row matters more.
+        import os as _os
+        try:
+            _cwd = _os.getcwd()
+            _home = _os.path.expanduser("~")
+            if _cwd == _home:
+                _cwd_disp = "~"
+            elif _cwd.startswith(_home + _os.sep):
+                _cwd_disp = "~" + _cwd[len(_home):]
+            else:
+                _cwd_disp = _cwd
+            if term_cols and term_cols < 100:
+                _cwd_disp = _os.path.basename(_cwd.rstrip(_os.sep)) or _cwd_disp
+        except Exception:
+            _cwd_disp = ""
+        _branch = getattr(self, "_cwd_branch", "") or ""
+        if _cwd_disp:
+            from rich.markup import escape as _mesc
+            cwd_seg = _mesc(_cwd_disp + (f" ({_branch})" if _branch else ""))
+        else:
+            cwd_seg = ""
         left = RichText.from_markup(
-            f"[{C.primary}]LocalCode[/] · "
-            f"{server_label} · context: {pct_remaining}% free · "
+            f"[{C.primary}]LocalCode[/]"
+            + (f" · [dim]{cwd_seg}[/]" if cwd_seg else "")
+            + f" · {server_label} · context: {pct_remaining}% free · "
             f"thinking: {thinking_label}"
             + (f" · task: {task_stage}" if task_stage else "")
             + f" · model: {short_model}"
@@ -1573,7 +1625,8 @@ class ChatScreen(Screen):
         if self._pending_messages:
             n = len(self._pending_messages)
             preview = self._pending_messages[0][:40]
-            q.update(f" ↻ {n} queued: \"{preview}\"{'…' if len(self._pending_messages[0]) > 40 else ''}")
+            from rich.markup import escape as _mesc
+            q.update(f" ↻ {n} queued: \"{_mesc(preview)}\"{'…' if len(self._pending_messages[0]) > 40 else ''}")
             q.add_class("active")
         else:
             q.remove_class("active")
@@ -1634,6 +1687,11 @@ class ChatScreen(Screen):
             self._slash_matches = [(cmd, desc) for cmd, desc in _SLASH_COMMANDS if cmd.startswith(prefix)]
             if self._slash_matches:
                 self._slash_selected = min(self._slash_selected, len(self._slash_matches) - 1)
+                # Don't leave the highlight on a greyed-out command (e.g.
+                # /thinking on a non-reasoning model): Enter would no-op. Land
+                # on the first selectable entry, matching arrow/Tab nav.
+                if self._slash_cmd_disabled(self._slash_matches[self._slash_selected][0]):
+                    self._slash_selected = self._next_selectable_slash(self._slash_selected, +1)
                 self._render_slash_menu()
                 menu.add_class("active")
                 status_bar.add_class("hidden")
@@ -1647,6 +1705,55 @@ class ChatScreen(Screen):
             menu.remove_class("active")
             status_bar.remove_class("hidden")
 
+    def _model_supports_thinking(self, cur=_UNSET) -> bool:
+        """Whether the currently-selected model can emit hidden reasoning.
+
+        Drives the `/thinking` selector and the status-bar label: diffusion
+        models (and any future entry that declares no `thinking` capability)
+        can't produce a toggleable reasoning channel, so the option is disabled
+        rather than offered as if it works. Unknown / unresolved model → assume
+        it can, so we never wrongly grey out a real reasoning model.
+
+        `cur` may be passed in by callers (e.g. the 2 s status tick) that have
+        already resolved the current ModelChoice, to avoid re-resolving it.
+        """
+        try:
+            if cur is _UNSET:
+                from ...models_catalog import current as current_choice
+                cur = current_choice(self.tui.config)
+        except Exception:
+            return True
+        if cur is None:
+            return True
+        try:
+            return bool(cur.supports_thinking)
+        except Exception:
+            return True
+
+    def _slash_cmd_disabled(self, cmd: str) -> bool:
+        """True when a slash command must render greyed-out + non-selectable
+        for the current model. Today only `/thinking` is gated (on models
+        without a hidden-reasoning channel)."""
+        if cmd == "/thinking":
+            return not self._model_supports_thinking()
+        return False
+
+    def _next_selectable_slash(self, start: int, step: int) -> int:
+        """Index of the next non-disabled slash match, walking `step` (±1).
+
+        Skips greyed-out entries (e.g. /thinking on a non-reasoning model)
+        so arrow/Tab navigation never lands the highlight on something that
+        can't be chosen. Falls back to `start` if every match is disabled."""
+        n = len(self._slash_matches)
+        if n == 0:
+            return 0
+        idx = start
+        for _ in range(n):
+            idx = (idx + step) % n
+            if not self._slash_cmd_disabled(self._slash_matches[idx][0]):
+                return idx
+        return start
+
     def _render_slash_menu(self) -> None:
         """Render the slash palette below the input.
 
@@ -1654,6 +1761,10 @@ class ChatScreen(Screen):
         fit, truncate with `…` instead of wrapping (wrapping made it
         look like there were extra options below). Width is computed
         from the actual screen width minus the fixed command column.
+
+        Commands that are unavailable for the current model (e.g.
+        `/thinking` on a diffusion model) render in a dimmed/struck style
+        and can't be selected.
         """
         menu = self.query_one("#slash-menu", Static)
         try:
@@ -1662,8 +1773,18 @@ class ChatScreen(Screen):
             avail = 60
         lines = []
         for i, (cmd, desc) in enumerate(self._slash_matches):
-            d = desc if len(desc) <= avail else desc[: max(0, avail - 1)].rstrip() + "…"
-            if i == self._slash_selected:
+            disabled = self._slash_cmd_disabled(cmd)
+            d = "unavailable for this model" if disabled else desc
+            # Truncate BOTH the real and the "unavailable" text so neither wraps
+            # to a second visual row on a narrow terminal (wrapping reads as a
+            # phantom extra menu entry — the exact thing this render prevents).
+            if len(d) > avail:
+                d = d[: max(0, avail - 1)].rstrip() + "…"
+            if disabled:
+                # Greyed out + non-selectable: dim + strikethrough so it
+                # reads as "offered but not usable here", never highlighted.
+                lines.append(f"[dim strike]{cmd:<14}[/]  [dim italic]{d}[/]")
+            elif i == self._slash_selected:
                 lines.append(f"[bold]{cmd:<14}[/]  [bold]{d}[/]")
             else:
                 lines.append(f"[dim]{cmd:<14}[/]  [dim]{d}[/]")
@@ -1973,6 +2094,15 @@ class ChatScreen(Screen):
         """
         log = self.query_one("#chat-log", ChatLog)
         cfg = self.tui.config
+        # Gate: models with no hidden-reasoning channel (diffusion) can't honor
+        # a thinking policy. Refuse rather than silently pretend it took effect
+        # — mirrors the greyed-out /thinking entry in the slash menu.
+        if not self._model_supports_thinking():
+            log.append_info(
+                "The current model doesn't support hidden thinking, so "
+                "/thinking has no effect here."
+            )
+            return
         parts = text.strip().split(maxsplit=1)
         current = (cfg.runtime.internal_thinking_mode or "off").strip().lower() or "off"
 
@@ -2257,39 +2387,55 @@ class ChatScreen(Screen):
           /mcp           — list connected servers + their tools
           /mcp reload    — disconnect all + re-spawn from config
         """
-        from ...mcp import (
-            load_mcp_config, connect_all, list_connected, shutdown_all,
-            MCP_CONFIG_PATH,
-        )
+        # Resolve the log widget FIRST — it's referenced on every path below
+        # (including the import-failure branch). Defining it after the try/except
+        # made an import error raise NameError and take the whole TUI down.
         log = self.query_one("#chat-log", ChatLog)
+        try:
+            from ...mcp import (
+                load_mcp_config, connect_all, list_connected, shutdown_all,
+                MCP_CONFIG_PATH,
+            )
+        except ImportError as _e:
+            log.append_error(
+                f"MCP SDK not installed ({_e}). "
+                "Install it with: uv add mcp>=1.28.0"
+            )
+            return
+
         parts = text.strip().split()
         sub = parts[1] if len(parts) >= 2 else None
 
-        if sub == "reload":
-            shutdown_all()
-            count, errors = connect_all()
-            log.append_info(f"MCP reloaded: {count} server(s) connected.")
-            for e in errors:
-                log.append_error(f"  {e}")
-            return
+        # Every MCP call below can spawn subprocesses / touch the async bridge;
+        # a bad server config must surface as a message, never crash the TUI.
+        try:
+            if sub == "reload":
+                shutdown_all()
+                count, errors = connect_all()
+                log.append_info(f"MCP reloaded: {count} server(s) connected.")
+                for e in errors:
+                    log.append_error(f"  {e}")
+                return
 
-        config = load_mcp_config()
-        if not config:
-            log.append_info(
-                f"No MCP servers configured. Create {MCP_CONFIG_PATH} with:\n"
-                '  {"mcpServers": {"myserver": {"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/path"]}}}'
-            )
-            return
-        connected = list_connected()
-        if not connected:
-            count, errors = connect_all()
-            log.append_info(f"Connected {count} MCP server(s).")
-            for e in errors:
-                log.append_error(f"  {e}")
+            config = load_mcp_config()
+            if not config:
+                log.append_info(
+                    f"No MCP servers configured. Create {MCP_CONFIG_PATH} with:\n"
+                    '  {"mcpServers": {"myserver": {"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/path"]}}}'
+                )
+                return
             connected = list_connected()
-        for name, tools in connected:
-            tool_names = ", ".join(t.get("name", "?") for t in tools) or "(no tools)"
-            log.append_info(f"  {name}: {tool_names}")
+            if not connected:
+                count, errors = connect_all()
+                log.append_info(f"Connected {count} MCP server(s).")
+                for e in errors:
+                    log.append_error(f"  {e}")
+                connected = list_connected()
+            for name, tools in connected:
+                tool_names = ", ".join(t.get("name", "?") for t in tools) or "(no tools)"
+                log.append_info(f"  {name}: {tool_names}")
+        except Exception as _e:  # noqa: BLE001 — never let /mcp crash the app
+            log.append_error(f"MCP error: {type(_e).__name__}: {_e}")
 
     def _handle_audio_command(self, text: str) -> None:
         """`/audio` toggles spoken responses (TTS) on/off.
@@ -3294,7 +3440,8 @@ class ChatScreen(Screen):
             return
         n = len(self._search_results)
         if n == 0:
-            bar.update(f"[dim]No results for[/] [bold]\"{query}\"[/]")
+            from rich.markup import escape as _mesc
+            bar.update(f"[dim]No results for[/] [bold]\"{_mesc(query)}\"[/]")
         else:
             self._show_search_result()
 
@@ -3436,7 +3583,13 @@ class ChatScreen(Screen):
             # forever — input queues with no way to unblock, or /vision
             # is permanently dead. Clear them here whatever the worker.
             self._recover_stuck_state()
-            self._on_turn_done()
+            # But ONLY the agent-turn worker may end the turn. Running
+            # _on_turn_done for ANY errored worker (a `!cmd` helper, a
+            # model-swap probe) mid-turn set _agent_busy=False and drained
+            # the queue into a SECOND run_agent_turn while the first thread
+            # was still running ask() — two agent loops mutating one session.
+            if event.worker.name == "run_agent_turn":
+                self._on_turn_done()
 
     def _recover_stuck_state(self) -> None:
         """Clear blocking flags after a worker crash so the UI can't wedge.
@@ -3899,13 +4052,17 @@ class ChatScreen(Screen):
         if self._slash_matches:
             key = event.key
             if key in ("down", "tab"):
-                self._slash_selected = (self._slash_selected + 1) % len(self._slash_matches)
+                self._slash_selected = self._next_selectable_slash(
+                    self._slash_selected, +1
+                )
                 self._render_slash_menu()
                 event.prevent_default()
                 event.stop()
                 return
             elif key == "up":
-                self._slash_selected = (self._slash_selected - 1) % len(self._slash_matches)
+                self._slash_selected = self._next_selectable_slash(
+                    self._slash_selected, -1
+                )
                 self._render_slash_menu()
                 event.prevent_default()
                 event.stop()
@@ -3916,6 +4073,15 @@ class ChatScreen(Screen):
                 # Input.Submitted fire; the TextArea has no equivalent
                 # auto-submit, so clear the menu and submit explicitly.)
                 cmd = self._slash_matches[self._slash_selected][0]
+                # Disabled (greyed-out) commands are non-selectable — e.g.
+                # /thinking on a model with no hidden-reasoning channel.
+                if self._slash_cmd_disabled(cmd):
+                    self.query_one("#chat-log", ChatLog).append_info(
+                        f"{cmd} isn't available for the current model."
+                    )
+                    event.prevent_default()
+                    event.stop()
+                    return
                 inp = self.query_one("#chat-input", _ChatTextArea)
                 inp.text = cmd
                 self._slash_matches = []

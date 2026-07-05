@@ -13,7 +13,6 @@ from localcode.bootstrap import (
     _find_turboquant_source,
     _turboquant_binary_path,
     build_turboquant,
-    detect_install_plan,
     detect_llama_cpp_install_plan,
 )
 
@@ -112,38 +111,6 @@ class TestBuildTurboquant:
                 ok, msg = build_turboquant()
         assert ok is False
         assert "cmake" in msg.lower()
-
-
-class TestDetectInstallPlan:
-    """Verify detect_install_plan returns correct platform-specific plans."""
-
-    def test_darwin_with_brew(self) -> None:
-        with patch("platform.system", return_value="Darwin"):
-            with patch("shutil.which", return_value="/usr/local/bin/brew"):
-                plan = detect_install_plan()
-        assert plan is not None
-        assert plan.label == "Homebrew"
-        assert "brew" in plan.command[0]
-        assert "ollama" in plan.command
-
-    def test_linux_with_apt(self) -> None:
-        with patch("platform.system", return_value="Linux"):
-            with patch("shutil.which", side_effect=lambda x: "/usr/bin/apt-get" if x == "apt-get" else None):
-                plan = detect_install_plan()
-        assert plan is not None
-        assert plan.label == "apt"
-
-    def test_unknown_platform_returns_none(self) -> None:
-        with patch("platform.system", return_value="Windows"):
-            with patch("shutil.which", return_value=None):
-                plan = detect_install_plan()
-        assert plan is None
-
-    def test_darwin_no_brew_returns_none(self) -> None:
-        with patch("platform.system", return_value="Darwin"):
-            with patch("shutil.which", return_value=None):
-                plan = detect_install_plan()
-        assert plan is None
 
 
 class TestDetectLlamaCppInstallPlan:

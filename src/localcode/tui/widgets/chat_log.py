@@ -35,6 +35,10 @@ _CUSTOM_THEME = Theme({
     "markdown.h2": "bold white",
     "markdown.h3": "bold white",
     "markdown.h4": "bold white",
+    # Rich's default block_quote style renders an alarming red on some
+    # terminals — quoted text is not an error, so make it a calm dim italic.
+    "markdown.block_quote": "italic #9aa4b2",
+    "markdown.block_quote_border": "#5f87ff",
 })
 
 
@@ -368,19 +372,42 @@ class ChatLog(RichLog):
             pass
 
     def _set_clipboard_osc52(self, text: str) -> None:
-        """Set clipboard via OSC 52 escape sequence — works with iTerm2, Terminal.app, etc."""
+        """Copy selected text to the clipboard.
+
+        LocalCode is macOS-only, so `pbcopy` is the reliable primary: it writes
+        the real system clipboard regardless of the terminal app (Terminal.app
+        silently ignores OSC 52, which is why copy appeared broken). OSC 52 is
+        the fallback for remote/SSH sessions where pbcopy targets the wrong
+        machine and the terminal forwards the clipboard escape instead.
+        """
         import base64
         import os
+        import subprocess
         encoded = base64.b64encode(text.encode()).decode()
-        # Write directly to terminal fd, bypassing Textual's stdout
+
+        def _osc52() -> bool:
+            try:
+                fd = os.open("/dev/tty", os.O_WRONLY)
+                os.write(fd, f"\033]52;c;{encoded}\a".encode())
+                os.close(fd)
+                return True
+            except OSError:
+                return False
+
+        # In a remote/SSH session, `pbcopy` targets the REMOTE machine's
+        # clipboard, not the user's — so the terminal-forwarded OSC 52 escape is
+        # the correct primary path there. Locally, pbcopy is the reliable one
+        # (many terminals silently drop OSC 52). Detect SSH via env.
+        remote = bool(os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_TTY"))
+        if remote:
+            if _osc52():
+                return
         try:
-            fd = os.open("/dev/tty", os.O_WRONLY)
-            os.write(fd, f"\033]52;c;{encoded}\a".encode())
-            os.close(fd)
-        except OSError:
-            # Fallback to pbcopy
-            import subprocess
             subprocess.run(["pbcopy"], input=text.encode(), check=True)
+            return
+        except Exception:
+            pass
+        _osc52()
 
     def _thinking_hist_at_y(self, y: int, *, tolerance: int = 2) -> int | None:
         """Return the thinking history entry nearest a clicked content row."""

@@ -2,7 +2,7 @@
 
 The user-facing feature: attach an image, the model sees it. Under the hood
 that's `composer._build_user_message`, which must emit the right wire format
-per provider (Ollama vs llama_cpp vs HF/MLX). These tests pin every branch
+per provider (Ollama vs llama_cpp vs HF). These tests pin every branch
 plus the capability flags on the vision-capable profiles (including the new
 Gemma 4 12B).
 """
@@ -41,13 +41,6 @@ def _user_msg(provider: str, images=None):
 # ── Per-provider wire format ────────────────────────────────────────
 
 
-def test_ollama_uses_images_field():
-    msg = _user_msg("ollama", images=[TINY_PNG_B64])
-    assert msg["role"] == "user"
-    assert msg["images"] == [TINY_PNG_B64]
-    assert msg["content"] == "what is in this image?"
-
-
 def test_llama_cpp_uses_openai_image_url_parts():
     msg = _user_msg("llama_cpp", images=[TINY_PNG_B64])
     parts = msg["content"]
@@ -57,16 +50,6 @@ def test_llama_cpp_uses_openai_image_url_parts():
     assert len(image_parts) == 1 and len(text_parts) == 1
     assert image_parts[0]["image_url"]["url"].startswith("data:image/png;base64,")
     assert TINY_PNG_B64 in image_parts[0]["image_url"]["url"]
-
-
-@pytest.mark.parametrize("provider", ["huggingface-local", "mlx-local"])
-def test_hf_mlx_use_multipart_image_parts(provider):
-    msg = _user_msg(provider, images=[TINY_PNG_B64])
-    parts = msg["content"]
-    assert isinstance(parts, list)
-    image_parts = [p for p in parts if p.get("type") == "image"]
-    assert len(image_parts) == 1
-    assert image_parts[0]["image"].startswith("data:image/png;base64,")
 
 
 def test_multiple_images_all_included():
