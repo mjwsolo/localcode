@@ -174,7 +174,28 @@ def execute(ctx: ToolContext, args: dict) -> str:
     # write_file" disaster, which was the one case where rejecting
     # was load-bearing.
     existed = path.is_file()
+    # Capture the prior content so an in-place rewrite renders as a diff card
+    # (like edit_file/multi_edit), not a bare "Rewrote (N lines)" one-liner.
+    old_content = ""
+    if existed:
+        try:
+            old_content = path.read_text(errors="replace")
+        except Exception:
+            old_content = ""
     path.write_text(content)
     lines = content.count("\n") + 1
     verb = "Rewrote" if existed else "Created"
+
+    # Emit a unified diff for rewrites of existing files so the TUI draws the
+    # diff card. New files (or unchanged rewrites) keep the concise summary —
+    # a full new-file dump as "+" lines is noise, and the summary reads fine.
+    if existed and old_content != content:
+        import difflib
+        diff = list(difflib.unified_diff(
+            old_content.splitlines(keepends=True),
+            content.splitlines(keepends=True),
+            fromfile=args["path"], tofile=args["path"], lineterm="",
+        ))
+        if diff:
+            return "\n".join(diff[:120])
     return f"{verb} {args['path']} ({lines} lines)"

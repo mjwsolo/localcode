@@ -87,7 +87,10 @@ def test_write_file_overwrites_existing_file(tmp_path: Path) -> None:
         ToolContext(app=_App(tmp_path), out=_Out()),
         {"path": "app.py", "content": "print('new')\n"},
     )
-    assert result.startswith("Rewrote ")
+    # A rewrite of an existing file now returns a unified diff (consistent
+    # with edit_file) so the TUI renders a diff card; both the old and new
+    # lines appear in it. New-file writes still return the "Created …" summary.
+    assert "-print('old')" in result and "+print('new')" in result
     assert existing.read_text() == "print('new')\n"
 
 
