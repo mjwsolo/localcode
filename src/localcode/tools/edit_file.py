@@ -258,14 +258,22 @@ def execute(ctx: ToolContext, args: dict) -> str:
                 f"file may already be in the state you want."
             )
         path.write_text(new_content)
+        _sw = ""
+        try:
+            from .syntax_check import check_syntax
+            _e = check_syntax(str(path), new_content)
+            if _e:
+                _sw = f"\n\n⚠ SYNTAX ERROR after this edit — fix it now: {_e}"
+        except Exception:
+            _sw = ""
         diff = list(difflib.unified_diff(
             old_content.splitlines(keepends=True),
             new_content.splitlines(keepends=True),
             fromfile=args["path"], tofile=args["path"], lineterm="",
         ))
         if diff:
-            return "\n".join(diff[:60])
-        return f"Edited {args['path']} ({count} replacement{'s' if count != 1 else ''})"
+            return "\n".join(diff[:60]) + _sw
+        return f"Edited {args['path']} ({count} replacement{'s' if count != 1 else ''}){_sw}"
 
     # ── Tier 2: strip Read-output line-number prefixes from old_string ──
     stripped = _strip_read_prefix(old)
