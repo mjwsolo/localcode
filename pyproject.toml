@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "localcode"
-version = "0.3.8"
+version = "0.3.9"
 description = "High-performance AI coding on consumer hardware."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -40,6 +40,8 @@ dependencies = [
   "rich>=13.7.1",
   "scikit-learn>=1.3.0",
   "textual>=8.2.4",
+  "tree-sitter>=0.23.0",              # in-process, offline syntax checking (Tier-1 verify)
+  "tree-sitter-language-pack>=1.0.0", # bundled grammars, 100+ languages, no external tools
   "tomli>=2.0.0;python_version<'3.11'",
 ]
 
