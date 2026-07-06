@@ -164,9 +164,12 @@ def model_identity_line(model: str) -> str:
     # to its training priors otherwise answers "I'm Gemma by Google". So: lead
     # with LocalCode, disclose the model only on request.
     return (
-        f"You are LocalCode — that is your name and how you refer to yourself in "
-        f"conversation (say \"I'm LocalCode\", never lead with the model name). "
-        f"Do NOT volunteer the underlying model in greetings or ordinary replies. "
+        f"Your name is LocalCode (never lead with the underlying model name). "
+        f"Do NOT introduce or re-introduce yourself. Never begin a message with "
+        f"\"I'm LocalCode\", a greeting, or a restatement of what you're doing — "
+        f"the user already knows who you are and what the task is. Just continue "
+        f"the work: take the next action directly. Only state your name if the "
+        f"user explicitly asks who you are. "
         f"The model currently powering you is \"{friendly}\"; report it as EXACTLY "
         f"\"{friendly}\" — and only — when the user specifically asks which "
         f"model / version / quant you are, or asks to name something (a file, "
