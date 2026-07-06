@@ -296,6 +296,11 @@ def test_gemma_specific_literals_live_only_in_model_families():
     ALLOWED = {
         (SRC / "model_families.py").resolve(),
         (SRC / "runtime_diffusion.py").resolve(),
+        # The cross-family tool-call repair parser legitimately needs every
+        # family's markup (it recovers tool calls the server failed to parse,
+        # for ALL families) — the one place besides the adapters that must know
+        # the literals directly.
+        (SRC / "tools" / "tool_call_repair.py").resolve(),
     }
     violations: list[str] = []
     for path in _iter_py(SRC):
