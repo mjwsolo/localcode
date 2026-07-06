@@ -299,12 +299,10 @@ class ServerManager:
         self._lock = threading.Lock()
         self._last_exit_code: Optional[int] = None  # disconnect diagnostics
         self._last_death_was_pressure: bool = False
-        # Idle auto-suspend: track wall-clock of the most recent chat
-        # activity. A background watchdog thread shuts the server down
-        # after `_idle_timeout_s` seconds of inactivity to stop the GPU
-        # from cooking the laptop while the user is reading replies.
-        # The next chat call transparently respawns via _restart_server.
-        # 0 disables; default 10 min. Override with env LOCALCODE_IDLE_SUSPEND_S.
+        # Idle auto-suspend: a watchdog shuts the server down after
+        # `_idle_timeout_s` of inactivity (stops the GPU cooking the laptop
+        # while the user reads); the next chat call respawns via
+        # _restart_server. 0 disables; default 10 min. Env: LOCALCODE_IDLE_SUSPEND_S.
         import os as _os
         try:
             self._idle_timeout_s: float = float(
@@ -394,10 +392,8 @@ class ServerManager:
             _prev_model = self._model_path  # capture before shutdown clears it
             self._shutdown_locked()
             # Wait for the OLD server's memory to release before spawning the
-            # new one: the kernel takes 1-3 s to free wired Metal memory after
-            # the child reaps, and spawning into that window double-commits and
-            # trips the pressure monitor on a 16 GB Mac. Best-effort — targets
-            # ~11 GB free, times out at 8 s, proceeds anyway.
+            # new one (kernel takes 1-3 s to free wired Metal memory; spawning
+            # into that window double-commits). Best-effort: ~11 GB target, 8 s.
             if had_prior:
                 # Only a genuine model change is "model_switch"; a same-model
                 # relaunch (crash/disconnect recovery) is "server_restart".
@@ -422,6 +418,15 @@ class ServerManager:
             # AGX driver may read the env at first Metal touch — setting it in
             # the parent env before spawn is the belt-and-suspenders approach.
             env.setdefault("AGX_RELAX_CDM_CTXSTORE_TIMEOUT", "1")
+            # Disable Metal residency sets on at-risk launches → prevents the wired-cap SIGKILL.
+            try:
+                from .memory_guard import metal_residency_env
+                _renv = metal_residency_env(str(model_path), cmd)
+                if _renv:
+                    env.update(_renv)
+                    _lifecycle_log("metal_no_residency", model=str(model_path))
+            except Exception:
+                pass
             # Capture the server's OWN stdout/stderr to server.log (this runtime
             # path used to send both to /dev/null, discarding llama-server's
             # final ggml/Metal error on the recurring -9). Append per-spawn.
@@ -461,11 +466,10 @@ class ServerManager:
             except Exception:
                 pass
 
-            # Layer 2: userspace memory-pressure monitor. Polls
-            # kern.memorystatus_vm_pressure_level every 500 ms; on WARN
-            # transition, SIGTERMs our server before the kernel stalls.
-            # Complementary to the jetsam ceiling — acts on system-wide
-            # pressure (everything else swelling) not just our own RSS.
+            # Layer 2: userspace pressure monitor — polls
+            # kern.memorystatus_vm_pressure_level every 500 ms and SIGTERMs our
+            # server on WARN. Complements the jetsam ceiling (acts on system-
+            # wide pressure, not just our own RSS).
             try:
                 self._pressure_thread = start_pressure_monitor(
                     self._process,
@@ -474,10 +478,8 @@ class ServerManager:
             except Exception:
                 self._pressure_thread = None
             self._write_pid_file(self._process.pid)
-            # Log the FULL launch command so debugging can answer "what flags
-            # was the server using?" — subtle flags (e.g. --spec-type ngram-mod)
-            # cause repetition pathologies that look like model bugs. Truncated
-            # to 4000 chars (~80 args) to keep the event small.
+            # Log the FULL launch command (which flags was the server using?);
+            # truncated to 4000 chars (~80 args) to keep the event small.
             _flags_str = " ".join(str(c) for c in cmd)[:4000]
             _lifecycle_log("server_started", pid=self._process.pid, port=port,
                            model=Path(model_path).name,
@@ -698,10 +700,8 @@ class ServerManager:
         _lifecycle_log("pressure_kill", level=level, pid=killed_pid,
                        guard="memory_pressure", exit_code=self._last_exit_code,
                        free_mb=_system_free_memory_mb())
-        # Clear internal state so subsequent code paths see "no server
-        # running" rather than a phantom Popen handle. Safe to do from
-        # the pressure-monitor thread because `_process` reads/writes
-        # are atomic in CPython for the assignment.
+        # Clear internal state so callers see "no server" not a phantom Popen.
+        # Safe from the pressure-monitor thread (assignment is atomic in CPython).
         self._process = None
         self._model_path = None
 
