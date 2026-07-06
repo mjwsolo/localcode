@@ -399,16 +399,24 @@ class _ChatTextArea(TextArea):
     DEFAULT_CSS = """
     _ChatTextArea {
         background: ansi_default;
+        /* Scrollbar shows once the input grows past its cap. Force the brand
+           blue + a thin bar — otherwise it inherits the textual-ansi theme's
+           `scrollbar: ansi_blue`, which renders as the terminal's dark navy
+           (the "wrong blue"). */
+        scrollbar-color: #5f87ff;
+        scrollbar-color-hover: #5f87ff;
+        scrollbar-color-active: #7aa2ff;
+        scrollbar-background: ansi_default;
+        scrollbar-size-vertical: 1;
         & .text-area--cursor-line {
             background: ansi_default;
         }
-        /* The caret. Without an explicit style it inherits the ansi_default
-           theme where $foreground == $background, rendering an INVISIBLE
-           cursor. Give it concrete high-contrast colors so it shows (and
-           blinks) on every terminal, light or dark. */
+        /* The caret. `reverse` swaps the cell's fg/bg using the terminal's
+           OWN colors, so the cursor is a light block on a dark terminal and
+           a dark block on a light one — no hardcoded hex that fights the
+           ansi_default palette (which rendered as a near-black block). */
         & .text-area--cursor {
-            color: #1e1e1e;
-            background: #d0d0d0;
+            text-style: reverse;
         }
         &:focus {
             background-tint: transparent 0%;
@@ -483,6 +491,14 @@ class _ChatTextArea(TextArea):
         # once content exceeds it the TextArea scrolls internally rather than
         # being cut off (the CSS `max-height` was a static 10).
         self.styles.max_height = cap
+
+    def on_text_area_changed(self, event: "TextArea.Changed") -> None:
+        # Re-measure on EVERY content change — typing, backspace, cut — not
+        # just paste/history. A long typed line soft-wraps in the document;
+        # without this the widget stayed one row tall and only the last
+        # wrapped row (the "end") was visible, so mid-line edits looked
+        # impossible. Growing the box exposes the whole wrapped input.
+        self.autosize_height()
 
     # ── input history (per-session, in-memory) ──
     # Same shell-style behaviour as the old Input: ↑ recalls older
@@ -667,6 +683,23 @@ _SLASH_COMMANDS = [
 # command handler still treats it as a no-op alias to avoid surprising
 # anyone who typed it before.
 
+# Every recognized slash command (palette names + aliases the handler
+# accepts). Input starting with "/" is only treated as a command when its
+# first token is one of these; anything else — e.g. a filesystem path like
+# /Users/you/project — is sent to the model as a normal message instead of
+# being rejected as an "Unknown command". Only `!` enters shell mode.
+_KNOWN_COMMANDS = {name for name, _desc in _SLASH_COMMANDS} | {
+    "/quit", "/search", "/copy",
+}
+
+
+def _is_known_command(text: str) -> bool:
+    """True only when `text`'s leading token is a recognized slash command."""
+    if not text.startswith("/"):
+        return False
+    head = text.split(None, 1)[0].lower()
+    return head in _KNOWN_COMMANDS
+
 if TYPE_CHECKING:
     from ..app import LocalCodeTUI
     from ...telemetry import TurnTrace
@@ -684,6 +717,14 @@ _SPINNER_GERUNDS = [
 ]
 
 
+# How long (seconds) each spinner word stays before rotating. Deliberately
+# slow: the word is a mood indicator, not a data readout. Rotating it per
+# token (at 50-100 tok/s) makes it strobe unreadably — the reference CLI
+# agents keep the word steady for a couple seconds and let only the little
+# frame glyph + timer animate quickly. ~2.4 s reads as "alive but calm".
+_SPINNER_WORD_PERIOD = 2.4
+
+
 def _spinner_label(tick: int = 0) -> str:
     """Return a generic playful gerund for the streaming spinner.
 
@@ -692,6 +733,16 @@ def _spinner_label(tick: int = 0) -> str:
     label feels alive without ever revealing real thinking content.
     """
     return _SPINNER_GERUNDS[tick % len(_SPINNER_GERUNDS)]
+
+
+def _spinner_label_for_elapsed(elapsed: float) -> str:
+    """Pick the gerund by WALL-CLOCK time, not token/tick count.
+
+    The word advances once every `_SPINNER_WORD_PERIOD` seconds regardless of
+    how fast tokens stream, so a fast decode no longer flickers the label.
+    """
+    idx = int(max(0.0, elapsed) / _SPINNER_WORD_PERIOD)
+    return _SPINNER_GERUNDS[idx % len(_SPINNER_GERUNDS)]
 
 _TOOL_CALL_RE = re.compile(
     r'<\|?tool_call\|?>.*?<\|?/?tool_call\|?>', re.DOTALL
@@ -1311,6 +1362,14 @@ class ChatScreen(Screen):
         if not text:
             return
 
+        # While the model is REASONING, rotate the playful gerund on a slow
+        # wall-clock cadence here — never per streamed chunk. This is the one
+        # place the word is chosen, so token speed can't strobe it. Fixed
+        # phases ("generating") keep their word.
+        if self._active_mode == "thinking" and getattr(self, "_thinking_phase", "") == "thinking":
+            elapsed = time.time() - (self._turn_start or time.time())
+            text = _spinner_label_for_elapsed(elapsed)
+
         timer = self._elapsed_str()
 
         # ● for tools (blue ball), ◆ for thinking
@@ -1820,9 +1879,9 @@ class ChatScreen(Screen):
         if not text:
             return
         # Record into per-input history so ↑/↓ can recall it next time.
-        # Skipped for slash commands because users normally don't want
-        # `/clear` and `/quit` in their navigable history.
-        if not text.startswith("/"):
+        # Skipped only for real slash commands (users don't want `/clear`
+        # and `/quit` in navigable history) — a `/path` message IS recorded.
+        if not _is_known_command(text):
             inp.history_push(text)
         inp.clear()
         # Belt + suspenders for the "submitted text reappears in the
@@ -1860,7 +1919,10 @@ class ChatScreen(Screen):
         self.set_timer(0.5, _double_clear)
         self.set_timer(1.5, _double_clear)
 
-        if text.startswith("/"):
+        # A leading "/" is a command ONLY when it matches a known one —
+        # otherwise (e.g. a pasted path like /Users/you/repo) it's a normal
+        # message for the model, not an "Unknown command".
+        if _is_known_command(text):
             self._handle_command(text)
             return
 
@@ -3958,24 +4020,18 @@ class ChatScreen(Screen):
             self._thinking_text += chunk
             self._turn_tokens += max(1, len(chunk) // 4) if chunk else 0
             self._thinking_phase = "thinking"
-            # Keep the spinner on a generic placeholder — never surface the
-            # model's real reasoning text here (it goes to the expandable
-            # thinking section on thinking_done). Token count + elapsed time
-            # next to the label keep updating via _tick_active.
+            # Do NOT touch the spinner word here — the word rotates on the
+            # 50 ms wall-clock timer in _tick_active, so a fast decode can't
+            # strobe it (and the shimmer stays smooth instead of jumping on
+            # every irregular chunk). Just make sure the animation is running.
             if self._active_mode != "thinking":
-                self._show_active_thinking(_spinner_label(self._tick_count))
-            else:
-                self._active_step_text = _spinner_label(self._tick_count)
-                self._tick_active()
+                self._show_active_thinking("thinking")
         elif t == "thinking_peek":
             self._thinking_phase = "thinking"
             # thinking_peek carries model text in p["text"]; deliberately
-            # ignore it for the spinner label and show a placeholder instead.
+            # ignore it — the timer picks the placeholder word (see above).
             if self._active_mode != "thinking":
-                self._show_active_thinking(_spinner_label(self._tick_count))
-            else:
-                self._active_step_text = _spinner_label(self._tick_count)
-                self._tick_active()
+                self._show_active_thinking("thinking")
         elif t == "thinking_done":
             text = p.get("text", "")
             self._thinking_text = text

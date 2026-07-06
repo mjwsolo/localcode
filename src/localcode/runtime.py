@@ -242,6 +242,11 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
         self.config = config
         self._client: httpx.Client | None = None
         self.last_response_meta: dict[str, Any] = {}  # for token tracking
+        # Circuit-breaker state for the stream-recovery loop: consecutive
+        # server deaths since the last successful stream. Persists across
+        # calls/turns (this gateway is one per session) so a deterministic
+        # crash can't restart-loop forever. Reset to 0 on any success.
+        self._consecutive_stream_deaths = 0
         # llama_cpp is the only HTTP runtime (ollama/mlx/hf removed); diffusion
         # models are architecture-routed to the one-shot CLI, not this endpoint.
         base = self.config.base_url.rstrip("/")
@@ -1324,6 +1329,10 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
         # error instead of thrashing.
         _MAX_STREAM_RESTARTS = 1
         _restarts_done = 0
+        # Circuit-breaker ceiling: how many consecutive server deaths (across
+        # calls/turns, reset on any successful stream) we'll keep restarting
+        # through before declaring the server unstable and stopping the loop.
+        _MAX_CONSECUTIVE_STREAM_DEATHS = 3
         # STREAM-LEVEL "have we handed real content to the consumer yet?"
         # flag. The per-attempt `_emitted_real` is reset each try; this one
         # survives across attempts and is the streaming-safety gate for
@@ -1814,6 +1823,10 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
                         "type": "content",
                         "content": _fmt_err(_LCE(_by_code("E3108"))),
                     }
+                # Reached the end of a stream without an exception — the server
+                # answered. Clear the circuit breaker so a later transient death
+                # gets a fresh recovery budget (only CONSECUTIVE deaths count).
+                self._consecutive_stream_deaths = 0
                 yield {
                     "type": "stream_done",
                     "finish_reason": last_finish_reason,
@@ -1858,7 +1871,29 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
                 # With recovery: detect the pattern, wait for memory to
                 # settle, restart the server, retry the stream once.
                 err_str = _error_message(exc).lower()
-                is_conn_err = "connect" in err_str or "refused" in err_str
+                # Classify by EXCEPTION TYPE (with a text fallback), not a bare
+                # `"connect" in err_str` — that substring also matched httpx's
+                # RemoteProtocolError ("peer closed CONNECTION … incomplete
+                # chunked read"), but that's fine on its own; both a dead socket
+                # AND a mid-body drop are recoverable by restart. The real
+                # defect was the ABSENCE of a stop condition: a deterministic
+                # failure (an oversized request that kills the server every
+                # time) restarted + re-POSTed forever. The circuit breaker
+                # below (_consecutive_stream_deaths) bounds that.
+                try:
+                    import httpx as _httpx
+                    _is_protocol_drop = isinstance(exc, _httpx.RemoteProtocolError)
+                    _is_connect_err = isinstance(
+                        exc, (_httpx.ConnectError, _httpx.ConnectTimeout)
+                    )
+                except Exception:
+                    _is_protocol_drop = "incomplete chunked read" in err_str or "peer closed" in err_str
+                    _is_connect_err = False
+                if not _is_connect_err and not _is_protocol_drop:
+                    _is_connect_err = "connect" in err_str or "refused" in err_str
+                # Both a connect failure and a mid-stream protocol drop are
+                # "server went away" — recoverable by restart + retry.
+                is_conn_err = _is_connect_err or _is_protocol_drop
                 # Auto-recovery on connection-refused: try ONE server
                 # restart before surfacing the error to the user. Any
                 # time the server is dead (pressure-kill, OOM, crash,
@@ -1876,27 +1911,44 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
                 # e2e run 2026-04-23T23:54, long_coding_session failed
                 # 25/25 turns at 0.5 s each on a dead server).
                 _pressure_related = _pressure_kill_recent()
-                # STREAMING-SAFETY RULE: a connection drop AFTER we've already
-                # yielded real content cannot be recovered by restart+retry —
-                # re-running the stream would re-emit content the consumer
-                # already saw (double answer / corrupted turn). Restart+retry
-                # is only safe when nothing has been handed downstream yet
-                # (drop before first token). Mid-stream → surface E3102 with
-                # diagnostic context instead of silently replaying.
+                # STREAMING-SAFETY: a mid-stream drop that already yielded
+                # content may replay a partial duplicate on retry — acceptable
+                # (the recovery stage explains it) and far better than killing a
+                # turn that would otherwise self-heal (a hard E3102 here used to
+                # kill builds on a transient memory-pressure pause).
                 if is_conn_err:
-                    # Capture the disconnect class for diagnostics.
+                    # Capture the disconnect class for diagnostics (both a dead
+                    # socket and a mid-body protocol drop land here).
                     _log_disconnect_context(
-                        "stream_chat_events", exc, mid_stream=_emitted_real_stream
+                        "stream_chat_events", exc,
+                        mid_stream=_emitted_real_stream or _is_protocol_drop,
                     )
-                    # RECOVER even when content was already streamed: restart +
-                    # retry (below). The server gets paused/killed under memory
-                    # pressure mid-build and used to silently restart+continue;
-                    # hard-failing with E3102 here was a REGRESSION (turns that
-                    # used to self-heal started dying). A mid-response restart
-                    # may replay a partial duplicate of the reply — far better
-                    # than killing the whole turn. The retry path emits a clear
-                    # "restarting" stage so the duplicate is explained.
-                if is_conn_err and attempt < self.config.max_retries and _restarts_done < _MAX_STREAM_RESTARTS:
+                    # CIRCUIT BREAKER — the fix for the restart loop. Count
+                    # consecutive server deaths across calls (reset on any
+                    # successful stream, see below). A transient death recovers
+                    # on the first restart; a DETERMINISTIC one — a request too
+                    # large for the server, killing it every time — would
+                    # otherwise restart + re-POST forever. Once the deaths pile
+                    # up we stop restarting and surface actionable guidance.
+                    self._consecutive_stream_deaths = (
+                        getattr(self, "_consecutive_stream_deaths", 0) + 1
+                    )
+                    if self._consecutive_stream_deaths > _MAX_CONSECUTIVE_STREAM_DEATHS:
+                        yield {
+                            "type": "stage", "name": "server_unstable",
+                            "message": (
+                                "The model server keeps crashing on this request — "
+                                "it's likely too large for the current settings. "
+                                "Try /clear to shrink the context, or /model to "
+                                "switch to a lighter model."
+                            ),
+                        }
+                        break  # stop the restart loop; fall through to E3102
+                if (
+                    is_conn_err
+                    and attempt < self.config.max_retries
+                    and _restarts_done < _MAX_STREAM_RESTARTS
+                ):
                     _restarts_done += 1
                     recovery_label = (
                         "memory_pressure_recovery"

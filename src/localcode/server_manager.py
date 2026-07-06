@@ -398,23 +398,20 @@ class ServerManager:
         """
         with self._lock:
             had_prior = self._process is not None
+            _prev_model = self._model_path  # capture before shutdown clears it
             self._shutdown_locked()
-            # Wait for the OLD server's memory to actually release
-            # before spawning the new one. `process.wait()` returns
-            # when the child reaps, but the kernel may take 1-3 s to
-            # release wired Metal memory. Spawning the new ~10 GB
-            # server in that window double-commits memory and reliably
-            # triggers the pressure monitor on a 16 GB Mac (the bug
-            # behind the user's "two servers running" hypothesis).
-            #
-            # Target: enough free memory to fit a typical model + 1 GB
-            # margin (~11 GB for our standard quant). Best-effort —
-            # times out at 8 s if the target isn't met, logs the
-            # outcome, and proceeds anyway (the user wanted to switch
-            # models; refusing entirely would be worse than retry).
+            # Wait for the OLD server's memory to actually release before
+            # spawning the new one: the kernel may take 1-3 s to free wired
+            # Metal memory after the child reaps, and spawning the new ~10 GB
+            # server in that window double-commits and trips the pressure
+            # monitor on a 16 GB Mac. Best-effort — targets ~11 GB free, times
+            # out at 8 s, and proceeds anyway (refusing would be worse).
             if had_prior:
-                _lifecycle_log("memory_wait_start",
-                               reason="model_switch", target_mb=11000)
+                # Only a genuine model change is "model_switch"; a same-model
+                # relaunch (crash/disconnect recovery) is "server_restart".
+                _reason = ("model_switch" if (model_path and model_path != _prev_model)
+                           else "server_restart")
+                _lifecycle_log("memory_wait_start", reason=_reason, target_mb=11000)
                 _wait_for_memory_release(min_free_mb=11000, timeout_s=8.0)
 
             # Find a port we can actually bind to. If the default is

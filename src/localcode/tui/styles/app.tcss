@@ -66,8 +66,10 @@ Screen {
     background-tint: transparent 0%;
 }
 
+/* height: auto so the row grows with the multi-line input instead of
+   clipping it to a single line. The `›` prompt (height 1) top-aligns. */
 #input-row {
-    height: 1;
+    height: auto;
     border: none;
     background: ansi_default;
     background-tint: transparent 0%;
@@ -87,7 +89,7 @@ Screen {
     border: none;
     padding: 0;
     margin: 0;
-    height: 1;
+    height: auto;
     width: 1fr;
     background: ansi_default;
     background-tint: transparent 0%;

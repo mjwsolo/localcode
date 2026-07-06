@@ -87,7 +87,10 @@ def test_write_file_overwrites_existing_file(tmp_path: Path) -> None:
         ToolContext(app=_App(tmp_path), out=_Out()),
         {"path": "app.py", "content": "print('new')\n"},
     )
-    assert result.startswith("Rewrote ")
+    # A rewrite of an existing file now returns a unified diff (consistent
+    # with edit_file) so the TUI renders a diff card; both the old and new
+    # lines appear in it. New-file writes still return the "Created …" summary.
+    assert "-print('old')" in result and "+print('new')" in result
     assert existing.read_text() == "print('new')\n"
 
 
@@ -909,11 +912,16 @@ def test_dispatch_result_returns_typed_tool_result(tmp_path: Path) -> None:
     assert "path" in result.text
 
 
-def test_semantic_tool_summary_preserves_facts_and_errors() -> None:
+def test_semantic_tool_summary_keeps_facts_neutralizes_old_errors() -> None:
     success = "body\n\n[tool facts: ok=True, url=http://localhost:1234, port=1234]"
     assert "port=1234" in _semantic_tool_summary(success)
+    # OLD errors are neutralized (self-conditioning, arXiv:2509.09677): the
+    # failure TEXT must not be echoed back — only a neutral note. Recent
+    # errors (within keep_recent) are left intact by _compact_old_tool_results.
     error = "[exit code 1]\nline1\nTraceback details"
-    assert "older tool error preserved" in _semantic_tool_summary(error)
+    summary = _semantic_tool_summary(error)
+    assert "errored and was handled" in summary
+    assert "Traceback" not in summary and "exit code" not in summary
 
 
 def test_prepare_model_messages_microcompacts_large_turn_history() -> None:
