@@ -209,3 +209,61 @@ def recommended_jetsam_limit_mb() -> int:
         total_mb = 16 * 1024
     reserve = 3500 if total_mb < 24 * 1024 else 6000
     return max(2048, total_mb - reserve)
+
+
+def should_disable_metal_residency(model_path: str, ctx_size: int) -> bool:
+    """Whether to set GGML_METAL_NO_RESIDENCY=1 for this launch.
+
+    Root cause of the recurring mid-stream SIGKILL (-9, no crash report, tens
+    of GB of system RAM still free): on Apple Silicon, llama.cpp's Metal
+    residency sets keep the model weights + KV cache + compute buffers WIRED
+    for ~3 minutes (ggml-metal-device.m). During a long generation the wired
+    total grows, and when a decode-step spike crosses the GPU's
+    `recommendedMaxWorkingSetSize` (~75% of RAM — a hard ceiling independent of
+    free system RAM), the kernel kills the process outright. This is the exact
+    bug class in ggml-org/llama.cpp#16646 on the same M4 Max / 128 GB hardware.
+
+    Setting GGML_METAL_NO_RESIDENCY=1 makes those buffers EVICTABLE instead of
+    wired, so the OS pages under pressure rather than killing — turning a hard
+    crash into (at worst) mild slowdown, and only when actually near the cap.
+
+    Gated to at-risk launches so the common small-context fast path is
+    untouched: large context (>=128K, where KV + compute-buffer growth is the
+    trigger) OR a model whose weights alone are a large fraction of the wired
+    cap. No user action, no sudo — we control the spawn env.
+    """
+    try:
+        r = subprocess.run(["sysctl", "-n", "hw.memsize"],
+                           capture_output=True, text=True, timeout=2)
+        total_mb = int(r.stdout.strip()) // (1024 * 1024)
+    except Exception:
+        return False
+    # Metal's wired ceiling is ~75% of physical RAM.
+    wired_cap_mb = int(total_mb * 0.75)
+    if ctx_size >= 131072:
+        return True
+    try:
+        import os as _os
+        model_mb = _os.path.getsize(model_path) // (1024 * 1024)
+    except Exception:
+        model_mb = 0
+    # Weights alone over ~55% of the wired cap → KV + compute will breach it.
+    return model_mb > int(wired_cap_mb * 0.55)
+
+
+def metal_residency_env(model_path: str, cmd: list) -> dict:
+    """Return {GGML_METAL_NO_RESIDENCY: '1'} when this launch is at risk of the
+    wired-cap SIGKILL, else {}. macOS-only; parses --ctx-size from the command.
+    """
+    import sys as _sys
+    if _sys.platform != "darwin":
+        return {}
+    ctx = 0
+    for i, tok in enumerate(cmd):
+        if tok == "--ctx-size" and i + 1 < len(cmd):
+            try:
+                ctx = int(cmd[i + 1])
+            except Exception:
+                ctx = 0
+            break
+    return {"GGML_METAL_NO_RESIDENCY": "1"} if should_disable_metal_residency(model_path, ctx) else {}
