@@ -168,6 +168,21 @@ def _log_disconnect_context(stage: str, error: Any, *, mid_stream: bool = False)
     diag["stage"] = stage
     diag["mid_stream"] = mid_stream
     diag["error"] = err_str[:500]
+    # Capture the SERVER's own last words. llama-server prints the real cause
+    # (ggml/Metal allocation failure, GGML_ASSERT, OOM) to server.log right
+    # before it dies; without this we only see httpx's "connection dropped"
+    # and are left guessing. The tail is the actual diagnosis.
+    _server_tail = ""
+    try:
+        from .paths import global_state_dir
+        _lp = global_state_dir() / "server.log"
+        if _lp.exists():
+            _lines = _lp.read_text(errors="replace").splitlines()
+            _server_tail = "\n".join(_lines[-15:])[-1500:]
+    except Exception:
+        _server_tail = ""
+    if _server_tail:
+        diag["server_log_tail"] = _server_tail
     try:
         from .server_manager import _lifecycle_log as _ll
         _ll("server_disconnect", **diag)
@@ -186,6 +201,8 @@ def _log_disconnect_context(stage: str, error: Any, *, mid_stream: bool = False)
                 f"pressure_kill={diag.get('pressure_kill')} "
                 f"running={diag.get('running')} mid_stream={mid_stream} "
                 f"free_mb={diag.get('free_mb')} error={err_str[:300]}\n"
+                + (f"  server.log tail:\n    "
+                   + _server_tail.replace("\n", "\n    ") + "\n" if _server_tail else "")
             )
     except Exception:
         pass
