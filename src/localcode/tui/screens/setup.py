@@ -120,8 +120,8 @@ class SetupScreen(Screen):
                     id="setup-onetime-note",
                 )
                 yield Static(
-                    "[dim]q / Esc / Ctrl+C to quit — the download resumes "
-                    "where it left off next launch.[/]",
+                    "[dim]Esc to quit — the download resumes where it "
+                    "left off next launch.[/]",
                     id="setup-quit-hint",
                 )
 
@@ -838,7 +838,7 @@ class SetupScreen(Screen):
             f"[bold]/model[/].\n\n"
             f"[bold]c[/] chat now with {fallback.name}   ·   "
             f"[bold]w[/] wait here for {target.name}\n"
-            f"[dim]q / Esc / Ctrl+C to quit — the download resumes next launch.[/]"
+            f"[dim]Esc to quit — the download resumes next launch.[/]"
         )
         # Stored as the live status text; `_tick` renders it verbatim while
         # `_awaiting_choice` is set (no [dim] wrap, no clobber).
