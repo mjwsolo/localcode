@@ -46,6 +46,7 @@ def _emit_wrapped_line(
     build_cont_prefix,       # callable() → Text for every wrap-continuation row
     content_style: str,
     content_width: int,
+    highlighted=None,        # optional pre-syntax-highlighted Text for `content`
 ) -> None:
     """Write a styled diff line to `log`, wrapping long content cleanly.
 
@@ -56,7 +57,20 @@ def _emit_wrapped_line(
     width, write the first piece with the real line-number + marker
     prefix, and write each continuation piece with a blank prefix of
     the same width so everything lines up under the `+`/`-` column.
+
+    When `highlighted` (a syntax-colored Text of `content`) is given AND the
+    line fits on one row, we render it directly to preserve token colors;
+    long lines fall back to plain-style wrapping so layout never breaks.
     """
+    # Syntax-highlighted fast path: only when the whole line fits one row
+    # (avoids re-implementing style-preserving wrap). Otherwise fall through.
+    if highlighted is not None and content_width > 0 and len(content) <= content_width:
+        dl = build_first_prefix()
+        dl.append_text(highlighted)
+        log.write(dl)
+        log._track_lines()
+        return
+
     if content_width <= 0:
         # Degenerate terminal size — fall back to one write and let
         # Rich wrap as best it can.
@@ -94,6 +108,45 @@ def _emit_wrapped_line(
 _HUNK_HEADER_RE = re.compile(r'\+(\d+)(?:,(\d+))?')
 _HUNK_OLD_RE = re.compile(r'-(\d+)')
 
+# Extension → Pygments lexer name for syntax-highlighting diff content.
+_LEXER_BY_EXT = {
+    ".py": "python", ".pyi": "python", ".ts": "typescript", ".tsx": "tsx",
+    ".js": "javascript", ".jsx": "jsx", ".mjs": "javascript", ".go": "go",
+    ".rs": "rust", ".java": "java", ".kt": "kotlin", ".swift": "swift",
+    ".c": "c", ".h": "c", ".cpp": "cpp", ".cc": "cpp", ".hpp": "cpp",
+    ".cs": "csharp", ".rb": "ruby", ".php": "php", ".css": "css",
+    ".scss": "scss", ".html": "html", ".xml": "xml", ".json": "json",
+    ".yaml": "yaml", ".yml": "yaml", ".toml": "toml", ".sh": "bash",
+    ".bash": "bash", ".zsh": "bash", ".sql": "sql", ".md": "markdown",
+}
+
+
+def _lexer_for(file_path: str) -> str | None:
+    import os
+    return _LEXER_BY_EXT.get(os.path.splitext(file_path or "")[1].lower())
+
+
+def _highlight(content: str, lexer: str | None):
+    """Syntax-highlight one code line into a Rich Text, or None on failure.
+
+    Bounded to the few preview lines a diff card shows, so the Pygments cost
+    is negligible. Uses `background_color="default"` so it stays transparent
+    over the terminal palette (ansi_default theme). Any failure → None, and
+    the caller falls back to the flat green/red/dim styling.
+    """
+    if not lexer or not content.strip():
+        return None
+    try:
+        from rich.syntax import Syntax
+        txt = Syntax(
+            content, lexer, theme="ansi_dark",
+            background_color="default", word_wrap=False,
+        ).highlight(content)
+        txt.rstrip()  # drop the trailing newline Syntax appends
+        return txt
+    except Exception:
+        return None
+
 
 def render_diff(log: "ChatLog", diff_text: str, max_body_lines: int = 8) -> None:
     """Write a unified-diff blob to `log` with the structured layout.
@@ -118,6 +171,7 @@ def render_diff(log: "ChatLog", diff_text: str, max_body_lines: int = 8) -> None
                 span = int(m.group(2) or 0)
                 max_line_no = max(max_line_no, start + span)
     gutter_w = max(2, len(str(max_line_no)) + 1)
+    lexer = _lexer_for(file_path)
 
     # Header row
     header = Text()
@@ -199,6 +253,7 @@ def render_diff(log: "ChatLog", diff_text: str, max_body_lines: int = 8) -> None
             _emit_wrapped_line(
                 log, line_text[1:], _first_plus, _cont_plus,
                 content_style=f"{C.success}", content_width=width_changed,
+                highlighted=_highlight(line_text[1:], lexer),
             )
             new_line += 1
         else:
@@ -217,6 +272,7 @@ def render_diff(log: "ChatLog", diff_text: str, max_body_lines: int = 8) -> None
             _emit_wrapped_line(
                 log, content, _first_ctx, _cont_ctx,
                 content_style="dim", content_width=width_context,
+                highlighted=_highlight(content, lexer),
             )
             old_line += 1
             new_line += 1

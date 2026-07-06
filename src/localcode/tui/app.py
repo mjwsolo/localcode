@@ -45,20 +45,36 @@ _TERMINAL_RESTORE = (
 def _restore_terminal_state() -> None:
     """Best-effort reset for shutdown paths that bypass Textual teardown."""
     payload = _TERMINAL_RESTORE.encode()
+    wrote = False
     try:
         with open("/dev/tty", "wb", buffering=0) as tty:
             tty.write(payload)
-        return
+        wrote = True
     except Exception:
         pass
-    try:
-        os.write(1, payload)
-    except Exception:
+    if not wrote:
         try:
-            sys.__stdout__.write(_TERMINAL_RESTORE)
-            sys.__stdout__.flush()
+            os.write(1, payload)
         except Exception:
-            pass
+            try:
+                sys.__stdout__.write(_TERMINAL_RESTORE)
+                sys.__stdout__.flush()
+            except Exception:
+                pass
+    # Escape codes don't undo kernel raw mode (no echo, dead Ctrl+C). On the
+    # signal path this runs instead of the launcher's termios restore, so
+    # bring the line discipline back to sane here too.
+    try:
+        import subprocess
+        subprocess.run(
+            ["stty", "sane"],
+            stdin=open("/dev/tty", "rb"),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        )
+    except Exception:
+        pass
 
 
 class LocalCodeTUI(App):

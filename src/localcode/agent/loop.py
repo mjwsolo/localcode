@@ -721,6 +721,19 @@ def run_agent_loop(
                     ]
             except Exception:
                 pass
+            # Inject the working-memory checklist (todo_write tool): the model
+            # always sees its own plan (done / in-progress / left) so it
+            # advances instead of repeating. Appended LAST, ephemeral, empty-safe.
+            try:
+                from ..tools.todo_write import render_todo_reminder
+                _todos = list(getattr(app.session, "todos", []) or [])
+                _todo_note = render_todo_reminder(_todos)
+                if _todo_note:
+                    model_messages = list(model_messages) + [
+                        {"role": "user", "content": _todo_note}
+                    ]
+            except Exception:
+                pass
             round_tool_schemas = schemas_for_goal(
                 _goal_state.goal_type,
                 user_text,
@@ -1206,7 +1219,11 @@ def run_agent_loop(
                 break
 
         # ── No tool calls = model is done ──
-        if not tool_calls:
+        # Also require no pending tool call: the runtime promotes pending
+        # tools into `tool_calls`, but if a future path doesn't, we keep
+        # looping instead of ending early (small models often emit a stop
+        # token with a call still pending).
+        if not tool_calls and not _round_pending_tool_count:
             # Match v0.2.12's no-tool-calls path exactly: render content,
             # render any grounded file summary, break. Nothing else.
             #
