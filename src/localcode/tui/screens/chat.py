@@ -399,6 +399,15 @@ class _ChatTextArea(TextArea):
     DEFAULT_CSS = """
     _ChatTextArea {
         background: ansi_default;
+        /* Scrollbar shows once the input grows past its cap. Force the brand
+           blue + a thin bar — otherwise it inherits the textual-ansi theme's
+           `scrollbar: ansi_blue`, which renders as the terminal's dark navy
+           (the "wrong blue"). */
+        scrollbar-color: #5f87ff;
+        scrollbar-color-hover: #5f87ff;
+        scrollbar-color-active: #7aa2ff;
+        scrollbar-background: ansi_default;
+        scrollbar-size-vertical: 1;
         & .text-area--cursor-line {
             background: ansi_default;
         }
