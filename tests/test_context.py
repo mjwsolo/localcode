@@ -169,7 +169,9 @@ def test_progress_ledger_dedups_and_shows_outcomes():
         files_read=["a.ts", "b.ts", "a.ts", "a.ts"],  # a.ts re-read
         budget_chars=3500,
     )
-    assert "build on it" in led.lower() and "do not re-read" in led.lower()
+    # Header frames the ledger as the assistant's OWN actions (not the user's
+    # work / pre-existing files) so the model doesn't treat stale dirs as its task.
+    assert "your own tool calls" in led.lower() and "new progress" in led.lower()
     assert led.count("a.ts") == 1  # deduped
     assert "src/types.ts" in led
     assert "ok npm i" in led and "x npm run build" in led  # outcomes flagged
