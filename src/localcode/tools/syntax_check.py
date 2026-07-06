@@ -1,23 +1,22 @@
-"""One-shot syntax validation for files the agent writes.
+"""One-shot syntax validation for files the agent writes — in-process, offline.
 
-Poor-man's LSP. The big agents (Claude Code, opencode) run a persistent
-language server and feed its diagnostics back after each edit; codex uses
-verified structured patches. A persistent LSP is too heavy for localcode's
-target — a 16 GB Mac already running a large local model. So instead we run a
-FAST, ONE-SHOT syntax check after each write and, if it fails, append the exact
-error to the tool result.
+Tier-1 verification. The big agents use a persistent language server (LSP);
+opencode's own docs say that's often worse than running diagnostics directly
+(LSPs "get out of sync, use significant memory, slow down agent workflows") —
+decisive for a 16 GB Mac already running a large local model.
 
-Why this matters for a LOCAL model specifically: a small quantized model drifts
-into structural typos (`useState(0]`, an unterminated string, a missing bracket,
-`getCardsForCard`). With no verification the model has to NOTICE its own typo —
-which weak models are bad at — so it re-reads the broken file, the broken code
-enters its context, and it reproduces the error (self-conditioning loop). A
-deterministic check gives it GROUND TRUTH ("line 37: unexpected token") so it
-fixes the exact line instead of guessing.
+Crucially this must work with NO tools the user has to install and NO network:
+it's bundled. We parse with tree-sitter (grammars compiled into the wheel — one
+~4.5 MB native extension covering 100+ languages) and flag any syntax error
+in-process. So when a small quantized model drifts into a structural typo
+(`useState(0]`, an unterminated string, a missing bracket), the write tool
+appends the exact error and line, and the model fixes THAT line instead of
+re-reading the broken file and reproducing the error (the self-conditioning
+loop). Python/JSON keep their native checkers for sharper messages.
 
-Best-effort and non-blocking: the write ALWAYS succeeds; this only appends a
-warning. Any checker failure/absence returns None (no false alarms). Disable
-with LOCALCODE_SYNTAX_CHECK=0.
+Semantic/type errors (wrong names, missing imports) are caught separately by
+project_check at completion (tsc/ruff/go/cargo). Disable with
+LOCALCODE_SYNTAX_CHECK=0.
 """
 from __future__ import annotations
 
@@ -27,53 +26,36 @@ import subprocess
 
 _TIMEOUT = 5.0
 
+# File extension → tree-sitter language name (all bundled in the language pack).
+_TS_LANG = {
+    ".js": "javascript", ".mjs": "javascript", ".cjs": "javascript",
+    ".jsx": "tsx", ".ts": "typescript", ".mts": "typescript", ".cts": "typescript",
+    ".tsx": "tsx", ".go": "go", ".rs": "rust", ".rb": "ruby", ".php": "php",
+    ".sh": "bash", ".bash": "bash", ".zsh": "bash", ".lua": "lua",
+    ".c": "c", ".h": "c", ".cpp": "cpp", ".cc": "cpp", ".cxx": "cpp",
+    ".hpp": "cpp", ".hh": "cpp", ".java": "java", ".kt": "kotlin",
+    ".swift": "swift", ".cs": "csharp", ".scala": "scala",
+    ".css": "css", ".scss": "scss", ".html": "html", ".xml": "xml",
+    ".yaml": "yaml", ".yml": "yaml", ".toml": "toml", ".sql": "sql",
+}
+
 
 def check_syntax(path: str, content: str) -> str | None:
-    """Return a one-line syntax-error string, or None if OK / not checkable.
-
-    In-process for JSON/Python (instant, zero deps); a fast one-shot subprocess
-    for JS (node --check) and TS/JSX (esbuild, when the project has it).
-    """
+    """Return a one-line syntax-error string, or None if OK / not checkable."""
     if os.environ.get("LOCALCODE_SYNTAX_CHECK") == "0":
         return None
     ext = os.path.splitext(path)[1].lower()
     try:
+        # Native checkers give the sharpest messages; use them where free.
         if ext == ".json":
             return _check_json(content)
         if ext in (".py", ".pyi"):
             return _check_python(content, path)
-        if ext in (".js", ".mjs", ".cjs"):
-            return _check_node(path)
-        if ext in (".ts", ".tsx", ".jsx", ".mts", ".cts"):
-            return _check_esbuild(path)
-        # Per-file syntax linters for other languages (best-effort — only if the
-        # interpreter/tool is on PATH). Whole-project TYPE checks (go/rust/tsc)
-        # run separately at completion in project_check.
-        if ext == ".rb":
-            return _check_cli(["ruby", "-wc", path], "ruby")
-        if ext == ".php":
-            return _check_cli(["php", "-l", path], "php")
-        if ext in (".sh", ".bash"):
-            return _check_cli(["bash", "-n", path], "bash")
-        if ext == ".lua":
-            return _check_cli(["luac", "-p", path], "luac")
-        if ext == ".rs":
-            # rustc syntax-only parse (no full build): --emit=metadata is slow;
-            # a lightweight parse-only pass isn't stable, so skip unless a fast
-            # tool exists. cargo check at completion covers Rust type errors.
-            return None
+        lang = _TS_LANG.get(ext)
+        if lang:
+            return _check_treesitter(content, lang)
     except Exception:
         return None
-    return None
-
-
-def _check_cli(argv: list, tool: str) -> str | None:
-    import shutil
-    if not shutil.which(tool):
-        return None
-    r = subprocess.run(argv, capture_output=True, text=True, timeout=_TIMEOUT)
-    if r.returncode != 0:
-        return _first_error_line((r.stderr or "") + "\n" + (r.stdout or ""))
     return None
 
 
@@ -94,66 +76,47 @@ def _check_python(content: str, path: str) -> str | None:
         return f"Python syntax error at {loc}: {e.msg}"
 
 
-def _check_node(path: str) -> str | None:
-    import shutil
-    if not shutil.which("node"):
-        return None
-    r = subprocess.run(
-        ["node", "--check", path],
-        capture_output=True, text=True, timeout=_TIMEOUT,
-    )
-    if r.returncode != 0:
-        return _first_error_line(r.stderr)
-    return None
+def _check_treesitter(content: str, lang: str) -> str | None:
+    """Parse with a bundled tree-sitter grammar; report the first syntax error.
 
-
-def _find_bin(start: str, name: str) -> str | None:
-    """Walk up from the file's dir to find node_modules/.bin/<name>."""
-    d = os.path.dirname(os.path.abspath(start))
-    for _ in range(25):
-        cand = os.path.join(d, "node_modules", ".bin", name)
-        if os.path.exists(cand):
-            return cand
-        parent = os.path.dirname(d)
-        if parent == d:
-            break
-        d = parent
-    return None
-
-
-def _check_esbuild(path: str) -> str | None:
-    # esbuild parses TS/TSX/JSX and reports syntax errors instantly. Only used
-    # when the project has it (Vite/most JS projects do post-install); if not
-    # present we skip rather than risk a false alarm from a wrong parser.
-    esbuild = _find_bin(path, "esbuild")
-    if not esbuild:
-        return None
-    loader = "tsx" if path.endswith((".tsx", ".jsx")) else "ts"
-    r = subprocess.run(
-        [esbuild, path, f"--loader={loader}", "--log-level=error"],
-        capture_output=True, text=True, timeout=_TIMEOUT,
-    )
-    if r.returncode != 0 and r.stderr.strip():
-        return _first_error_line(r.stderr)
-    return None
-
-
-def _first_error_line(stderr: str) -> str | None:
-    """Pull the human-meaningful error out of a node/esbuild stderr dump.
-
-    Prefer the actual `SyntaxError: …` / `error: …` message, skipping node's
-    internal loader/stack frames (`node:internal/…`, `    at …`).
+    No external tools, no network — the grammars are compiled into the wheel.
+    Returns None if tree-sitter isn't available (graceful) or the file parses.
     """
-    lines = [l.rstrip() for l in stderr.splitlines()]
-    # First choice: the real error message line.
-    for s in lines:
-        t = s.strip()
-        if t.startswith(("SyntaxError", "TypeError", "ReferenceError")) or " error:" in t.lower() or t.lower().startswith("error"):
-            return t[:200]
-    # Fallback: the "file:line" location node prints first (skip internals/stack).
-    for s in lines:
-        t = s.strip()
-        if not t or t.startswith(("node:internal", "at ", "^")):
-            continue
-        return t[:200]
+    try:
+        from tree_sitter_language_pack import get_language
+        from tree_sitter import Parser
+    except Exception:
+        return None
+    try:
+        parser = Parser(get_language(lang))
+        tree = parser.parse(content.encode("utf-8"))
+    except Exception:
+        return None
+    root = tree.root_node
+    if not root.has_error:
+        return None
+    node = _first_error_node(root)
+    if node is None:
+        return f"syntax error detected in this {lang} file (unbalanced brackets/quotes or a stray token)"
+    line = node.start_point[0] + 1
+    col = node.start_point[1] + 1
+    snippet = ""
+    try:
+        src_line = content.splitlines()[node.start_point[0]].strip()
+        snippet = f" — near: {src_line[:80]}"
+    except Exception:
+        snippet = ""
+    kind = "missing token" if node.is_missing else "unexpected token"
+    return f"syntax error (line {line} col {col}): {kind}{snippet}"
+
+
+def _first_error_node(root):
+    """DFS for the first ERROR or MISSING node (the actual syntax fault)."""
+    stack = [root]
+    while stack:
+        n = stack.pop()
+        if n.is_error or n.is_missing:
+            return n
+        # push children in order so we return the earliest error
+        stack.extend(reversed(n.children))
     return None
