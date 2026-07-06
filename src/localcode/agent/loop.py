@@ -40,6 +40,7 @@ __all__ = ["run_agent_loop"]
 
 from .constants import (
     MAX_ROUNDS,
+    CHURN_FILE_WRITE_LIMIT,
     MAX_OUTPUT_TOKENS,
     MAX_THINKING_SECONDS,
     MAX_THINKING_CHARS,
@@ -70,6 +71,7 @@ from .prompts import (
 )
 from .prompt_context import build_agent_system_prompt
 from .recovery import (
+    rewrite_hard_stop,
     StallMode,
     detect_stall,
     nudge_for,
@@ -1141,33 +1143,13 @@ def run_agent_loop(
             _ephemeral_nudge_indices.append(len(messages) - 1)
 
         # ── Stalled-round recovery ──
-        # Three failure modes end a round with the model NOT actually
-        # done, but the user watching a frozen screen:
-        #
-        # (A) Empty round — long reasoning, then server closes the
-        #     stream with NO content and NO tool_calls. Images 107/108.
-        #
-        # (B) Intent-without-action — model emits ONE sentence of
-        #     forward-looking narration ("I'll build the web app now.
-        #     Let me create this.") and stops, with no tool call. Image
-        #     112. Happens because IQ2/IQ3 sometimes exits the reasoning
-        #     channel with just a sign-off instead of an action.
-        #
-        # (C) Gave-up-after-rejection — most recent tool call returned
-        #     a "REJECTED" / "Error" string AND the round ended with no
-        #     follow-up tool call. The model hit a snag and bailed
-        #     instead of reading the rejection's actionable feedback
-        #     and retrying. This was image 123: write_file got
-        #     REJECTED for syntax error, model stopped completely.
-        #
-        # Stall detection + nudge. Logic lives in agent/recovery.py
-        # (T0.1-d split). `stall` is None for a productive round,
-        # otherwise a `StallMode` enum that drives both the telemetry
-        # label and the per-mode nudge text.
-        # Gated on Feature.AUTO_NUDGE_RECOVERY. Disabled → stalls end
-        # the turn silently (no synthetic SYSTEM: nudge), which is the
-        # pre-recovery behaviour and what eval wants when A/B-ing the
-        # nudge feature's actual contribution to task completion.
+        # Three failure modes end a round with the model NOT done: (A) empty
+        # round (long reasoning, stream closes with no content/tools); (B)
+        # intent-without-action (one narration sentence, no tool call); (C)
+        # gave-up-after-rejection (last tool returned REJECTED/Error, round
+        # ended with no retry). Detection + nudge live in agent/recovery.py;
+        # `stall` is None for a productive round else a StallMode. Gated on
+        # Feature.AUTO_NUDGE_RECOVERY (off → stalls end the turn silently).
         from ..features import Feature, is_enabled as _is_enabled
         stall = detect_stall(
             tool_calls=tool_calls,
@@ -1508,11 +1490,22 @@ def run_agent_loop(
                     "smallest targeted edit and verify it."
                 )
 
+            # HARD rewrite-stop: the churn NUDGE (limit 3) only advises — logs
+            # showed a model rewrite one file 16x while 25-34 nudges fired.
+            # Past 2x the nudge limit, REJECT further full rewrites (see
+            # recovery.rewrite_hard_stop). Key on the RAW path like the counter.
+            _rewrite_limit_stub = None
+            if tool_name in ("write_file", "append_file", "multi_edit") and isinstance(args, dict):
+                _rw_path = args.get("path") or args.get("file_path") or ""
+                _rewrite_limit_stub = rewrite_hard_stop(_rw_path, _file_write_counts)
             # Execute (timed — wall-clock added to _round_tool_exec_ms
             # so round_end can show the model what fraction of its
             # round time was spent waiting on tools vs LLM).
             _tool_started_at = time.monotonic()
-            if _edit_sequence_stub is not None:
+            if _rewrite_limit_stub is not None:
+                from ..tools import ToolResult as _ToolResult
+                _tool_result_obj = _ToolResult(text=_rewrite_limit_stub, ok=False, facts={"tool": tool_name, "ok": False, "repeated_failed_call": True, "rewrite_hard_stop": True})
+            elif _edit_sequence_stub is not None:
                 from ..tools import ToolResult as _ToolResult
                 _tool_result_obj = _ToolResult(text=_edit_sequence_stub, ok=False, facts={"tool": tool_name, "ok": False, "edit_sequence": "missing_context"})
             elif _oversize_stub is not None:
