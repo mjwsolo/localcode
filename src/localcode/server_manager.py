@@ -71,12 +71,9 @@ from .paths import (
     lifecycle_log_path,
 )
 
-# PID file stays GLOBAL — only one llama-server runs on the machine
-# (single port, single GPU memory budget). When you `cd` between
-# projects mid-session, the running server stays serving you. The
-# per-project lifecycle log records a fresh `server_started` entry
-# on next launch from the new project. See paths.py for the full
-# global-vs-project split rationale.
+# PID file stays GLOBAL — only one llama-server runs per machine (single port,
+# single GPU budget), so it keeps serving you when you `cd` between projects.
+# See paths.py for the global-vs-project split rationale.
 PID_FILE = server_pid_file()
 DEFAULT_PORT = 8081
 # Preferred-range scan (8081-8099) before falling through to an OS-assigned
@@ -177,13 +174,9 @@ def _rewrite_port_arg(cmd: list[str], port: int) -> list[str]:
 
 STUCK_SERVER_MARKER = stuck_server_marker_path()
 
-# Persistent (append-only) lifecycle log for every server start, stop,
-# pressure-kill, and recovery event. Distinct from the per-session
-# `~/.local/share/localcode/server.log` (which the setup screen
-# overwrites with `open(..., "w")` on every launch and so loses
-# inter-session context). Per-project (lives at
-# `<project_root>/.localcode/lifecycle.log`) so each project has its
-# own diagnostic timeline.
+# Persistent (append-only) lifecycle log for every server start/stop/kill/
+# recovery event. Per-project (`<project_root>/.localcode/lifecycle.log`) so
+# each project keeps its own diagnostic timeline across sessions.
 LIFECYCLE_LOG = lifecycle_log_path()
 
 
@@ -400,12 +393,11 @@ class ServerManager:
             had_prior = self._process is not None
             _prev_model = self._model_path  # capture before shutdown clears it
             self._shutdown_locked()
-            # Wait for the OLD server's memory to actually release before
-            # spawning the new one: the kernel may take 1-3 s to free wired
-            # Metal memory after the child reaps, and spawning the new ~10 GB
-            # server in that window double-commits and trips the pressure
-            # monitor on a 16 GB Mac. Best-effort — targets ~11 GB free, times
-            # out at 8 s, and proceeds anyway (refusing would be worse).
+            # Wait for the OLD server's memory to release before spawning the
+            # new one: the kernel takes 1-3 s to free wired Metal memory after
+            # the child reaps, and spawning into that window double-commits and
+            # trips the pressure monitor on a 16 GB Mac. Best-effort — targets
+            # ~11 GB free, times out at 8 s, proceeds anyway.
             if had_prior:
                 # Only a genuine model change is "model_switch"; a same-model
                 # relaunch (crash/disconnect recovery) is "server_restart".
@@ -482,14 +474,10 @@ class ServerManager:
             except Exception:
                 self._pressure_thread = None
             self._write_pid_file(self._process.pid)
-            # Log the FULL command we launched with so future debugging
-            # can answer "what flags was the server using during this
-            # session?" — needed because subtle flags like
-            # `--lookup-cache-dynamic` or `--spec-type ngram-mod` cause
-            # repetition pathologies that look like model bugs but are
-            # actually decode-time speculative-cache feedback loops.
-            # Truncated to 4000 chars to keep the event small; that's
-            # enough for ~80 args.
+            # Log the FULL launch command so debugging can answer "what flags
+            # was the server using?" — subtle flags (e.g. --spec-type ngram-mod)
+            # cause repetition pathologies that look like model bugs. Truncated
+            # to 4000 chars (~80 args) to keep the event small.
             _flags_str = " ".join(str(c) for c in cmd)[:4000]
             _lifecycle_log("server_started", pid=self._process.pid, port=port,
                            model=Path(model_path).name,
