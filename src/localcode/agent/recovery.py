@@ -365,36 +365,36 @@ def churn_nudge_for(signal: ChurnSignal) -> str:
     Names the concrete subject (file path / command) + count so the model
     sees what it's thrashing on, then tells it the ONE thing to do instead.
     """
+    # NOTE: these are FORWARD-ONLY imperatives. They deliberately contain NO
+    # self-referential loop language ("you're going in circles", "you've
+    # rewritten X N times", "thrashing", "stop planning"). A small model
+    # parrots whatever we inject: injecting "you're going in circles" as a
+    # user-role message makes it reply "You're right, I've been going in
+    # circles" — which then sits in its own context and self-conditions the
+    # loop deeper (arXiv:2509.09677). So we tell it the NEXT concrete action
+    # and nothing about the failure it just had.
     if signal.mode is ChurnMode.FILE_REWRITE:
         return (
-            f"SYSTEM: You've rewritten {signal.subject} {signal.count} times "
-            "this turn. Stop rewriting it. Read the ACTUAL error output from "
-            "the last failure, identify the specific line/cause, and make ONE "
-            "targeted edit_file change to fix that — do not overwrite the whole "
-            "file again."
+            f"SYSTEM: {signal.subject} is written — move on to the next file. "
+            "If it has a specific error, make ONE targeted edit_file change to "
+            "the exact line; otherwise create the next file the task needs."
         )
     if signal.mode is ChurnMode.COMMAND_FAILURE:
         return (
-            f"SYSTEM: `{signal.subject}` has failed {signal.count} times this "
-            "turn. Re-running it will not help. Read its error output line by "
-            "line, fix the ROOT CAUSE (a missing dependency, a syntax error in "
-            "a config/source file, a wrong path), and only then run it again."
+            f"SYSTEM: `{signal.subject}` won't succeed as-is. Read its error "
+            "output, fix the root cause (missing dependency, a syntax error in a "
+            "config/source file, a wrong path) with an edit, then run it once."
         )
     if signal.mode is ChurnMode.PLANNING_SPIN:
         return (
-            "SYSTEM: You've spent several rounds planning and re-deriving the "
-            "same approach without changing a single file or running a build. "
-            "You've planned enough. Take ONE concrete action NOW: create or "
-            "edit the most important file for the next step, then build/run to "
-            "verify it. Do not restate the plan — execute the first step of it."
+            "SYSTEM: Take the next concrete action now — create or edit the next "
+            "file the task needs, then run the build to verify. Write code, not "
+            "a plan."
         )
     # INVESTIGATION_SPIN
     return (
-        "SYSTEM: Several rounds of reading/listing/searching without WRITING "
-        "anything — you're going in circles. STOP exploring. If the task is to "
-        "build something, create the target file and write real code THIS round "
-        "with write_file/edit_file; do NOT read, ls, find, cat, or grep again. "
-        "Leftover files on disk are NOT your progress (may be an unrelated run) — "
-        "only files YOU write count. If you truly lack info only the user has, "
-        "ask ONE focused question; otherwise start writing now."
+        "SYSTEM: Take a concrete action now — create the next file the task "
+        "needs and write real code with write_file/edit_file. Files already on "
+        "disk that you did not create are not part of your task. If you truly "
+        "lack information only the user has, ask ONE focused question."
     )
