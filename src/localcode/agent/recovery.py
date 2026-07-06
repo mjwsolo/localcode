@@ -390,9 +390,11 @@ def churn_nudge_for(signal: ChurnSignal) -> str:
         )
     # INVESTIGATION_SPIN
     return (
-        "SYSTEM: You've spent several rounds reading and searching files "
-        "without taking any concrete action. You're investigating in circles. "
-        "Take a concrete action NOW: make a specific edit, run the build/tests, "
-        "or — if you genuinely lack information only the user has — ask ONE "
-        "focused question. Do not read or grep more files this round."
+        "SYSTEM: Several rounds of reading/listing/searching without WRITING "
+        "anything — you're going in circles. STOP exploring. If the task is to "
+        "build something, create the target file and write real code THIS round "
+        "with write_file/edit_file; do NOT read, ls, find, cat, or grep again. "
+        "Leftover files on disk are NOT your progress (may be an unrelated run) — "
+        "only files YOU write count. If you truly lack info only the user has, "
+        "ask ONE focused question; otherwise start writing now."
     )
