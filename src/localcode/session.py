@@ -49,6 +49,10 @@ class SessionState:
     events: list[dict[str, str]] = field(default_factory=list)
     current_task: TaskState | None = None
     recent_tasks: list[TaskState] = field(default_factory=list)
+    # Working-memory checklist written by the todo_write tool: a list of
+    # {content, status, activeForm} dicts. Persisted so a resumed session
+    # keeps its plan; injected into context each round by the agent loop.
+    todos: list[dict] = field(default_factory=list)
 
 
 class SessionStore:
@@ -170,6 +174,7 @@ class SessionStore:
             events=list(data.get("events", [])),
             current_task=_load_task(current_task),
             recent_tasks=[task for task in (_load_task(t) for t in recent_tasks) if task is not None],
+            todos=list(data.get("todos", [])),
         )
 
     def save(self, session: SessionState) -> Path:
@@ -184,6 +189,7 @@ class SessionStore:
             "pinned_files": session.pinned_files,
             "last_assistant_text": session.last_assistant_text,
             "events": session.events,
+            "todos": session.todos,
             "current_task": None if session.current_task is None else {
                 "task_id": session.current_task.task_id,
                 "user_request": session.current_task.user_request,
