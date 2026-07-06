@@ -711,6 +711,50 @@ def _normalize_repo_root_variants(cmd: str, repo: str) -> str:
     return pattern.sub(repo, cmd)
 
 
+def _quoting_error_hint(output: str) -> str:
+    """Turn a raw shell quoting failure into actionable guidance.
+
+    A path with spaces or parentheses (e.g. `Qwen 3.6 35B-A3B (Q8)`) that
+    isn't quoted breaks bash with `syntax error near unexpected token` — an
+    error a model can't act on, so it retries the same broken shape in a loop
+    (observed exactly this). Tell it precisely how to fix it.
+    """
+    low = output.lower()
+    if "syntax error near unexpected token" not in low and "unexpected eof" not in low:
+        return ""
+    return (
+        "HINT: a path or argument with spaces or parentheses wasn't quoted, so "
+        "the shell mis-parsed it. Wrap paths in SINGLE quotes — e.g. "
+        "ls -la '/Users/you/My Dir (v2)'. Simpler and safer: use list_files or "
+        "read_file with the path as an argument — they take the raw path and "
+        "never need shell escaping."
+    )
+
+
+def _redirect_shell_dir_listing(cmd: str) -> str:
+    """Route `ls <path>` to list_files, which can't break on spaces/parens.
+
+    Mirrors the `cat → read_file` guard. Only fires for a plain `ls` with a
+    PATH argument (no pipes/redirs/chains) — bare `ls`/`ls -la` in the cwd
+    can't hit the quoting failure, so it's left to run.
+    """
+    _cd, body = _extract_leading_cd(cmd)
+    b = body.strip()
+    if any(sep in b for sep in ("|", ">", "<", "&&", "||", ";", "$(", "`")):
+        return ""
+    # Path arg must NOT start with '-' (else `ls -la` reads its own flags as a path).
+    m = re.match(r"^ls((?:\s+-[a-zA-Z]+)*)\s+([^-\s].*)$", b)
+    if m is None:
+        return ""  # bare `ls`/`ls -la` (no path) — harmless, let it run
+    path = m.group(2).strip().strip('"').strip("'")
+    return (
+        f"REJECTED: use list_files(path='{path}') to inspect a directory, not "
+        "bash `ls <path>`. list_files takes the path as an argument, so it never "
+        "breaks on spaces or parentheses in a folder name — which is what fails "
+        "with bash here."
+    )
+
+
 def execute(ctx: ToolContext, args: dict) -> str:
     cmd = _normalize_repo_root_variants(args["command"], str(ctx.repo))
     # Block ANY use of process-attaching debuggers — lldb / dtrace /
@@ -776,6 +820,9 @@ def execute(ctx: ToolContext, args: dict) -> str:
     file_read_redirect = _redirect_shell_file_read(cmd, str(repo))
     if file_read_redirect:
         return file_read_redirect
+    dir_listing_redirect = _redirect_shell_dir_listing(cmd)
+    if dir_listing_redirect:
+        return dir_listing_redirect
     file_write_redirect = _redirect_shell_file_write(cmd, str(repo))
     if file_write_redirect:
         return file_write_redirect
@@ -969,6 +1016,11 @@ def execute(ctx: ToolContext, args: dict) -> str:
             pass
         if r.returncode != 0:
             output = f"[exit code {r.returncode}]\n{output}"
+            # Shell quoting failure (unquoted spaces/parens in a path) → give
+            # the model an actionable fix instead of a raw syntax error it loops on.
+            _qh = _quoting_error_hint(output)
+            if _qh:
+                output = _qh + "\n\n" + output
         # AirPlay-collision detector: if the model curls localhost:5000
         # or :7000, those are squatted by macOS AirPlay Receiver /
         # AirTunes — bare `curl -s` sees a 200 with empty body and
