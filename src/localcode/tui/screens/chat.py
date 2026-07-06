@@ -411,12 +411,16 @@ class _ChatTextArea(TextArea):
         & .text-area--cursor-line {
             background: ansi_default;
         }
-        /* The caret. `reverse` swaps the cell's fg/bg using the terminal's
-           OWN colors, so the cursor is a light block on a dark terminal and
-           a dark block on a light one — no hardcoded hex that fights the
-           ansi_default palette (which rendered as a near-black block). */
+        /* The caret. textual-ansi reports dark=False, so TextArea's own
+           `&:light .text-area--cursor` rule (background: $foreground 70%) wins
+           over a plain override and renders a dark/black block. Force it with
+           !important: color+background = ansi_default (terminal fg/bg) plus
+           `reverse` swaps them, giving a light block on a dark terminal and a
+           dark block on a light one — terminal-adaptive, no hardcoded hex. */
         & .text-area--cursor {
-            text-style: reverse;
+            color: ansi_default !important;
+            background: ansi_default !important;
+            text-style: reverse !important;
         }
         &:focus {
             background-tint: transparent 0%;
