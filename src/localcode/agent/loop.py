@@ -838,6 +838,25 @@ def run_agent_loop(
         content = _stream_result.content
         tool_calls = _stream_result.tool_calls
 
+        # Recover tool calls the model emitted but the server failed to parse.
+        # Quantized Qwen quants sometimes emit `<tool_call><function=…>` (XML)
+        # or `<tool_call>{…}` (JSON) shapes --jinja doesn't recognize, so they
+        # arrive as plain CONTENT with no structured tool_calls: the call never
+        # runs (wasted turn) and leaked <think> reasoning makes the model narrate
+        # "the user wants…". Parse them out of content, execute them, and strip
+        # the raw XML + leaked thinking from what's stored/shown.
+        if content and ("<tool_call>" in content or "</think>" in content):
+            try:
+                from ..tools.tool_call_repair import repair_tool_calls
+                _cleaned, _recovered = repair_tool_calls(content)
+                if _recovered and not tool_calls:
+                    tool_calls = _recovered
+                    _stream_result.tool_calls = _recovered
+                if _cleaned != content:
+                    content = _cleaned
+            except Exception:
+                pass
+
         # Clear the indicator before rendering output
         out._stop_indicator()
         sys.stdout.write("\r\033[K")  # clear indicator line
