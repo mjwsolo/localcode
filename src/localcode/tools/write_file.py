@@ -173,6 +173,19 @@ def execute(ctx: ToolContext, args: dict) -> str:
     # catches the data.py-style "model copies in-memory stub back into
     # write_file" disaster, which was the one case where rejecting
     # was load-bearing.
+    # Log the EXACT content the model sent (post-JSON-parse) so a "the file is
+    # corrupted / write_file isn't writing what I sent" report is provable from
+    # logs in one grep, instead of a mystery. Best-effort, capped, append-only.
+    try:
+        from ..paths import global_state_dir
+        _wl = global_state_dir() / "write_content.log"
+        with open(_wl, "a", encoding="utf-8", errors="replace") as _fh:
+            _fh.write(f"\n===== write_file {args['path']} ({len(content)} chars) =====\n")
+            _fh.write(content[:20000])
+            _fh.write("\n")
+    except Exception:
+        pass
+
     existed = path.is_file()
     # Capture the prior content so an in-place rewrite renders as a diff card
     # (like edit_file/multi_edit), not a bare "Rewrote (N lines)" one-liner.
