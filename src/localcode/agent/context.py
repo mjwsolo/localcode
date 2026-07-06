@@ -246,10 +246,9 @@ def _semantic_tool_summary(content: str) -> str:
     )
     if is_error:
         # Self-conditioning (arXiv:2509.09677): echoing an OLD error's text
-        # pushes the model to repeat the mistake (scale-independent). Recent
-        # errors stay intact (kept above by keep_recent) so it can fix the
-        # immediate problem; older ones drop to a neutral note. The progress
-        # ledger still records the failure fact, minus the conditioning text.
+        # pushes the model to repeat the mistake. Recent errors stay intact
+        # (kept above by keep_recent) so it can fix the immediate problem;
+        # older ones drop to a neutral note (the ledger still records the fact).
         return "[an earlier tool call errored and was handled — details dropped]"
     if facts:
         return (
@@ -725,9 +724,10 @@ def build_progress_ledger(
         return list(dict.fromkeys(s for s in seq if s))
 
     lines = [
-        "## Work already done this task — build on it. Do NOT re-read a file or "
-        "re-run a command listed below unless you have CHANGED it since; you "
-        "already have the result.",
+        "## A log of YOUR OWN tool calls so far this turn — NOT the user's work "
+        "and NOT pre-existing files on disk (leftover files you did not create are "
+        "not your progress or your task). Don't re-read/re-run anything below "
+        "unless you changed it; keep making NEW progress toward the user's goal.",
     ]
     rd = _uniq(files_read)
     if rd:
