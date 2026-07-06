@@ -80,8 +80,10 @@ def test_investigation_spin_outranks_planning_spin():
 def test_planning_spin_nudge_is_actionable():
     sig = detect_churn({}, {}, 0, planning_streak=CHURN_PLANNING_STREAK_LIMIT)
     text = churn_nudge_for(sig)
-    assert "planned enough" in text.lower()
-    assert "concrete action" in text.lower() or "execute" in text.lower()
+    # Forward-only imperative: tells it the next action, with NO echo-able
+    # self-critical loop language ("planned enough") a small model would parrot.
+    assert "concrete action" in text.lower() or "write code" in text.lower()
+    assert "planned enough" not in text.lower() and "circles" not in text.lower()
 
 
 def test_command_failure_takes_precedence_over_file_rewrite():
