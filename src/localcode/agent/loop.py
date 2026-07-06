@@ -715,22 +715,22 @@ def run_agent_loop(
                     list(getattr(_tool_exec_state, "files_read", {}) or {}),
                     progress_ledger_budget_chars(_win_tokens),
                 )
-                if _ledger:
-                    model_messages = list(model_messages) + [
-                        {"role": "user", "content": _ledger}
-                    ]
             except Exception:
-                pass
-            # Inject the working-memory checklist (todo_write tool): the model
-            # always sees its own plan (done / in-progress / left) so it
-            # advances instead of repeating. Appended LAST, ephemeral, empty-safe.
+                _ledger = ""
+            # Working-memory checklist (todo_write): model sees its own plan.
+            _todo_note = ""
             try:
                 from ..tools.todo_write import render_todo_reminder
-                _todos = list(getattr(app.session, "todos", []) or [])
-                _todo_note = render_todo_reminder(_todos)
-                if _todo_note:
+                _todo_note = render_todo_reminder(list(getattr(app.session, "todos", []) or []))
+            except Exception:
+                _todo_note = ""
+            # Inject ledger + todo as ONE trailing SYSTEM message (not role:user
+            # — as a user turn the model re-greeted every round). Ephemeral.
+            try:
+                _ctx_block = "\n\n".join(b for b in (_ledger, _todo_note) if b)
+                if _ctx_block:
                     model_messages = list(model_messages) + [
-                        {"role": "user", "content": _todo_note}
+                        {"role": "system", "content": _ctx_block}
                     ]
             except Exception:
                 pass
