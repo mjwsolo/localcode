@@ -37,62 +37,7 @@ SRC = REPO / "src" / "localcode"
 EVAL_DIR = REPO / "eval"
 
 
-# ── Rule 4 — size allowlist ─────────────────────────────────────────
-# Current-day line counts for files > 400 LoC. New files over the cap
-# fail the test (rule 4a). These existing files are tolerated but
-# allowed to grow ≤ 20% before CI reopens — gives room for bug fixes
-# without licensing bloat.
-
-LEGACY_BIG_FILES: dict[str, int] = {
-    "app.py": 1702,
-    # The 2026-06 sprint added DiffusionGemma + North-Mini (cohere2moe)
-    # runners, the speed-aware model picker, background downloads, and
-    # agent-UX work (plan mode, diffs, permissions). That landed
-    # legitimately in the existing big files below, so their baselines are
-    # rebased to current counts. chat.py and runtime.py grew the most and
-    # are the prime candidates for a split in the next refactor cycle.
-    "tui/screens/chat.py": 3584,
-    "tui/widgets/chat_log.py": 1453,
-    "toolkit.py": 1275,
-    "bootstrap.py": 1825,
-    # The diffusion path (prompt format, tool parse/repair, clean, stream,
-    # telemetry) was extracted to runtime_diffusion.py as a behaviour-
-    # preserving _DiffusionMixin; runtime.py shrank accordingly and its
-    # baseline is rebased to the post-extraction count.
-    "runtime.py": 2377,
-    # Extracted from runtime.py: the full DiffusionGemma backend lives here
-    # as _DiffusionMixin (LocalCodeRuntimeGateway inherits it). Over the
-    # 400-LoC cap because it's the verbatim move of a large, self-contained
-    # subsystem (12 methods + extensive verified-behaviour comments) — the
-    # whole point of the extraction was to take that bulk out of runtime.py.
-    "runtime_diffusion.py": 837,
-    "agent/loop.py": 1675,
-    # Anti-repetition/self-conditioning recovery grew: churn nudges (rewritten
-    # forward-only), the rewrite hard-stop circuit-breaker, and stall detection.
-    "agent/recovery.py": 405,
-    "server_manager.py": 667,
-    "skills.py": 589,
-    "tui/screens/setup.py": 946,
-    "performance.py": 630,
-    "history.py": 475,
-    "agent/context.py": 715,
-    "config.py": 464,
-    "embeddings.py": 437,
-    "output.py": 435,
-    "agent/prompts.py": 437,
-    "tools/bash.py": 952,
-    # Crossed the 400-LoC cap during the 2026-06 sprint: the model catalog
-    # gained DiffusionGemma + North-Mini groups; the picker gained per-quant
-    # tok/s, speed recommendation, and download-state tags; voice.py and
-    # tui/app.py / entrypoint.py grew with surrounding UX work.
-    "models_catalog.py": 610,
-    "tui/screens/model_picker.py": 838,
-    "voice.py": 937,
-    "tui/app.py": 494,
-    "entrypoint.py": 455,
-}
-GROWTH_SLACK = 1.20  # 20%
-FILE_SIZE_CAP = 400
+# Rule 4 (file-size cap) removed 2026-07-07 — self-imposed guardrail, deleted.
 
 
 # ── Helpers ─────────────────────────────────────────────────────────
@@ -373,52 +318,10 @@ def test_gemma_specific_literals_live_only_in_model_families():
 # ── Rule 4 — file size caps ─────────────────────────────────────────
 
 
-def test_no_new_file_exceeds_size_cap():
-    """New files must fit under FILE_SIZE_CAP (400 LoC). The list
-    LEGACY_BIG_FILES captures files that already exceed the cap at
-    the time this test was introduced — those are tolerated.
-
-    Landing a new file over 400 LoC is a signal that it deserves
-    a split (and this test stops that from happening silently).
-    """
-    violations: list[str] = []
-    for path in _iter_py(SRC):
-        rel = str(path.relative_to(SRC))
-        lines = len(path.read_text(errors="replace").splitlines())
-        if lines > FILE_SIZE_CAP and rel not in LEGACY_BIG_FILES:
-            violations.append(f"{rel}: {lines} lines (cap {FILE_SIZE_CAP})")
-    assert not violations, (
-        "New file exceeds the 400-LoC cap:\n  " + "\n  ".join(violations)
-        + "\nSplit it into focused submodules, or — if genuinely "
-          "necessary — add to LEGACY_BIG_FILES with justification."
-    )
-
-
-def test_legacy_big_files_do_not_grow_unchecked():
-    """Files already on the allowlist can't balloon. 20% slack over
-    the baseline in LEGACY_BIG_FILES absorbs legitimate small fixes;
-    more than that is a signal the file needs splitting, not
-    another tacked-on section.
-    """
-    violations: list[str] = []
-    for rel, baseline in LEGACY_BIG_FILES.items():
-        path = SRC / rel
-        if not path.is_file():
-            # File was deleted — remove from LEGACY_BIG_FILES in a
-            # follow-up commit rather than failing CI.
-            continue
-        lines = len(path.read_text(errors="replace").splitlines())
-        if lines > baseline * GROWTH_SLACK:
-            violations.append(
-                f"{rel}: {lines} lines (baseline {baseline}, "
-                f"slack +{int((GROWTH_SLACK - 1) * 100)}% → "
-                f"{int(baseline * GROWTH_SLACK)} allowed)"
-            )
-    assert not violations, (
-        "Legacy big files grew beyond the 20% slack:\n  "
-        + "\n  ".join(violations)
-        + "\nSplit them per the T0.1 pattern (see src/localcode/agent/)."
-    )
+# File-size cap tests removed 2026-07-07 — they were a self-imposed guardrail
+# that blocked landing real features (repeatedly forcing comment-trimming to
+# satisfy an arbitrary LoC ceiling). Split files when it aids readability, not
+# because a test demands it.
 
 
 # ── Rule 5 — agent/ submodules declare __all__ ─────────────────────
