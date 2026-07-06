@@ -45,6 +45,37 @@ if TYPE_CHECKING:
 __all__: list[str] = []
 
 
+def _spill_tool_output(result: str, tool_name: str) -> str | None:
+    """Write an oversized tool result to a file and return its path.
+
+    Truncation alone makes a small model re-run the command "to see the rest".
+    Instead we keep the full output on disk and point the model at it (grep/
+    read the exact part). Best-effort: None on error → caller falls back to
+    plain truncation. Content-hashed filenames; old spills reaped after 7 days.
+    """
+    try:
+        import hashlib
+        import time as _time
+        from ..paths import global_state_dir
+        spill_dir = global_state_dir() / "tool_output"
+        spill_dir.mkdir(parents=True, exist_ok=True)
+        # Reap spills older than 7 days so this never grows unbounded.
+        try:
+            cutoff = _time.time() - 7 * 86400
+            for old in spill_dir.glob("*.txt"):
+                if old.stat().st_mtime < cutoff:
+                    old.unlink(missing_ok=True)
+        except Exception:
+            pass
+        digest = hashlib.sha1(result.encode("utf-8", "replace")).hexdigest()[:12]
+        path = spill_dir / f"{tool_name}_{digest}.txt"
+        if not path.exists():
+            path.write_text(result, encoding="utf-8", errors="replace")
+        return str(path)
+    except Exception:
+        return None
+
+
 def _truncate_result(result: str, tool_name: str) -> str:
     """Truncate a tool result to its per-tool size limit with a
     strategy tuned to what each tool's output actually looks like.
@@ -70,6 +101,15 @@ def _truncate_result(result: str, tool_name: str) -> str:
         return result
 
     dropped = len(result) - limit
+    # Spill the FULL output to disk and point the model at it, so it fetches
+    # the exact part it needs instead of re-running the command to "see the
+    # rest". Appended to every strategy's hint below.
+    _spill = _spill_tool_output(result, tool_name)
+    spill_hint = (
+        f" Full output saved to {_spill} — read_file (with offset) or grep it "
+        f"to see the rest; do NOT re-run the command."
+        if _spill else ""
+    )
 
     if tool_name == "read_file":
         # Keep the HEAD; if we can find line numbers in the content
@@ -85,7 +125,7 @@ def _truncate_result(result: str, tool_name: str) -> str:
                 last_numbered = int(line.split("\t", 1)[0])
         hint = (
             f"\n\n[truncated — {dropped} more chars not shown. "
-            f"{'Call read_file with offset=' + str(last_numbered) + ' to continue reading from there.' if last_numbered else 'Call read_file with a larger offset to continue.'}]"
+            f"{'Call read_file with offset=' + str(last_numbered) + ' to continue reading from there.' if last_numbered else 'Call read_file with a larger offset to continue.'}{spill_hint}]"
         )
         return head + hint
 
@@ -99,7 +139,7 @@ def _truncate_result(result: str, tool_name: str) -> str:
         dropped_lines = result[limit:].count("\n") + 1
         hint = (
             f"\n\n[truncated — {dropped_lines} more match-lines not shown. "
-            "Narrow with a more specific pattern or `include=*.py` to see them.]"
+            f"Narrow with a more specific pattern or `include=*.py` to see them.{spill_hint}]"
         )
         return head + hint
 
@@ -114,7 +154,7 @@ def _truncate_result(result: str, tool_name: str) -> str:
             first_sig = "\n".join(non_empty[:8])
             last_sig = "\n".join(non_empty[-12:]) if len(non_empty) > 12 else ""
             marker = (
-                f"\n\n[... {dropped} chars of bash output compressed ...]\n\n"
+                f"\n\n[... {dropped} chars of bash output compressed.{spill_hint} ...]\n\n"
             )
             if any(token in result for token in ("backend", "frontend", "src/", "node_modules", "package.json", "pyproject.toml")):
                 tree_hint = (
@@ -133,14 +173,14 @@ def _truncate_result(result: str, tool_name: str) -> str:
         tail_size = limit - head_size - 64  # 64 chars for the marker line
         head = result[:head_size]
         tail = result[-tail_size:]
-        marker = f"\n\n[... {dropped} chars of middle output dropped ...]\n\n"
+        marker = f"\n\n[... {dropped} chars of middle output dropped.{spill_hint} ...]\n\n"
         return head + marker + tail
 
     # Default — middle-drop.
     half = limit // 2
     return (
         result[:half]
-        + f"\n\n[...{dropped} chars truncated...]\n\n"
+        + f"\n\n[...{dropped} chars truncated.{spill_hint} ...]\n\n"
         + result[-half:]
     )
 
@@ -205,11 +245,12 @@ def _semantic_tool_summary(content: str) -> str:
         or "Traceback " in content
     )
     if is_error:
-        tail = "\n".join([ln for ln in lines[-12:] if ln.strip()])[:1200]
-        return (
-            f"[older tool error preserved: {len(content)} chars, "
-            f"{len(lines)} lines]\n{first_line}\n{tail}"
-        )
+        # Self-conditioning (arXiv:2509.09677): echoing an OLD error's text
+        # pushes the model to repeat the mistake (scale-independent). Recent
+        # errors stay intact (kept above by keep_recent) so it can fix the
+        # immediate problem; older ones drop to a neutral note. The progress
+        # ledger still records the failure fact, minus the conditioning text.
+        return "[an earlier tool call errored and was handled — details dropped]"
     if facts:
         return (
             f"[older successful tool result summarized: {len(content)} chars, "
