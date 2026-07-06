@@ -32,12 +32,52 @@ SCHEMA = {
 }
 
 
+def _suggest_path(missing) -> str:
+    """Suggest the real file when the model gave a typo'd/wrong-case path.
+
+    Walk up to the nearest existing ancestor dir and fuzzy-match the missing
+    filename (and its path segments) against what's actually there.
+    """
+    import difflib
+    from pathlib import Path
+    try:
+        missing = Path(missing)
+        name = missing.name
+        # Nearest existing ancestor to search in.
+        base = missing.parent
+        for _ in range(6):
+            if base.exists():
+                break
+            base = base.parent
+        if not base.exists():
+            return ""
+        candidates = []
+        for p in base.rglob("*"):
+            if p.is_file():
+                candidates.append(p)
+            if len(candidates) > 4000:
+                break
+        names = [p.name for p in candidates]
+        close = difflib.get_close_matches(name, names, n=1, cutoff=0.6)
+        if close:
+            match = next(p for p in candidates if p.name == close[0])
+            return f"Did you mean: {match} — read THAT exact path (don't guess variants)."
+    except Exception:
+        pass
+    return ""
+
+
 def execute(ctx: ToolContext, args: dict) -> str:
     if "path" not in args:
         return "Error: 'path' argument is required for read_file."
     path = ctx.repo / args["path"]
     if not path.exists():
-        return f"File not found: {args['path']}"
+        # A small model invents misspelled/wrong-case paths ("Aki" for "Anki",
+        # gitHub/github/Github) and, getting a bare "not found", retries with
+        # ANOTHER wrong variant forever (dedup can't collapse differing typos).
+        # Point it at the real nearby file so it corrects instead of guessing.
+        hint = _suggest_path(path)
+        return f"File not found: {args['path']}" + (f"\n{hint}" if hint else "")
     content = path.read_text(errors="replace")
     lines = content.splitlines()
     offset = args.get("offset", 0)
