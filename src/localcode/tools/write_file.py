@@ -187,6 +187,13 @@ def execute(ctx: ToolContext, args: dict) -> str:
         pass
 
     existed = path.is_file()
+    # Typo-duplicate guard: creating a NEW file whose name closely matches an
+    # existing sibling (e.g. `ReivewSession.tsx` next to `ReviewSession.tsx`)
+    # is almost always a filename typo that splits the code across two files
+    # and breaks imports. Warn before it snowballs. (Observed in real logs.)
+    _dup_warning = ""
+    if not existed:
+        _dup_warning = _similar_sibling_warning(path)
     # Capture the prior content so an in-place rewrite renders as a diff card
     # (like edit_file/multi_edit), not a bare "Rewrote (N lines)" one-liner.
     old_content = ""
@@ -222,5 +229,25 @@ def execute(ctx: ToolContext, args: dict) -> str:
             fromfile=args["path"], tofile=args["path"], lineterm="",
         ))
         if diff:
-            return "\n".join(diff[:120]) + _syntax_warning
-    return f"{verb} {args['path']} ({lines} lines){_syntax_warning}"
+            return "\n".join(diff[:120]) + _syntax_warning + _dup_warning
+    return f"{verb} {args['path']} ({lines} lines){_syntax_warning}{_dup_warning}"
+
+
+def _similar_sibling_warning(path) -> str:
+    """Warn when a newly-created file's name near-matches an existing sibling."""
+    import difflib
+    try:
+        name = path.name
+        siblings = [p.name for p in path.parent.iterdir()
+                    if p.is_file() and p.name != name]
+        close = difflib.get_close_matches(name, siblings, n=1, cutoff=0.85)
+        if close:
+            return (
+                f"\n\n⚠ A very similarly-named file already exists: '{close[0]}'. "
+                f"This is likely a filename TYPO that will split your code across "
+                f"two files and break imports. If you meant that file, delete this "
+                f"one and edit_file '{close[0]}' instead."
+            )
+    except Exception:
+        pass
+    return ""
