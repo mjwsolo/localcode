@@ -1240,24 +1240,44 @@ def run_agent_loop(
                 and not ran_build_or_test(bash_history)
             ):
                 _build_verify_nudges += 1
+                # TIER-2 VERIFICATION: don't just NUDGE the model to typecheck
+                # (a small model skips it or mishandles output) — RUN the
+                # project's real typecheck/lint ourselves and feed the concrete
+                # errors back. Catches semantic errors (wrong names, missing
+                # imports) the per-write syntax check can't. Light: once per
+                # turn, at completion. See tools.project_check.
+                _proj_errors = None
+                try:
+                    from ..tools.project_check import run_project_check
+                    out.print_info("Verifying — running the project's typecheck…")
+                    _proj_errors = run_project_check(str(app.repo_root))
+                except Exception:
+                    _proj_errors = None
                 try:
                     from ..events import emit as _emit_bg
-                    _emit_bg("auto_nudge", signal="build_unverified", round_idx=round_num)
+                    _emit_bg("auto_nudge", signal="build_unverified",
+                             round_idx=round_num, had_errors=bool(_proj_errors))
                 except Exception:
                     pass
-                out.print_info(
-                    "Changed code but never built/ran it — nudging it to build "
-                    "and fix before finishing."
-                )
-                messages.append({"role": "user", "content": (
-                    "SYSTEM: You changed code but never built, type-checked, or ran "
-                    "it this turn. Run the project's build/typecheck now (e.g. "
-                    "`npm run build` or `npx tsc --noEmit` for TypeScript; the test "
-                    "command or an import smoke-check for Python), FIX every error it "
-                    "reports, then finish. Do not claim it works without building it."
-                )})
+                if _proj_errors:
+                    out.print_info("Typecheck found errors — sending them back to fix.")
+                    messages.append({"role": "user", "content": (
+                        "SYSTEM: the project's typecheck/build was run for you and "
+                        "reported errors. FIX each one (targeted edit_file changes), "
+                        "then finish. Do not claim it works until these are gone:\n\n"
+                        + _proj_errors
+                    )})
+                else:
+                    # No checker available, or it passed — fall back to advising.
+                    out.print_info("Changed code but never built/ran it — nudging to verify.")
+                    messages.append({"role": "user", "content": (
+                        "SYSTEM: You changed code but never built, type-checked, or ran "
+                        "it. Run the project's build/typecheck (npm run build / npx tsc "
+                        "--noEmit for TS; tests or an import smoke-check for Python), fix "
+                        "every error, then finish. Don't claim it works without building."
+                    )})
                 _ephemeral_nudge_indices.append(len(messages) - 1)
-                continue  # don't accept completion — let it build + fix first
+                continue  # don't accept completion — let it fix first
             if _goal_state.goal_type == "run_or_launch":
                 _task_port = int(getattr(_task_state, "active_port", 0) or 0)
                 content = ground_run_or_launch_text(content, _task_port)
