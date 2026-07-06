@@ -199,6 +199,18 @@ def execute(ctx: ToolContext, args: dict) -> str:
     lines = content.count("\n") + 1
     verb = "Rewrote" if existed else "Created"
 
+    # Deterministic syntax check (poor-man's LSP): if the just-written file has
+    # a syntax error, surface the EXACT error so the model fixes that line next
+    # round instead of re-reading the broken file and drifting. See syntax_check.
+    _syntax_warning = ""
+    try:
+        from .syntax_check import check_syntax
+        _err = check_syntax(str(path), content)
+        if _err:
+            _syntax_warning = f"\n\n⚠ SYNTAX ERROR in this file — fix it now: {_err}"
+    except Exception:
+        _syntax_warning = ""
+
     # Emit a unified diff for rewrites of existing files so the TUI draws the
     # diff card. New files (or unchanged rewrites) keep the concise summary —
     # a full new-file dump as "+" lines is noise, and the summary reads fine.
@@ -210,5 +222,5 @@ def execute(ctx: ToolContext, args: dict) -> str:
             fromfile=args["path"], tofile=args["path"], lineterm="",
         ))
         if diff:
-            return "\n".join(diff[:120])
-    return f"{verb} {args['path']} ({lines} lines)"
+            return "\n".join(diff[:120]) + _syntax_warning
+    return f"{verb} {args['path']} ({lines} lines){_syntax_warning}"
