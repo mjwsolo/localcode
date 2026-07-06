@@ -168,6 +168,21 @@ def _log_disconnect_context(stage: str, error: Any, *, mid_stream: bool = False)
     diag["stage"] = stage
     diag["mid_stream"] = mid_stream
     diag["error"] = err_str[:500]
+    # Capture the SERVER's own last words. llama-server prints the real cause
+    # (ggml/Metal allocation failure, GGML_ASSERT, OOM) to server.log right
+    # before it dies; without this we only see httpx's "connection dropped"
+    # and are left guessing. The tail is the actual diagnosis.
+    _server_tail = ""
+    try:
+        from .paths import global_state_dir
+        _lp = global_state_dir() / "server.log"
+        if _lp.exists():
+            _lines = _lp.read_text(errors="replace").splitlines()
+            _server_tail = "\n".join(_lines[-15:])[-1500:]
+    except Exception:
+        _server_tail = ""
+    if _server_tail:
+        diag["server_log_tail"] = _server_tail
     try:
         from .server_manager import _lifecycle_log as _ll
         _ll("server_disconnect", **diag)
@@ -186,6 +201,8 @@ def _log_disconnect_context(stage: str, error: Any, *, mid_stream: bool = False)
                 f"pressure_kill={diag.get('pressure_kill')} "
                 f"running={diag.get('running')} mid_stream={mid_stream} "
                 f"free_mb={diag.get('free_mb')} error={err_str[:300]}\n"
+                + (f"  server.log tail:\n    "
+                   + _server_tail.replace("\n", "\n    ") + "\n" if _server_tail else "")
             )
     except Exception:
         pass
@@ -2064,6 +2081,25 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
             # revert this hunk and accept occasional rephrase as a
             # model property of Qwen3.6 IQ2_M.
             payload["repeat_penalty"] = 1.05
+            # Forward the EOS-NEUTRAL anti-loop samplers that were previously
+            # computed into `opts` and then DROPPED (they only went to the dead
+            # ollama-shaped payload below). DRY penalises repeated N-GRAMS —
+            # not single tokens — so unlike repeat_penalty it does NOT suppress
+            # the EOS/sentence-end tokens that caused the 2026-04-29 paraphrase
+            # regression; min_p trims the low-probability tail that token-
+            # collapse loops feed on. llama-server has DRY OFF by default, so
+            # NOT forwarding these is a real root cause of the repeat-collapse
+            # loops. We deliberately do NOT re-add the aggressive repeat_penalty
+            # /top_k/top_p bundle (that was the regression). A/B back to
+            # temperature-only with LOCALCODE_SAMPLER_MINIMAL=1.
+            import os as _os
+            if _os.environ.get("LOCALCODE_SAMPLER_MINIMAL") != "1":
+                payload["dry_multiplier"] = opts["dry_multiplier"]
+                payload["dry_base"] = opts["dry_base"]
+                payload["dry_allowed_length"] = opts["dry_allowed_length"]
+                payload["dry_penalty_last_n"] = opts["dry_penalty_last_n"]
+                if opts.get("min_p", 0):
+                    payload["min_p"] = opts["min_p"]
             if "num_predict" in opts:
                 _np = opts["num_predict"]
                 # llama-server treats max_tokens=-1 as "use default", which on
@@ -2080,8 +2116,11 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
             # outbound chat-completions payload so we can verify DRY is
             # actually being forwarded. Set LOCALCODE_DEBUG_SAMPLERS=1
             # to enable. Self-disables after one log to keep noise down.
-            import os, logging
-            if os.environ.get("LOCALCODE_DEBUG_SAMPLERS") == "1" and not getattr(self, "_logged_samplers", False):
+            import logging
+            # Always log the ACTUAL forwarded samplers once per session (was
+            # opt-in) so we can correlate looping with the real server config —
+            # the "control this better" record. Cheap: fires exactly once.
+            if not getattr(self, "_logged_samplers", False):
                 sampler_keys = (
                     "temperature", "top_p", "top_k", "min_p",
                     "repeat_penalty", "repeat_last_n",
