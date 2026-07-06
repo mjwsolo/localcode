@@ -46,8 +46,34 @@ def check_syntax(path: str, content: str) -> str | None:
             return _check_node(path)
         if ext in (".ts", ".tsx", ".jsx", ".mts", ".cts"):
             return _check_esbuild(path)
+        # Per-file syntax linters for other languages (best-effort — only if the
+        # interpreter/tool is on PATH). Whole-project TYPE checks (go/rust/tsc)
+        # run separately at completion in project_check.
+        if ext == ".rb":
+            return _check_cli(["ruby", "-wc", path], "ruby")
+        if ext == ".php":
+            return _check_cli(["php", "-l", path], "php")
+        if ext in (".sh", ".bash"):
+            return _check_cli(["bash", "-n", path], "bash")
+        if ext == ".lua":
+            return _check_cli(["luac", "-p", path], "luac")
+        if ext == ".rs":
+            # rustc syntax-only parse (no full build): --emit=metadata is slow;
+            # a lightweight parse-only pass isn't stable, so skip unless a fast
+            # tool exists. cargo check at completion covers Rust type errors.
+            return None
     except Exception:
         return None
+    return None
+
+
+def _check_cli(argv: list, tool: str) -> str | None:
+    import shutil
+    if not shutil.which(tool):
+        return None
+    r = subprocess.run(argv, capture_output=True, text=True, timeout=_TIMEOUT)
+    if r.returncode != 0:
+        return _first_error_line((r.stderr or "") + "\n" + (r.stdout or ""))
     return None
 
 
