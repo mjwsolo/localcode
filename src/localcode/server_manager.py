@@ -430,20 +430,35 @@ class ServerManager:
             # AGX driver may read the env at first Metal touch — setting it in
             # the parent env before spawn is the belt-and-suspenders approach.
             env.setdefault("AGX_RELAX_CDM_CTXSTORE_TIMEOUT", "1")
+            # Capture the server's OWN stdout/stderr to server.log (this runtime
+            # path used to send both to /dev/null, discarding llama-server's
+            # final ggml/Metal error on the recurring -9). Append per-spawn.
+            log_fh = None
+            try:
+                from .paths import global_state_dir
+                log_fh = open(global_state_dir() / "server.log", "a", buffering=1)
+                log_fh.write(f"\n===== llama-server spawn (port {port}) =====\n")
+            except Exception:
+                log_fh = None
+            try:  # close any prior spawn's handle before replacing it
+                if getattr(self, "_log_fh", None) is not None:
+                    self._log_fh.close()
+            except Exception:
+                pass
+            self._log_fh = log_fh
             self._process = subprocess.Popen(
                 cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=(log_fh or subprocess.DEVNULL),
+                stderr=subprocess.STDOUT if log_fh else subprocess.DEVNULL,
                 start_new_session=True,  # process group leader → killpg works
                 env=env,
             )
             self._model_path = model_path
             self._port = port
 
-            # Layer 1: kernel-enforced memory ceiling via jetsam. If
-            # llama-server tries to wire more than the budget allows,
-            # macOS kernel kills it BEFORE the vm_fault wait-chain can
-            # form. This is the hard backstop — sanctioned Apple API.
+            # Layer 1: kernel-enforced memory ceiling via jetsam — the hard
+            # backstop (sanctioned Apple API) that kills llama-server before it
+            # can push the system over the edge.
             try:
                 from .memory_guard import (
                     set_jetsam_highwater, recommended_jetsam_limit_mb,
