@@ -127,25 +127,12 @@ def detect_stall(
     if not content:
         return StallMode.EMPTY
 
-    # NARRATION. Real failures showed the model
-    # emitting hundreds of chars describing the edit it was about to
-    # make, then ending the round with zero tool calls.
-    #
-    # Important: do NOT classify every short answer after a tool call as
-    # narration. A question like "weather in ny?" legitimately uses one
-    # tool, then answers in ~200 chars. The old broad `<400 chars after
-    # tools` rule deleted that answer, injected an auto-nudge, and made
-    # the model call the same API repeatedly. Only intent phrases count
-    # as narration.
-    #
-    # Two complementary detectors:
-    #   • _NARRATION_INTENT_RE — "let me X" / "I'll Y" / "going to Z"
-    #     anywhere in the content (full scan, not just tail) catches
-    #     case (1) and similar variants where the commit phrase may
-    #     be mid-content rather than at the end.
-    #   • _NARRATION_PRESENT_PARTICIPLE_RE — last sentence starts with
-    #     "Updating X / Changing Y / Now writing Z" + target. Past
-    #     tense "Updated X" / "Changed Y" deliberately excluded.
+    # NARRATION detection. Only INTENT phrases count — not every short answer
+    # after a tool call (a "weather in ny?" answer legitimately runs one tool
+    # then replies in ~200 chars; the old broad rule deleted such answers and
+    # looped). Two detectors: _NARRATION_INTENT_RE ("let me X"/"I'll Y" anywhere)
+    # and _NARRATION_PRESENT_PARTICIPLE_RE (last sentence "Updating X/Now writing
+    # Z" + target; past tense "Updated X" excluded).
     stripped = content.strip()
     if bool(tools_called_prior) and stripped:
         if _NARRATION_INTENT_RE.search(stripped):
@@ -397,4 +384,20 @@ def churn_nudge_for(signal: ChurnSignal) -> str:
         "needs and write real code with write_file/edit_file. Files already on "
         "disk that you did not create are not part of your task. If you truly "
         "lack information only the user has, ask ONE focused question."
+    )
+
+
+def rewrite_hard_stop(path, file_write_counts) -> str | None:
+    """Circuit-breaker for rewrite drift: reject once a path is rewritten past
+    2x the nudge limit (the nudge only advises; logs showed 16x on one file)."""
+    if not path or not isinstance(path, str):
+        return None
+    n = file_write_counts.get(path, 0)
+    if n < CHURN_FILE_WRITE_LIMIT * 2:
+        return None
+    return (
+        f"REJECTED — HARD STOP: you have rewritten {path} {n} times this turn "
+        "and it's still not right — full rewrites are drifting. Make ONE "
+        "targeted edit_file change to the broken line, or leave this file and "
+        "move on. Do NOT call write_file on this path again."
     )

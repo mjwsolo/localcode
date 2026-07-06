@@ -67,6 +67,9 @@ LEGACY_BIG_FILES: dict[str, int] = {
     # whole point of the extraction was to take that bulk out of runtime.py.
     "runtime_diffusion.py": 837,
     "agent/loop.py": 1675,
+    # Anti-repetition/self-conditioning recovery grew: churn nudges (rewritten
+    # forward-only), the rewrite hard-stop circuit-breaker, and stall detection.
+    "agent/recovery.py": 405,
     "server_manager.py": 667,
     "skills.py": 589,
     "tui/screens/setup.py": 946,
