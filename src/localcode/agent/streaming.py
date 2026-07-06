@@ -89,58 +89,6 @@ def _decode_streaming_content(args: str, start_pos: int) -> tuple[str, int]:
     return ("".join(out), i)
 
 
-def _maybe_incremental_write(
-    app: "LocalCodeApp",
-    result: "StreamRoundResult",
-    *,
-    tool_name: str,
-    tool_idx: int,
-    snippet: str,
-) -> None:
-    """Write the streaming `content` to disk incrementally for write_file
-    / append_file. Tracks per-tool-index state on `result.live_writes`
-    so we only write NEW bytes each tick.
-
-    Best-effort: any failure (path not yet decoded, decode error, FS
-    error) silently no-ops — the round-end atomic write_file.execute()
-    is still authoritative."""
-    if tool_name not in {"write_file", "append_file"}:
-        return
-    if not snippet:
-        return
-    state = result.live_writes.get(tool_idx)
-    if state is None:
-        # Need a path before we can write anywhere. Extract it from the
-        # leading args; tool schemas put it FIRST so it shows up in the
-        # first ~256 chars.
-        m = _PATH_FIELD_RE.search(snippet)
-        if not m:
-            return
-        path_str = m.group(1)
-        try:
-            target = Path(path_str)
-            if not target.is_absolute():
-                target = Path(app.repo_root) / target
-            target.parent.mkdir(parents=True, exist_ok=True)
-            # write_file truncates; append_file extends an existing file.
-            mode = "w" if tool_name == "write_file" else "a"
-            target.open(mode).close()  # truncate / touch
-        except Exception:
-            return
-        state = {"path": str(target), "decoded_pos": 0}
-        result.live_writes[tool_idx] = state
-    decoded, new_pos = _decode_streaming_content(snippet, state["decoded_pos"])
-    if not decoded and new_pos == state["decoded_pos"]:
-        return
-    if decoded:
-        try:
-            with open(state["path"], "a", encoding="utf-8") as f:
-                f.write(decoded)
-        except Exception:
-            return
-    state["decoded_pos"] = new_pos
-
-
 @dataclass
 class StreamRoundResult:
     content_parts: list[str] = field(default_factory=list)
@@ -253,17 +201,18 @@ def stream_model_round(
             out.stream(chunk)
             return
         if typ == "tool_preview":
+            # Live file preview is driven from THIS event (the TUI decodes
+            # args_snippet). We deliberately do NOT write to the target file
+            # incrementally: if the round was cut short (token/context cap, a
+            # mid-stream server SIGKILL, Ctrl-C), the partial bytes orphaned on
+            # disk while the loop discarded the tool call — leaving a truncated
+            # file (e.g. "autop") that the model then read back and churned on
+            # forever. The authoritative full-overwrite write_file.execute() at
+            # round-commit is the ONLY thing that touches disk.
             out.tool_preview(
                 event.get("name", ""),
                 int(event.get("args_chars", 0) or 0),
                 event.get("args_snippet", "") or "",
-            )
-            _maybe_incremental_write(
-                app,
-                result,
-                tool_name=event.get("name", "") or "",
-                tool_idx=int(event.get("index", -1) or -1),
-                snippet=event.get("args_snippet", "") or "",
             )
             return
         if typ == "tool_calls":

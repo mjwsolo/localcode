@@ -98,6 +98,14 @@ def execute(ctx: ToolContext, args: dict) -> str:
         return f"Error: no-op multi_edit on {args['path']}; applied 0/{len(edits)}."
 
     path.write_text(content)
+    _sw = ""
+    try:
+        from .syntax_check import check_syntax
+        _e = check_syntax(str(path), content)
+        if _e:
+            _sw = f"\n\n⚠ SYNTAX ERROR after these edits — fix it now: {_e}"
+    except Exception:
+        _sw = ""
     diff = list(difflib.unified_diff(
         original.splitlines(keepends=True),
         content.splitlines(keepends=True),
@@ -105,8 +113,8 @@ def execute(ctx: ToolContext, args: dict) -> str:
     ))
     head = f"Applied {len(prepared)}/{len(edits)} edits to {args['path']}"
     if diff:
-        return head + "\n" + "\n".join(diff[:120])
-    return head
+        return head + "\n" + "\n".join(diff[:120]) + _sw
+    return head + _sw
 
 
 def _find_all(text: str, needle: str) -> list[int]:
