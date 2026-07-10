@@ -1125,6 +1125,14 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
             # CREATES this round, while leaving legitimate prompt-side
             # repetition (paths, function names, identifiers) untouched.
             "dry_penalty_last_n": dry_penalty_last_n,
+            # Sequence breakers RESET DRY's n-gram matching at these tokens, so
+            # a repeated file PATH / identifier isn't treated as a penalizable
+            # loop. Without them (llama.cpp's default breakers don't include
+            # path chars), a path repeated within one round — `cd X && mkdir X
+            # && ls X` — got its username subtokens suppressed and the model
+            # emitted mangled variants (`marcsolomon` → `marcolon`). Breaking on
+            # `/ . _ - space` keeps DRY for phrasal loops but frees paths/idents.
+            "dry_sequence_breakers": ["\n", "/", ".", "_", "-", " ", ":", "\"", "'"],
         }
         if self.config.mode == "fast":
             opts["num_predict"] = 4096  # cap generation for speed
@@ -2098,6 +2106,8 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
                 payload["dry_base"] = opts["dry_base"]
                 payload["dry_allowed_length"] = opts["dry_allowed_length"]
                 payload["dry_penalty_last_n"] = opts["dry_penalty_last_n"]
+                if opts.get("dry_sequence_breakers"):
+                    payload["dry_sequence_breakers"] = opts["dry_sequence_breakers"]
                 if opts.get("min_p", 0):
                     payload["min_p"] = opts["min_p"]
             if "num_predict" in opts:
