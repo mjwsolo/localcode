@@ -698,17 +698,48 @@ def _normalize_repo_root_variants(cmd: str, repo: str) -> str:
     run with `cwd=repo`, so absolute paths are unnecessary; when they do
     appear and clearly target this repo, normalize them to the actual root
     instead of letting the command fail for a fake home-directory variant.
+    Then a general pass repairs ANY `/Users/<garbled>/` (not just repo paths)
+    back to the real home — the model mangles the username via penalty-induced
+    token corruption (`marcsolomon` → `marcolon`/`marcslomon`), a DIFFERENT
+    misspelling each time, so it can't be dedup'd; we fix it deterministically.
     """
     if not repo.startswith("/Users/"):
-        return cmd
+        return _repair_home_username(cmd)
     parts = repo.strip("/").split("/")
     if len(parts) < 3:
-        return cmd
+        return _repair_home_username(cmd)
     stable_tail = "/".join(parts[2:])
     pattern = re.compile(
         rf"/Users/[^/\s'\"]+/{re.escape(stable_tail)}(?=(?:/|\s|['\"]|$))"
     )
-    return pattern.sub(repo, cmd)
+    return _repair_home_username(pattern.sub(repo, cmd))
+
+
+def _repair_home_username(cmd: str) -> str:
+    """Fix `/Users/<wrong>/…` → `/Users/<real>/…` using the actual home dir.
+
+    localcode knows the real username; any `/Users/<name>/` where <name> is not
+    the real one AND not another existing home directory is a corruption — swap
+    in the real username so the command targets the file the model meant.
+    """
+    import os as _os
+    home = _os.path.expanduser("~")
+    if not home.startswith("/Users/"):
+        return cmd
+    real_user = home.split("/")[2]
+    if not real_user:
+        return cmd
+
+    def _sub(m):
+        name = m.group(1)
+        if name == real_user:
+            return m.group(0)
+        # Leave real, existing OTHER home dirs alone (multi-user machines).
+        if _os.path.isdir(f"/Users/{name}"):
+            return m.group(0)
+        return f"/Users/{real_user}/"
+
+    return re.sub(r"/Users/([^/\s'\"]+)/", _sub, cmd)
 
 
 def _quoting_error_hint(output: str) -> str:
