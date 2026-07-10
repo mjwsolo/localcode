@@ -726,10 +726,20 @@ def run_agent_loop(
                 _todo_note = render_todo_reminder(list(getattr(app.session, "todos", []) or []))
             except Exception:
                 _todo_note = ""
-            # Inject ledger + todo as ONE trailing SYSTEM message (not role:user
-            # — as a user turn the model re-greeted every round). Ephemeral.
+            # Filesystem reconciliation (pi/codex/opencode pattern): the actual
+            # files on disk, scanned in CODE each round. Ground truth the model
+            # can't forget or hallucinate — kills the "re-check what exists /
+            # restart" loop that memory-based tracking couldn't.
+            _fs_state = ""
             try:
-                _ctx_block = "\n\n".join(b for b in (_ledger, _todo_note) if b)
+                from .context import build_filesystem_state
+                _fs_state = build_filesystem_state(changed_files)
+            except Exception:
+                _fs_state = ""
+            # Inject ledger + fs-state + todo as ONE trailing SYSTEM message (not
+            # role:user — as a user turn the model re-greeted every round). Ephemeral.
+            try:
+                _ctx_block = "\n\n".join(b for b in (_ledger, _fs_state, _todo_note) if b)
                 if _ctx_block:
                     model_messages = list(model_messages) + [
                         {"role": "system", "content": _ctx_block}
