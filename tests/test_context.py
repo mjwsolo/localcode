@@ -185,7 +185,11 @@ def test_progress_ledger_budget_is_ram_tiered():
     assert progress_ledger_budget_chars(98304) == 1600    # 48 GB / 96K
     assert progress_ledger_budget_chars(131072) == 2200   # 64 GB / 128K
     assert progress_ledger_budget_chars(262144) == 3500   # 128 GB / 256K: rich
-    # Budget actually trims.
+    # Budget trims the OPTIONAL content (files-read / commands), but the
+    # created/edited list is PROTECTED — never dropped, since it's the anchor
+    # that stops the model forgetting what it built. So a long read/command
+    # payload gets trimmed while the created file stays.
     from localcode.agent.context import build_progress_ledger
-    big = build_progress_ledger(["f"], [("c" * 300, "ok")], ["p" * 300], 100)
-    assert len(big) <= 102
+    big = build_progress_ledger(["kept.py"], [("c" * 300, "ok")], ["p" * 300], 100)
+    assert "kept.py" in big                       # created file never dropped
+    assert "cccc" not in big or "…" in big        # long command payload trimmed

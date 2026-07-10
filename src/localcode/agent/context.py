@@ -729,12 +729,24 @@ def build_progress_ledger(
         "not your progress or your task). Don't re-read/re-run anything below "
         "unless you changed it; keep making NEW progress toward the user's goal.",
     ]
+    # Files created/edited is the most important line (it's "where I am" in a
+    # multi-file build) — list it FIRST and show ALL of them, not just the last
+    # 12. Capping at 12 dropped the earliest files once a build exceeded 12,
+    # so the model re-checked what existed and felt like it restarted. Paths are
+    # short; the whole list is cheap and is the anchor that prevents forgetting.
+    cf = _uniq(changed_files)
+    # The created/edited list is PROTECTED — never truncated by the budget.
+    # It's the anchor that stops the model forgetting what it built; losing any
+    # of it is what caused the "restarting" feeling. Everything ELSE (files
+    # read, commands) shares the remaining budget and can be trimmed.
+    protected = []
+    if cf:
+        protected.append(f"Files YOU already created/edited this task ({len(cf)}) — "
+                         "do NOT recreate or re-check these, build on them: " + ", ".join(cf))
+    optional = []
     rd = _uniq(files_read)
     if rd:
-        lines.append("Files read: " + ", ".join(rd[-12:]))
-    cf = _uniq(changed_files)
-    if cf:
-        lines.append("Files created/edited: " + ", ".join(cf[-12:]))
+        optional.append("Files read: " + ", ".join(rd[-12:]))
     if bash_history:
         cmds: list[str] = []
         for cmd, res in bash_history[-8:]:
@@ -747,11 +759,64 @@ def build_progress_ledger(
                         if str(cmd).strip() else "")
         cmds = [c for c in cmds if c]
         if cmds:
-            lines.append("Commands run: " + " | ".join(cmds))
-    text = "\n".join(lines)
-    if budget_chars and len(text) > budget_chars:
-        text = text[: max(0, budget_chars - 2)].rstrip() + " …"
-    return text
+            optional.append("Commands run: " + " | ".join(cmds))
+
+    head = "\n".join(lines + protected)
+    if not optional:
+        return head
+    extra = "\n".join(optional)
+    if budget_chars and len(head) + 1 + len(extra) > budget_chars:
+        room = max(0, budget_chars - len(head) - 3)
+        extra = extra[:room].rstrip() + " …" if room > 0 else ""
+    return head + ("\n" + extra if extra else "")
+
+
+def build_filesystem_state(changed_files: list[str], max_files: int = 80) -> str:
+    """Ground-truth 'what's actually on disk' for the project being built.
+
+    The #1 fix for the model re-checking which files exist and re-creating
+    them (pi/codex/opencode all converge on this): don't rely on the model's
+    recollection — reconcile against the FILESYSTEM in code, each round. We
+    walk the tree rooted at the project the model is building (the common
+    parent of the files it has changed) and list the real source files. Because
+    the truth comes from the OS, it survives compaction/restart and the model
+    can't hallucinate it away. Returns "" when nothing has been built yet.
+    """
+    import os
+    roots = [os.path.dirname(f) for f in changed_files if f]
+    if not roots:
+        return ""
+    # Project root = shortest existing common-ish ancestor of changed files.
+    try:
+        root = os.path.commonpath([os.path.abspath(os.path.dirname(f))
+                                   for f in changed_files if f])
+    except Exception:
+        root = os.path.abspath(roots[0])
+    if not os.path.isdir(root):
+        return ""
+    _SKIP = {".git", "node_modules", "dist", "build", ".venv", "__pycache__", ".next"}
+    _SRC = (".ts", ".tsx", ".js", ".jsx", ".py", ".css", ".scss", ".html", ".json",
+            ".md", ".go", ".rs", ".java", ".rb", ".php", ".vue", ".svelte", ".toml", ".yaml", ".yml")
+    found: list[str] = []
+    for base, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in _SKIP]
+        for fn in files:
+            if fn.endswith(_SRC):
+                rel = os.path.relpath(os.path.join(base, fn), root)
+                found.append(rel)
+                if len(found) >= max_files:
+                    break
+        if len(found) >= max_files:
+            break
+    if not found:
+        return ""
+    found.sort()
+    return (
+        f"## Files that ALREADY EXIST on disk in this project ({os.path.basename(root)}/) "
+        f"— ground truth, {len(found)} file(s). Do NOT list the directory to check; "
+        "do NOT recreate these. Edit an existing file or create a NEW one the task needs:\n"
+        + ", ".join(found)
+    )
 
 
 def _estimate_tokens(messages: list[dict]) -> int:
