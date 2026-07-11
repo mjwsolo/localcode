@@ -8,9 +8,14 @@ Messages displayed with clear visual hierarchy:
 """
 from __future__ import annotations
 
+import re
 import time
 
 from ...theme import C
+
+# Leading internal error code (`[E3102] `) — stripped from user-facing error
+# lines; no peer harness shows an internal code. See append_error.
+_CODE_PREFIX_RE = re.compile(r"^\[E\d+\]\s*")
 
 
 
@@ -776,6 +781,13 @@ class ChatLog(RichLog):
         self._render_info(text)
 
     def append_error(self, text: str) -> None:
+        # Strip the internal [Eccc] code from the user-facing error line. No peer
+        # harness (claude-code/codex/opencode/pi) shows an internal error code —
+        # it reads as machine noise. The code is still persisted to
+        # ~/.localcode/last_error.log and kept in the CLI/headless path
+        # (out.set_error) so the e2e error sentinels and bug reports still have
+        # it; only the interactive screen is cleaned.
+        text = _CODE_PREFIX_RE.sub("", text)
         self._dispatch_gap("error")
         self._history.append(("error", text))
         self._render_error(text)
@@ -1446,20 +1458,15 @@ class ChatLog(RichLog):
         body = self._truncate_oneline(body, self._visible_width())
         line = Text(no_wrap=True)
         split_name = len(prefix)
-        line.append(body[:split_name], style=f"bold {C.success}")
-        # Split the args+summary region: args in bright green, summary
-        # in dim green. We find the args closing ')' to split cleanly.
-        tail = body[split_name:]
-        if args_one and tail.startswith("("):
-            end = tail.find(")")
-            if end == -1:
-                line.append(tail, style=f"{C.success}")
-            else:
-                line.append(tail[: end + 1], style=f"{C.success}")
-                if len(tail) > end + 1:
-                    line.append(tail[end + 1 :], style=f"dim {C.success}")
-        else:
-            line.append(tail, style=f"dim {C.success}")
+        # Muted tool line: ONLY the "✓" glyph carries the success colour; the
+        # tool name is plain bold and the args/summary are dim grey. A long run
+        # of routine reads/writes then reads as calm structure instead of a wall
+        # of green — colour is reserved for real signal (errors, diffs). Matches
+        # codex / claude-code / opencode / pi, which render tool lines muted.
+        line.append(body[:4], style=C.success)          # "  ✓ " check glyph
+        line.append(body[4:split_name], style="bold")   # tool name — no colour
+        # args + summary both dim (grey), so nothing shouts for attention.
+        line.append(body[split_name:], style="dim")
         self.write(line)
         self._track_lines()
 
@@ -1491,11 +1498,25 @@ class ChatLog(RichLog):
 
     def _render_tool_result(self, result: str, error: bool) -> None:
         if error:
-            err_one = result.replace("\n", " ").strip()
-            line = Text(no_wrap=True, overflow="ellipsis")
-            line.append("    ⎿ ", style="dim")
-            line.append(err_one, style="bold red")
-            self.write(line)
+            # Show the first several error lines (not collapse to one) — peers
+            # render multi-line errors so the user can actually read what failed
+            # (claude-code caps ~10, codex renders the err lines). Strip the
+            # internal "[exit code N]" marker; the done row already conveys it.
+            text = re.sub(r"^\[exit code \d+\]\n?", "", result.strip())
+            err_lines = [l for l in text.splitlines() if l.strip()] or [text.strip()]
+            shown = err_lines[:6]
+            for i, l in enumerate(shown):
+                prefix = "    ⎿ " if i == 0 else "    │ "
+                line = Text(no_wrap=True, overflow="ellipsis")
+                line.append(prefix, style="dim")
+                line.append(l[:200], style="bold red" if i == 0 else "red")
+                self.write(line)
+            if len(err_lines) > len(shown):
+                tail = Text(no_wrap=True)
+                tail.append("    │ ", style="dim")
+                tail.append(f"… +{len(err_lines) - len(shown)} more lines",
+                            style="dim italic")
+                self.write(tail)
             self._track_lines()
             return
 
