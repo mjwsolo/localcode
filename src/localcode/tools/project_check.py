@@ -65,6 +65,12 @@ def _detect_commands(repo_root: str) -> list[tuple[str, list[str], str]]:
             scripts = {}
         # Only run node-based checks once deps are installed (else every import
         # is a false "cannot find module" error that would derail the model).
+        # NOTE: tsc/typecheck only covers the files the project's tsconfig
+        # includes (typically `src/`). A module written OUTSIDE that root (e.g.
+        # accidentally at the repo root) is never type-checked here, so the
+        # Tier-1 per-write syntax_check is the only gate it passes through. If
+        # this proves a recurring miss, widen coverage (e.g. an explicit tsc
+        # over stray *.ts outside `include`) rather than assuming src/-only.
         if os.path.isdir(node_modules):
             if "typecheck" in scripts:
                 cmds.append(("npm run typecheck", ["npm", "run", "--silent", "typecheck"], pj_dir))
