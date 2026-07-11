@@ -8,9 +8,14 @@ Messages displayed with clear visual hierarchy:
 """
 from __future__ import annotations
 
+import re
 import time
 
 from ...theme import C
+
+# Leading internal error code (`[E3102] `) — stripped from user-facing error
+# lines; no peer harness shows an internal code. See append_error.
+_CODE_PREFIX_RE = re.compile(r"^\[E\d+\]\s*")
 
 
 
@@ -776,6 +781,13 @@ class ChatLog(RichLog):
         self._render_info(text)
 
     def append_error(self, text: str) -> None:
+        # Strip the internal [Eccc] code from the user-facing error line. No peer
+        # harness (claude-code/codex/opencode/pi) shows an internal error code —
+        # it reads as machine noise. The code is still persisted to
+        # ~/.localcode/last_error.log and kept in the CLI/headless path
+        # (out.set_error) so the e2e error sentinels and bug reports still have
+        # it; only the interactive screen is cleaned.
+        text = _CODE_PREFIX_RE.sub("", text)
         self._dispatch_gap("error")
         self._history.append(("error", text))
         self._render_error(text)
@@ -1486,11 +1498,25 @@ class ChatLog(RichLog):
 
     def _render_tool_result(self, result: str, error: bool) -> None:
         if error:
-            err_one = result.replace("\n", " ").strip()
-            line = Text(no_wrap=True, overflow="ellipsis")
-            line.append("    ⎿ ", style="dim")
-            line.append(err_one, style="bold red")
-            self.write(line)
+            # Show the first several error lines (not collapse to one) — peers
+            # render multi-line errors so the user can actually read what failed
+            # (claude-code caps ~10, codex renders the err lines). Strip the
+            # internal "[exit code N]" marker; the done row already conveys it.
+            text = re.sub(r"^\[exit code \d+\]\n?", "", result.strip())
+            err_lines = [l for l in text.splitlines() if l.strip()] or [text.strip()]
+            shown = err_lines[:6]
+            for i, l in enumerate(shown):
+                prefix = "    ⎿ " if i == 0 else "    │ "
+                line = Text(no_wrap=True, overflow="ellipsis")
+                line.append(prefix, style="dim")
+                line.append(l[:200], style="bold red" if i == 0 else "red")
+                self.write(line)
+            if len(err_lines) > len(shown):
+                tail = Text(no_wrap=True)
+                tail.append("    │ ", style="dim")
+                tail.append(f"… +{len(err_lines) - len(shown)} more lines",
+                            style="dim italic")
+                self.write(tail)
             self._track_lines()
             return
 
