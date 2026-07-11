@@ -287,6 +287,49 @@ def _render_markdown(text: str, console: Console | None = None) -> None:
     else:
         c.print(Padding(text, (0, 2, 0, 2)))
 
+def _split_exit_code(result: str) -> tuple[int | None, str]:
+    """Split a bash result into (exit_code, body).
+
+    bash.py prepends `[exit code N]\\n` to a failed command's output as a
+    model-facing failure marker. Return the parsed code and the remaining body,
+    or (None, result) when the marker is absent (command succeeded).
+    """
+    s = result.lstrip()
+    if s.startswith("[exit code "):
+        end = s.find("]")
+        if end != -1:
+            try:
+                code = int(s[len("[exit code "):end].strip())
+            except ValueError:
+                return None, result
+            body = s[end + 1:]
+            return code, body[1:] if body.startswith("\n") else body
+    return None, result
+
+
+def _redirect_note(result: str) -> str:
+    """Turn an internal `REJECTED …` string into a short user-facing note.
+
+    The full REJECTED payload (routing hints, "Suggested tool call: …",
+    hard-stop instructions) is for the model's recovery, not the user. Two
+    cases: a routing redirect ("use X instead") → "→ used X instead"; anything
+    else (repeat/hard-stop/unsafe/oversize block) → a neutral "→ skipped …"
+    note. Never show the raw protocol text.
+    """
+    import re
+    m = re.search(r"\buse\s+([a-z_]+)\s+instead", result)
+    if m:
+        return f"→ used {m.group(1)} instead"
+    low = result.lower()
+    if "hard stop" in low or "already failed" in low or "already ran" in low or "rewritten" in low:
+        return "→ skipped (repeating a call that won't help)"
+    if "safety ceiling" in low or "over the" in low:
+        return "→ skipped (too large — splitting instead)"
+    if "defer" in low or "blocked" in low or "live server" in low:
+        return "→ skipped that step"
+    return "→ adjusted approach"
+
+
 def _brief_result(tool_name: str, result: str) -> str:
     """Short summary of a tool result for terminal display."""
     lines = result.strip().splitlines()
@@ -301,6 +344,11 @@ def _brief_result(tool_name: str, result: str) -> str:
         return "already done — using cached result"
     if s.startswith("[FILE UNCHANGED"):
         return "unchanged — see earlier read"
+    # Internal tool-routing/hard-stop correction. This is a signal FOR THE
+    # MODEL, not the user — render a short neutral note, never the raw
+    # "REJECTED: …" / "REJECTED — HARD STOP: …" protocol text (both forms).
+    if s.startswith("REJECTED"):
+        return _redirect_note(s)
     if tool_name == "read_file":
         return f"{len(lines)} lines"
     if tool_name == "write_file":
@@ -308,11 +356,20 @@ def _brief_result(tool_name: str, result: str) -> str:
     if tool_name == "edit_file":
         return result.strip()[:80] if result.strip() else "edited"
     if tool_name == "bash":
-        if not result.strip():
+        # `[exit code N]` is a model-facing marker prepended to the output so the
+        # model knows the command failed. Don't show that raw token to the user:
+        # strip it, and render a clean "failed (exit N)" plus any real output.
+        exit_code, body = _split_exit_code(result)
+        body_lines = body.strip().splitlines()
+        if exit_code is not None:
+            head = body_lines[0][:80] if body_lines and body_lines[0].strip() else ""
+            tail = f"  …({len(body_lines)} lines)" if len(body_lines) > 1 else ""
+            return f"failed (exit {exit_code}){(': ' + head) if head else ''}{tail}"
+        if not body.strip():
             return "done (no output)"
-        if len(lines) <= 3:
-            return "\n".join(lines)[:200]
-        return f"{lines[0][:80]}  …({len(lines)} lines)"
+        if len(body_lines) <= 3:
+            return "\n".join(body_lines)[:200]
+        return f"{body_lines[0][:80]}  …({len(body_lines)} lines)"
     if tool_name == "grep":
         return f"{len(lines)} matches" if lines and lines[0] else "no matches"
     if tool_name in ("glob", "list_files"):

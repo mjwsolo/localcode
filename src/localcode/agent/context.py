@@ -76,9 +76,44 @@ def _spill_tool_output(result: str, tool_name: str) -> str | None:
         return None
 
 
-def _truncate_result(result: str, tool_name: str) -> str:
+# How much of the context window (in chars) a single tool result may occupy,
+# per tool. The static RESULT_LIMITS values act as the FLOOR, so small machines
+# (64K window ≈ 224K chars → these fractions fall below the floor) are
+# byte-identical to before, while a big machine (256K ≈ 900K chars) lets the
+# model keep far more of the output it has room for instead of a fixed 20–50K
+# slice. grep matches are dense/repetitive so get the smallest share; read_file
+# is the primary code-ingestion path so gets the most.
+_RESULT_LIMIT_WINDOW_FRACTION: dict[str, float] = {
+    "grep": 0.03,
+    "bash": 0.05,
+    "read_file": 0.08,
+    "default": 0.08,
+}
+
+
+def _dynamic_result_limit(tool_name: str, ctx_tokens: int) -> int:
+    """Per-tool truncation budget (chars), scaled to the real context window.
+
+    Returns the static RESULT_LIMITS value as a floor; on a large window the
+    limit grows to a fraction of the window so the model isn't starved of output
+    it has room for. web_search and any tool without a fraction stay at the
+    fixed floor (web results don't benefit from window-scaling).
+    """
+    floor = RESULT_LIMITS.get(tool_name, RESULT_LIMITS["default"])
+    frac = _RESULT_LIMIT_WINDOW_FRACTION.get(tool_name)
+    if not ctx_tokens or frac is None:
+        return floor
+    # CHARS_PER_TOKEN=4 is the internal estimate; use 3.5 to match loop.py's
+    # tokens→chars conversion and stay conservative.
+    return max(floor, int(ctx_tokens * 3.5 * frac))
+
+
+def _truncate_result(result: str, tool_name: str, ctx_tokens: int = 0) -> str:
     """Truncate a tool result to its per-tool size limit with a
     strategy tuned to what each tool's output actually looks like.
+
+    `ctx_tokens` (the model's real context window) scales the limit up on big
+    machines; 0 falls back to the static floor (small machines unchanged).
 
     Strategies:
       • `read_file` — keep HEAD only. File content is ordered; the
@@ -96,7 +131,7 @@ def _truncate_result(result: str, tool_name: str) -> str:
 
     Returns the result unchanged when it's within the limit.
     """
-    limit = RESULT_LIMITS.get(tool_name, RESULT_LIMITS["default"])
+    limit = _dynamic_result_limit(tool_name, ctx_tokens)
     if len(result) <= limit:
         return result
 

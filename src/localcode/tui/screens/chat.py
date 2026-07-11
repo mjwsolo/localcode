@@ -1093,6 +1093,12 @@ class ChatScreen(Screen):
                 text = (m.get("content") or "").strip()
                 if not text:
                     continue
+                # Defense-in-depth: an ephemeral "SYSTEM:" nudge is a role:user
+                # message that is normally stripped before persistence — but if a
+                # turn was interrupted before stripping ran, it can survive. Never
+                # replay it as "you: SYSTEM: …" (it was never the user's words).
+                if text.startswith("SYSTEM:") or text.startswith("SYSTEM —"):
+                    continue
                 if role == "user":
                     log.append_info(f"[dim]you:[/] {text}")
                 elif role == "assistant":
