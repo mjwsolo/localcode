@@ -19,83 +19,9 @@ __all__ = [
     "build_agent_system_prompt",
     "build_task_goal_block",
     "build_dynamic_skills_block",
-    "is_placeholder_segment",
-    "sanitize_placeholder_path",
     "build_target_grounding_block",
     "build_incremental_milestones_block",
 ]
-
-
-# A path segment the model emitted as a literal fill-in-the-blank prompt
-# rather than a real name. Observed in a real build failure: the model
-# wrote a target path containing "[insert your model name]" verbatim and
-# then thrashed because that directory could never resolve. We catch the
-# common bracketed/angle-bracketed/braced placeholder shapes plus the
-# bare "your-..." / "my-..." conventions LLMs reach for.
-_PLACEHOLDER_RE = re.compile(
-    r"""
-    ^\s*(?:
-        [\[\<\{].*?[\]\>\}]            # [insert x] / <your x> / {name}
-      | (?:insert|your|my|the)[\s_-]+  # "insert ...", "your ...", "my ..."
-        (?:\w+[\s_-]*)*?               # the words being filled in
-        (?:name|here|project|app|dir|folder|path|model)\b
-      | (?:project[\s_-]*name|app[\s_-]*name|model[\s_-]*name|placeholder)
-      | \.{3,}                         # literal "..."
-      | xxx+|tbd|todo
-    )\s*$
-    """,
-    re.IGNORECASE | re.VERBOSE,
-)
-
-
-def is_placeholder_segment(segment: str) -> bool:
-    """True if a single path segment looks like an unfilled placeholder
-    (e.g. "[insert your model name]", "<your app>", "project-name",
-    "...", "TODO") rather than a concrete name the model chose.
-    """
-    seg = str(segment or "").strip()
-    if not seg:
-        return False
-    return bool(_PLACEHOLDER_RE.match(seg))
-
-
-def sanitize_placeholder_path(path: str, default_name: str = "app") -> str:
-    """Replace any placeholder segments in `path` with a concrete name.
-
-    The model sometimes emits a target path with a literal fill-in slot
-    ("./[insert your model name]/main.py"). Such a path can never resolve,
-    so the build thrashes. We substitute a sensible default for each
-    placeholder segment so the path is at least concrete; the grounding
-    block (see `build_target_grounding_block`) separately instructs the
-    model to choose a real name. `default_name` is sanitized to a safe
-    slug; falls back to "app" when empty.
-
-    Returns the original string unchanged when no placeholder is present
-    (the common case — keeps real paths byte-identical).
-    """
-    raw = str(path or "")
-    if not raw:
-        return raw
-    safe_default = re.sub(r"[^A-Za-z0-9._-]+", "-", str(default_name or "").strip()).strip("-")
-    if not safe_default:
-        safe_default = "app"
-    # Preserve a leading "./" or "/" and split on the OS separator without
-    # collapsing it, so we can rejoin with the same separator.
-    sep = "/"
-    if "\\" in raw and "/" not in raw:
-        sep = "\\"
-    segments = raw.split(sep)
-    changed = False
-    out_segments: list[str] = []
-    for seg in segments:
-        if is_placeholder_segment(seg):
-            out_segments.append(safe_default)
-            changed = True
-        else:
-            out_segments.append(seg)
-    if not changed:
-        return raw
-    return sep.join(out_segments)
 
 
 @dataclass
@@ -183,11 +109,9 @@ def build_agent_system_prompt(
 def build_target_grounding_block(repo_root: Any, goal_state: Any) -> str:
     """One short block that pins the target directory for build-type turns.
 
-    Grounds the model so it stops thrashing between the repo root and a
-    subdir, and explicitly forbids literal placeholder path segments
-    ("[insert your model name]", "<your app>") — substitute a real name
-    instead. Returned only for build_app-shaped goals; empty otherwise so
-    the cached prompt prefix is unaffected for ordinary turns.
+    Grounds the model so it stops thrashing between the repo root and a subdir.
+    Returned only for build_app-shaped goals; empty otherwise so the cached
+    prompt prefix is unaffected for ordinary turns.
     """
     goal_type = str(getattr(goal_state, "goal_type", "") or "")
     if goal_type != "build_app":
@@ -198,20 +122,11 @@ def build_target_grounding_block(repo_root: Any, goal_state: Any) -> str:
         root = str(repo_root or "")
     if not root:
         return ""
-    suggested = str(getattr(goal_state, "task_slug", "") or "").strip()
-    name_hint = (
-        f' If you create a new subdirectory, pick a concrete name (e.g. "{suggested}") —'
-        if suggested
-        else " If you create a new subdirectory, pick a concrete, descriptive name —"
-    )
     return (
         "\n\nTarget location (work here, do not drift):\n"
         f"- The project root is: {root}\n"
         "- Create and edit all files under that root. Do not switch between the "
         "root and an unrelated subdirectory between steps; decide once and stay there.\n"
-        "- NEVER write a path containing a literal placeholder such as "
-        "`[insert your model name]`, `<your app>`, `{project-name}`, or `...`."
-        f"{name_hint} never leave the placeholder text in the path.\n"
     )
 
 
