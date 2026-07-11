@@ -58,25 +58,33 @@ def _build_summary(old: list[dict]) -> str:
             if result:
                 key_actions.append(f"Tool {tool_name or 'unknown'}: {result}")
 
-    summary_lines = ["[Conversation summary]"]
+    # Second-person, self-referential framing: everything below is the
+    # ASSISTANT's OWN prior work, NOT files/work the user handed over. This
+    # stops the model from reading its own build after compaction as
+    # pre-existing user-provided code ("the user created these files…").
+    summary_lines = [
+        "Summary of what YOU have already done this task (this is YOUR OWN prior "
+        "work — NOT the user's, and NOT pre-existing files on disk; build on it — "
+        "do NOT restart, re-read, or ask the user what to build):"
+    ]
     if latest_user_goal:
-        summary_lines.append(f"Current objective: {latest_user_goal}")
+        summary_lines.append(f"The user's task: {latest_user_goal}")
     if summary_parts:
-        summary_lines.append("Topics discussed:")
+        summary_lines.append("Context so far:")
         for s in summary_parts[-8:]:
             summary_lines.append(f"  - {s}")
     if key_actions:
-        summary_lines.append("Work already completed:")
+        summary_lines.append("You already did:")
         for a in key_actions[-10:]:
             summary_lines.append(f"  - {a}")
     if open_questions:
-        summary_lines.append("Open issues / pending follow-ups:")
+        summary_lines.append("Still to do:")
         for q in open_questions[-6:]:
             summary_lines.append(f"  - {q}")
     if files_mentioned:
-        summary_lines.append(f"Files involved: {', '.join(sorted(files_mentioned)[:20])}")
+        summary_lines.append(f"Files YOU created/edited: {', '.join(sorted(files_mentioned)[:20])}")
     if tools_used:
-        summary_lines.append(f"Tools used: {', '.join(sorted(tools_used))}")
+        summary_lines.append(f"Tools YOU used: {', '.join(sorted(tools_used))}")
     return "\n".join(summary_lines)
 
 
@@ -110,12 +118,24 @@ def auto_compact(messages: list[dict], max_chars: int,
 
     summary_text = _build_summary(old)
 
+    # Frame the summary as a role:"system" memo (matching compaction.py) so the
+    # model never mistakes its OWN compacted work for user-authored code. The
+    # old approach injected the summary under role:"user" with passive
+    # third-person wording ("Work already completed:"), which made the model
+    # read its own build as pre-existing files the user had handed over ("the
+    # user created these files", "what would you like me to build?").
+    memo = (
+        "Earlier turns of THIS task were compacted to save context. The summary "
+        "below is YOUR OWN work already done — build on it and do NOT restart, "
+        "re-read files, redo steps, or ask the user what to build:\n\n"
+        f"{summary_text}"
+    )
+
     # Build compacted messages
     compacted = []
     if system_msg:
         compacted.append(system_msg)
-    compacted.append({"role": "user", "content": summary_text})
-    compacted.append({"role": "assistant", "content": "Understood. I have the context from our earlier conversation. How can I continue helping?"})
+    compacted.append({"role": "system", "content": memo})
     compacted.extend(recent)
 
     return compacted, summary_text

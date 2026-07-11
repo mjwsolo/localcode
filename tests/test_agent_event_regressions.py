@@ -332,6 +332,101 @@ def test_file_not_found_edit_counts_as_repeated_failure() -> None:
     assert "already failed 2 times" in stub
 
 
+def test_repeated_same_path_rewrite_is_rejected_as_churn() -> None:
+    """Rewrite churn: the model wrote `useData.ts` 14× in one turn. Each
+    write SUCCEEDS with slightly different content, so the exact-args
+    failed_calls/success_counts guards never fire — only a path-keyed
+    counter catches it. After the churn threshold, the next rewrite of the
+    same path is rejected with a 'stop and verify' nudge."""
+    state = ToolExecutionState()
+    path = "src/hooks/useData.ts"
+
+    # Three SUCCESSFUL writes to the same path, each with DIFFERENT content
+    # (near-duplicate rewrites — distinct arg blobs every round).
+    for round_num, body in enumerate(
+        ("export const useData = () => 1;\n",
+         "export const useData = () => 2;\n",
+         "export const useData = () => 3;\n"),
+        start=1,
+    ):
+        args = {"path": path, "content": body}
+        assert dedup_stub_for_tool("write_file", args, state) is None
+        track_tool_result(
+            tool_name="write_file",
+            args=args,
+            tool_result=f"Rewrote {path} (1 lines)",
+            round_num=round_num,
+            state=state,
+            dedup_stub=None,
+        )
+
+    # The 4th rewrite of the same path is now churn — reject before execution.
+    stub = dedup_stub_for_tool(
+        "write_file", {"path": path, "content": "export const useData = () => 4;\n"}, state
+    )
+    assert stub is not None
+    assert stub.startswith("REJECTED:")
+    assert path in stub
+    assert "3 times" in stub
+    assert "build" in stub.lower()
+
+    # An edit_file to the SAME path is also caught (path-keyed, not tool-keyed).
+    edit_stub = dedup_stub_for_tool(
+        "edit_file", {"path": path, "old_string": "1", "new_string": "9"}, state
+    )
+    assert edit_stub is not None and edit_stub.startswith("REJECTED:")
+
+    # A DIFFERENT path is unaffected — the guard is per-path.
+    assert dedup_stub_for_tool(
+        "write_file", {"path": "src/other.ts", "content": "x\n"}, state
+    ) is None
+
+
+def test_two_rewrites_of_same_path_are_allowed() -> None:
+    """The churn guard must not fire on normal scaffold→fill-in→fix cycles.
+    Two prior writes to a path is under threshold and stays silent."""
+    state = ToolExecutionState()
+    path = "app.py"
+    for round_num in (1, 2):
+        args = {"path": path, "content": f"print({round_num})\n"}
+        track_tool_result(
+            tool_name="write_file",
+            args=args,
+            tool_result=f"Rewrote {path} (1 lines)",
+            round_num=round_num,
+            state=state,
+            dedup_stub=None,
+        )
+    assert dedup_stub_for_tool(
+        "write_file", {"path": path, "content": "print(3)\n"}, state
+    ) is None
+
+
+def test_failed_writes_do_not_count_toward_churn() -> None:
+    """A rejected/failed write never landed on disk, so it isn't churn.
+    Only successful writes accrue against the per-path threshold."""
+    state = ToolExecutionState()
+    path = "broken.py"
+    for round_num in (1, 2, 3, 4):
+        # Distinct content each round so the exact-args failed_calls guard
+        # (keyed on canonical_args) stays under its own threshold; we're
+        # isolating the path-keyed churn behavior here.
+        args = {"path": path, "content": f"def f(:\n# {round_num}\n"}
+        track_tool_result(
+            tool_name="write_file",
+            args=args,
+            tool_result="Error: could not write broken.py",
+            round_num=round_num,
+            state=state,
+            dedup_stub=None,
+        )
+    # Failed writes leave write_path_counts empty → no churn stub.
+    assert state.write_path_counts.get(path, 0) == 0
+    assert dedup_stub_for_tool(
+        "write_file", {"path": path, "content": "def f():\n    return 1\n"}, state
+    ) is None
+
+
 def test_read_file_dedup_is_disabled_to_unblock_debug_loops() -> None:
     """Removed 2026-04-29 after observing a 17-minute hang where the
     model was legitimately re-reading a file to fix a verification gap
