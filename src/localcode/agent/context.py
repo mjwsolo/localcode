@@ -900,50 +900,67 @@ def _compact_messages(messages: list[dict], out: "OutputManager") -> list[dict]:
     if not old:
         return messages
 
-    # Build summary from old messages
-    parts = []
-    files_modified = set()
-    commands_run = []
+    # Build an anchored "Work State" summary from old messages. This is the
+    # structure opencode + codex converge on (Objective / Completed / Blocked /
+    # Next Move) — a state machine a small local model can follow, not a flat
+    # "Called X, Called Y" log. Built DETERMINISTICALLY (no LLM call — matches
+    # codex's no-inference compaction, which matters on slow 16GB hardware):
+    # completed = files written + commands that succeeded; blocked = commands
+    # that failed / errors; objective = the first user request.
+    objective = ""
+    files_modified: list[str] = []
+    ok_cmds: list[str] = []
+    failed: list[str] = []
 
     for m in old:
         role = m.get("role", "")
         content = str(m.get("content", ""))
-
+        if role == "user" and not objective and not content.startswith(("Previous", "SYSTEM:", "##")):
+            objective = content[:200]
         if role == "assistant" and m.get("tool_calls"):
             for tc in m["tool_calls"]:
                 fn = tc.get("function", {})
                 name = fn.get("name", "")
                 try:
-                    # `arguments` may be a JSON string OR an already-decoded
-                    # dict (some providers/parsers do that) — json.loads on a
-                    # dict raises TypeError, which used to escape and kill the
-                    # turn with E3102 during compaction.
                     _raw = fn.get("arguments", "{}")
                     args = _raw if isinstance(_raw, dict) else json.loads(_raw)
                 except (json.JSONDecodeError, TypeError, ValueError):
                     args = {}
-                if name in ("write_file", "append_file", "edit_file"):
-                    files_modified.add(args.get("path", "?"))
+                if name in ("write_file", "append_file", "edit_file", "multi_edit"):
+                    p = args.get("path") or args.get("file_path")
+                    if p and p not in files_modified:
+                        files_modified.append(p)
                 elif name == "bash":
-                    commands_run.append(args.get("command", "")[:60])
-                parts.append(f"Called {name}({_summarize_args(args)})")
+                    ok_cmds.append(str(args.get("command", ""))[:70])
+        elif role == "tool":
+            c = content.strip()
+            if c.startswith(("Error", "[exit code", "REJECTED")) or "Traceback " in c:
+                failed.append(c.splitlines()[0][:100] if c else "")
 
-        elif role == "user" and not content.startswith("Previous"):
-            parts.append(f"User: {content[:100]}")
-
-    summary_lines = ["Previous conversation summary:"]
+    completed = []
     if files_modified:
-        summary_lines.append(f"Files modified: {', '.join(files_modified)}")
-    if commands_run:
-        summary_lines.append(f"Commands run: {'; '.join(commands_run[:5])}")
-    summary_lines.extend(parts[-8:])
+        completed.append("Files created/edited: " + ", ".join(files_modified))
+    if ok_cmds:
+        completed.append("Commands run: " + " | ".join(ok_cmds[-5:]))
+    blocked = [f for f in failed if f][-3:]
 
-    out.print_info("Context compacted — older messages summarized.")
+    lines = ["## Work state so far (older turns compacted — build on this, don't redo it):"]
+    if objective:
+        lines.append(f"Objective: {objective}")
+    lines.append("Completed:")
+    lines.extend(f"  - {c}" for c in completed) if completed else lines.append("  - (none yet)")
+    if blocked:
+        lines.append("Blocked / errors seen:")
+        lines.extend(f"  - {b}" for b in blocked)
+    lines.append("Next move: continue the objective from the current file state; "
+                 "do not re-read files or re-run commands listed above.")
+
+    out.print_info("Context compacted — older turns summarized to a work-state note.")
 
     return [
         *system,
-        {"role": "user", "content": "\n".join(summary_lines)},
-        {"role": "assistant", "content": "Got it. Continuing from where we left off."},
+        {"role": "user", "content": "\n".join(lines)},
+        {"role": "assistant", "content": "Understood — continuing from the current state."},
         *recent,
     ]
 
