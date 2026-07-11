@@ -23,13 +23,22 @@ import shutil
 import subprocess
 
 _TIMEOUT = 60.0
-_MAX_ERR_CHARS = 2500
+_MAX_ERR_CHARS = 2500  # floor; scaled up to the real context window at call time
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 
-def run_project_check(repo_root: str) -> str | None:
+def run_project_check(repo_root: str, ctx_tokens: int = 0) -> str | None:
     """Run the first available typecheck/lint for the project; return a bounded
-    error summary, or None if clean / nothing to run."""
+    error summary, or None if clean / nothing to run.
+
+    `ctx_tokens` (the model's real context window) scales the error-text cap so a
+    big-window model can see more of a wall of tsc/build errors it has room for,
+    instead of a fixed 2500-char slice; floored at 2500 so small machines are
+    unchanged.
+    """
+    max_err_chars = _MAX_ERR_CHARS
+    if ctx_tokens:
+        max_err_chars = max(_MAX_ERR_CHARS, int(ctx_tokens * 3.5 * 0.04))
     env = {**os.environ, "NO_COLOR": "1", "FORCE_COLOR": "0"}
     for label, argv, cwd in _detect_commands(repo_root):
         try:
@@ -42,10 +51,12 @@ def run_project_check(repo_root: str) -> str | None:
         if r.returncode != 0:
             out = _ANSI.sub("", ((r.stdout or "") + "\n" + (r.stderr or "")).strip())
             # Keep only the most useful lines, capped, so we don't flood a
-            # small model's context with a wall of output.
-            lines = [l for l in out.splitlines() if l.strip()][:40]
+            # small model's context with a wall of output. The line cap also
+            # scales with the window (40 on a small machine → more on a big one).
+            max_lines = 40 if not ctx_tokens else max(40, int(ctx_tokens / 4000))
+            lines = [l for l in out.splitlines() if l.strip()][:max_lines]
             if lines:
-                return f"[{label}] reported errors:\n" + "\n".join(lines)[:_MAX_ERR_CHARS]
+                return f"[{label}] reported errors:\n" + "\n".join(lines)[:max_err_chars]
     return None
 
 

@@ -410,17 +410,21 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
             "--threads", str(threads),
             "--flash-attn", "on" if flash_attn_on else "off",
         ]
-        # Multimodal projector — if the currently-selected catalog entry
-        # has an mmproj sidecar AND the sidecar is on disk, pass --mmproj
-        # so llama-server loads the vision encoder alongside the text
-        # decoder. We don't auto-download here; the chat layer prompts
-        # the user on first vision use (see voice.py / vision flow).
+        # Multimodal projector — pass --mmproj only when vision is
+        # ENABLED (config flag) AND the currently-selected catalog entry
+        # has an mmproj sidecar present on disk. Gating on the flag (not
+        # file presence alone) is what lets /vision OFF free the encoder
+        # RAM by relaunching without --mmproj while KEEPING the projector
+        # file on disk — so re-enabling never re-downloads. We don't
+        # auto-download here; the chat layer prompts the user on first
+        # vision use (see voice.py / vision flow).
         try:
-            from .models_catalog import by_filename
-            from pathlib import Path as _P
-            choice = by_filename(_P(model_path).name)
-            if choice is not None and choice.mmproj_path and choice.mmproj_path.is_file():
-                cmd.extend(["--mmproj", str(choice.mmproj_path)])
+            if getattr(self.config, "vision_enabled", False):
+                from .models_catalog import by_filename
+                from pathlib import Path as _P
+                choice = by_filename(_P(model_path).name)
+                if choice is not None and choice.mmproj_path and choice.mmproj_path.is_file():
+                    cmd.extend(["--mmproj", str(choice.mmproj_path)])
         except Exception:
             # Never block server launch on mmproj lookup
             pass
