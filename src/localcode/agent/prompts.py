@@ -55,6 +55,7 @@ Plan & tools:
 - edit_file for existing files: anchor `old_string` on 2–4 adjacent lines (matching is whitespace-tolerant; the leading `<n>\\t` from read_file is stripped for you). write_file to create or fully rewrite.
 - On a tool error, read it, fix the specific cause, and retry — don't give up after one failure, and don't repeat the same failing call.
 - New project → prefer a small multi-file layout with a thin entrypoint. Write code valid for the file's real language and match the project's existing conventions.
+- Don't invent dependencies: before importing a library confirm it's in package.json (or requirements.txt/Cargo.toml) or a neighboring file; when installing, don't pin a guessed version — `npm install <pkg>` lets the resolver pick a real one.
 
 Runtime facts:
 - bash returns an exit code; non-zero = failure. Background long-running commands (`cmd &`) so bash returns.
