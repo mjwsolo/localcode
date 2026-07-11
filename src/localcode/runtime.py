@@ -1130,7 +1130,7 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
             # loop. Without them (llama.cpp's default breakers don't include
             # path chars), a path repeated within one round — `cd X && mkdir X
             # && ls X` — got its username subtokens suppressed and the model
-            # emitted mangled variants (`marcsolomon` → `marcolon`). Breaking on
+            # emitted mangled variants of the home-dir username. Breaking on
             # `/ . _ - space` keeps DRY for phrasal loops but frees paths/idents.
             "dry_sequence_breakers": ["\n", "/", ".", "_", "-", " ", ":", "\"", "'"],
         }
