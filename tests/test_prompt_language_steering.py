@@ -14,12 +14,11 @@ from localcode.agent.prompts import SYSTEM_PROMPT, project_stack_line
 
 def test_system_prompt_has_language_matching_rule() -> None:
     text = SYSTEM_PROMPT.lower()
-    # The rule must forbid Python syntax leaking into other languages and
-    # tell the model to match the file's actual language + conventions.
-    assert "match the project's language" in text
-    assert "triple-quoted docstrings" in text
-    assert "snake_case" in SYSTEM_PROMPT
-    assert ".tsx" in SYSTEM_PROMPT
+    # The prompt must tell the model to write code valid for the file's actual
+    # language and match the project's conventions (worded concisely — no long
+    # per-language example list, which bloats the prompt for a small model).
+    assert "valid for the file's real language" in text
+    assert "match the project's existing conventions" in text
     assert "conventions" in text
 
 
