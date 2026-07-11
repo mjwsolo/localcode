@@ -122,18 +122,20 @@ class TurnTrace:
         self._active_tool = ToolEvent(name=name, args=args or "",
                                       start_ts=time.monotonic())
 
-    def tool_finished(self, result_chars: int, error: bool) -> None:
-        """Close out the most recent tool call. If no tool is active (e.g.
-        tool_start event was lost), we silently drop — the loss is more
-        useful than a noisy assertion."""
+    def tool_finished(self, result_chars: int, error: bool) -> int:
+        """Close out the most recent tool call and return its duration in ms
+        (0 if no tool is active — e.g. a lost tool_start event). If no tool is
+        active we silently drop; the loss is more useful than a noisy assertion.
+        The returned duration lets the UI render a per-tool time on the done row."""
         if self._active_tool is None:
-            return
+            return 0
         t = self._active_tool
         t.duration_ms = int((time.monotonic() - t.start_ts) * 1000)
         t.result_chars = result_chars
         t.error = bool(error)
         self.tools.append(t)
         self._active_tool = None
+        return t.duration_ms
 
     # ── Finalization ──
 

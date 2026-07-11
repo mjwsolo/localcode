@@ -758,6 +758,16 @@ def _spinner_label_for_elapsed(elapsed: float) -> str:
     idx = int(max(0.0, elapsed) / _SPINNER_WORD_PERIOD)
     return _SPINNER_GERUNDS[idx % len(_SPINNER_GERUNDS)]
 
+
+def _fmt_tool_duration(ms: int) -> str:
+    """Compact per-tool duration for the done row: `3s`, `1m04s` (matches the
+    turn-summary formatter). Only shown when ≥1s so quick calls stay quiet."""
+    secs = ms / 1000
+    if secs < 60:
+        return f"{secs:.0f}s"
+    m, s = divmod(int(secs), 60)
+    return f"{m}m{s:02d}s"
+
 _TOOL_CALL_RE = re.compile(
     r'<\|?tool_call\|?>.*?<\|?/?tool_call\|?>', re.DOTALL
 )
@@ -4126,13 +4136,18 @@ class ChatScreen(Screen):
             # Use name from event payload (reliable) instead of _active_tool_name (can go stale)
             name = p.get("name", "") or self._active_tool_name
             args = p.get("args", "") or self._active_tool_args
+            # Close telemetry FIRST so we have the per-tool elapsed to render on
+            # the done row (like codex `• {duration}` / claude-code `(49s)`).
+            _dur_ms = 0
+            if self._telemetry_turn is not None:
+                _dur_ms = self._telemetry_turn.tool_finished(len(str(result)), is_error) or 0
+            _dur = f"  · {_fmt_tool_duration(_dur_ms)}" if _dur_ms >= 1000 else ""
             # Always render ✓ green for success, ● + error for failure
             if is_error:
                 log.append_tool(name, args)
                 log.append_tool_result(result, error=True)
             else:
                 lines = result.strip().splitlines()
-                summary = lines[0][:80] if lines else ""
                 is_diff = len(lines) > 1 and _is_diff_result(result)
                 if is_diff:
                     # For diffs, extract file path from --- line as summary
@@ -4141,13 +4156,18 @@ class ChatScreen(Screen):
                         if l.startswith("--- ") or l.startswith("+++ "):
                             file_path = l.split("\t")[0][4:]  # strip --- /+++ prefix
                             break
-                    log.append_tool_done(name, args, f"--- {file_path}" if file_path else "")
+                    _s = f"--- {file_path}" if file_path else ""
+                    log.append_tool_done(name, args, f"{_s}{_dur}")
                     log.append_tool_result(result)
                 else:
-                    log.append_tool_done(name, args, summary)
-            # Telemetry: close out the most recent tool-started event.
-            if self._telemetry_turn is not None:
-                self._telemetry_turn.tool_finished(len(str(result)), is_error)
+                    # Summarize by MAGNITUDE (N lines / N matches / N files), not
+                    # the first line of output — matching claude-code/codex/opencode
+                    # which show the result's shape. `_brief_result` is the same
+                    # summarizer the CLI uses, so both surfaces agree, and it also
+                    # cleans internal markers ([exit code], REJECTED, etc.).
+                    from ...agent.helpers import _brief_result
+                    summary = _brief_result(name, result)
+                    log.append_tool_done(name, args, f"{summary}{_dur}")
             self._thinking_phase = ""
             # Show thinking indicator immediately after tool completion
             # to cover the gap while the model processes the result

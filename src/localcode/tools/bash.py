@@ -762,6 +762,38 @@ def _quoting_error_hint(output: str) -> str:
     )
 
 
+# Package/version-not-found signatures across npm / pnpm / yarn / pip. A small
+# local model routinely invents package names or versions (e.g. `@types/dexie`,
+# a `^9.9.9` that doesn't exist) → the installer 404s and, with only raw stderr,
+# the model retries the SAME bad name in a loop. None of the reference harnesses
+# handle this deterministically (they rely on a "verify the library exists"
+# prompt line, which isn't enough for a small model), so we catch it here.
+_DEP_NOT_FOUND_MARKERS = (
+    "e404", "etarget", "no matching version found", "notarget",
+    "404 not found - get", "is not in this registry",
+    "could not find a version that satisfies",  # pip
+    "no matching distribution found",           # pip
+    "err_pnpm_no_matching_version",             # pnpm
+)
+
+
+def _dependency_error_hint(output: str) -> str:
+    """Actionable guidance when an install fails because a package/version does
+    not exist — so the model corrects the name instead of retrying it."""
+    low = output.lower()
+    if not any(m in low for m in _DEP_NOT_FOUND_MARKERS):
+        return ""
+    return (
+        "HINT: that package or version does not exist in the registry. Do NOT "
+        "retry the same name/version — it will 404 again. Instead: (1) read "
+        "package.json (or requirements.txt / Cargo.toml) and use a name that is "
+        "actually there; (2) install WITHOUT a pinned version so the resolver "
+        "picks a real latest (e.g. `npm install <pkg>` not `<pkg>@^9.9.9`); or "
+        "(3) if you invented the package, drop it. Never guess package names or "
+        "version numbers."
+    )
+
+
 def _redirect_shell_dir_listing(cmd: str) -> str:
     """Route `ls <path>` to list_files, which can't break on spaces/parens.
 
@@ -1052,6 +1084,11 @@ def execute(ctx: ToolContext, args: dict) -> str:
             _qh = _quoting_error_hint(output)
             if _qh:
                 output = _qh + "\n\n" + output
+            # Package/version-not-found (npm E404 / pip / etc.) → tell the model
+            # the name is wrong so it fixes it instead of retrying the same 404.
+            _dh = _dependency_error_hint(output)
+            if _dh:
+                output = _dh + "\n\n" + output
         # AirPlay-collision detector: if the model curls localhost:5000
         # or :7000, those are squatted by macOS AirPlay Receiver /
         # AirTunes — bare `curl -s` sees a 200 with empty body and
