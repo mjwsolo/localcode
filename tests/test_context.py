@@ -35,6 +35,61 @@ class TestFindRepoRoot:
         found = find_repo_root(no_git)
         assert found == no_git.resolve()
 
+    def test_prefers_project_marker_over_walking_to_home(self, tmp_path: Path) -> None:
+        """No .git, but a pyproject.toml in an ancestor pins that project dir —
+        instead of returning the (deep) launch dir or walking up to $HOME."""
+        project = tmp_path / "myproj"
+        (project / "src" / "pkg").mkdir(parents=True)
+        (project / "pyproject.toml").write_text("[project]\nname='x'\n")
+        # Launched deep inside the project, no git anywhere.
+        found = find_repo_root(project / "src" / "pkg")
+        assert found == project.resolve()
+
+    def test_nearest_marker_wins(self, tmp_path: Path) -> None:
+        """When markers exist at multiple levels, the NEAREST (deepest) wins."""
+        outer = tmp_path / "outer"
+        inner = outer / "inner"
+        inner.mkdir(parents=True)
+        (outer / "package.json").write_text("{}")
+        (inner / "package.json").write_text("{}")
+        assert find_repo_root(inner) == inner.resolve()
+
+    def test_git_root_beats_nearer_marker(self, tmp_path: Path) -> None:
+        """A real .git root always wins, even when a shallower marker exists —
+        behaviour must stay IDENTICAL when a git checkout is present."""
+        repo = tmp_path / "repo"
+        deep = repo / "frontend"
+        deep.mkdir(parents=True)
+        (repo / ".git").mkdir()
+        # A package.json sits in the deeper dir, but .git at the repo root wins.
+        (deep / "package.json").write_text("{}")
+        assert find_repo_root(deep) == repo.resolve()
+
+    def test_never_adopts_home_via_marker(self, tmp_path: Path, monkeypatch) -> None:
+        """A marker sitting at $HOME must NOT be adopted as the repo root —
+        $HOME is never a legitimate project root."""
+        fake_home = tmp_path / "home"
+        launch = fake_home / "Desktop" / "build"
+        launch.mkdir(parents=True)
+        (fake_home / "package.json").write_text("{}")  # marker AT home
+        monkeypatch.setenv("HOME", str(fake_home))
+        # Walk stops at $HOME, so the home-level marker is refused; falls back
+        # to the launch dir rather than adopting $HOME.
+        found = find_repo_root(launch)
+        assert found == launch.resolve()
+        assert found != fake_home.resolve()
+
+    def test_is_home_or_shallower_flags_home(self, tmp_path: Path, monkeypatch) -> None:
+        from localcode.context import _is_home_or_shallower
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        monkeypatch.setenv("HOME", str(fake_home))
+        assert _is_home_or_shallower(fake_home.resolve()) is True
+        assert _is_home_or_shallower(Path(fake_home.anchor)) is True
+        project = fake_home / "Github" / "proj"
+        project.mkdir(parents=True)
+        assert _is_home_or_shallower(project.resolve()) is False
+
 
 class TestListRepoFiles:
     """Verify list_repo_files returns files and respects ignore dirs."""
