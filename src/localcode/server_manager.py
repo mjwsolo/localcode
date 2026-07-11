@@ -455,14 +455,26 @@ class ServerManager:
 
             # Layer 1: kernel-enforced memory ceiling via jetsam — the hard
             # backstop (sanctioned Apple API) that kills llama-server before it
-            # can push the system over the edge.
+            # can push the system over the edge. ONLY installed on small Macs
+            # (<48 GB): there a runaway server must be killed before it freezes
+            # the machine. On a large Mac a big model legitimately needs most of
+            # RAM, and a FATAL highwater there just SIGKILLs (-9) the server
+            # mid-decode when its footprint spikes past total−reserve — the
+            # mystery long-task crash. Big machines rely on Layer 2 (graceful).
             try:
                 from .memory_guard import (
                     set_jetsam_highwater, recommended_jetsam_limit_mb,
-                    start_pressure_monitor,
+                    should_set_fatal_jetsam_limit, start_pressure_monitor,
                 )
-                set_jetsam_highwater(self._process.pid,
-                                     recommended_jetsam_limit_mb())
+                if should_set_fatal_jetsam_limit():
+                    _limit = recommended_jetsam_limit_mb()
+                    set_jetsam_highwater(self._process.pid, _limit)
+                    _lifecycle_log("jetsam_highwater_set", pid=self._process.pid,
+                                   limit_mb=_limit)
+                else:
+                    _lifecycle_log("jetsam_highwater_skipped",
+                                   pid=self._process.pid,
+                                   reason="large_ram_uses_pressure_monitor")
             except Exception:
                 pass
 

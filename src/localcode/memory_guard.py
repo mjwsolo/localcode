@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.util
+import os
 import platform
 import subprocess
 import threading
@@ -192,21 +193,42 @@ def set_jetsam_highwater(pid: int, limit_mb: int) -> bool:
         return False
 
 
-def recommended_jetsam_limit_mb() -> int:
-    """Budget: physical_ram − 3.5 GB reserved for macOS + other apps.
-
-    On a 16 GB Mac that's 16384 − 3500 = 12884 MB. llama-server for our
-    10–11 GB models tops out around 13 GB wired during decode (measured
-    Apr 22 2026), so this leaves ~100 MB margin — kernel will kill
-    llama-server before it can push the system over the edge. On 32 GB+
-    we're more permissive.
-    """
+def _total_ram_mb() -> int:
     try:
         r = subprocess.run(["sysctl", "-n", "hw.memsize"],
                            capture_output=True, text=True, timeout=2)
-        total_mb = int(r.stdout.strip()) // (1024 * 1024)
+        return int(r.stdout.strip()) // (1024 * 1024)
     except Exception:
-        total_mb = 16 * 1024
+        return 16 * 1024
+
+
+def should_set_fatal_jetsam_limit() -> bool:
+    """Whether to install the FATAL per-process jetsam highwater on the server.
+
+    The fatal kernel cap exists to stop a runaway server from freezing a SMALL
+    Mac — on 16 GB, an ~11 GB model that spikes must be killed before it takes
+    the whole machine down. But on a large Mac a big model legitimately needs
+    most of RAM: a 36 GB model at 256K context (weights + a huge KV cache + ctx
+    checkpoints + compute-buffer spikes) can push the server's phys_footprint
+    past total−reserve during a normal decode step, and the FATAL cap then makes
+    the kernel SIGKILL it (-9, no crash report — the mystery crash we chased for
+    hours). On 48 GB+ the graceful userspace pressure monitor (SIGTERM on WARN)
+    is enough, so we DON'T install a fatal cap there. Override with
+    LOCALCODE_FORCE_JETSAM_LIMIT=1 / =0.
+    """
+    force = os.environ.get("LOCALCODE_FORCE_JETSAM_LIMIT")
+    if force in ("0", "1"):
+        return force == "1"
+    return _total_ram_mb() < 48 * 1024
+
+
+def recommended_jetsam_limit_mb() -> int:
+    """Per-process fatal jetsam highwater (MB) for machines that get one.
+
+    Only used when should_set_fatal_jetsam_limit() is True (small Macs). Budget
+    = physical RAM − reserve for macOS + other apps.
+    """
+    total_mb = _total_ram_mb()
     reserve = 3500 if total_mb < 24 * 1024 else 6000
     return max(2048, total_mb - reserve)
 

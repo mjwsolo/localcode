@@ -7,6 +7,26 @@ from .base import ToolContext
 DEFAULT_LIMIT = 240
 MAX_DEFAULT_CHARS = 12_000
 
+
+def _dynamic_read_defaults(ctx: ToolContext) -> tuple[int, int]:
+    """(default_line_limit, max_default_chars), scaled to the model's real
+    context window. read_file is the primary code-ingestion path: on a 256K
+    window the fixed 240-line / 12K-char default forces needless pagination and
+    re-reads where the machine has the MOST room. Scale up to ~6% of the window
+    in chars (and lines proportionally), floored at the static defaults so a
+    16 GB Mac (small window) is byte-identical to before.
+    """
+    try:
+        ctx_tokens = int(ctx.app.engine._target_num_ctx())
+    except Exception:
+        ctx_tokens = 0
+    if not ctx_tokens:
+        return DEFAULT_LIMIT, MAX_DEFAULT_CHARS
+    max_chars = max(MAX_DEFAULT_CHARS, int(ctx_tokens * 3.5 * 0.06))
+    # Keep the historical ~50 chars/line ratio between the two defaults.
+    line_limit = max(DEFAULT_LIMIT, max_chars // 50)
+    return line_limit, max_chars
+
 SCHEMA = {
     "type": "function",
     "function": {
@@ -80,28 +100,29 @@ def execute(ctx: ToolContext, args: dict) -> str:
         return f"File not found: {args['path']}" + (f"\n{hint}" if hint else "")
     content = path.read_text(errors="replace")
     lines = content.splitlines()
+    default_limit, max_default_chars = _dynamic_read_defaults(ctx)
     offset = args.get("offset", 0)
     explicit_limit = "limit" in args
-    limit = args.get("limit", DEFAULT_LIMIT)
+    limit = args.get("limit", default_limit)
     selected = lines[offset:offset + limit]
     numbered = [f"{i + offset + 1}\t{line}" for i, line in enumerate(selected)]
     result = "\n".join(numbered)
     if len(lines) > offset + limit:
         result += f"\n\n[{len(lines) - offset - limit} more lines — use offset={offset + limit} to continue]"
-    if not explicit_limit and len(result) > MAX_DEFAULT_CHARS:
+    if not explicit_limit and len(result) > max_default_chars:
         kept: list[str] = []
         total = 0
         for line in numbered:
             total += len(line) + 1
-            if total > MAX_DEFAULT_CHARS:
+            if total > max_default_chars:
                 break
             kept.append(line)
         result = "\n".join(kept)
         remaining_from_line = offset + len(kept)
         result += (
-            f"\n\n[Large file summarized at {MAX_DEFAULT_CHARS} chars. "
+            f"\n\n[Large file summarized at {max_default_chars} chars. "
             f"File has {len(lines)} lines; continue with "
-            f"offset={remaining_from_line}, limit={DEFAULT_LIMIT}, or request "
+            f"offset={remaining_from_line}, limit={default_limit}, or request "
             "a focused smaller range around the symbol you need.]"
         )
     # Prompt-injection defence: wrap untrusted file content in explicit
