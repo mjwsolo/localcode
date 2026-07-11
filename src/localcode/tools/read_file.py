@@ -72,7 +72,7 @@ def execute(ctx: ToolContext, args: dict) -> str:
         return "Error: 'path' argument is required for read_file."
     path = ctx.repo / args["path"]
     if not path.exists():
-        # A small model invents misspelled/wrong-case paths ("Aki" for "Anki",
+        # A small model invents misspelled/wrong-case paths (a dropped letter,
         # gitHub/github/Github) and, getting a bare "not found", retries with
         # ANOTHER wrong variant forever (dedup can't collapse differing typos).
         # Point it at the real nearby file so it corrects instead of guessing.

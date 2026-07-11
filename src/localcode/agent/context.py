@@ -771,6 +771,32 @@ def build_progress_ledger(
     return head + ("\n" + extra if extra else "")
 
 
+_PROJECT_MARKERS = ("package.json", "pyproject.toml", ".git", "go.mod", "Cargo.toml", "tsconfig.json")
+
+
+def _project_root_for(common: str, dirs: list[str]) -> str | None:
+    """The project directory to scan: the nearest marker at-or-below `common`,
+    else the deepest single changed-file dir. Bounds the walk to one project."""
+    import os
+    # Walk DOWN from each changed dir toward `common` looking for a marker,
+    # picking the shallowest marker that is still within `common`.
+    candidates = []
+    for d in dirs:
+        cur = d
+        while cur and cur.startswith(common):
+            if any(os.path.exists(os.path.join(cur, m)) for m in _PROJECT_MARKERS):
+                candidates.append(cur)
+            parent = os.path.dirname(cur)
+            if parent == cur:
+                break
+            cur = parent
+    if candidates:
+        return min(candidates, key=len)  # shallowest marker dir
+    # No marker: only trust it if all changed files share ONE dir (a real
+    # single-project build); otherwise decline (common ancestor may be broad).
+    return dirs[0] if len(set(dirs)) == 1 else None
+
+
 def build_filesystem_state(changed_files: list[str], max_files: int = 80) -> str:
     """Ground-truth 'what's actually on disk' for the project being built.
 
@@ -786,13 +812,24 @@ def build_filesystem_state(changed_files: list[str], max_files: int = 80) -> str
     roots = [os.path.dirname(f) for f in changed_files if f]
     if not roots:
         return ""
-    # Project root = shortest existing common-ish ancestor of changed files.
     try:
-        root = os.path.commonpath([os.path.abspath(os.path.dirname(f))
-                                   for f in changed_files if f])
+        common = os.path.commonpath([os.path.abspath(os.path.dirname(f))
+                                     for f in changed_files if f])
     except Exception:
-        root = os.path.abspath(roots[0])
-    if not os.path.isdir(root):
+        common = os.path.abspath(roots[0])
+    # SCOPE GUARD: only ever walk a real PROJECT dir, never a broad ancestor
+    # like ~ or a top-level workspace. Anchor to the nearest project marker
+    # (package.json / pyproject.toml / .git / go.mod / Cargo.toml) at-or-below
+    # the common path; if none, use the deepest single changed-file dir. And
+    # NEVER walk the home dir or anything shallower — bail out entirely.
+    root = _project_root_for(common, [os.path.abspath(os.path.dirname(f))
+                                      for f in changed_files if f])
+    home = os.path.expanduser("~")
+    if not root or not os.path.isdir(root):
+        return ""
+    if os.path.abspath(root) in (home, os.path.dirname(home), os.path.sep):
+        return ""
+    if len(os.path.abspath(root).rstrip("/").split("/")) < 4:  # too shallow → unsafe to walk
         return ""
     _SKIP = {".git", "node_modules", "dist", "build", ".venv", "__pycache__", ".next"}
     _SRC = (".ts", ".tsx", ".js", ".jsx", ".py", ".css", ".scss", ".html", ".json",

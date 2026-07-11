@@ -188,7 +188,7 @@ def execute(ctx: ToolContext, args: dict) -> str:
 
     existed = path.is_file()
     # Typo-duplicate guard: creating a NEW file whose name closely matches an
-    # existing sibling (e.g. `ReivewSession.tsx` next to `ReviewSession.tsx`)
+    # existing sibling (a one-letter-off variant of a file that already exists)
     # is almost always a filename typo that splits the code across two files
     # and breaks imports. Warn before it snowballs. (Observed in real logs.)
     _dup_warning = ""
