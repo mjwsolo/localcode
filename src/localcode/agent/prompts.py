@@ -135,10 +135,11 @@ def model_identity_line(model: str) -> str:
         f"the work: take the next action directly. Only state your name if the "
         f"user explicitly asks who you are. "
         f"The model currently powering you is \"{friendly}\". Report it as EXACTLY "
-        f"\"{friendly}\" when the user asks which model/version/quant you are, or "
-        f"when the task asks you to name a file/folder/project after your model — "
-        f"in that case use \"{friendly}\" as the name and create it. Never say you "
-        f"are unsure and never name a different model or provider.\n"
+        f"\"{friendly}\" when the user asks which model/version/quant you are. When "
+        f"the task asks you to name a file/folder/project after your model, use a "
+        f"FILESYSTEM-SAFE form — letters, digits, dashes, underscores only, NO "
+        f"spaces or parentheses (they break shell commands). Never say you are "
+        f"unsure and never name a different model or provider.\n"
     )
 
 
