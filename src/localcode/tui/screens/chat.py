@@ -570,6 +570,16 @@ class _ChatTextArea(TextArea):
         # row in a live terminal.
         text = getattr(event, "text", "") or ""
         if not text:
+            # A terminal pastes ONLY text; an image copied to the OS
+            # clipboard arrives here as an EMPTY paste. This is exactly
+            # where we hook image capture: read the clipboard for a PNG
+            # and, if present, attach it to the next message.
+            try:
+                handler = getattr(self.screen, "_attach_clipboard_image", None)
+                if callable(handler) and handler():
+                    event.stop()
+            except Exception:
+                pass
             return
         joined = text.replace("\r\n", "\n").replace("\r", "\n")
         prevent_default = getattr(event, "prevent_default", None)
@@ -984,6 +994,9 @@ class ChatScreen(Screen):
         # App.notify exactly once per finished/failed download.
         self._dl_notified: set[str] = set()
         self._pending_messages: list[str] = []
+        # Base64-encoded images captured from an empty (image) clipboard
+        # paste, attached to the FIRST user message of the next turn.
+        self._pending_images: list[str] = []
         self._stream_buf: list[str] = []
         self._last_assistant_text: str = ""
         self._turn_start: float = 0
@@ -2230,7 +2243,9 @@ class ChatScreen(Screen):
         # Resolve the catalog entry behind the configured model path.
         choice = current_choice(config)
         model_disp = choice.name if choice is not None else _P(config.runtime.model or "—").name
-        mmproj_on = "yes" if (choice and choice.mmproj_path and choice.mmproj_path.is_file()) else "no"
+        _vision_on = bool(getattr(config.runtime, "vision_enabled", False))
+        _mmproj_cached = bool(choice and choice.mmproj_path and choice.mmproj_path.is_file())
+        mmproj_on = "yes" if (_vision_on and _mmproj_cached) else ("off (cached)" if _mmproj_cached else "no")
 
         # Voice state (lazy)
         vs = getattr(self.tui, "voice_state", None)
@@ -2679,6 +2694,16 @@ class ChatScreen(Screen):
                 "Type [bold]/vision[/] again to retry — partial download is preserved."
             )
             return
+        # Persist the enabled flag now that the projector is on disk, so
+        # the runtime relaunches WITH --mmproj and future toggles never
+        # re-download (the file stays put; OFF just drops --mmproj).
+        try:
+            cfg = self.tui.config
+            cfg.runtime.vision_enabled = True
+            from ...config import save_config
+            save_config(cfg)
+        except Exception:
+            pass
         log.append_info("Vision projector ready — restarting server to activate...")
         self._restart_for_vision_change(reason="Vision ON")
 
@@ -2752,6 +2777,69 @@ class ChatScreen(Screen):
 
         self.run_worker(_worker, thread=True, exclusive=False)
 
+    def _attach_clipboard_image(self) -> bool:
+        """Empty paste → maybe an image sits on the OS clipboard.
+
+        Reads it as PNG, base64-encodes it into `_pending_images` (sent
+        with the next message), shows a visible indicator, and auto-enables
+        vision when the model supports it. Returns True if an image was
+        attached (so the caller can `event.stop()` and avoid a terminal
+        beep). macOS-only under the hood; a no-op elsewhere.
+        """
+        try:
+            from ..clipboard_image import read_clipboard_png
+        except Exception:
+            return False
+        try:
+            png = read_clipboard_png()
+        except Exception:
+            png = None
+        if not png:
+            return False
+        import base64
+        b64 = base64.b64encode(png).decode("ascii")
+        if getattr(self, "_pending_images", None) is None:
+            self._pending_images = []
+        self._pending_images.append(b64)
+        n = len(self._pending_images)
+        try:
+            log = self.query_one("#chat-log", ChatLog)
+            log.append_info(
+                f"📎 image attached ({n}) — it will be sent with your next message"
+            )
+        except Exception:
+            pass
+        try:
+            self._maybe_enable_vision_for_image()
+        except Exception:
+            pass
+        return True
+
+    def _maybe_enable_vision_for_image(self) -> None:
+        """After attaching a pasted image, make sure the model can see it.
+
+        If the current model supports vision but vision is OFF, enable it
+        (which only downloads the projector when genuinely missing). If the
+        model can't do vision at all, tell the user to switch models.
+        """
+        try:
+            from ...models_catalog import current as current_choice
+            config = self.tui.config
+            choice = current_choice(config)
+            log = self.query_one("#chat-log", ChatLog)
+        except Exception:
+            return
+        if choice is None or not getattr(choice, "supports_vision", False):
+            log.append_info(
+                "Note: the current model can't see images — switch to a vision "
+                "model with /model to use this attachment."
+            )
+            return
+        if getattr(config.runtime, "vision_enabled", False):
+            return  # already on
+        log.append_info("Enabling vision so the model can see this image…")
+        self._handle_vision_command("/vision")
+
     def _handle_vision_command(self, text: str) -> None:
         """`/vision` toggles vision on/off for the current model.
 
@@ -2781,25 +2869,32 @@ class ChatScreen(Screen):
         except Exception:
             pass
         mmproj = choice.mmproj_path
-        has = bool(mmproj and mmproj.is_file())
+        # `file_on_disk` = projector already downloaded; `enabled` = the
+        # persistent config flag that decides whether the server loads it.
+        # ON/OFF is driven by the FLAG, not file presence — turning OFF
+        # keeps the file so re-enabling never re-downloads.
+        file_on_disk = bool(mmproj and mmproj.is_file())
+        enabled = bool(getattr(config.runtime, "vision_enabled", False))
 
         parts = text.strip().split()
         sub = parts[1] if len(parts) >= 2 else None
 
-        # ── bare /vision → toggle ─────────────────────────────────
-        if sub is None:
-            if has:
-                # Currently "on" → remove projector + restart server so
-                # it relaunches without --mmproj. Frees RAM immediately.
-                try:
-                    mmproj.unlink()
-                except Exception as e:
-                    log.append_error(f"Couldn't remove projector: {e}")
-                    return
-                log.append_info("Vision OFF — restarting server to release projector memory…")
-                self._restart_for_vision_change(reason="Vision OFF")
-                return
-            # Currently "off" → download + activate (async — keeps UI live)
+        def _set_flag(value: bool) -> None:
+            config.runtime.vision_enabled = value
+            try:
+                from ...config import save_config
+                save_config(config)
+            except Exception:
+                pass
+
+        def _turn_on_with_existing_file() -> None:
+            # Projector already on disk → just flip the flag + restart so
+            # the runtime relaunches WITH --mmproj. No download.
+            _set_flag(True)
+            log.append_info("Vision ON — restarting server to load the projector…")
+            self._restart_for_vision_change(reason="Vision ON")
+
+        def _download_then_enable() -> None:
             if getattr(self, "_vision_download_in_flight", False):
                 log.append_info("Vision projector is already downloading — please wait.")
                 return
@@ -2827,13 +2922,32 @@ class ChatScreen(Screen):
 
             import threading as _t
             _t.Thread(target=_worker, daemon=True).start()
+
+        # ── bare /vision → toggle ─────────────────────────────────
+        if sub is None:
+            if enabled:
+                # Currently ON → flip flag off + restart so the server
+                # relaunches WITHOUT --mmproj. Frees the encoder RAM but
+                # KEEPS the projector file on disk (instant re-enable).
+                _set_flag(False)
+                log.append_info("Vision OFF — restarting server to release projector memory…")
+                self._restart_for_vision_change(reason="Vision OFF")
+                return
+            # Currently OFF → enable. If the projector is already on disk,
+            # just flip + restart; only download when genuinely missing.
+            if file_on_disk:
+                _turn_on_with_existing_file()
+            else:
+                _download_then_enable()
             return
 
         # ── power-user subcommands ───────────────────────────────
         if sub == "status":
-            if has:
+            if enabled and file_on_disk:
                 mb = mmproj.stat().st_size // (1024 * 1024)
                 log.append_info(f"Vision: on · {mmproj.name} · {mb} MB")
+            elif file_on_disk:
+                log.append_info("Vision: off (projector cached on disk) · type /vision to enable instantly")
             else:
                 log.append_info(
                     f"Vision: off · type /vision to enable "
@@ -2842,15 +2956,20 @@ class ChatScreen(Screen):
             return
 
         if sub in ("on", "download", "setup"):
-            if has:
+            if enabled:
                 log.append_info("Vision already on.")
                 return
-            self._handle_vision_command("/vision")
+            if file_on_disk:
+                _turn_on_with_existing_file()
+            else:
+                _download_then_enable()
             return
 
         if sub == "off":
-            if has:
-                self._handle_vision_command("/vision")
+            if enabled:
+                _set_flag(False)
+                log.append_info("Vision OFF — restarting server to release projector memory…")
+                self._restart_for_vision_change(reason="Vision OFF")
             else:
                 log.append_info("Vision already off.")
             return
@@ -3585,6 +3704,18 @@ class ChatScreen(Screen):
         log.reset_steps()
         self._show_thinking()
         self._update_status()
+        # Hand any images pasted from the clipboard to the engine so the
+        # agent loop can attach them to THIS turn's first user message.
+        # app.ask() composes text-only messages, so the images ride on the
+        # engine object (which the loop already receives) rather than a
+        # new param. Cleared after handoff so they send exactly once.
+        _imgs = getattr(self, "_pending_images", None)
+        if _imgs:
+            try:
+                self.tui.engine._pending_images = list(_imgs)
+            except Exception:
+                pass
+            self._pending_images = []
         self.run_agent_turn(text)
 
     @work(exclusive=True, thread=True)
