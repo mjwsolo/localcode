@@ -33,6 +33,15 @@ class ToolExecutionState:
     # times in a row and nothing stopped it. Telemetry behind the
     # removal didn't include info-fetch loops.
     success_counts: dict[tuple[str, str], int] = field(default_factory=dict)
+    # Successful write/edit calls keyed by PATH ONLY (not exact args), so
+    # rewriting the same file with slightly different content each round
+    # still accrues. Feeds the write-churn guard in `dedup_stub_for_tool`.
+    # Motivating logs (2026-06): a turn wrote `useData.ts` 14×, `database.ts`
+    # 8×, `package.json` 4× — plus near-duplicate misspelled siblings
+    # (ReviewSession/ReviewSesssion/ReivewSession.tsx). The per-exact-args
+    # `failed_calls`/`success_counts` guards miss this because each rewrite
+    # is a DISTINCT arg blob; only a path-keyed counter catches the churn.
+    write_path_counts: dict[str, int] = field(default_factory=dict)
     # Last error text seen for a failed bash command, keyed by the same
     # whitespace-normalized cmd_key as `bash_failures`. Lets the rejection
     # stub name the ACTUAL cause ("No such file or directory", syntax error,
@@ -48,6 +57,16 @@ class ToolExecutionState:
 # directory failed and the model re-emitted it 11× because the rejection
 # blocked but never steered.
 _HARD_STOP_THRESHOLD = 4
+
+# After this many SUCCESSFUL writes to the SAME path within one turn, the
+# next write/edit to that path is rejected with a "stop rewriting, go
+# verify" nudge. Keyed by path (not exact args) so near-identical rewrites
+# and typo'd-content re-saves both count. The threshold is deliberately
+# generous — this is a DYNAMIC harness where a couple of legitimate
+# rewrites of the same file per turn are normal (scaffold → fill in →
+# fix a syntax error). We only step in once a file is clearly being
+# churned (4th write of the same path this turn).
+_WRITE_CHURN_THRESHOLD = 3
 
 
 def _diagnose_bash_error(err: str) -> str | None:
@@ -190,6 +209,29 @@ def dedup_stub_for_tool(
                 "exact anchor, use multi_edit/edit_diff where appropriate, or "
                 "move on if the file is already correct."
             )
+        # Write-churn guard: repeated SUCCESSFUL rewrites of the SAME path
+        # this turn. Keyed by path (not exact args) so near-duplicate content
+        # each round still accrues — the failed_calls/success_counts guards
+        # above miss this because every rewrite is a distinct arg blob. Once
+        # a file has already been written `_WRITE_CHURN_THRESHOLD` times, the
+        # earlier writes already landed on disk; another rewrite is churn.
+        # Nudge the model to STOP and verify (run the build) or move to the
+        # next file instead of rewriting the same path again.
+        churn_path = args.get("path") or args.get("file_path") or ""
+        if isinstance(churn_path, str) and churn_path:
+            writes = state.write_path_counts.get(churn_path, 0)
+            if writes >= _WRITE_CHURN_THRESHOLD:
+                return (
+                    f"REJECTED: {churn_path} has already been written {writes} "
+                    "times this turn. Those writes already landed on disk — "
+                    "rewriting the same file again is churn, not progress. "
+                    "STOP rewriting this path. Instead: run the build/test "
+                    "command (bash) to verify what you have and read the ACTUAL "
+                    "error it reports, or move on to the NEXT file. Only write "
+                    f"{churn_path} again if a concrete build error tells you "
+                    "exactly what line to change — and if so, use a small "
+                    "targeted edit_file, not a full rewrite."
+                )
     return None
 
 
@@ -292,6 +334,12 @@ def track_tool_result(
             state.files_modified.add(modified_path)
             state.files_read.pop(modified_path, None)
             state.io_calls.clear()
+            # Path-keyed write tally feeds the write-churn guard. Only
+            # successful writes count — a rejected/failed write did NOT
+            # land on disk, so it isn't churn.
+            state.write_path_counts[modified_path] = (
+                state.write_path_counts.get(modified_path, 0) + 1
+            )
     if (
         tool_name in {"write_file", "append_file", "edit_file", "multi_edit", "edit_diff"}
         and not failed
