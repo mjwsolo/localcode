@@ -361,6 +361,31 @@ def run_agent_loop(
     if not messages or messages[-1].get("content") != user_text:
         messages.append({"role": "user", "content": user_text})
 
+    # Attach any images pasted in the TUI to THIS turn's user message.
+    # app.ask()/compose_messages is text-only, so the base64 images ride
+    # on the app object (stashed by the chat screen). We rebuild the
+    # matching user message here — where the loop owns the message list —
+    # via the composer's OpenAI-compatible image_url parts. Cleared after
+    # so images send exactly once, and only when the model can see them.
+    _pending_imgs = getattr(app, "_pending_images", None)
+    if _pending_imgs:
+        app._pending_images = []
+        _profile = getattr(app, "profile", None)
+        if _profile is not None and getattr(_profile, "supports_vision", False):
+            try:
+                from ..composer import _build_user_message
+                _provider = getattr(getattr(app, "config", None).runtime, "provider", "llama_cpp")
+                for _i in range(len(messages) - 1, -1, -1):
+                    if (messages[_i].get("role") == "user"
+                            and messages[_i].get("content") == user_text):
+                        messages[_i] = _build_user_message(
+                            user_text, list(_pending_imgs), _profile, _provider
+                        )
+                        break
+            except Exception:
+                # Never let image plumbing break a normal text turn.
+                pass
+
     full_response: list[str] = []
     start_time = time.time()
     tools_called: list[str] = []
