@@ -699,9 +699,9 @@ def _normalize_repo_root_variants(cmd: str, repo: str) -> str:
     appear and clearly target this repo, normalize them to the actual root
     instead of letting the command fail for a fake home-directory variant.
     Then a general pass repairs ANY `/Users/<garbled>/` (not just repo paths)
-    back to the real home — the model mangles the username via penalty-induced
-    token corruption (`marcsolomon` → `marcolon`/`marcslomon`), a DIFFERENT
-    misspelling each time, so it can't be dedup'd; we fix it deterministically.
+    back to the real home — the model mangles the home-dir username via
+    penalty-induced token corruption (a DIFFERENT misspelling each time, so it
+    can't be dedup'd); we fix it deterministically against the real $HOME.
     """
     if not repo.startswith("/Users/"):
         return _repair_home_username(cmd)
