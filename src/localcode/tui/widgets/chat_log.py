@@ -1446,20 +1446,15 @@ class ChatLog(RichLog):
         body = self._truncate_oneline(body, self._visible_width())
         line = Text(no_wrap=True)
         split_name = len(prefix)
-        line.append(body[:split_name], style=f"bold {C.success}")
-        # Split the args+summary region: args in bright green, summary
-        # in dim green. We find the args closing ')' to split cleanly.
-        tail = body[split_name:]
-        if args_one and tail.startswith("("):
-            end = tail.find(")")
-            if end == -1:
-                line.append(tail, style=f"{C.success}")
-            else:
-                line.append(tail[: end + 1], style=f"{C.success}")
-                if len(tail) > end + 1:
-                    line.append(tail[end + 1 :], style=f"dim {C.success}")
-        else:
-            line.append(tail, style=f"dim {C.success}")
+        # Muted tool line: ONLY the "✓" glyph carries the success colour; the
+        # tool name is plain bold and the args/summary are dim grey. A long run
+        # of routine reads/writes then reads as calm structure instead of a wall
+        # of green — colour is reserved for real signal (errors, diffs). Matches
+        # codex / claude-code / opencode / pi, which render tool lines muted.
+        line.append(body[:4], style=C.success)          # "  ✓ " check glyph
+        line.append(body[4:split_name], style="bold")   # tool name — no colour
+        # args + summary both dim (grey), so nothing shouts for attention.
+        line.append(body[split_name:], style="dim")
         self.write(line)
         self._track_lines()
 
