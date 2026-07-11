@@ -1326,7 +1326,7 @@ def run_agent_loop(
                 try:
                     from ..tools.project_check import run_project_check
                     out.print_info("Verifying — running the project's typecheck…")
-                    _proj_errors = run_project_check(str(app.repo_root))
+                    _proj_errors = run_project_check(str(app.repo_root), ctx_tokens=_ctx_tokens_turn)
                 except Exception:
                     _proj_errors = None
                 try:
