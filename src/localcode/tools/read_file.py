@@ -52,31 +52,87 @@ SCHEMA = {
 }
 
 
+# Fuzzy-match ratio at/above which we AUTO-READ the real file instead of
+# merely suggesting it. 0.85 is high enough that only genuine typos /
+# case-variants of one real name match (Aki→Anki, gitHub→Github), not two
+# distinct files that happen to be somewhat similar.
+AUTO_READ_RATIO = 0.85
+
+
+def _list_dir_candidates(missing):
+    """(candidates, base) — every file under the nearest existing ancestor of
+    `missing`. Walk up to 6 levels so a wrong path segment deep in the tree
+    still resolves to a searchable directory. Capped at 4000 files."""
+    from pathlib import Path
+    missing = Path(missing)
+    base = missing.parent
+    for _ in range(6):
+        if base.exists():
+            break
+        base = base.parent
+    if not base.exists():
+        return [], None
+    candidates = []
+    for p in base.rglob("*"):
+        if p.is_file():
+            candidates.append(p)
+        if len(candidates) > 4000:
+            break
+    return candidates, base
+
+
+def _confident_match(missing):
+    """Return the ONE real file `missing` is almost certainly a typo of, else
+    None. Authoritative (used to auto-read), so it only fires when unambiguous:
+
+      • exactly one file whose basename equals `missing`'s case-insensitively
+        (a pure case/typo of a unique name — gitHub→Github, README.MD→readme.md), OR
+      • exactly one file whose basename fuzzy-matches at ratio ≥ AUTO_READ_RATIO.
+
+    Requiring the winner to be UNIQUE prevents auto-reading the wrong one of
+    several same-named files in different dirs — that stays a soft suggestion.
+    """
+    import difflib
+    from pathlib import Path
+    try:
+        candidates, _ = _list_dir_candidates(missing)
+        if not candidates:
+            return None
+        name = Path(missing).name
+        # Pure case/typo of a unique basename → definitely that file.
+        same = [p for p in candidates if p.name.lower() == name.lower()]
+        if len(same) == 1:
+            return same[0]
+        if len(same) > 1:
+            return None  # ambiguous by name — don't auto-pick.
+        # High-confidence fuzzy basename match, and it must be unique.
+        names = [p.name for p in candidates]
+        close = difflib.get_close_matches(name, names, n=1, cutoff=AUTO_READ_RATIO)
+        if close:
+            hits = [p for p in candidates if p.name == close[0]]
+            if len(hits) == 1:
+                return hits[0]
+    except Exception:
+        pass
+    return None
+
+
 def _suggest_path(missing) -> str:
     """Suggest the real file when the model gave a typo'd/wrong-case path.
 
     Walk up to the nearest existing ancestor dir and fuzzy-match the missing
-    filename (and its path segments) against what's actually there.
+    filename (and its path segments) against what's actually there. Lower-
+    confidence sibling of `_confident_match`: used only when we're NOT sure
+    enough to auto-read, so it stays a hint the model can act on.
     """
     import difflib
     from pathlib import Path
     try:
         missing = Path(missing)
         name = missing.name
-        # Nearest existing ancestor to search in.
-        base = missing.parent
-        for _ in range(6):
-            if base.exists():
-                break
-            base = base.parent
-        if not base.exists():
+        candidates, base = _list_dir_candidates(missing)
+        if not candidates:
             return ""
-        candidates = []
-        for p in base.rglob("*"):
-            if p.is_file():
-                candidates.append(p)
-            if len(candidates) > 4000:
-                break
         names = [p.name for p in candidates]
         close = difflib.get_close_matches(name, names, n=1, cutoff=0.6)
         if close:
@@ -90,14 +146,34 @@ def _suggest_path(missing) -> str:
 def execute(ctx: ToolContext, args: dict) -> str:
     if "path" not in args:
         return "Error: 'path' argument is required for read_file."
-    path = ctx.repo / args["path"]
+    requested = args["path"]
+    path = ctx.repo / requested
+    note = ""
+    source_disp = str(requested)
     if not path.exists():
         # A small model invents misspelled/wrong-case paths (a dropped letter,
         # gitHub/github/Github) and, getting a bare "not found", retries with
         # ANOTHER wrong variant forever (dedup can't collapse differing typos).
-        # Point it at the real nearby file so it corrects instead of guessing.
-        hint = _suggest_path(path)
-        return f"File not found: {args['path']}" + (f"\n{hint}" if hint else "")
+        real = _confident_match(path)
+        if real is None:
+            # Not confident enough to auto-read — hand back the best soft hint.
+            hint = _suggest_path(path)
+            return f"File not found: {requested}" + (f"\n{hint}" if hint else "")
+        # AUTHORITATIVE recovery: `requested` is unambiguously a typo/case-
+        # variant of exactly one real file. Read THAT file now instead of
+        # bouncing the model back with a suggestion it can ignore (which is
+        # what fuels the 20+-retry not-found death loop). The note pins the
+        # correct path so the next call uses it directly.
+        try:
+            source_disp = str(real.relative_to(ctx.repo))
+        except Exception:
+            source_disp = str(real)
+        note = (
+            f"[read {source_disp} instead of '{requested}' — that path does not "
+            f"exist and this is the only close match. Use '{source_disp}' "
+            "exactly from now on; do NOT guess more spellings.]\n\n"
+        )
+        path = real
     content = path.read_text(errors="replace")
     lines = content.splitlines()
     default_limit, max_default_chars = _dynamic_read_defaults(ctx)
@@ -131,7 +207,7 @@ def execute(ctx: ToolContext, args: dict) -> str:
     # phrases (IGNORE ALL PRIOR INSTRUCTIONS, etc.) with a visible
     # warning before the content. See src/localcode/injection_defense.py.
     from ..injection_defense import wrap_untrusted
-    return wrap_untrusted(result, source=str(args["path"]))
+    return note + wrap_untrusted(result, source=source_disp)
 
 
 def is_concurrency_safe(args: dict) -> bool:
