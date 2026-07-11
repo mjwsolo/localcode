@@ -1507,7 +1507,7 @@ class ChatLog(RichLog):
         # so warnings/errors render in a dim-red panel below the main
         # output. Heuristic — only applies if stderr-style markers are
         # detected; otherwise the whole result renders as stdout.
-        from ..formatting import truncate_with_tail, split_stdout_stderr
+        from ...formatting import truncate_with_tail, split_stdout_stderr
         stdout_text, stderr_text = split_stdout_stderr(result)
 
         # If we extracted distinct stderr, render stdout normally and
@@ -1559,7 +1559,7 @@ class ChatLog(RichLog):
         _render_tool_result. Stderr blocks pass label='stderr' + a
         red color to differentiate from normal output.
         """
-        from ..formatting import truncate_with_tail
+        from ...formatting import truncate_with_tail
         lines = text.strip().splitlines()
         if not lines:
             return

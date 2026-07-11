@@ -510,13 +510,28 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
         # subsequent multi-turn requests can restore and skip prefix
         # re-evaluation. Measured 19× speedup on turn 2 vs cold turn 1
         # (5932 ms → 302 ms prompt eval at 2K ctx).
-        # --ctx-checkpoints 32     keep up to 32 rolling state snapshots
+        # --ctx-checkpoints N      keep up to N rolling state snapshots
         # --checkpoint-every-n-tokens 2048  snapshot every 2K tokens during prefill
         # For pure-attention models these are no-ops; cheap to always set.
         # Note: --swa-full would additionally warm the attention SWA cache
         # but causes Metal OOM at our 14336 MiB sysctl on 16 GB Macs. Skip.
+        # Scale the snapshot count DOWN as context grows: a checkpoint stores
+        # the model's recurrent/KV state, and at 256K each one is far larger
+        # than at 8K. 32 snapshots × a 256K state is gigabytes of extra RSS
+        # that pushed the server into the memory killer on long tasks. 32 is
+        # only worth it at small contexts where each snapshot is tiny; at big
+        # windows a handful still gives the multi-turn prefix-reuse speedup.
+        _ckpt_ctx = self._target_num_ctx(model_path=model_path)
+        if _ckpt_ctx >= 131072:
+            _ckpts = "4"
+        elif _ckpt_ctx >= 65536:
+            _ckpts = "8"
+        elif _ckpt_ctx >= 32768:
+            _ckpts = "16"
+        else:
+            _ckpts = "32"
         cmd.extend([
-            "--ctx-checkpoints", "32",
+            "--ctx-checkpoints", _ckpts,
             "--checkpoint-every-n-tokens", "2048",
         ])
         # Single slot, disable fit check (we manage memory via sysctl)

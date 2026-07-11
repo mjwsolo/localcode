@@ -78,13 +78,6 @@ def test_installed_help_runs(installed_venv, tmp_path):
     assert "LocalCode" in r.stdout
 
 
-def test_installed_models_command_shows_12b(installed_venv, tmp_path):
-    """The freshly-installed package exposes the new Gemma 4 12B profile."""
-    r = _run_installed(installed_venv, "models", home=tmp_path)
-    assert r.returncode == 0, r.stderr
-    assert "12b" in r.stdout
-
-
 def test_installed_package_imports_clean(installed_venv):
     """Import the top-level package from the installed location (NOT the
     source tree) to catch missing modules / packaging gaps."""

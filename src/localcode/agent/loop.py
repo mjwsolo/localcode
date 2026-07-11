@@ -52,8 +52,6 @@ from .context import (
     _prepare_model_messages,
     _summarize_args,
     _truncate_result,
-    _estimate_tokens,
-    _compact_messages,
     build_progress_ledger,
 )
 from .helpers import (
@@ -334,14 +332,23 @@ def run_agent_loop(
             messages.append(m)
     elif use_thinking:
         # Thinking mode: keep context shorter but preserve recent assistant responses
-        # Only drop very large blocks (repo structure dumps, huge tool results)
+        # Only drop very large blocks (repo structure dumps, huge tool results).
+        # The "large block" threshold scales with the model's real context window
+        # instead of a fixed 1500 chars — on a 256K window 1500 chars is ~1% of
+        # the budget, so the old fixed value silently stripped tool results the
+        # big machine had ample room to keep (and needs, to track its work).
+        try:
+            _tw = int(app.engine._target_num_ctx())
+        except Exception:
+            _tw = 0
+        _big_block_chars = max(1500, int(_tw * 3.5 * 0.02)) if _tw else 1500
         for m in composed_messages:
             if m.get("role") == "system":
                 continue
             content = str(m.get("content", ""))
             # Skip very large context blocks (repo structure, bulk retrieval results)
             # but keep normal assistant responses so model remembers recent conversation
-            if len(content) > 1500 and m.get("role") not in ("user", "assistant"):
+            if len(content) > _big_block_chars and m.get("role") not in ("user", "assistant"):
                 continue
             messages.append(m)
     else:
@@ -373,8 +380,23 @@ def run_agent_loop(
     )
     hook_before_turn(_hook_state)
     _app_build_request = is_app_build_request(user_text) or _goal_state.goal_type == "build_app"
-    _aggregate_budget = 24_000 if _app_build_request else MAX_AGGREGATE_PER_TURN
-    _compact_token_limit = 12_000 if _app_build_request else 27_000
+    # Per-turn tool-output budget (in chars) scales with the model's REAL
+    # context window instead of a fixed cap: allow tool results to fill up to
+    # ~35% of the window before further output this turn is truncated. Dynamic
+    # per RAM/model — a 256K window keeps far more than a 64K one. The old fixed
+    # values (24K for app builds, 100K otherwise) starved big machines and,
+    # perversely, gave app builds — which read/write the MOST — the LEAST. The
+    # floor keeps small windows usable; within-turn overflow is still caught by
+    # the window-aware compaction pass at the top of each round.
+    try:
+        _ctx_tokens_turn = int(app.engine._target_num_ctx())
+    except Exception:
+        _ctx_tokens_turn = 0
+    _aggregate_budget = (
+        max(MAX_AGGREGATE_PER_TURN, int(_ctx_tokens_turn * 3.5 * 0.35))
+        if _ctx_tokens_turn
+        else MAX_AGGREGATE_PER_TURN
+    )
     _completion_gate_retries = 0
     _MAX_COMPLETION_GATE_RETRIES = 1
     _edit_recovery_nudges = 0
@@ -1805,9 +1827,15 @@ def run_agent_loop(
                 _write_existing_rejections_this_turn += 1
             # Show result to user — send full result for write/edit so TUI can render diff
             is_error = tool_result_is_error(tool_result)
-            is_rejected = tool_result.startswith("REJECTED:")
+            # Match BOTH "REJECTED:" and "REJECTED — HARD STOP:" (em-dash) — the
+            # latter used to slip past this colon-only check and render as a raw
+            # red protocol line to the user.
+            is_rejected = tool_result.startswith("REJECTED")
             if is_rejected:
-                out.tool_result(tool_result, error=True, idx=idx)
+                # Internal tool-routing redirect — the model needs the full
+                # REJECTED payload (kept in `messages` below), but the user sees
+                # only a short neutral note, not a red error block.
+                out.tool_result(_brief_result(tool_name, tool_result), error=False, idx=idx)
             elif tool_name in ("write_file", "append_file", "edit_file") and not is_error:
                 out.tool_result(tool_result, error=False, idx=idx)
             else:
@@ -1817,12 +1845,16 @@ def run_agent_loop(
             _facts_note = facts_suffix(_tool_facts)
             if _facts_note and _facts_note not in tool_result:
                 tool_result = f"{tool_result}{_facts_note}"
-            tool_result = _truncate_result(tool_result, tool_name)
+            tool_result = _truncate_result(tool_result, tool_name, ctx_tokens=_ctx_tokens_turn)
             aggregate_size += len(tool_result)
 
-            # Aggregate budget
+            # Aggregate budget. The post-budget clamp scales with the window too:
+            # once a turn's cumulative tool output crosses the (dynamic) budget,
+            # a big machine still keeps a proportionally larger stub than a 16 GB
+            # one instead of a brutal fixed 500 chars.
             if aggregate_size > _aggregate_budget:
-                tool_result = tool_result[:500] + "\n[Truncated — context budget exceeded this turn]"
+                _stub_chars = max(500, int(_ctx_tokens_turn * 3.5 * 0.01)) if _ctx_tokens_turn else 500
+                tool_result = tool_result[:_stub_chars] + "\n[Truncated — context budget exceeded this turn]"
 
             # Add to history
             messages.append({
@@ -1982,9 +2014,13 @@ def run_agent_loop(
         if loop_detected:
             break
 
-        # Context compaction check (85% of 32K = ~27K tokens)
-        if _estimate_tokens(messages) > _compact_token_limit:
-            messages = _compact_messages(messages, out)
+        # Compaction is handled ONCE per round at the TOP of the loop by the
+        # window-aware `should_compact`/`compact` path (see ~line 612), whose
+        # threshold scales with the model's real context window and the user's
+        # RAM. The old fixed-12K/27K second pass that used to live here fired at
+        # <5% of a 256K window, crushed all but 8 messages into a 5-line note,
+        # and made the model lose provenance of its own writes → the re-read /
+        # "fix systematically" churn loop. Removed: one dynamic system only.
 
     else:
         # `for…else` only fires when the loop exhausted naturally

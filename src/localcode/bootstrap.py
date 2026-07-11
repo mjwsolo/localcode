@@ -132,6 +132,10 @@ def _runner_panel(label: str, detail: str, tick: int, steps: list[SetupStep], cu
 
 _progress_status: dict[str, str] = {}
 
+# Generic return type for run_with_runner (the TypeVar was imported but never
+# bound — ruff F821, and it broke the E9/F82 lint gate in CI).
+T = TypeVar("T")
+
 
 def run_with_runner(console: Console, step: SetupStep, steps: list[SetupStep], fn: Callable[[], T]) -> T:
     result: dict[str, T] = {}
