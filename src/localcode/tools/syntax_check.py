@@ -20,6 +20,7 @@ LOCALCODE_SYNTAX_CHECK=0.
 """
 from __future__ import annotations
 
+import ast
 import json
 import os
 import subprocess
@@ -70,10 +71,40 @@ def _check_json(content: str) -> str | None:
 def _check_python(content: str, path: str) -> str | None:
     try:
         compile(content, path, "exec")
-        return None
     except SyntaxError as e:
         loc = f"line {e.lineno}" + (f" col {e.offset}" if e.offset else "")
         return f"Python syntax error at {loc}: {e.msg}"
+    # Grammar is valid — also flag a name defined twice at module top level
+    # (legal Python, but almost always an accidental clobber the model should fix).
+    return _check_python_duplicates(content)
+
+
+def _check_python_duplicates(content: str) -> str | None:
+    """Best-effort: a top-level def/class name declared twice in one module.
+
+    Skips @overload-decorated defs (a legitimate repeated name). Returns None on
+    any parse trouble so this never blocks a write it can't reason about.
+    """
+    try:
+        tree = ast.parse(content)
+    except Exception:
+        return None
+    seen: dict[str, int] = {}
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        # @overload / @typing.overload legitimately repeats a name — ignore.
+        if any(
+            (getattr(dec, "attr", None) or getattr(dec, "id", None)) == "overload"
+            for dec in node.decorator_list
+        ):
+            continue
+        name = node.name
+        line = node.lineno
+        if name in seen:
+            return f"duplicate declaration: '{name}' declared at lines {seen[name]} and {line}"
+        seen[name] = line
+    return None
 
 
 def _check_treesitter(content: str, lang: str) -> str | None:
@@ -94,7 +125,10 @@ def _check_treesitter(content: str, lang: str) -> str | None:
         return None
     root = tree.root_node
     if not root.has_error:
-        return None
+        # Grammar is valid — but a duplicate top-level declaration is still a
+        # real build error (e.g. `export function foo` twice → esbuild/tsc
+        # "has already been declared") that a grammar check alone can't catch.
+        return _check_duplicate_decls(root, content, lang)
     node = _first_error_node(root)
     if node is None:
         return f"syntax error detected in this {lang} file (unbalanced brackets/quotes or a stray token)"
@@ -119,4 +153,64 @@ def _first_error_node(root):
             return n
         # push children in order so we return the earliest error
         stack.extend(reversed(n.children))
+    return None
+
+
+# Top-level TS/JS declaration node types that bind a single name.
+_JS_NAMED_DECL = frozenset({
+    "function_declaration", "generator_function_declaration",
+    "class_declaration", "abstract_class_declaration",
+    "interface_declaration", "type_alias_declaration", "enum_declaration",
+})
+# var/let/const wrappers that hold one or more variable_declarator children.
+_JS_VAR_DECL = frozenset({"lexical_declaration", "variable_declaration"})
+
+
+def _check_duplicate_decls(root, content: str, lang: str) -> str | None:
+    """Flag a top-level name declared more than once in a TS/JS file.
+
+    Grammatically valid, but a hard build error real users hit (esbuild/tsc:
+    "The symbol X has already been declared"). Best-effort over the parse tree
+    we already produced; returns None for unrelated languages or on any trouble.
+    """
+    if lang not in ("javascript", "typescript", "tsx"):
+        return None
+    try:
+        src = content.encode("utf-8")
+    except Exception:
+        return None
+
+    def _text(node) -> str:
+        return src[node.start_byte:node.end_byte].decode("utf-8", "replace")
+
+    seen: dict[str, int] = {}
+
+    def _record(name_node) -> str | None:
+        if name_node is None or name_node.type != "identifier":
+            return None
+        name = _text(name_node)
+        line = name_node.start_point[0] + 1
+        if name in seen:
+            return f"duplicate declaration: '{name}' declared at lines {seen[name]} and {line}"
+        seen[name] = line
+        return None
+
+    for child in root.children:
+        node = child
+        # `export function foo` / `export const x` — unwrap to the declaration.
+        if node.type == "export_statement":
+            decl = node.child_by_field_name("declaration")
+            if decl is None:
+                continue
+            node = decl
+        if node.type in _JS_NAMED_DECL:
+            err = _record(node.child_by_field_name("name"))
+            if err:
+                return err
+        elif node.type in _JS_VAR_DECL:
+            for c in node.children:
+                if c.type == "variable_declarator":
+                    err = _record(c.child_by_field_name("name"))
+                    if err:
+                        return err
     return None

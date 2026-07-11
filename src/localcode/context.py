@@ -16,11 +16,68 @@ IGNORE_DIRS = {
 }
 
 
+# Non-.git project markers, in the same spirit as agent/context._PROJECT_MARKERS.
+# When a directory has no git history, one of these still identifies the ROOT of
+# a real project — so a deep build dir anchors to its own project instead of
+# silently adopting $HOME.
+_ROOT_PROJECT_MARKERS = (
+    "package.json",
+    "pyproject.toml",
+    "go.mod",
+    "Cargo.toml",
+    "tsconfig.json",
+)
+
+
+def _is_home_or_shallower(path: Path) -> bool:
+    """True when `path` is $HOME, its parent, or the filesystem root/anchor.
+
+    These are never legitimate project roots. Adopting one forces the model to
+    carry long absolute paths (e.g. `$HOME/Desktop/Github/.../Anki/<model>/…`)
+    on every tool call, which it then corrupts (`Aki`, `gitHub`, hallucinated
+    users) and dies in failed-read loops. This predicate lets us refuse them.
+    """
+    try:
+        home = Path.home().resolve()
+    except (RuntimeError, OSError):
+        return False
+    return path in {home, home.parent, Path(path.anchor)}
+
+
 def find_repo_root(start: Path) -> Path:
+    """Locate the project root to anchor the model's paths against.
+
+    Order of preference:
+      1. The nearest ancestor containing `.git` — a real VCS root. This path is
+         behaviour-IDENTICAL to the original implementation and is what runs
+         whenever the user is inside a git checkout.
+      2. If there is no `.git` anywhere above `start`, the nearest ancestor
+         carrying a non-git project marker (package.json / pyproject.toml /
+         go.mod / Cargo.toml / tsconfig.json). This pins a *real* project dir
+         instead of walking all the way up to (and silently adopting) $HOME.
+      3. Otherwise `start` itself — but NEVER bare $HOME (or shallower). When
+         `start` resolves to $HOME with no project marker, we still hand back
+         $HOME (there is nothing nearer to anchor to), but callers can detect
+         that degenerate case via `_is_home_or_shallower` and mark it.
+    """
     current = start.resolve()
-    for candidate in [current, *current.parents]:
+    chain = [current, *current.parents]
+
+    # 1. A real .git root always wins — identical to the original behaviour.
+    for candidate in chain:
         if (candidate / ".git").exists():
             return candidate
+
+    # 2. No .git: prefer the nearest non-git project marker, but never accept a
+    #    marker at $HOME or shallower (those are not project roots).
+    for candidate in chain:
+        if _is_home_or_shallower(candidate):
+            break
+        if any((candidate / marker).exists() for marker in _ROOT_PROJECT_MARKERS):
+            return candidate
+
+    # 3. Nothing better than the launch dir. Return it unchanged (this is cwd);
+    #    if it IS $HOME the caller is responsible for marking the degenerate case.
     return current
 
 

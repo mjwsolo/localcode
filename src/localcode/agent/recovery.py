@@ -43,6 +43,10 @@ __all__ = [
     "ChurnSignal",
     "detect_churn",
     "churn_nudge_for",
+    "NOT_FOUND_LOOP_LIMIT",
+    "not_found_key",
+    "detect_not_found_loop",
+    "not_found_nudge",
 ]
 
 
@@ -400,4 +404,80 @@ def rewrite_hard_stop(path, file_write_counts) -> str | None:
         "and it's still not right — full rewrites are drifting. Make ONE "
         "targeted edit_file change to the broken line, or leave this file and "
         "move on. Do NOT call write_file on this path again."
+    )
+
+
+# ── Repeated file-not-found (typo death loop) ───────────────────────
+#
+# read_file's own _confident_match auto-reads a real file when the typo
+# is unambiguous, which breaks MOST of these loops at the source. But
+# when the guessed paths are too far off to match (or point at a dir
+# that doesn't exist), the model can still bounce "file not found" 20+
+# times, each time with a slightly different wrong spelling/case. The
+# byte-identical breakers miss it (each path differs); the churn
+# detectors miss it (read_file is read-only, so it just extends the
+# investigation streak). This is the read-side analogue of the bash
+# command-failure guard: key on the PARENT DIRECTORY (differing typos
+# of one filename share a parent) and count not-found failures.
+
+NOT_FOUND_LOOP_LIMIT = 3
+"""How many 'file not found' read_file failures against the SAME parent
+directory may occur in one turn before we pin the correct path. 3 (like
+CHURN_COMMAND_FAIL_LIMIT): a genuine "read A, oops try B" correction is 1-2
+misses; a 3rd not-found in the same dir means the model is spraying spelling
+variants of a real filename it should just list_files for."""
+
+
+def not_found_key(path: str) -> str:
+    """Normalize a missing read path to the family we count not-found errors
+    by: its parent directory. Different typos of the same file
+    (Aki.md / Anki.md / anki.md) all share a parent, so keying on the parent
+    collapses them into one repeat count. Returns "." for a bare filename."""
+    from pathlib import PurePosixPath
+    p = PurePosixPath(str(path or "").strip().replace("\\", "/"))
+    return str(p.parent)
+
+
+def detect_not_found_loop(not_found_counts: dict[str, int]) -> tuple[str, int] | None:
+    """Return (parent_dir, count) when read_file has failed 'file not found'
+    NOT_FOUND_LOOP_LIMIT+ times against the same parent directory this turn —
+    the model is guessing typo/case variants of a real filename instead of
+    listing the directory once.
+
+    Pure function. Caller maintains `not_found_counts` across the turn
+    (parent-dir key via `not_found_key` → count of not-found read failures).
+    Returns None when nothing crosses the threshold.
+    """
+    worst = ""
+    worst_n = 0
+    for key, n in not_found_counts.items():
+        if n > worst_n:
+            worst, worst_n = key, n
+    if worst_n >= NOT_FOUND_LOOP_LIMIT:
+        return worst, worst_n
+    return None
+
+
+def not_found_nudge(parent_dir: str, real_names: list[str] | None = None) -> str:
+    """Hard, forward-only nudge pinning the correct recovery path for a
+    not-found loop: list the directory ONCE, then read an EXACT name from it.
+
+    Like `churn_nudge_for`, this is a FORWARD-ONLY imperative with NO
+    echo-able self-critical loop language ("you keep failing", "stop
+    guessing in circles") that a small model would parrot back into its own
+    context. When `real_names` is supplied (caller listed the dir), the exact
+    names are pinned so the model can't invent another variant.
+    """
+    listing = ""
+    if real_names:
+        shown = ", ".join(sorted(real_names)[:20])
+        listing = (
+            f" The files that actually exist in {parent_dir} are: {shown}. "
+            "Read one of those EXACT names."
+        )
+    return (
+        f"SYSTEM: read_file cannot find that file in {parent_dir}. Do not try "
+        "another spelling or capitalization. Call list_files on "
+        f"{parent_dir} ONCE, then read_file with an EXACT name from that "
+        "listing." + listing
     )

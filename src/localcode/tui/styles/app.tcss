@@ -54,14 +54,16 @@ Screen {
 
 /* ── Input area ── */
 
-/* Rounded thin border — the input is the one boxed element on screen,
-   which makes it read as "type here" without any label. The border
-   lives on #input-box (preview + input row together) so a long value
-   that wraps to multiple lines grows inside the field instead of
-   spilling above it into the chat area. */
+/* Two horizontal rules — a line above and below the input, no left/right
+   sides — which reads as "type here" without boxing it in. The border lives
+   on #input-box (preview + input row together) so a long value that wraps to
+   multiple lines grows inside the field instead of spilling above it into the
+   chat area. */
 #input-box {
     height: auto;
-    border: round #444444;
+    border: none;
+    border-top: solid #444444;
+    border-bottom: solid #444444;
     background: ansi_default;
     background-tint: transparent 0%;
 }

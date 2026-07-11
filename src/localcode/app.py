@@ -15,7 +15,7 @@ from .composer import compose_messages
 # loading were dead code (no user configured an MCP server; Playwright
 # browser path was unreachable from the agent loop).
 from .config import AppConfig, ensure_home_dirs, save_config
-from .context import build_context_block, find_repo_root
+from .context import build_context_block, find_repo_root, _is_home_or_shallower
 from .indexer import build_index, load_index, search_index
 from .models import GEMMA_PROFILES, get_runtime_model, resolve_profile
 from .patching import build_diff, parse_diff
@@ -138,6 +138,20 @@ class LocalCodeApp:
             _, preset = benchmark_report(self.config, self.config.runtime.mode)
             apply_preset(self.config, preset, model=self.config.runtime.model)
         self.repo_root = find_repo_root(cwd or Path.cwd())
+        # Degenerate case: no .git and no project marker anywhere above the
+        # launch dir, and that launch dir is $HOME (or shallower). We can't
+        # invent a better root, but we MUST flag it — otherwise the model ends
+        # up carrying 70-char absolute paths (with spaces/mixed-case) on every
+        # tool call and corrupts them into failed-read loops. Mark it so the
+        # rest of the app (and logs) know paths are unanchored, and prefer the
+        # deepest dir the model actually builds in once files start landing.
+        self.repo_root_is_home = _is_home_or_shallower(self.repo_root)
+        if self.repo_root_is_home:
+            self.log.warning(
+                "No project root found above %s; running unanchored at $HOME. "
+                "Paths will be resolved relative to whatever directory the task "
+                "builds in.", self.repo_root,
+            )
         self.store = SessionStore()
         if session_id:
             self.session = self.store.load(session_id)

@@ -51,6 +51,7 @@ Top rules (most important first):
 Plan & tools:
 - For a task with 3+ steps, call todo_write first to lay out the steps, then keep exactly one in_progress and mark each done the instant it's finished. Your list is shown back each round — use it to see what's left.
 - Use real, repo-relative paths (don't improvise `/Users/...` paths).
+- For files and dirs use list_files/read_file/write_file/edit_file — NOT bash (`ls`, `cat`, `cat >`, `>`). bash is only for running commands (npm, git, build, test).
 - edit_file for existing files: anchor `old_string` on 2–4 adjacent lines (matching is whitespace-tolerant; the leading `<n>\\t` from read_file is stripped for you). write_file to create or fully rewrite.
 - On a tool error, read it, fix the specific cause, and retry — don't give up after one failure, and don't repeat the same failing call.
 - New project → prefer a small multi-file layout with a thin entrypoint. Write code valid for the file's real language and match the project's existing conventions.
