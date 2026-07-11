@@ -45,6 +45,7 @@ llama_cpp_lookup_cache = false
 kv_cache_type_k = "q8_0"
 kv_cache_type_v = "turbo4"
 llama_cpp_binary = ""
+vision_enabled = false
 temperature = 1.0
 max_context_chars = 200000
 request_timeout_seconds = 600
@@ -116,6 +117,11 @@ class RuntimeConfig:
     diffusion_cli_binary: str = ""         # llama-diffusion-cli path (DiffusionGemma runner; built on demand)
     cohere_server_binary: str = ""         # llama-server with cohere2moe (North-Mini-Code; built on demand from PR #24260)
     model_dir: str = ""                    # directory where GGUFs download to (blank → ~/.local/share/localcode/models)
+    # Vision toggle. Tracks whether the multimodal projector should be
+    # loaded (--mmproj) alongside the text decoder. Persisted so turning
+    # vision OFF just relaunches WITHOUT --mmproj (frees RAM) while KEEPING
+    # the projector file on disk — re-enabling is instant, no re-download.
+    vision_enabled: bool = False
     temperature: float = 1.0  # Unsloth's official Gemma 4 recommendation — prevents IQ3_S mode-collapse loops
     max_context_chars: int = 200000
     request_timeout_seconds: int = 600
@@ -241,6 +247,7 @@ def save_config(config: AppConfig) -> Path:
         f'diffusion_cli_binary = "{config.runtime.diffusion_cli_binary}"\n'
         f'cohere_server_binary = "{config.runtime.cohere_server_binary}"\n'
         f'model_dir = "{config.runtime.model_dir}"\n'
+        f"vision_enabled = {'true' if config.runtime.vision_enabled else 'false'}\n"
         f"temperature = {config.runtime.temperature}\n"
         f"max_context_chars = {config.runtime.max_context_chars}\n"
         f"request_timeout_seconds = {config.runtime.request_timeout_seconds}\n"
@@ -321,6 +328,7 @@ def load_config() -> AppConfig:
         diffusion_cli_binary=os.environ.get("LOCALCODE_DIFFUSION_CLI_BINARY", runtime_data.get("diffusion_cli_binary", "")),
         cohere_server_binary=os.environ.get("LOCALCODE_COHERE_SERVER_BINARY", runtime_data.get("cohere_server_binary", "")),
         model_dir=os.environ.get("LOCALCODE_MODEL_DIR", runtime_data.get("model_dir", "")),
+        vision_enabled=str(os.environ.get("LOCALCODE_VISION_ENABLED", runtime_data.get("vision_enabled", False))).lower() in {"1", "true", "yes", "on"},
         # `llama_cpp_spec_type` migration (2026-04-26): old configs
         # auto-saved "ngram-mod" or "ngram-simple" from a benchmark
         # preset. N-gram speculative decoding looks up matching
