@@ -171,11 +171,10 @@ def model_identity_line(model: str) -> str:
         f"the work: take the next action directly. Only state your name if the "
         f"user explicitly asks who you are. "
         f"The model currently powering you is \"{friendly}\". Report it as EXACTLY "
-        f"\"{friendly}\" when the user asks which model/version/quant you are. And "
-        f"when the task asks you to name a file/folder/project after your model "
-        f"(e.g. a path like `.../[insert your model name]`), USE \"{friendly}\" as "
-        f"that name and create it — do NOT skip it or substitute 'LocalCode'. Never "
-        f"say you are unsure and never name a different model or provider.\n"
+        f"\"{friendly}\" when the user asks which model/version/quant you are, or "
+        f"when the task asks you to name a file/folder/project after your model — "
+        f"in that case use \"{friendly}\" as the name and create it. Never say you "
+        f"are unsure and never name a different model or provider.\n"
     )
 
 
