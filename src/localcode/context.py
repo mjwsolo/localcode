@@ -33,9 +33,10 @@ def _is_home_or_shallower(path: Path) -> bool:
     """True when `path` is $HOME, its parent, or the filesystem root/anchor.
 
     These are never legitimate project roots. Adopting one forces the model to
-    carry long absolute paths (e.g. `$HOME/Desktop/Github/.../Anki/<model>/…`)
-    on every tool call, which it then corrupts (`Aki`, `gitHub`, hallucinated
-    users) and dies in failed-read loops. This predicate lets us refuse them.
+    carry long absolute paths (e.g. `$HOME/some/deep/project/<subdir>/…`)
+    on every tool call, which it then corrupts (dropped letters, wrong case,
+    hallucinated users) and dies in failed-read loops. This predicate lets us
+    refuse them.
     """
     try:
         home = Path.home().resolve()

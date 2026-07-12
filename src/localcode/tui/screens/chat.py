@@ -10,6 +10,7 @@ Layout (top to bottom):
 from __future__ import annotations
 
 from ...theme import C
+from ..paste_collapse import PasteBuffer, is_large_paste
 
 # Sentinel: lets _model_supports_thinking accept a pre-resolved ModelChoice
 # (the 2 s status tick already has one) vs. resolving it itself.
@@ -585,7 +586,19 @@ class _ChatTextArea(TextArea):
         prevent_default = getattr(event, "prevent_default", None)
         if callable(prevent_default):
             prevent_default()
-        self.insert(joined)
+        # Collapse a LARGE paste to a single deletable chip so the composer
+        # doesn't flood (every peer does this: claude-code
+        # `[Pasted text #1 +400 lines]`, pi `[paste #1 +123 lines]`,
+        # opencode `[Pasted ~N lines]`). The real text is stashed in the
+        # per-widget PasteBuffer and spliced back at submit
+        # (ChatScreen._submit_message). Small pastes stay inline.
+        if is_large_paste(joined):
+            if getattr(self, "_paste_buffer", None) is None:
+                self._paste_buffer = PasteBuffer()
+            chip = self._paste_buffer.add(joined)
+            self.insert(chip)
+        else:
+            self.insert(joined)
         event.stop()
         # Grow now AND after the next render: a single-line paste only knows its
         # wrapped row-count once the document re-wraps on the following frame,
@@ -1405,6 +1418,19 @@ class ChatScreen(Screen):
 
         timer = self._elapsed_str()
 
+        # Esc-to-interrupt affordance — spliced inside the badge parens the
+        # way codex renders `(3s • esc to interrupt)` and claude-code /
+        # opencode / pi all surface "esc to interrupt". Only while a turn is
+        # actually cancellable (`_agent_busy`); `_elapsed_str` always wraps
+        # in parens so we inject just before the closing one.
+        def _with_interrupt(badge: str) -> str:
+            if not self._agent_busy:
+                return badge
+            hint = "esc to interrupt"
+            if badge.endswith(")"):
+                return f"{badge[:-1]} · {hint})"
+            return f"{badge} · {hint}"
+
         # ● for tools (blue ball), ◆ for thinking
         icon = "●" if self._active_mode == "tool" else "◆"
         label = f"{icon} {text}..."
@@ -1424,7 +1450,10 @@ class ChatScreen(Screen):
             if self._active_mode == "tool" and "(" in compact_text:
                 compact_text = compact_text.split("(", 1)[0]
             label = f"{icon} {compact_text}..."
-            max_label = max(8, width - (len(timer) + 4 if width >= 28 else 2))
+            # Only append the interrupt hint on a roomy-enough narrow
+            # terminal — otherwise the badge would overflow the row.
+            badge = _with_interrupt(timer) if width >= 56 else timer
+            max_label = max(8, width - (len(badge) + 4 if width >= 28 else 2))
             if len(label) > max_label:
                 label = label[: max(3, max_label - 1)] + "…"
             pos = self._scan_pos % max(len(label), 1)
@@ -1433,17 +1462,18 @@ class ChatScreen(Screen):
             line.append(label[:pos + 1], style=f"bold {C.primary}")
             line.append(label[pos + 1:], style="dim italic")
             if width >= 28:
-                line.append(f" {timer}", style="dim")
+                line.append(f" {badge}", style="dim")
             self.query_one("#active-step", Static).update(line)
             return
 
+        badge = _with_interrupt(timer)
         pos = self._scan_pos
         bright = label[:pos + 1]
         dim = label[pos + 1:]
         # Escape markup characters in the text
         bright = bright.replace("[", "\\[")
         dim = dim.replace("[", "\\[")
-        line = f"  [bold]{bright}[/][dim italic]{dim}[/]  [dim]{timer}[/]"
+        line = f"  [bold]{bright}[/][dim italic]{dim}[/]  [dim]{badge}[/]"
 
         w = self.query_one("#active-step", Static)
         w.update(line)
@@ -1908,7 +1938,16 @@ class ChatScreen(Screen):
         single-line `on_input_submitted` chat path.
         """
         inp = self.query_one("#chat-input", _ChatTextArea)
-        text = (raw_text if raw_text is not None else inp.text).strip()
+        text = raw_text if raw_text is not None else inp.text
+        # Expand any collapsed-paste chips back to their real text before
+        # anything else looks at the message. Chips the user deleted from
+        # the composer never match and are dropped; clear() forgets the
+        # rest so they can't leak into the NEXT message.
+        pb = getattr(inp, "_paste_buffer", None)
+        if pb is not None and len(pb):
+            text = pb.expand(text)
+            pb.clear()
+        text = (text or "").strip()
         if not text:
             return
         # Record into per-input history so ↑/↓ can recall it next time.
@@ -2074,6 +2113,43 @@ class ChatScreen(Screen):
         if dropped:
             note += f" (also dropped {dropped} queued message{'s' if dropped != 1 else ''})"
         log.append_info(note + ".")
+
+    def _interrupt_turn(self) -> None:
+        """Esc-to-interrupt: cancel the in-flight agent turn.
+
+        Same effect as typing 'stop'/'cancel' (see `_request_cancel` and
+        `_is_stop_intent`), but triggered by the Escape key. Flips
+        `app.cancel_requested` — the agent loop polls it at round and tool
+        boundaries (agent/loop.py) — and also cancels the Textual worker as
+        a backstop. Drops any queued messages and shows a short steering
+        line (claude-code's InterruptedByUser pattern).
+        """
+        if not self._agent_busy:
+            return
+        log = self.query_one("#chat-log", ChatLog)
+        # Primary mechanism: the loop polls this flag and unwinds cleanly.
+        if self.tui.engine is not None:
+            self.tui.engine.cancel_requested = True
+        # Backstop: ask the worker to cancel too. It's a thread worker
+        # running blocking work, so this mainly matters at await points —
+        # cancel_requested is what actually unwinds the loop — but it's
+        # cheap and harmless.
+        w = getattr(self, "_turn_worker", None)
+        if w is not None:
+            try:
+                w.cancel()
+            except Exception:
+                pass
+        dropped = len(self._pending_messages)
+        self._pending_messages.clear()
+        try:
+            self._update_queue()
+        except Exception:
+            pass
+        note = "Interrupted · tell me what to do differently"
+        if dropped:
+            note += f" (dropped {dropped} queued message{'s' if dropped != 1 else ''})"
+        log.append_info(note)
 
     def _handle_command(self, text: str) -> None:
         log = self.query_one("#chat-log", ChatLog)
@@ -3570,14 +3646,19 @@ class ChatScreen(Screen):
         _t3.Thread(target=_final_worker, daemon=True).start()
 
     def action_ptt_cancel(self) -> None:
-        """Cancel an active recording — throws away audio, no transcription.
+        """Escape key. Priority order:
 
-        Only fires when a recording is actually in flight. When idle,
-        Esc keeps its normal behavior (e.g. closing the search bar)
-        because we early-return without consuming the event.
+          1. An active voice recording → discard it (original behaviour).
+          2. An in-flight agent turn → interrupt it (esc-to-interrupt, the
+             affordance every peer CLI shows in its working badge).
+          3. Idle → return without consuming, so other Esc handlers run.
         """
         if not getattr(self, "_ptt_recorder", None):
-            return  # let other Esc handlers run
+            # No recording. If an agent turn is running, Escape interrupts
+            # it instead of doing nothing.
+            if self._agent_busy:
+                self._interrupt_turn()
+            return  # otherwise let other Esc handlers run
         log = self.query_one("#chat-log", ChatLog)
         # Tear down watchdog + visualizer + streaming timer
         for attr in ("_ptt_silence_timer", "_ptt_hold_timer", "_ptt_stream_timer", "_ptt_cursor_timer"):
@@ -3726,7 +3807,9 @@ class ChatScreen(Screen):
             except Exception:
                 pass
             self._pending_images = []
-        self.run_agent_turn(text)
+        # Keep a handle on the turn worker so Escape (esc-to-interrupt) can
+        # cancel it as a backstop to app.cancel_requested.
+        self._turn_worker = self.run_agent_turn(text)
 
     @work(exclusive=True, thread=True)
     def run_agent_turn(self, user_text: str) -> None:

@@ -777,7 +777,11 @@ class ServerManager:
                 return False
             if _probe_health(port, timeout=1.0):
                 return True
-            time.sleep(1)
+            # Poll at 0.25 s (was 1 s): the server can finish loading at any
+            # point in the interval, so a coarse 1 s poll adds up to ~1 s of
+            # dead wait to every warm-start's time-to-ready. 0.25 s cuts that
+            # to ≤0.25 s; the probe itself is a cheap local /health GET.
+            time.sleep(0.25)
         return False
 
 

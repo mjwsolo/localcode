@@ -78,6 +78,9 @@ from .recovery import (
     detect_churn,
     churn_nudge_for,
     command_token,
+    detect_reject_reread_loop,
+    reject_reread_nudge,
+    todo_close_verification_suffix,
 )
 from .tool_orchestration import prefetch_parallel_tool_calls
 from .streaming import finish_thinking_display, stream_model_round
@@ -111,7 +114,6 @@ from .app_tasks import (
     ground_run_or_launch_text,
     has_launch_signal,
     has_runtime_verification_signal,
-    is_app_build_request,
     is_focused_blocking_question,
     looks_like_partial_handoff,
 )
@@ -404,15 +406,13 @@ def run_agent_loop(
         tools_called=tools_called,
     )
     hook_before_turn(_hook_state)
-    _app_build_request = is_app_build_request(user_text) or _goal_state.goal_type == "build_app"
     # Per-turn tool-output budget (in chars) scales with the model's REAL
     # context window instead of a fixed cap: allow tool results to fill up to
     # ~35% of the window before further output this turn is truncated. Dynamic
-    # per RAM/model — a 256K window keeps far more than a 64K one. The old fixed
-    # values (24K for app builds, 100K otherwise) starved big machines and,
-    # perversely, gave app builds — which read/write the MOST — the LEAST. The
-    # floor keeps small windows usable; within-turn overflow is still caught by
-    # the window-aware compaction pass at the top of each round.
+    # per RAM/model — a 256K window keeps far more than a 64K one. A single
+    # fixed cap starves big machines; the floor keeps small windows usable, and
+    # within-turn overflow is still caught by the window-aware compaction pass
+    # at the top of each round.
     try:
         _ctx_tokens_turn = int(app.engine._target_num_ctx())
     except Exception:
@@ -524,8 +524,37 @@ def run_agent_loop(
     # rounds (zero tools) reset the read-only streak. Resets to 0 the moment
     # a round changes a file or runs a build.
     _planning_streak = 0
-    # Build-verification gate: capped at ONE nudge per turn (loop-safe).
+    # Build-verification STOP gate: a true completion gate (claude-code
+    # query.ts stop-hook pattern). When the model tries to END a build_app turn
+    # that changed code, we run the project's real typecheck/test and, if it
+    # reports errors, inject them and FORCE another round instead of accepting
+    # "done". Bounded by _MAX_BUILD_VERIFY_RETRIES so a genuinely unfixable
+    # project can't spin forever; each retry RE-RUNS the check so the gate keeps
+    # holding until the project is clean or the bound is hit.
     _build_verify_nudges = 0
+    _MAX_BUILD_VERIFY_RETRIES = 2
+    # Reject → re-read → reject spin: ONE actionable redirect per turn
+    # (recovery.detect_reject_reread_loop, recomputed from the transcript).
+    _reject_reread_nudge_done = False
+    # Last synthetic-nudge kind we injected, so the recovery ladder never fires
+    # the SAME nag twice in a row (claude-code attachments.ts two-and-threshold
+    # discipline). Routed through `_append_nudge` below.
+    _last_nudge_kind = ""
+
+    def _append_nudge(content: str, kind: str, *, ephemeral: bool = True) -> bool:
+        """Append a synthetic SYSTEM nudge unless the SAME `kind` was the
+        immediately-previous nudge (never the same nag twice running — the
+        two-and-threshold discipline). Records the injected index for
+        end-of-turn ephemeral cleanup. Returns True when it actually appended.
+        """
+        nonlocal _last_nudge_kind
+        if kind and kind == _last_nudge_kind:
+            return False
+        messages.append({"role": "user", "content": content})
+        if ephemeral:
+            _ephemeral_nudge_indices.append(len(messages) - 1)
+        _last_nudge_kind = kind
+        return True
     # Cross-round repeated-call breaker: count identical (tool, args) calls
     # across the WHOLE turn (the in-round breaker only catches one round).
     # NUDGE-only — never withholds a tool result (avoids the read-dedup-stub
@@ -1264,8 +1293,13 @@ def run_agent_loop(
                     f"continue… (auto-retry {_empty_rounds_this_turn}/"
                     f"{_MAX_EMPTY_ROUND_RETRIES})"
                 )
-                messages.append({"role": "user", "content": nudge_for(stall)})
-                _ephemeral_nudge_indices.append(len(messages) - 1)
+                # Route through the guard so the SAME stall nudge never fires
+                # two rounds running (two-and-threshold discipline). If it's
+                # suppressed we still continue — the retry counter advanced and
+                # the assistant's dead "about to act" message was already
+                # dropped, so the model gets another clean shot without the
+                # self-conditioning duplicate nag.
+                _append_nudge(nudge_for(stall), kind=f"stall:{stall.name}")
                 continue  # next round of the main loop
             else:
                 out.print_info(
@@ -1298,30 +1332,38 @@ def run_agent_loop(
             # permission question, the user gets to answer — the runtime
             # does not silently force a retry.
             _blocking_question = is_focused_blocking_question(content)
-            # ── Build-verification gate ──
-            # The model wants to finish a build_app turn, but it changed CODE
-            # and never built/typechecked/tested or ran it. Nudge it ONCE to
-            # compile + fix before finishing. STRICTLY scoped to avoid the
-            # 2026-04-29 paraphrase-loop regression: build_app goal ONLY (never
-            # Q&A), not a blocking question, never deletes the assistant answer,
-            # capped at one nudge per turn. Mirrors the proven stall-nudge
-            # pattern (append user message + continue).
+            # ── Build-verification STOP gate (claude-code query.ts stop-hook) ──
+            # The model wants to END a build_app turn that changed CODE. This is
+            # a TRUE completion gate, not a one-shot nudge: we RUN the project's
+            # own typecheck/test ourselves and, if it reports errors, inject them
+            # and FORCE another round — the model cannot declare "done" while the
+            # gate is red. Each completion attempt RE-RUNS the check, so the gate
+            # keeps holding until the project is clean or _MAX_BUILD_VERIFY_RETRIES
+            # is hit (a genuinely unfixable project can't spin forever).
+            #
+            # NOTE: gated on build_app, which `infer_goal_state` (now generalist)
+            # never sets — so this stop-gate is currently DORMANT. That's
+            # intentional for 0.3.20: making it general ("any code-changing turn
+            # + a checker") fires a full project typecheck on every one-line edit,
+            # which is too aggressive and slow. A proper general trigger (fire on
+            # a multi-file / new-file BUILD completion, not a small edit) is a
+            # follow-up. Left dormant rather than shipped half-tuned.
             if (
                 not _blocking_question
                 and _goal_state.goal_type == "build_app"
-                and _build_verify_nudges < 1
+                and _build_verify_nudges < _MAX_BUILD_VERIFY_RETRIES
                 and _is_enabled(Feature.AUTO_NUDGE_RECOVERY)
                 and _changed_code_files(changed_files)
-                and not has_runtime_verification_signal(bash_history)
-                and not ran_build_or_test(bash_history)
             ):
-                _build_verify_nudges += 1
+                _self_verified = (
+                    has_runtime_verification_signal(bash_history)
+                    or ran_build_or_test(bash_history)
+                )
                 # TIER-2 VERIFICATION: don't just NUDGE the model to typecheck
                 # (a small model skips it or mishandles output) — RUN the
                 # project's real typecheck/lint ourselves and feed the concrete
                 # errors back. Catches semantic errors (wrong names, missing
-                # imports) the per-write syntax check can't. Light: once per
-                # turn, at completion. See tools.project_check.
+                # imports) the per-write syntax check can't. See project_check.
                 _proj_errors = None
                 try:
                     from ..tools.project_check import run_project_check
@@ -1331,11 +1373,19 @@ def run_agent_loop(
                     _proj_errors = None
                 try:
                     from ..events import emit as _emit_bg
-                    _emit_bg("auto_nudge", signal="build_unverified",
-                             round_idx=round_num, had_errors=bool(_proj_errors))
+                    _emit_bg("auto_nudge", signal="build_verify_gate",
+                             round_idx=round_num, attempt=_build_verify_nudges,
+                             had_errors=bool(_proj_errors),
+                             self_verified=bool(_self_verified))
                 except Exception:
                     pass
                 if _proj_errors:
+                    # STOP: cannot finish while the gate is red. Errors are fresh
+                    # actionable feedback (they change as the model fixes them),
+                    # so this is NOT routed through the "not twice in a row" nag
+                    # guard — but we record the kind so a following reminder-style
+                    # nudge doesn't stack on top of it.
+                    _build_verify_nudges += 1
                     out.print_info("Typecheck found errors — sending them back to fix.")
                     messages.append({"role": "user", "content": (
                         "SYSTEM: the project's typecheck/build was run for you and "
@@ -1343,17 +1393,25 @@ def run_agent_loop(
                         "then finish. Do not claim it works until these are gone:\n\n"
                         + _proj_errors
                     )})
-                else:
-                    # No checker available, or it passed — fall back to advising.
+                    _ephemeral_nudge_indices.append(len(messages) - 1)
+                    _last_nudge_kind = "build_verify_errors"
+                    continue  # don't accept completion — the gate is red
+                if not _self_verified and _build_verify_nudges < 1:
+                    # Gate is clean (checker passed OR none configured) AND the
+                    # model never ran a build/test itself — advise ONCE to verify.
+                    # This one IS a recurring-style nag → routed through the guard.
+                    _build_verify_nudges += 1
                     out.print_info("Changed code but never built/ran it — nudging to verify.")
-                    messages.append({"role": "user", "content": (
+                    if _append_nudge(
                         "SYSTEM: You changed code but never built, type-checked, or ran "
                         "it. Run the project's build/typecheck (npm run build / npx tsc "
                         "--noEmit for TS; tests or an import smoke-check for Python), fix "
-                        "every error, then finish. Don't claim it works without building."
-                    )})
-                _ephemeral_nudge_indices.append(len(messages) - 1)
-                continue  # don't accept completion — let it fix first
+                        "every error, then finish. Don't claim it works without building.",
+                        kind="build_verify_advise",
+                    ):
+                        continue  # let it verify before finishing
+                # else: gate clean and either self-verified or already advised →
+                # fall through and accept completion.
             if _goal_state.goal_type == "run_or_launch":
                 _task_port = int(getattr(_task_state, "active_port", 0) or 0)
                 content = ground_run_or_launch_text(content, _task_port)
@@ -1552,8 +1610,8 @@ def run_agent_loop(
             # Same-call 3× guard for tools without their own dedup
             # (bash / web_fetch / web_search / launch_app). Took the
             # place of the broader exact-repeat counter that was retired
-            # 2026-04-26 — re-added narrowly after a "how hot in france"
-            # turn fired the same `curl wttr.in/Paris?format=…` 4× in a
+            # 2026-04-26 — re-added narrowly after an info-fetch turn
+            # fired the same read-only `curl` command 4× in a
             # row. dedup_stub wins ties so list_files/glob/grep keep
             # their existing message.
             if _dedup_stub is None:
@@ -1881,6 +1939,30 @@ def run_agent_loop(
                 _stub_chars = max(500, int(_ctx_tokens_turn * 3.5 * 0.01)) if _ctx_tokens_turn else 500
                 tool_result = tool_result[:_stub_chars] + "\n[Truncated — context budget exceeded this turn]"
 
+            # ── Todo-close verification nudge (claude-code TodoWriteTool) ──
+            # When the model just marked a 3+ item todo list fully done and none
+            # of the items was a verification step, append a one-line "verify
+            # before your final summary" reminder that RIDES ON this tool result
+            # — no extra round. Appended after truncation so the short reminder
+            # can't be clipped. General + cheap (pure fn of the todos it sent).
+            if tool_name == "todo_write" and isinstance(args, dict):
+                try:
+                    _todo_suffix = todo_close_verification_suffix(args.get("todos"))
+                except Exception:
+                    _todo_suffix = ""
+                if _todo_suffix:
+                    tool_result = f"{tool_result}{_todo_suffix}"
+                    try:
+                        from ..events import emit as _emit_todo_verify
+                        _emit_todo_verify(
+                            "todo_close_verify_nudge",
+                            turn_id=_turn_id,
+                            round_idx=round_num,
+                            item_count=len(args.get("todos") or []),
+                        )
+                    except Exception:
+                        pass
+
             # Add to history
             messages.append({
                 "role": "tool",
@@ -2034,6 +2116,39 @@ def run_agent_loop(
                 )
                 messages.append({"role": "user", "content": churn_nudge_for(_churn)})
                 _ephemeral_nudge_indices.append(len(messages) - 1)
+                _last_nudge_kind = "churn"
+
+        # ── Reject → re-read → reject recovery rung (bounded, single-shot) ──
+        # The remaining log loop the other detectors miss: a mutation keeps
+        # coming back REJECTED (dedup / "already modified" / old_string-not-found)
+        # and the model reacts by re-reading the file and retrying the same
+        # shape. detect_reject_reread_loop RECOMPUTES the signal from the
+        # transcript tail (survives compaction). We give ONE actionable redirect
+        # per turn, then stop nagging (the guard boolean). Composes with the
+        # existing breakers: gated so it won't fire in a round another nudge
+        # already fired, and `_append_nudge` blocks the same nag twice running.
+        if (
+            not _reject_reread_nudge_done
+            and not _churn_nudge_done
+            and not _spin_nudge_done
+            and not _xround_repeat_nudge_done
+            and not _hard_stop_nudge_fired
+            and _is_enabled(Feature.AUTO_NUDGE_RECOVERY)
+        ):
+            _rr_count = detect_reject_reread_loop(messages)
+            if _rr_count is not None:
+                if _append_nudge(reject_reread_nudge(), kind="reject_reread"):
+                    _reject_reread_nudge_done = True
+                    out.print_info(
+                        "Detected a reject → re-read loop — giving it one "
+                        "targeted redirect."
+                    )
+                    try:
+                        from ..events import emit as _emit_rr
+                        _emit_rr("auto_nudge", signal="reject_reread_loop",
+                                 count=_rr_count, round_idx=round_num)
+                    except Exception:
+                        pass
 
         # Break outer loop if loop was detected
         if loop_detected:
