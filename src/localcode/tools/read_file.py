@@ -180,6 +180,10 @@ def execute(ctx: ToolContext, args: dict) -> str:
     offset = args.get("offset", 0)
     explicit_limit = "limit" in args
     limit = args.get("limit", default_limit)
+    # A read is "full" (satisfies the read-before-edit guard) only when it
+    # starts at the top AND returns every line untruncated. offset>0 or any
+    # truncation below flips this to a partial view.
+    _full_read = (not offset) and (len(lines) <= offset + limit)
     selected = lines[offset:offset + limit]
     numbered = [f"{i + offset + 1}\t{line}" for i, line in enumerate(selected)]
     result = "\n".join(numbered)
@@ -201,6 +205,14 @@ def execute(ctx: ToolContext, args: dict) -> str:
             f"offset={remaining_from_line}, limit={default_limit}, or request "
             "a focused smaller range around the symbol you need.]"
         )
+        _full_read = False  # char-truncated: the model has not seen the whole file
+    # Record this read for the read-before-edit staleness guard (edit_file /
+    # write_file / multi_edit consult it). Best-effort; never fail a read.
+    try:
+        from . import read_state
+        read_state.record_read(ctx.app, path, full=_full_read)
+    except Exception:
+        pass
     # Prompt-injection defence: wrap untrusted file content in explicit
     # data/instruction separator markers so the model knows this text
     # is DATA, not commands. Signature detector flags common injection
