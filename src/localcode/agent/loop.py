@@ -111,7 +111,6 @@ from .app_tasks import (
     ground_run_or_launch_text,
     has_launch_signal,
     has_runtime_verification_signal,
-    is_app_build_request,
     is_focused_blocking_question,
     looks_like_partial_handoff,
 )
@@ -404,15 +403,13 @@ def run_agent_loop(
         tools_called=tools_called,
     )
     hook_before_turn(_hook_state)
-    _app_build_request = is_app_build_request(user_text) or _goal_state.goal_type == "build_app"
     # Per-turn tool-output budget (in chars) scales with the model's REAL
     # context window instead of a fixed cap: allow tool results to fill up to
     # ~35% of the window before further output this turn is truncated. Dynamic
-    # per RAM/model — a 256K window keeps far more than a 64K one. The old fixed
-    # values (24K for app builds, 100K otherwise) starved big machines and,
-    # perversely, gave app builds — which read/write the MOST — the LEAST. The
-    # floor keeps small windows usable; within-turn overflow is still caught by
-    # the window-aware compaction pass at the top of each round.
+    # per RAM/model — a 256K window keeps far more than a 64K one. A single
+    # fixed cap starves big machines; the floor keeps small windows usable, and
+    # within-turn overflow is still caught by the window-aware compaction pass
+    # at the top of each round.
     try:
         _ctx_tokens_turn = int(app.engine._target_num_ctx())
     except Exception:
@@ -1552,8 +1549,8 @@ def run_agent_loop(
             # Same-call 3× guard for tools without their own dedup
             # (bash / web_fetch / web_search / launch_app). Took the
             # place of the broader exact-repeat counter that was retired
-            # 2026-04-26 — re-added narrowly after a "how hot in france"
-            # turn fired the same `curl wttr.in/Paris?format=…` 4× in a
+            # 2026-04-26 — re-added narrowly after an info-fetch turn
+            # fired the same read-only `curl` command 4× in a
             # row. dedup_stub wins ties so list_files/glob/grep keep
             # their existing message.
             if _dedup_stub is None:

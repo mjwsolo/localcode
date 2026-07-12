@@ -28,19 +28,19 @@ class ToolExecutionState:
     # Successful (tool_name, canonical_args) repeats — covers the gap
     # left when only `failed_calls` and `bash_failures` were tracked.
     # The 3-in-a-row exact-repeat guard was retired 2026-04-26 with the
-    # rationale "fired 0 times in observed sessions"; on 2026-04-29 a
-    # weather lookup ran the same `curl wttr.in/Paris?format=…` four
+    # rationale "fired 0 times in observed sessions"; later an info-fetch
+    # loop re-ran the same read-only command (e.g. a `curl` fetch) four
     # times in a row and nothing stopped it. Telemetry behind the
     # removal didn't include info-fetch loops.
     success_counts: dict[tuple[str, str], int] = field(default_factory=dict)
     # Successful write/edit calls keyed by PATH ONLY (not exact args), so
     # rewriting the same file with slightly different content each round
     # still accrues. Feeds the write-churn guard in `dedup_stub_for_tool`.
-    # Motivating logs (2026-06): a turn wrote `useData.ts` 14×, `database.ts`
-    # 8×, `package.json` 4× — plus near-duplicate misspelled siblings
-    # (ReviewSession/ReviewSesssion/ReivewSession.tsx). The per-exact-args
-    # `failed_calls`/`success_counts` guards miss this because each rewrite
-    # is a DISTINCT arg blob; only a path-keyed counter catches the churn.
+    # Motivating logs: a turn rewrote the same handful of source files 8–14×
+    # each — plus near-duplicate misspelled siblings of one component. The
+    # per-exact-args `failed_calls`/`success_counts` guards miss this because
+    # each rewrite is a DISTINCT arg blob; only a path-keyed counter catches
+    # the churn.
     write_path_counts: dict[str, int] = field(default_factory=dict)
     # Last error text seen for a failed bash command, keyed by the same
     # whitespace-normalized cmd_key as `bash_failures`. Lets the rejection
