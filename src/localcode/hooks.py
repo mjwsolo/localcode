@@ -51,6 +51,9 @@ class HookConfig:
     user_prompt_submit: str = ""
     pre_tool_use: str = ""
     post_tool_use: str = ""
+    post_edit: str = ""
+    pre_completion: str = ""
+    post_compaction: str = ""
 
 
 class HookRunner:
@@ -95,7 +98,10 @@ class HookRunner:
         try:
             data = tomllib.loads(path.read_text())
             hooks = data.get("hooks", {})
-            for key in ("session_start", "user_prompt_submit", "pre_tool_use", "post_tool_use"):
+            for key in (
+                "session_start", "user_prompt_submit", "pre_tool_use", "post_tool_use",
+                "post_edit", "pre_completion", "post_compaction",
+            ):
                 val = hooks.get(key, "")
                 if val:
                     setattr(config, key, val)
@@ -139,6 +145,21 @@ class HookRunner:
             "TOOL_ERROR": "1" if error else "0",
         })
 
+    def on_post_edit(self, path: str, result: str, error: bool = False) -> HookResult:
+        if not self.config.post_edit:
+            return HookResult()
+        return self._run(self.config.post_edit, {"EDIT_PATH": path, "EDIT_RESULT": result[:500], "EDIT_ERROR": "1" if error else "0"})
+
+    def on_pre_completion(self, response: str, status: str) -> HookResult:
+        if not self.config.pre_completion:
+            return HookResult()
+        return self._run(self.config.pre_completion, {"COMPLETION_RESPONSE": response[:2000], "COMPLETION_STATUS": status})
+
+    def on_post_compaction(self, before_count: int, after_count: int) -> HookResult:
+        if not self.config.post_compaction:
+            return HookResult()
+        return self._run(self.config.post_compaction, {"COMPACTION_BEFORE_COUNT": str(before_count), "COMPACTION_AFTER_COUNT": str(after_count)})
+
     def _run(self, command: str, extra_env: dict[str, str]) -> HookResult:
         """Execute a hook command."""
         env = clean_env({**self._base_env, **extra_env})
@@ -172,4 +193,7 @@ class HookRunner:
             self.config.user_prompt_submit,
             self.config.pre_tool_use,
             self.config.post_tool_use,
+            self.config.post_edit,
+            self.config.pre_completion,
+            self.config.post_compaction,
         ])
