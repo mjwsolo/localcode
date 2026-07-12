@@ -49,6 +49,7 @@ from .constants import (
 )
 from .goal import GoalState, infer_goal_state
 from .context import (
+    _msg_bytes,
     _prepare_model_messages,
     _summarize_args,
     _truncate_result,
@@ -785,11 +786,6 @@ def run_agent_loop(
             user_text=user_text,
         )
         try:
-            # Compact older tool results so every round's prompt stays small
-            # enough for hybrid-memory models (Qwen 3.6) to re-evaluate fast.
-            # Pass the model's context window (RAM-derived) so compaction is
-            # window-aware: a big machine keeps far more history instead of
-            # crushing it to a fixed 36 KB (which made the model lose track).
             _ctx_chars = None
             try:
                 _nctx = app.engine._target_num_ctx()
@@ -797,11 +793,45 @@ def run_agent_loop(
                     _ctx_chars = int(_nctx * 3.5)  # tokens → ~chars
             except Exception:
                 _ctx_chars = None
-            model_messages = hook_before_model(
-                _prepare_model_messages(messages, ctx_window_chars=_ctx_chars,
-                                        observed_ttft_ms=_observed_ttft_ms),
-                _hook_state,
-            )
+            # ── Append-only transcript between DISCRETE compactions ──
+            # (codex/opencode/pi/claude-code pattern). The old behavior ran the
+            # full shrink pass EVERY round with a moving age boundary: each
+            # round another message crossed "old" and got stubbed, changing
+            # bytes near the START of the prompt, so llama.cpp's prefix cache
+            # missed and the ENTIRE conversation re-prefilled every round. On a
+            # measured 55-min build that was 77% of wall-clock (TTFT grew from
+            # 3 s at round 3 to 95 s at round 53 — pure re-prefill). All four
+            # reference harnesses append-only within a turn and compact as a
+            # discrete event; on a LOCAL model, where prefill is the dominant
+            # cost, the prefix cache is the single biggest speed lever.
+            #
+            # Trigger is dynamic (window-derived, RAM-scaled upstream): compact
+            # when the serialized transcript passes ~55% of the context window
+            # (headroom for the trailing ephemeral block + generation). The
+            # compaction is DURABLE (messages[:] = shrunk) so subsequent rounds
+            # are again byte-stable prefixes — one cache miss per compaction,
+            # zero per round.
+            _trigger_bytes = int((_ctx_chars or 250_000) * 0.55)
+            if _msg_bytes(messages) > _trigger_bytes:
+                # Mid-turn nudges are per-round steering the model has already
+                # consumed; their stored INDICES are only valid on the
+                # uncompacted list, so strip them first and reset bookkeeping.
+                if _ephemeral_nudge_indices:
+                    strip_ephemeral_nudges(messages, _ephemeral_nudge_indices)
+                    _ephemeral_nudge_indices.clear()
+                messages[:] = _prepare_model_messages(
+                    messages, ctx_window_chars=_ctx_chars,
+                    observed_ttft_ms=_observed_ttft_ms,
+                )
+                try:
+                    from ..events import emit as _emit_compact
+                    _emit_compact("discrete_compaction", turn_id=_turn_id,
+                                  round_idx=round_num,
+                                  bytes_after=_msg_bytes(messages),
+                                  trigger_bytes=_trigger_bytes)
+                except Exception:
+                    pass
+            model_messages = hook_before_model(list(messages), _hook_state)
             # Inject a window-scaled progress ledger (Codex-style tool-state
             # awareness): the model always sees what it has already done, so it
             # stops re-reading files / restarting from scratch. Built from
