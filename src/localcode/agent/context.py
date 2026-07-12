@@ -605,20 +605,22 @@ def _msg_bytes(messages: list[dict]) -> int:
 
 def _window_aware_compaction(ctx_window_chars: int | None) -> tuple[int, int]:
     """(history_budget_bytes, keep_recent_tool_results) scaled to the context
-    window. The whole point: compaction must be DYNAMIC per machine. A 16 GB
-    Mac with a ~16K window has no room, so aggressive lossy compaction (the
-    old fixed 36 KB / keep-4) is correct. A 128 GB Mac with a 128K window has
-    ~8x the room — crushing its history to 36 KB threw away the data model the
-    model needs and made it lose track / re-read / drift. So budget ~55% of
-    the window to history and keep proportionally more recent tool output.
+    window. Capacity and replay latency are separate budgets: large-RAM Macs
+    can retain richer recent evidence, but hybrid/recurrent local models may
+    still re-process the entire prompt each round. Durable ledgers preserve
+    completed work while this hot transcript remains bounded.
 
     `ctx_window_chars` ≈ num_ctx tokens × ~3.5 chars/token. None/unknown →
     the legacy fixed behaviour (back-compat, safe on tiny windows).
     """
     if not ctx_window_chars or ctx_window_chars <= 0:
         return 36_000, COMPACT_KEEP_RECENT_TOOL_RESULTS
-    budget = max(36_000, int(ctx_window_chars * 0.55))
-    keep = max(COMPACT_KEEP_RECENT_TOOL_RESULTS, min(24, ctx_window_chars // 20_000))
+    # A large KV window is capacity, not a latency target. Live 128 GB / Qwen
+    # traces showed TTFT rising from ~2 s to 44 s as one build replayed ~28K
+    # prompt tokens. Cap the hot transcript while the durable progress ledger
+    # and filesystem-state block preserve what was completed.
+    budget = max(36_000, min(48_000, int(ctx_window_chars * 0.20)))
+    keep = max(COMPACT_KEEP_RECENT_TOOL_RESULTS, min(8, ctx_window_chars // 40_000))
     return budget, keep
 
 
@@ -704,31 +706,36 @@ def _microcompact_for_prompt_budget(messages: list[dict], *, target_bytes: int =
         return messages
 
     system_count = 1 if messages and messages[0].get("role") == "system" else 0
-    boundary = max(system_count, len(messages) - 12)
-    while boundary > system_count:
-        if messages[boundary].get("role") == "tool":
-            boundary -= 1
+    best = messages
+    # Tighten the protocol-safe suffix until the serialized prompt fits. A
+    # fixed 12-message tail can itself contain several complete source files.
+    for tail_size in (12, 10, 8, 6, 4):
+        boundary = max(system_count, len(messages) - tail_size)
+        while boundary > system_count:
+            if messages[boundary].get("role") == "tool":
+                boundary -= 1
+                continue
+            prev = messages[boundary - 1]
+            if prev.get("role") == "assistant" and prev.get("tool_calls"):
+                boundary -= 1
+                continue
+            break
+        if boundary <= system_count:
             continue
-        prev = messages[boundary - 1]
-        if prev.get("role") == "assistant" and prev.get("tool_calls"):
-            boundary -= 1
-            continue
-        break
-    if boundary <= system_count:
-        return messages
-
-    old = messages[system_count:boundary]
-    recent = messages[boundary:]
-    summary = _compact_history_summary(old)
-    candidate = [
-        *messages[:system_count],
-        {"role": "user", "content": summary},
-        {"role": "assistant", "content": "Continuing with the summarized prior work."},
-        *recent,
-    ]
-    if _msg_bytes(candidate) >= _msg_bytes(messages):
-        return messages
-    return candidate
+        old = messages[system_count:boundary]
+        recent = messages[boundary:]
+        summary = _compact_history_summary(old)
+        candidate = [
+            *messages[:system_count],
+            {"role": "user", "content": summary},
+            {"role": "assistant", "content": "Continuing with the summarized prior work."},
+            *recent,
+        ]
+        if _msg_bytes(candidate) < _msg_bytes(best):
+            best = candidate
+        if _msg_bytes(candidate) <= target_bytes:
+            return candidate
+    return best
 
 
 def _compact_history_summary(messages: list[dict]) -> str:
