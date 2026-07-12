@@ -624,8 +624,23 @@ def _window_aware_compaction(ctx_window_chars: int | None) -> tuple[int, int]:
     return budget, keep
 
 
+def latency_budgeted_hot_replay(
+    ctx_window_chars: int | None,
+    observed_ttft_ms: int | None,
+    *,
+    target_ttft_ms: int = 8_000,
+) -> tuple[int, int]:
+    """Adapt hot replay to measured local prefill latency, not KV capacity."""
+    budget, keep = _window_aware_compaction(ctx_window_chars)
+    if not observed_ttft_ms or observed_ttft_ms <= target_ttft_ms:
+        return budget, keep
+    ratio = max(0.35, target_ttft_ms / observed_ttft_ms)
+    return max(18_000, int(budget * ratio)), max(2, int(keep * ratio))
+
+
 def _prepare_model_messages(
-    messages: list[dict], ctx_window_chars: int | None = None
+    messages: list[dict], ctx_window_chars: int | None = None,
+    observed_ttft_ms: int | None = None,
 ) -> list[dict]:
     """One-stop context-shrink pass before sending to the model.
 
@@ -651,7 +666,7 @@ def _prepare_model_messages(
     practice?" without instrumenting the agent loop. Silent on no-op
     so the log doesn't fill up with empty events.
     """
-    budget_bytes, keep_recent = _window_aware_compaction(ctx_window_chars)
+    budget_bytes, keep_recent = latency_budgeted_hot_replay(ctx_window_chars, observed_ttft_ms)
     before = _msg_bytes(messages)
     after_writes = _redact_old_write_args(messages)
     bytes_writes = before - _msg_bytes(after_writes)
