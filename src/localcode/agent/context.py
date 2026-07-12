@@ -721,12 +721,25 @@ def _microcompact_for_prompt_budget(messages: list[dict], *, target_bytes: int =
         return messages
 
     system_count = 1 if messages and messages[0].get("role") == "system" else 0
+    # NEVER compact away the task statement. The first real user message (not
+    # a synthetic "SYSTEM:" nudge) anchors the entire turn: summarizing it into
+    # a one-line ledger made the model literally ask "what is the actual task?"
+    # mid-build and re-derive the goal from directory names (observed live on a
+    # long agentic build). Keep it VERBATIM at the head, always — the reference
+    # harnesses' compaction likewise carries the original request forward.
+    head_count = system_count
+    for i in range(system_count, len(messages)):
+        m = messages[i]
+        if m.get("role") == "user" and isinstance(m.get("content"), str) \
+                and not m["content"].startswith("SYSTEM:"):
+            head_count = i + 1
+            break
     best = messages
     # Tighten the protocol-safe suffix until the serialized prompt fits. A
     # fixed 12-message tail can itself contain several complete source files.
     for tail_size in (12, 10, 8, 6, 4):
-        boundary = max(system_count, len(messages) - tail_size)
-        while boundary > system_count:
+        boundary = max(head_count, len(messages) - tail_size)
+        while boundary > head_count:
             if messages[boundary].get("role") == "tool":
                 boundary -= 1
                 continue
@@ -735,13 +748,13 @@ def _microcompact_for_prompt_budget(messages: list[dict], *, target_bytes: int =
                 boundary -= 1
                 continue
             break
-        if boundary <= system_count:
+        if boundary <= head_count:
             continue
-        old = messages[system_count:boundary]
+        old = messages[head_count:boundary]
         recent = messages[boundary:]
         summary = _compact_history_summary(old)
         candidate = [
-            *messages[:system_count],
+            *messages[:head_count],
             {"role": "user", "content": summary},
             {"role": "assistant", "content": "Continuing with the summarized prior work."},
             *recent,
