@@ -1255,13 +1255,41 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
             return True
 
         from .bootstrap import get_model_path
-        from .server_manager import ServerManager
+        from .server_manager import ServerManager, HEALTH_TIMEOUT_S
         from pathlib import Path
 
         preferred = Path(self.config.model).name if self.config.model else None
         model = get_model_path(preferred)
         if not model:
             return False
+        mgr = ServerManager.get()
+        # NEVER kill a server that is alive and still LOADING. A 30B+ model
+        # takes ~60 s to come up; a request landing during warmup gets a
+        # 503/conn error, and this recovery path used to treat that as "dead"
+        # and restart — killing the almost-loaded server and starting a fresh
+        # 60 s load on the fallback port. Observed live as 4 restarts in
+        # 3 minutes ping-ponging 8081↔8082, each reloading 35 GB of weights,
+        # while the user just saw "crunching". If the process is alive, WAIT
+        # for its health probe instead; only a genuinely dead or wedged
+        # server gets kill+relaunch.
+        if mgr.is_running():
+            try:
+                from .events import emit as _emit_wait
+                _emit_wait("server_warmup_wait", port=mgr.port)
+            except Exception:
+                pass
+            if mgr._wait_healthy(mgr.port, timeout_s=HEALTH_TIMEOUT_S):
+                # Loaded — the server was never broken. Re-point our client
+                # at the live port and carry on with zero reload cost.
+                try:
+                    actual_port = mgr.port
+                    new_base = f"http://localhost:{actual_port}"
+                    if self.config.base_url != new_base:
+                        self.config.base_url = new_base
+                        self.endpoint = f"{new_base}/v1/chat/completions"
+                except Exception:
+                    pass
+                return True
         try:
             if self._client is not None and not self._client.is_closed:
                 self._client.close()
@@ -1269,7 +1297,6 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
             pass
         self._client = None
         cmd = self.llama_server_command(str(model))
-        mgr = ServerManager.get()
         ok = mgr.restart(cmd, str(model))
         # Propagate the (possibly fallback) port back to our config and
         # endpoint URL so downstream HTTP requests hit the live server.
