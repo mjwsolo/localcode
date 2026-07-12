@@ -69,15 +69,20 @@ class EmbeddingSearch:
         # Try sentence-transformers
         try:
             from sentence_transformers import SentenceTransformer
-            # Try nomic first (better quality)
-            try:
+            import os as _os
+            # SECURITY: nomic-embed-text-v1.5 gives slightly better quality but
+            # requires trust_remote_code=True, which downloads and EXECUTES
+            # arbitrary Python from the model repo on the user's machine (a real
+            # RCE vector for 1M users). Default to all-MiniLM-L6-v2 — no remote
+            # code, and perfectly adequate for code search. Only use nomic if the
+            # user EXPLICITLY opts into remote code execution.
+            if _os.environ.get("LOCALCODE_TRUST_REMOTE_CODE") == "1":
                 self.model = SentenceTransformer(
                     "nomic-ai/nomic-embed-text-v1.5",
                     trust_remote_code=True,
                 )
                 self.model_name = "nomic-embed-text-v1.5"
-            except Exception:
-                # Fallback to MiniLM (smaller, always works)
+            else:
                 self.model = SentenceTransformer("all-MiniLM-L6-v2")
                 self.model_name = "all-MiniLM-L6-v2"
 
