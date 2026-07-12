@@ -250,13 +250,16 @@ def download_turboquant_binary(on_progress: Callable[[str], None] | None = None)
         binary.chmod(0o755)
         return True, str(binary)
     except ssl.SSLCertVerificationError:
-        # Retry without verification as last resort
-        ssl_ctx = ssl._create_unverified_context()
-        opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ssl_ctx))
-        urllib.request.install_opener(opener)
-        urllib.request.urlretrieve(url, str(binary))
-        binary.chmod(0o755)
-        return True, str(binary)
+        # SECURITY: never fetch an EXECUTABLE over an unverified connection — a
+        # network attacker could swap in a malicious binary. If cert
+        # verification fails, the fix is to repair the trust store, not to
+        # accept any cert.
+        return False, (
+            "Download failed: TLS certificate verification failed. Update your "
+            "certificates (`pip install -U certifi`), or build llama-cpp-"
+            "turboquant from source. LocalCode will not download an executable "
+            "over an unverified connection."
+        )
     except Exception as e:
         return False, f"Download failed: {e}\nBuild from source instead: clone llama-cpp-turboquant and run cmake."
 
@@ -373,10 +376,11 @@ def _download_parallel(url: str, dest: Path, num_threads: int = 16,
             if _attempt == 0:
                 import certifi
                 ssl_ctx = ssl.create_default_context(cafile=certifi.where())
-            elif _attempt == 1:
-                ssl_ctx = ssl.create_default_context()
             else:
-                ssl_ctx = ssl._create_unverified_context()
+                # SECURITY: stay verified — no unverified-TLS fallback. If the
+                # system trust store can't verify, the download fails cleanly
+                # rather than trusting any cert.
+                ssl_ctx = ssl.create_default_context()
             req = urllib.request.Request(url, method="HEAD")
             with urllib.request.urlopen(req, context=ssl_ctx, timeout=10) as resp:
                 total_size = int(resp.headers.get("Content-Length", 0))
@@ -387,7 +391,8 @@ def _download_parallel(url: str, dest: Path, num_threads: int = 16,
         except Exception:
             continue
     if ssl_ctx is None:
-        ssl_ctx = ssl._create_unverified_context()
+        # SECURITY: verified context only — never fall back to unverified TLS.
+        ssl_ctx = ssl.create_default_context()
 
     part = dest.with_name(dest.name + ".part")
 

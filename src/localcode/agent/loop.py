@@ -424,6 +424,13 @@ def run_agent_loop(
     )
     _completion_gate_retries = 0
     _MAX_COMPLETION_GATE_RETRIES = 1
+    # Open-todo completion discipline: don't let a long task end while the
+    # model's own todo list still has open items. Bounded overall, plus a
+    # diminishing-returns guard (stop nagging if the open-count stops falling).
+    _todo_continue_count = 0
+    _MAX_TODO_CONTINUATIONS = 15
+    _todo_stuck_count = 0
+    _last_todo_remaining = 10**9
     _edit_recovery_nudges = 0
     _MAX_CONSECUTIVE_CORRECTIONS = 2
     _generic_correction_nudges = 0
@@ -1341,6 +1348,54 @@ def run_agent_loop(
             # permission question, the user gets to answer — the runtime
             # does not silently force a retry.
             _blocking_question = is_focused_blocking_question(content)
+            # ── Open-todo completion gate (GENERAL — the goal-typed gates below
+            # are dead because infer_goal_state always returns general_task). If
+            # the model tries to END its turn while its OWN todo list still has
+            # open items, it stopped early: force it to continue to the next item.
+            # `session.todos` is cleared to [] by todo_write only when ALL are
+            # completed, so a non-empty list is real unfinished work. Bounded by
+            # _MAX_TODO_CONTINUATIONS, with a diminishing-returns guard so a model
+            # that can't make progress on its plan isn't nagged forever.
+            _open_todos = list(getattr(app.session, "todos", []) or [])
+            _todo_remaining = sum(
+                1 for t in _open_todos if str(t.get("status", "")).lower() != "completed"
+            )
+            if (
+                not _blocking_question
+                and _todo_remaining > 0
+                and _todo_continue_count < _MAX_TODO_CONTINUATIONS
+                and _todo_stuck_count < 3
+                and _is_enabled(Feature.AUTO_NUDGE_RECOVERY)
+            ):
+                # Diminishing returns: if the open-count didn't fall since the
+                # last continuation, the model isn't advancing its plan.
+                if _todo_remaining >= _last_todo_remaining:
+                    _todo_stuck_count += 1
+                else:
+                    _todo_stuck_count = 0
+                _last_todo_remaining = _todo_remaining
+                if _todo_stuck_count < 3:
+                    _todo_continue_count += 1
+                    _nxt = next(
+                        (t for t in _open_todos if str(t.get("status", "")).lower() == "in_progress"),
+                        None,
+                    ) or next(
+                        (t for t in _open_todos if str(t.get("status", "")).lower() != "completed"),
+                        None,
+                    )
+                    _nxt_label = (_nxt or {}).get("content", "the next item")
+                    out.print_info(
+                        f"{_todo_remaining} todo(s) still open — continuing (not stopping early)."
+                    )
+                    messages.append({"role": "user", "content": (
+                        f"SYSTEM: You still have {_todo_remaining} unfinished todo(s). "
+                        f"The task is NOT complete — do not stop. Continue now with: "
+                        f"{_nxt_label}. Mark a todo completed via todo_write only when it "
+                        f"is genuinely done, and keep going until every item is completed."
+                    )})
+                    _ephemeral_nudge_indices.append(len(messages) - 1)
+                    _last_nudge_kind = "todo_continue"
+                    continue  # force another round — reject the early completion
             # ── Build-verification STOP gate (claude-code query.ts stop-hook) ──
             # The model wants to END a build_app turn that changed CODE. This is
             # a TRUE completion gate, not a one-shot nudge: we RUN the project's
