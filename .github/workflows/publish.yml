@@ -1,17 +1,40 @@
 name: Build & Publish to PyPI
 
 on:
+  push:
+    tags: ["v*"]
   release:
     types: [published]
   workflow_dispatch:
 
 jobs:
+  test:
+    name: Release gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e . pytest pytest-timeout ruff
+      - run: ruff check --select E9,F63,F7,F82 src tests
+      - run: pytest tests/test_comprehensive_*.py -q --timeout=120
+      - name: Agent harness regression tests
+        run: |
+          pytest -q \
+            tests/test_agent_state_machine.py \
+            tests/test_evidence_and_lifecycle_hooks.py \
+            tests/test_execution_policies.py \
+            tests/test_code_navigation_and_processes.py
+
   # LocalCode is a pure-Python package (the llama-server binary is fetched
   # at runtime, not bundled), so we build a normal wheel + sdist with
   # `python -m build`. No cibuildwheel — that's for packages with compiled
   # extensions, and it errors out ("pure Python wheel generated") here.
   build:
     name: Build wheel + sdist
+    needs: [test]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

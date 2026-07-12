@@ -26,6 +26,8 @@ from . import (
     agent,
     append_file,
     bash,
+    background_process,
+    code_navigation,
     edit_diff,
     edit_file,
     glob_tool,
@@ -54,6 +56,8 @@ _TOOLS: dict[str, tuple[dict, Callable[[ToolContext, dict], str]]] = {
     "multi_edit":     (multi_edit.SCHEMA,     multi_edit.execute),
     "edit_diff":      (edit_diff.SCHEMA,      edit_diff.execute),
     "bash":           (bash.SCHEMA,           bash.execute),
+    "background_process": (background_process.SCHEMA, background_process.execute),
+    "code_navigation": (code_navigation.SCHEMA, code_navigation.execute),
     "launch_app":     (launch_app.SCHEMA,     launch_app.execute),
     "grep":           (grep.SCHEMA,           grep.execute),
     "glob":           (glob_tool.SCHEMA,      glob_tool.execute),
@@ -75,6 +79,8 @@ _PUBLIC_TOOL_NAMES = [
     "multi_edit",
     "edit_diff",
     "bash",
+    "background_process",
+    "code_navigation",
     "launch_app",
     "grep",
     "glob",
@@ -123,6 +129,7 @@ def schemas_for_goal(
     """
     selected = {
         "read_file", "bash", "edit_file", "write_file", "append_file", "list_files",
+        "background_process", "code_navigation",
         # Search/discovery — without these the model resorts to bash+grep / curl
         # for everything and the user sees the "google scraped HTML" failure mode.
         "grep", "glob", "web_search", "web_fetch", "skill",

@@ -162,6 +162,15 @@ def _execute_tool_result(app: "LocalCodeApp", name: str, args: dict, out: "Outpu
     wrapping plan-mode policy layer that refuses destructive tools
     while the agent is in plan-explore mode.
     """
+    try:
+        hook = getattr(app, "hooks", None)
+        decision = hook.on_pre_tool_use(name, args) if hook is not None else None
+        if decision is not None and decision.blocked:
+            reason = decision.error or decision.output or "pre-tool hook blocked"
+            return ToolResult(text=f"REJECTED: {reason}", ok=False, facts={"tool": name, "ok": False, "hook_blocked": True})
+    except Exception:
+        pass
+
     # Lint-gate: for source-file writes/edits, snapshot the file before the
     # tool runs so we can auto-revert on syntax-break. Motivation: the model
     # at 2-bit quant has been observed to delete import statements during
@@ -210,7 +219,18 @@ def _execute_tool_result(app: "LocalCodeApp", name: str, args: dict, out: "Outpu
         result = _tools_dispatch_result(name, ToolContext(app=app, out=out), args)
     except Exception as e:
         text = f"Error in {name}: {type(e).__name__}: {e}"
+        try:
+            if getattr(app, "hooks", None) is not None:
+                app.hooks.on_post_tool_use(name, args, text, error=True)
+        except Exception:
+            pass
         return ToolResult(text=text, ok=False, facts={"tool": name, "ok": False, "error_type": type(e).__name__})
+
+    try:
+        if getattr(app, "hooks", None) is not None:
+            app.hooks.on_post_tool_use(name, args, result.text, error=not result.ok)
+    except Exception:
+        pass
 
     if target_path is not None and target_path.exists() and target_path.suffix == ".py":
         # Python: ast.parse is cheap and authoritative.
@@ -228,6 +248,12 @@ def _execute_tool_result(app: "LocalCodeApp", name: str, args: dict, out: "Outpu
                 "user explicitly asked."
             )
             return ToolResult(text=text, ok=False, facts={"tool": name, "ok": False, "path": str(target_path), "reverted": True})
+    if name in _lint_tools:
+        try:
+            if getattr(app, "hooks", None) is not None:
+                app.hooks.on_post_edit(str(args.get("path", "")), result.text, error=not result.ok)
+        except Exception:
+            pass
     return result
 
 

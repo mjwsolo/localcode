@@ -3,6 +3,29 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.3.23 — 2026-07-12
+
+### Agent harness
+
+- Added a deterministic discover, plan, implement, verify, repair, and complete
+  task state machine with conservative goal classification.
+- Added hash-bound verification evidence that becomes stale when code, commands,
+  or relevant environment values change. Unverified edits can no longer be
+  reported as completed after the retry gate expires.
+- Added adaptive reasoning and TTFT-driven hot-context replay limits for fast
+  long-running work on local hybrid-memory models.
+- Added failure-aware shell assessment that distinguishes exit status from task
+  success, including masked failures, fallbacks, and unsafe pipelines.
+
+### Tools and extensibility
+
+- Added deterministic symbol, definition, and reference navigation.
+- Added supervised background processes with stable IDs, ownership, durable
+  logs, incremental polling, status, and explicit stopping.
+- Added pre/post-tool, post-edit, pre-completion, and post-compaction hooks.
+- Added progressive Agent Skills discovery across LocalCode, `.agents`, Claude,
+  and OpenCode layouts while bounding catalog prompt cost.
+
 ## 0.3.0 — 2026-04-28
 
 First open-source release.
