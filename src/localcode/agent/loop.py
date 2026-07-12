@@ -1341,14 +1341,16 @@ def run_agent_loop(
             # keeps holding until the project is clean or _MAX_BUILD_VERIFY_RETRIES
             # is hit (a genuinely unfixable project can't spin forever).
             #
-            # STRICTLY scoped to avoid the 2026-04-29 paraphrase-loop regression:
-            # build_app goal ONLY (never Q&A — Task 1's "never block a plain Q&A
-            # turn"), not a blocking question, never deletes the assistant answer.
-            # "Only gate when there's something to verify": run_project_check
-            # returns None when no typecheck/test is configured, so no false block.
+            # GENERAL gating (not goal-type — `infer_goal_state` is generalist and
+            # always returns general_task, so a build_app check would never fire):
+            # gate whenever this turn CHANGED CODE and a project checker exists.
+            # Safe because (a) never on a plain Q&A turn (`_changed_code_files`
+            # is false), (b) never on a blocking question, (c) `run_project_check`
+            # returns None when no typecheck/test is configured → no false block,
+            # (d) bounded by `_MAX_BUILD_VERIFY_RETRIES`. This is claude-code's
+            # stop-hook pattern applied to every user, not just app-builds.
             if (
                 not _blocking_question
-                and _goal_state.goal_type == "build_app"
                 and _build_verify_nudges < _MAX_BUILD_VERIFY_RETRIES
                 and _is_enabled(Feature.AUTO_NUDGE_RECOVERY)
                 and _changed_code_files(changed_files)
