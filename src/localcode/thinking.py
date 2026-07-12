@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-__all__ = ["should_use_thinking"]
+__all__ = ["should_use_thinking", "next_task_stage_after_tool"]
 
 
 _AUTO_REASONING_HINTS = (
@@ -24,6 +24,25 @@ _NO_THINKING_STAGES = {
     "running",
     "verified",
 }
+
+
+def next_task_stage_after_tool(
+    current_stage: str,
+    tool_name: str,
+    *,
+    succeeded: bool,
+) -> str:
+    """Leave reasoning-heavy scaffolding after successful implementation work."""
+    stage = (current_stage or "").strip().lower()
+    tool = (tool_name or "").strip().lower()
+    if not succeeded or stage not in {"planning", "scaffolding"}:
+        return stage
+    if tool in {
+        "write_file", "edit_file", "multi_edit", "apply_patch",
+        "bash", "launch_app",
+    }:
+        return "running"
+    return stage
 
 
 def should_use_thinking(

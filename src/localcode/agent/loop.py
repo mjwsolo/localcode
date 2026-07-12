@@ -1739,6 +1739,18 @@ def run_agent_loop(
             _round_tool_exec_ms += int(
                 (time.monotonic() - _tool_started_at) * 1000
             )
+            if _goal_state.goal_type == "build_app":
+                from ..thinking import next_task_stage_after_tool
+                _next_stage = next_task_stage_after_tool(
+                    _current_task_stage_for_thinking(),
+                    tool_name,
+                    succeeded=(
+                        bool(_tool_facts.get("ok", True))
+                        and not tool_result_is_error(str(tool_result))
+                    ),
+                )
+                if _next_stage == "running":
+                    _announce_task_stage(_next_stage)
             if tool_name == "bash":
                 _bash_cmd = str(args.get("command", ""))
                 bash_history.append((_bash_cmd, str(tool_result)))
@@ -2079,11 +2091,18 @@ def run_agent_loop(
         # counts as another re-planning round. Quiet rounds (no progress, no
         # narration) leave the streak unchanged.
         _round_changed_new_file = len(changed_files) > _changed_files_at_round_start
-        _round_ran_build = ran_build_or_test(bash_history[_bash_history_at_round_start:])
+        _round_bash = bash_history[_bash_history_at_round_start:]
+        _round_ran_build = ran_build_or_test(_round_bash)
+        # Successful setup/scaffolding is concrete progress too. The live trace
+        # incorrectly called mkdir + npm create "re-planning without progress".
+        _round_ran_successful_bash = any(
+            result and not str(result).startswith(("[exit code ", "Error:", "REJECTED:"))
+            for _cmd, result in _round_bash
+        )
         _round_had_reasoning = bool(
             (content and content.strip()) or _round_reasoning_chars > 0
         )
-        if _round_changed_new_file or _round_ran_build:
+        if _round_changed_new_file or _round_ran_build or _round_ran_successful_bash:
             _planning_streak = 0
         elif _round_had_reasoning and not _round_was_readonly:
             _planning_streak += 1

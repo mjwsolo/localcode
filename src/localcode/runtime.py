@@ -629,8 +629,8 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
 
         The tier ladder lives in `model_config.RAM_CTX_CEILING_TIERS` (the
         central per-Mac config); this delegates so the numbers are edited in
-        one place. Every current catalog model trains to >=256K, so on a big
-        machine RAM is the binding constraint — 96 GB+ unlocks 256K; small-RAM
+        one place. The normal high-RAM default is the checkpointed 128K path;
+        256K remains available as an explicit experimental override. Small-RAM
         tiers stay conservative (16 GB→64K, 64 GB→128K hardware-measured).
         """
         from .model_config import ram_ctx_ceiling
