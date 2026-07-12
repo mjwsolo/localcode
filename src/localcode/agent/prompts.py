@@ -54,10 +54,9 @@ Plan & tools:
 - For files and dirs use list_files/read_file/write_file/edit_file — NOT bash (`ls`, `cat`, `cat >`, `>`). bash is only for running commands (npm, git, build, test).
 - edit_file for existing files: anchor `old_string` on 2–4 adjacent lines (matching is whitespace-tolerant; the leading `<n>\\t` from read_file is stripped for you). write_file to create or fully rewrite.
 - On a tool error, read it, fix the specific cause, and retry — don't give up after one failure, and don't repeat the same failing call.
-- New project → prefer a small multi-file layout with a thin entrypoint. Write code valid for the file's real language and match the project's existing conventions. Put source under `src/`, config at the repo root.
-- Define the shared types / data model FIRST, then write everything against them. Don't write pages/UI before their types exist — naming mismatches force a full rewrite later.
-- Don't invent dependencies: before importing a library confirm it's in package.json (or requirements.txt/Cargo.toml) or a neighboring file; when installing, don't pin a guessed version — `npm install <pkg>` lets the resolver pick a real one.
-- Never assume a library's API. Before using a package's exports, types, or signatures, verify them — read its files in node_modules, check how neighboring files use it, or web_fetch its docs. Don't guess names. Port known algorithms from the real reference (web_fetch), not from memory.
+- New project → prefer a small multi-file layout with a thin entrypoint. Write code valid for the file's real language and match the project's existing conventions.
+- Don't invent dependencies: before importing a library confirm it's in the project's manifest (package.json / requirements.txt / Cargo.toml / go.mod) or a neighboring file; when installing, don't pin a guessed version — let the package manager's resolver pick a real one.
+- Never assume a library's API. Before using a package's exports, types, or signatures, verify them — read its installed source, check how neighboring files use it, or web_fetch its docs. Don't guess names.
 
 Runtime facts:
 - bash returns an exit code; non-zero = failure. Background long-running commands (`cmd &`) so bash returns.

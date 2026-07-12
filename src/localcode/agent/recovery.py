@@ -431,7 +431,7 @@ variants of a real filename it should just list_files for."""
 def not_found_key(path: str) -> str:
     """Normalize a missing read path to the family we count not-found errors
     by: its parent directory. Different typos of the same file
-    (Aki.md / Anki.md / anki.md) all share a parent, so keying on the parent
+    (notes.md / Notes.md / note.md) all share a parent, so keying on the parent
     collapses them into one repeat count. Returns "." for a bare filename."""
     from pathlib import PurePosixPath
     p = PurePosixPath(str(path or "").strip().replace("\\", "/"))

@@ -54,8 +54,8 @@ SCHEMA = {
 
 # Fuzzy-match ratio at/above which we AUTO-READ the real file instead of
 # merely suggesting it. 0.85 is high enough that only genuine typos /
-# case-variants of one real name match (Aki→Anki, gitHub→Github), not two
-# distinct files that happen to be somewhat similar.
+# case-variants of one real name match (e.g. a dropped letter or wrong
+# case), not two distinct files that happen to be somewhat similar.
 AUTO_READ_RATIO = 0.85
 
 
