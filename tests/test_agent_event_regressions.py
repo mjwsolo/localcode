@@ -797,6 +797,27 @@ def test_bash_does_not_background_probe_commands_that_mention_app_py() -> None:
     assert _looks_like_detached_server_command("cd demo && python3 app.py")
 
 
+def test_bash_redirection_is_not_explicit_backgrounding() -> None:
+    from localcode.tools.bash import _BG_RE, _masked_shell_failure
+
+    assert _BG_RE.search("npx tsc --noEmit 2>&1 | head -60") is None
+    assert _BG_RE.search("command 3<&0") is None
+    assert _BG_RE.search("npm run dev &") is not None
+    assert _masked_shell_failure("Error: Cannot find module 'canvas'\nMODULE_NOT_FOUND")
+    assert not _masked_shell_failure("vite build completed successfully")
+
+
+def test_successful_build_mutation_leaves_reasoning_heavy_scaffolding() -> None:
+    from localcode.thinking import next_task_stage_after_tool, should_use_thinking
+
+    assert should_use_thinking("", "auto", goal_type="build_app", task_stage="scaffolding")
+    stage = next_task_stage_after_tool("scaffolding", "write_file", succeeded=True)
+    assert stage == "running"
+    assert not should_use_thinking("", "auto", goal_type="build_app", task_stage=stage)
+    assert next_task_stage_after_tool("scaffolding", "read_file", succeeded=True) == "scaffolding"
+    assert next_task_stage_after_tool("scaffolding", "bash", succeeded=False) == "scaffolding"
+
+
 def test_bash_server_launch_surfaces_startup_crash(tmp_path: Path, monkeypatch) -> None:
     # A server command that exits during startup must report the FAILURE +
     # the captured error (so the agent fixes it), NOT a blind "it's running".
