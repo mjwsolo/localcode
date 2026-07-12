@@ -600,7 +600,19 @@ def run_agent_loop(
     _verified_launch_summary = ""
     _observed_ttft_ms = 0
 
-    if _goal_state.goal_type == "run_or_launch":
+    # Open todos mean the model is mid-BUILD. It may start a preview dev server,
+    # but a running server is NOT task completion while the plan still has
+    # pending/in_progress items — taking the deterministic launch-and-finish
+    # fast-path here is exactly how the Anki build "completed" with 4 todos
+    # still open ("The app is now running" → done, at ~10% of the work). Only
+    # take the launcher fast-path when nothing is left on the list; otherwise
+    # fall through to normal agentic rounds and let the open-todo completion
+    # gate keep the model building until every item is done.
+    _open_todos_at_launch = [
+        t for t in list(getattr(getattr(app, "session", None), "todos", []) or [])
+        if str(t.get("status", "")).lower() != "completed"
+    ]
+    if _goal_state.goal_type == "run_or_launch" and not _open_todos_at_launch:
         try:
             from ..launcher import launch_project_app
             preferred_port = int(getattr(_task_state, "active_port", 0) or 0)

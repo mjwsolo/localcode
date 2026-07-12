@@ -444,12 +444,16 @@ class LocalCodeTUI(App):
 def main() -> None:
     """Entry point for lc-tui or localcode --tui."""
     app = LocalCodeTUI(show_mode_picker=False)
-    # Mouse events are required for the chat_log's click-to-expand
-    # thinking blocks and its custom drag-select + OSC 52 clipboard.
-    # Disabling mouse trades terminal-native text selection for both
-    # of those, which is a worse UX. The custom selection path
-    # already covers what the native one would have done.
-    app.run()
+    # Mouse capture is OFF by default so the terminal's NATIVE text selection,
+    # Cmd+C and Cmd+V all work — capturing the mouse disabled native selection,
+    # which made Terminal.app ring its bell on Cmd+C (empty native selection)
+    # and Cmd+V (image clipboard) — the persistent "beep". Native copy/paste is
+    # worth more to most users than click-to-expand thinking + custom drag-
+    # select, and this matches how claude-code behaves (no capture, no beep).
+    # Power users who want the click-to-expand / drag-select can opt back in.
+    import os as _os
+    _mouse = _os.environ.get("LOCALCODE_MOUSE", "0") == "1"
+    app.run(mouse=_mouse)
 
 
 if __name__ == "__main__":
