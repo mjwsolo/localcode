@@ -204,6 +204,13 @@ def build_dynamic_skills_block(
         )
 
         registry = load_registry(app.repo_root)
+        catalog = registry.listing()
+        catalog_block = (
+            "\n\n## Available Skills\n"
+            "Load a matching recipe with the skill tool; full bodies are deferred.\n"
+            + catalog
+            if catalog else ""
+        )
         recent_tools = list(getattr(app, "_recent_tool_names", []) or [])
         last_failed_tool = str(getattr(app, "_last_failed_tool_name", "") or "")
         candidates = dynamic_skill_candidates(
@@ -227,13 +234,13 @@ def build_dynamic_skills_block(
         # turns so llama.cpp's prefix-cache can hit.
         if not selected:
             return (
-                "",
+                catalog_block,
                 [],
                 [],
                 0,
                 candidates,
             )
-        block = dynamic_skill_block(selected)
+        block = catalog_block + dynamic_skill_block(selected)
         return (
             block,
             [skill.name for skill in selected],
