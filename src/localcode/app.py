@@ -245,6 +245,50 @@ class LocalCodeApp:
         except Exception:
             pass
 
+    def _anchor_home_build_root(self, slug: str) -> bool:
+        """Give a $HOME-launched new-app build a real project directory.
+
+        When localcode is started from $HOME with no project root, there is no
+        directory to anchor against, so `repo_root` stays at $HOME. The model
+        then scatters files into some arbitrary deep subdir while the harness —
+        launcher, verification, context, RAG — stays pinned at $HOME and never
+        finds the app it "built". (This is the second half of the Anki-build
+        stop: the build ran with cwd=$HOME.) Fix: anchor the build to a clean
+        canonical dir, $HOME/<slug>, created up-front BEFORE the turn's first
+        tool call, and re-point the path-critical components at it. Everything
+        else (launcher, verify, context, snapshots) reads `self.repo_root` live,
+        so re-pointing here is enough.
+
+        Guarded by the caller to the degenerate $HOME + build_app/new_app case,
+        so a normal in-project launch is never re-pinned. Idempotent — re-running
+        for the same slug re-adopts the existing dir (resume-friendly). Returns
+        True when the anchored dir already had files (a resume).
+        """
+        clean = (slug or "").strip().strip("/")
+        if not clean:
+            return False
+        new_root = (self.repo_root / clean).resolve()
+        # Never escape or re-adopt $HOME; never walk upward.
+        if _is_home_or_shallower(new_root) or self.repo_root.resolve() not in new_root.parents:
+            return False
+        try:
+            new_root.mkdir(parents=True, exist_ok=True)
+            had_files = any(new_root.iterdir())
+        except OSError:
+            return False
+        self.log.info("Anchoring $HOME build to canonical project dir %s", new_root)
+        self.repo_root = new_root
+        self.repo_root_is_home = False
+        # Re-point ONLY the components whose path resolution / write-containment
+        # must follow the new root. The turn_tracker keeps its $HOME baseline
+        # (already snapshotted this turn) — its diff is cosmetic.
+        try:
+            self.toolkit.repo_root = new_root
+            self.toolkit.changes.repo_root = new_root
+        except Exception:
+            pass
+        return had_files
+
     def _record_exec_event(self, event_type: str, payload: dict) -> None:
         detail = payload.get("stage") or payload.get("name") or payload.get("message") or payload.get("chunk") or event_type
         detail_text = str(detail).replace("\n", " ")[:200]
@@ -482,11 +526,25 @@ class LocalCodeApp:
                 goal_summary=goal_state.goal_summary,
                 success_criteria=merged_criteria,
             )
+        # $HOME-launched new-app build: anchor to a clean canonical project dir
+        # BEFORE any tool call, so the model builds in one place and the harness
+        # (launcher/verify/context) follows it. Only fires in the degenerate
+        # $HOME case; a normal in-project launch is untouched.
+        _anchored_resume = False
+        if (
+            self.repo_root_is_home
+            and goal_state.goal_type == "build_app"
+            and goal_state.task_kind == "new_app"
+        ):
+            _anchored_resume = self._anchor_home_build_root(goal_state.task_slug)
         if (
             not _continuing_task
             and goal_state.goal_type == "build_app"
             and goal_state.task_kind == "new_app"
-            and _canonical_project_dir_has_files(self.repo_root, goal_state.task_slug)
+            and (
+                _anchored_resume
+                or _canonical_project_dir_has_files(self.repo_root, goal_state.task_slug)
+            )
         ):
             task_state.current_stage = "scaffolding"
             task_state.goal_summary = (
