@@ -24,6 +24,11 @@ def test_ram_ctx_ceiling_delegates():
         assert GW._ram_ctx_ceiling(ram) == mc.ram_ctx_ceiling(ram)
 
 
+def test_high_ram_default_keeps_checkpointed_128k_path():
+    assert mc.ram_ctx_ceiling(96) == 131072
+    assert mc.ram_ctx_ceiling(128) == 131072
+
+
 def test_cohere_ctx_ceiling_delegates():
     from localcode.runtime import LocalCodeRuntimeGateway as GW
     for ram in (8, 16, 24, 32, 36, 48, 64, 96, 128, 192):

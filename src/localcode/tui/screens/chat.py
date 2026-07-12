@@ -691,7 +691,7 @@ from ..widgets.chat_log import ChatLog
 from ...autonomy import AutonomyLevel, apply_autonomy_to_permissions, get_policy
 
 _SLASH_COMMANDS = [
-    ("/permissions", "Toggle ask/auto-approve for commands"),
+    ("/permissions", "Toggle command approvals on/off"),
     ("/status", "Show runtime: server health, current model, perf config"),
     ("/restart", "Restart the model server (use when /status shows 'unreachable')"),
     ("/mcp", "List or reload MCP servers from ~/.localcode/mcp.json"),
@@ -1707,7 +1707,8 @@ class ChatScreen(Screen):
         left = RichText.from_markup(
             f"[{C.primary}]LocalCode[/]"
             + (f" · [dim]{cwd_seg}[/]" if cwd_seg else "")
-            + f" · {server_label} · context: {pct_remaining}% free · "
+            + f" · {server_label} · permissions: {self._permissions_label()} · "
+            f"context: {pct_remaining}% free · "
             f"thinking: {thinking_label}"
             + (f" · task: {task_stage}" if task_stage else "")
             + f" · model: {short_model}"
@@ -1741,6 +1742,12 @@ class ChatScreen(Screen):
             if bar_width and left.cell_len > bar_width:
                 left.truncate(bar_width, overflow="ellipsis")
             bar.update(left)
+
+    def _permissions_label(self) -> str:
+        engine = self.tui.engine
+        if engine is not None and engine._autonomy == AutonomyLevel.FULL_AUTO:
+            return "off"
+        return "on"
 
     def _update_queue(self) -> None:
         q = self.query_one("#queue-line", Static)
@@ -2206,12 +2213,17 @@ class ChatScreen(Screen):
             if app:
                 if app._autonomy == AutonomyLevel.FULL_AUTO:
                     app._autonomy = AutonomyLevel.AUTO_EDIT
+                    # Turning approvals back on must revoke broad grants cached
+                    # while the session was prompt-free.
+                    app._session_allow.clear()
+                    app.perms._session_approved.clear()
                     apply_autonomy_to_permissions(app.perms, get_policy(app._autonomy))
-                    log.append_info("Permissions ON — will ask before running commands")
+                    log.append_info("Permissions ON — asks only for high-impact commands")
                 else:
                     app._autonomy = AutonomyLevel.FULL_AUTO
                     apply_autonomy_to_permissions(app.perms, get_policy(app._autonomy))
-                    log.append_info("Permissions OFF — full auto, no questions asked")
+                    log.append_info("Permissions OFF — no approval prompts")
+                self._update_status()
         elif text == "/search":
             self.action_toggle_search()
         elif text == "/model" or text.startswith("/model "):

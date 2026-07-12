@@ -159,6 +159,18 @@ _PACKAGE_INSTALL_RE = re.compile(
     re.IGNORECASE,
 )
 
+_MASKED_FAILURE_RE = re.compile(
+    r"traceback \(most recent call last\)|"
+    r"error:\s+cannot find module|module_not_found|modulenotfounderror|"
+    r"command not found|no such file or directory",
+    re.IGNORECASE,
+)
+
+
+def _masked_shell_failure(output: str) -> bool:
+    """True when shell control flow hid an obvious failure behind exit 0."""
+    return bool(output and _MASKED_FAILURE_RE.search(output))
+
 _APP_SOURCE_SUFFIXES = (
     ".py", ".js", ".jsx", ".ts", ".tsx", ".html", ".css", ".vue", ".svelte",
     ".rs", ".go", ".java", ".kt", ".swift", ".rb", ".php", ".dart",
@@ -686,8 +698,10 @@ _GUI_PATTERNS = [
     "php -S",
 ]
 
-# Detect explicit shell backgrounding: lone `&` (not `&&`)
-_BG_RE = re.compile(r"(?<!&)&(?!&)")
+# Detect explicit shell backgrounding: lone `&` (not `&&`, `2>&1`, or
+# descriptor duplication such as `<&3`). The old expression matched the `&`
+# in `2>&1`, detaching ordinary build/typecheck commands.
+_BG_RE = re.compile(r"(?<![&<>])&(?!&)")
 
 
 def _normalize_repo_root_variants(cmd: str, repo: str) -> str:
@@ -1089,6 +1103,15 @@ def execute(ctx: ToolContext, args: dict) -> str:
             _dh = _dependency_error_hint(output)
             if _dh:
                 output = _dh + "\n\n" + output
+        elif _masked_shell_failure(output):
+            # `failing-command || echo fallback` returns zero even though the
+            # output contains a real stack trace/missing dependency. Mark it as
+            # failed so tool facts, recovery, and the UI cannot show a green ✓.
+            output = (
+                "[exit code 1]\n"
+                "A shell fallback masked the failing command's exit status.\n"
+                + output
+            )
         # AirPlay-collision detector: if the model curls localhost:5000
         # or :7000, those are squatted by macOS AirPlay Receiver /
         # AirTunes — bare `curl -s` sees a 200 with empty body and

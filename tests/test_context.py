@@ -212,8 +212,18 @@ def test_window_aware_compaction_scales_with_ram():
     small_b, small_k = W(int(16384 * 3.5))      # 16K window
     big_b, big_k = W(int(131072 * 3.5))         # 128K window
     assert small_b == 36_000 and small_k == 4   # small stays aggressive
-    assert big_b > 200_000 and big_k >= 16      # big keeps much more
+    # A large KV window is available for hard tasks, but live Qwen traces show
+    # that replaying >200KB every agent round pushes TTFT past one minute.
+    assert big_b == 48_000 and big_k <= 8
     assert big_b > small_b and big_k > small_k  # strictly scales up
+
+
+def test_approval_effects_surface_hidden_command_impact():
+    from localcode.tui.widgets.chat_log import _approval_effects
+
+    effects = _approval_effects("bash", "git status && npm install x | tail -5")
+    assert "network" in effects
+    assert "compound command" in effects
 
 
 def test_progress_ledger_dedups_and_shows_outcomes():
