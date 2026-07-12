@@ -47,6 +47,10 @@ __all__ = [
     "not_found_key",
     "detect_not_found_loop",
     "not_found_nudge",
+    "REJECT_REREAD_LOOP_LIMIT",
+    "detect_reject_reread_loop",
+    "reject_reread_nudge",
+    "todo_close_verification_suffix",
 ]
 
 
@@ -431,7 +435,7 @@ variants of a real filename it should just list_files for."""
 def not_found_key(path: str) -> str:
     """Normalize a missing read path to the family we count not-found errors
     by: its parent directory. Different typos of the same file
-    (Aki.md / Anki.md / anki.md) all share a parent, so keying on the parent
+    (notes.md / Notes.md / note.md) all share a parent, so keying on the parent
     collapses them into one repeat count. Returns "." for a bare filename."""
     from pathlib import PurePosixPath
     p = PurePosixPath(str(path or "").strip().replace("\\", "/"))
@@ -480,4 +484,123 @@ def not_found_nudge(parent_dir: str, real_names: list[str] | None = None) -> str
         "another spelling or capitalization. Call list_files on "
         f"{parent_dir} ONCE, then read_file with an EXACT name from that "
         "listing." + listing
+    )
+
+
+# ── Reject → re-read → reject spin (the "already modified" / dedup death loop) ─
+#
+# A mutation (edit_file/write_file/multi_edit) keeps returning REJECTED — a
+# read-dedup stub, a "file was modified since read" rejection, an
+# old_string-not-found rejection — and the model reacts by re-reading the file
+# and retrying the SAME shape, over and over. The byte-identical breakers can
+# miss it (the read paths / rejection reasons vary each round) and the churn
+# detector can miss it (the interleaved reads keep looking like fresh activity).
+#
+# Recomputed from the TRANSCRIPT TAIL each call rather than a stored counter, so
+# it survives compaction — the claude-code attachments.ts discipline: a nag's
+# fire condition is derived from message history, not a per-turn integer a
+# compaction pass would silently reset. Single-shot per turn at the loop layer
+# (a guard boolean) so we give ONE actionable redirect, then stop nagging.
+
+REJECT_REREAD_LOOP_LIMIT = 3
+"""How many REJECTED tool results (interleaved with a read_file re-read) may
+accumulate in the recent transcript before we fire the one-shot redirect. 3
+matches CHURN_COMMAND_FAIL_LIMIT / NOT_FOUND_LOOP_LIMIT: 1-2 rejections are a
+normal "oops, re-read, fix" correction; a 3rd with the model still re-reading
+means it's circling, not converging."""
+
+
+def detect_reject_reread_loop(messages: list[dict], window: int = 24) -> int | None:
+    """Return the count of recent REJECTED tool results when the model is stuck
+    in a reject → re-read → reject spin (count >= REJECT_REREAD_LOOP_LIMIT AND at
+    least one read_file was issued in the same window — the re-read tell), else
+    None.
+
+    Pure function. Reads only the last `window` messages so the cost is bounded
+    and the signal is recomputed from the transcript (survives compaction). The
+    read_file requirement is what distinguishes this from a plain
+    repeated-failure (handled by the failure breakers): here the model KEEPS
+    re-reading between rejections instead of changing strategy.
+    """
+    tail = messages[-window:] if (window and window > 0) else list(messages)
+    rejections = 0
+    saw_read = False
+    for m in tail:
+        role = m.get("role")
+        if role == "tool":
+            if str(m.get("content", "")).startswith("REJECTED"):
+                rejections += 1
+        elif role == "assistant":
+            for tc in (m.get("tool_calls") or []):
+                name = str(((tc.get("function") or {}).get("name")) or "")
+                if name == "read_file":
+                    saw_read = True
+    if rejections >= REJECT_REREAD_LOOP_LIMIT and saw_read:
+        return rejections
+    return None
+
+
+def reject_reread_nudge() -> str:
+    """One-shot, forward-only redirect for a reject → re-read → reject spin.
+
+    Like the churn / not-found nudges, this carries NO echo-able self-critical
+    loop language ("you keep failing", "you're going in circles") that a small
+    model would parrot back into its own context and self-condition on
+    (arXiv:2509.09677). It names the ONE concrete recovery path and an explicit
+    escape hatch (leave the file, move on) so the model doesn't keep circling.
+    """
+    return (
+        "SYSTEM: This edit keeps being rejected and re-reading the file is not "
+        "getting past it. Do this exactly once: read a SMALL focused range "
+        "around the target line, copy one SHORT exact snippet from that output, "
+        "and make ONE minimal edit_file change to that snippet. If it is "
+        "rejected again, leave this file as it is and move on to the next step "
+        "of the task — do not read it again."
+    )
+
+
+# ── Todo-close verification nudge (rides on the todo_write tool result) ───────
+#
+# When the model marks the LAST item of a 3+ item todo list completed and NONE
+# of the items was itself a verification step, append a one-line reminder to the
+# tool result telling it to verify before the final summary. Cheap and general:
+# it rides on the tool result the model already gets back (no extra turn), and
+# it fires at the exact loop-exit moment where a small model tends to declare
+# victory and stop. Mirrors claude-code's TodoWriteTool verification nudge,
+# generalized for a single-agent tool: there is no verifier subagent here, so we
+# point at the project's own build/typecheck/tests.
+
+_VERIFY_MENTION_RE = _re_recovery.compile(
+    r"verif|typecheck|type-check|\btest|\blint|\bbuild|compile|smoke",
+    _re_recovery.IGNORECASE,
+)
+
+
+def todo_close_verification_suffix(todos) -> str:
+    """Return a one-line "verify before you finish" reminder to append to the
+    todo_write tool result — but only when the model just closed out a 3+ item
+    list (all completed) and NONE of the item texts mentions a verification
+    step. Returns "" when the nudge doesn't apply.
+
+    Pure function of the todos the model just sent, so it's recomputed from the
+    tool call itself — no stored state to drift out of sync with compaction.
+    """
+    try:
+        items = [t for t in (todos or []) if isinstance(t, dict)]
+    except TypeError:
+        return ""
+    if len(items) < 3:
+        return ""
+    statuses = [str(t.get("status", "") or "").strip().lower() for t in items]
+    if not statuses or not all(s == "completed" for s in statuses):
+        return ""
+    contents = " ".join(str(t.get("content", "") or "") for t in items)
+    if _VERIFY_MENTION_RE.search(contents):
+        return ""
+    return (
+        "\n\nNOTE: you just marked a 3+ item task list fully done and none of "
+        "the items was a verification step. Before you write your final "
+        "summary, run the project's build/typecheck/tests (or a focused smoke "
+        "check) to confirm the work actually runs. Do not claim it works "
+        "without verifying."
     )

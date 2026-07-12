@@ -107,15 +107,103 @@ def _strip_read_prefix(text: str) -> str | None:
     return None
 
 
+# Typography normalisation — length-preserving char→char map. A small model
+# (or a copy-paste from rendered markdown / a chat UI) routinely emits STRAIGHT
+# quotes where the file has CURLY ones (or vice-versa), ASCII hyphens where the
+# file has en/em dashes, and normal spaces where the file has NBSP. Normalising
+# both sides to ASCII turns a hard "not found" into a correct edit. Because the
+# map is 1:1 (every char maps to exactly ONE char) the normalised string is the
+# SAME LENGTH as the original, so a match index in normalised space points at
+# the identical index in the original — we recover the real bytes for free.
+# (claude-code utils.ts normalizeQuotes; codex seek_sequence.rs normalise;
+# pi edit-diff.ts normalizeForFuzzyMatch.)
+_TYPO_MAP = {
+    ord(k): v
+    for k, v in {
+        "‘": "'", "’": "'", "‚": "'", "‛": "'",  # single curly
+        "“": '"', "”": '"', "„": '"', "‟": '"',  # double curly
+        "‐": "-", "‑": "-", "‒": "-", "–": "-",  # dashes
+        "—": "-", "―": "-", "−": "-",
+        " ": " ", " ": " ", " ": " ", " ": " ",  # odd spaces
+        " ": " ", " ": " ", " ": " ", " ": " ",
+        " ": " ", " ": " ", " ": " ", " ": " ", "　": " ",
+    }.items()
+}
+
+
+def _normalise_typography(text: str) -> str:
+    """Length-preserving map of curly quotes / unicode dashes / odd spaces to
+    their ASCII equivalents."""
+    return text.translate(_TYPO_MAP)
+
+
+def _is_opening_quote(s: str, i: int) -> bool:
+    """Opening context (claude-code isOpeningContext): start of string or
+    preceded by whitespace / an opening bracket / a dash."""
+    if i == 0:
+        return True
+    return s[i - 1] in " \t\n\r([{—–"
+
+
+def _preserve_typography(actual_old: str, new: str) -> str:
+    """Re-apply the FILE's smart-quote style to `new` (claude-code
+    preserveQuoteStyle). If the matched file text used curly quotes, convert the
+    corresponding straight quotes in the replacement back to curly so we don't
+    flatten the file's typography. Only quotes are re-applied (dashes/spaces are
+    left as the model wrote them — matching claude-code)."""
+    has_curly_double = ("“" in actual_old) or ("”" in actual_old)
+    has_curly_single = ("‘" in actual_old) or ("’" in actual_old)
+    if not (has_curly_double or has_curly_single):
+        return new
+    out: list[str] = []
+    for i, ch in enumerate(new):
+        if ch == '"' and has_curly_double:
+            out.append("“" if _is_opening_quote(new, i) else "”")
+        elif ch == "'" and has_curly_single:
+            # A quote between two letters is a contraction (don't → don’t).
+            if 0 < i < len(new) - 1 and new[i - 1].isalpha() and new[i + 1].isalpha():
+                out.append("’")
+            else:
+                out.append("‘" if _is_opening_quote(new, i) else "’")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def _find_typography_match(content: str, old: str) -> tuple[int, int] | None:
+    """If `old` matches `content` UNIQUELY after typography normalisation,
+    return (start, end) of the ORIGINAL (real-bytes) span. Length-preserving
+    normalisation means the normalised match index equals the original index."""
+    norm_old = _normalise_typography(old)
+    norm_content = _normalise_typography(content)
+    # If typography normalisation changes NEITHER side, this is identical to the
+    # exact tier (which already ran and failed) — nothing new to try. Otherwise
+    # a difference exists on the old side, the file side, or both, so proceed.
+    if norm_old == old and norm_content == content:
+        return None
+    hits: list[int] = []
+    start = 0
+    while True:
+        idx = norm_content.find(norm_old, start)
+        if idx < 0:
+            break
+        hits.append(idx)
+        start = idx + 1
+    if len(hits) != 1:
+        return None
+    return (hits[0], hits[0] + len(old))
+
+
 _WS_RUN = re.compile(r"\s+")
 
 
 def _normalise_ws(text: str) -> str:
-    """Collapse runs of whitespace to a single space + strip ends.
-    Used for fuzzy match: we don't accept fuzzy matches blindly, only
-    when the normalised pattern occurs UNIQUELY in the normalised
+    """Collapse runs of whitespace to a single space + strip ends, after
+    typography normalisation so a match differing by BOTH quote style and
+    whitespace still lands. Used for fuzzy match: we don't accept fuzzy matches
+    blindly, only when the normalised pattern occurs UNIQUELY in the normalised
     file."""
-    return _WS_RUN.sub(" ", text).strip()
+    return _WS_RUN.sub(" ", _normalise_typography(text)).strip()
 
 
 def _find_normalised_match(content: str, old: str) -> tuple[int, int] | None:
@@ -130,11 +218,14 @@ def _find_normalised_match(content: str, old: str) -> tuple[int, int] | None:
     norm_old = _normalise_ws(old)
     if not norm_old:
         return None
-    # Build (normalised_text, normalised_pos -> original_pos) map.
+    # Build (normalised_text, normalised_pos -> original_pos) map. We normalise
+    # typography first (length-preserving, so index i still maps to content[i])
+    # then collapse whitespace runs, exactly matching `_normalise_ws(old)`.
+    typo_content = _normalise_typography(content)
     norm_chars: list[str] = []
     pos_map: list[int] = []
     in_ws = False
-    for i, ch in enumerate(content):
+    for i, ch in enumerate(typo_content):
         if ch.isspace():
             if not in_ws:
                 norm_chars.append(" ")
@@ -206,12 +297,34 @@ def _closest_matches(content: str, old: str, k: int = 3) -> list[tuple[int, str]
     return [(i + 1, line) for _, i, line in scored[:k]]
 
 
+def _record_write(ctx: ToolContext, path, content: str) -> None:
+    """Refresh read-state after our own write so the model's own edits never
+    trip the read-before-edit guard next round. Best-effort."""
+    try:
+        from . import read_state
+        read_state.record_write(ctx.app, path, content)
+    except Exception:
+        pass
+
+
 def execute(ctx: ToolContext, args: dict) -> str:
     if "path" not in args:
         return "Error: 'path' argument is required for edit_file."
     path = ctx.repo / args["path"]
     if not path.exists():
         return f"File not found: {args['path']}"
+
+    # ── Read-before-edit staleness guard ──
+    # Refuse to edit a file the model hasn't fully read this session, or that
+    # has changed on disk since it was read. See tools/read_state.py.
+    try:
+        from . import read_state
+        _guard = read_state.guard_edit(ctx.app, path, args["path"])
+    except Exception:
+        _guard = None
+    if _guard:
+        return _guard
+
     content = path.read_text(errors="replace")
     old = args["old_string"]
     new = args["new_string"]
@@ -258,6 +371,7 @@ def execute(ctx: ToolContext, args: dict) -> str:
                 f"file may already be in the state you want."
             )
         path.write_text(new_content)
+        _record_write(ctx, path, new_content)
         _sw = ""
         try:
             from .syntax_check import check_syntax
@@ -282,7 +396,34 @@ def execute(ctx: ToolContext, args: dict) -> str:
         # has the prefix pattern, so it can't recurse again.
         return execute(ctx, {**args, "old_string": stripped})
 
-    # ── Tier 3: whitespace-normalised match (unique only) ──
+    # ── Tier 3: typography-normalised match (curly/straight quotes, unicode
+    # dashes, odd spaces) — unique only. Preserves the FILE's typography by
+    # re-applying its quote style to new_string (claude-code preserveQuoteStyle).
+    typo_span = _find_typography_match(content, old)
+    if typo_span is not None:
+        start, end = typo_span
+        old_content = content
+        actual_old = content[start:end]
+        new_adj = _preserve_typography(actual_old, new)
+        new_content = content[:start] + new_adj + content[end:]
+        if new_content != old_content:
+            path.write_text(new_content)
+            _record_write(ctx, path, new_content)
+            diff = list(difflib.unified_diff(
+                old_content.splitlines(keepends=True),
+                new_content.splitlines(keepends=True),
+                fromfile=args["path"], tofile=args["path"], lineterm="",
+            ))
+            body = "\n".join(diff[:60]) if diff else (
+                f"Edited {args['path']} (typography-tolerant match)"
+            )
+            return (
+                f"NOTE: matched `old_string` after normalising quote/dash "
+                f"typography (straight vs curly quotes, unicode dashes). Edit "
+                f"applied successfully, preserving the file's typography.\n{body}"
+            )
+
+    # ── Tier 4: whitespace-normalised match (unique only) ──
     span = _find_normalised_match(content, old)
     if span is not None:
         start, end = span
@@ -291,6 +432,7 @@ def execute(ctx: ToolContext, args: dict) -> str:
         # Build new content, only the unique fuzzy-match span gets replaced.
         new_content = content[:start] + new + content[end:]
         path.write_text(new_content)
+        _record_write(ctx, path, new_content)
         diff = list(difflib.unified_diff(
             old_content.splitlines(keepends=True),
             new_content.splitlines(keepends=True),
@@ -305,7 +447,7 @@ def execute(ctx: ToolContext, args: dict) -> str:
             f"difference vs the file. Edit applied successfully.\n{body}"
         )
 
-    # ── Tier 4: nothing matched — return actionable suggestions ──
+    # ── Tier 5: nothing matched — return actionable suggestions ──
     near = _closest_matches(content, old, k=3)
     if near:
         lines_summary = "\n".join(
