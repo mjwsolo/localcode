@@ -61,6 +61,17 @@ def execute(ctx: ToolContext, args: dict) -> str:
     if not isinstance(edits, list) or not edits:
         return "Error: 'edits' must be a non-empty list of {old_string, new_string} objects."
 
+    # ── Read-before-edit staleness guard ──
+    # Refuse to edit a file the model hasn't fully read this session, or that
+    # has changed on disk since it was read. See tools/read_state.py.
+    try:
+        from . import read_state
+        _guard = read_state.guard_edit(ctx.app, path, args["path"])
+    except Exception:
+        _guard = None
+    if _guard:
+        return _guard
+
     original = path.read_text(errors="replace")
     prepared: list[_PreparedEdit] = []
     for i, ed in enumerate(edits, 1):
@@ -82,6 +93,27 @@ def execute(ctx: ToolContext, args: dict) -> str:
         start = starts[0]
         prepared.append(_PreparedEdit(i, start, start + len(old), old, new))
 
+    # Clobber guard: an edit whose old_string is a substring of an EARLIER
+    # edit's new_string means the edits step on each other — once the earlier
+    # edit is applied, this edit's anchor would match text the earlier edit
+    # just inserted, cascading an unintended change. A loud, specific error
+    # beats silent corruption. (claude-code getPatchForEdits utils.ts:296-337.)
+    # Newlines are trimmed off the anchor first so a trailing-newline sentinel
+    # doesn't defeat the check.
+    for i in range(len(edits)):
+        old_i = str((edits[i] or {}).get("old_string", "")).strip("\n")
+        if not old_i:
+            continue
+        for j in range(i):
+            new_j = str((edits[j] or {}).get("new_string", ""))
+            if old_i in new_j:
+                return (
+                    f"Edit {i + 1}: its old_string is a substring of edit "
+                    f"{j + 1}'s new_string — these edits step on each other. "
+                    f"applied 0/{len(edits)}. Reorder or merge them; do not "
+                    "anchor one edit inside text another edit inserts."
+                )
+
     prepared.sort(key=lambda item: item.start)
     for prev, curr in zip(prepared, prepared[1:]):
         if curr.start < prev.end:
@@ -98,6 +130,13 @@ def execute(ctx: ToolContext, args: dict) -> str:
         return f"Error: no-op multi_edit on {args['path']}; applied 0/{len(edits)}."
 
     path.write_text(content)
+    # Refresh read-state so a follow-up edit on this path isn't blocked by the
+    # read-before-edit guard (the model just wrote the current bytes).
+    try:
+        from . import read_state
+        read_state.record_write(ctx.app, path, content)
+    except Exception:
+        pass
     _sw = ""
     try:
         from .syntax_check import check_syntax
