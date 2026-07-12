@@ -153,10 +153,34 @@ class GoalState:
         return data
 
 
+# NOTE ON THIS CLASSIFIER: goal_type is a WEAK hint, not the authority on
+# whether a task is finished. Completion is governed by the model's own todo
+# list (see the open-todo gate in agent/loop.py) — never by these regexes or by
+# a detected server port. History: "Build me an Anki clone … so I can launch it
+# like a native app" used to match the run_or_launch pattern on the phrase
+# "launch it", which then let a freshly-opened dev-server port count as "app
+# built" at ~10% of the work. The lasting fix is that a port no longer ends a
+# turn while todos are open; the widening below just keeps genuine builds out of
+# run_or_launch in the first place. Misclassifying an edit as build_app is
+# cheap (its criteria are just "code exists + verification passes"); the
+# dangerous direction is a build leaking into run_or_launch, so bias toward
+# build_app and require run_or_launch to be an *unambiguous* run request.
+_BUILD_VERB = r"(?:build|create|make|scaffold|implement|develop|generate|write|design|code)"
+_APP_NOUN = (
+    r"(?:app|application|web ?app|website|web ?page|site|dashboard|api|service|"
+    r"project|clone|game|tool|extension|widget|spa|pwa|frontend|back ?end|"
+    r"platform|bot|cli|ui|component|library|package|script|program|"
+    r"tracker|editor|viewer|generator)"
+)
+
+
 def infer_goal_state(user_text: str) -> GoalState:
     text = (user_text or "").strip()
     lower = text.lower()
-    if re.search(r"\b(build|create|make|scaffold|implement)\b.{0,40}\b(app|application|website|dashboard|api|service|project)\b", lower):
+    # build verb + app-ish noun anywhere in the request → it's a build. No tight
+    # proximity window (the old `.{0,40}` cap is exactly why "Build me a … web
+    # app" fell through — the noun sat 48 chars past the verb).
+    if re.search(rf"\b{_BUILD_VERB}\b", lower) and re.search(rf"\b{_APP_NOUN}\b", lower):
         goal_type, task_kind = "build_app", "new_app"
         criteria = ("Requested implementation exists on disk", "Relevant build or tests pass", "Runtime behavior is verified when applicable")
     elif re.search(r"\b(run|launch|start|serve|open)\b.{0,24}\b(app|server|site|project|it)\b", lower):
