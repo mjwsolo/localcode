@@ -126,13 +126,18 @@ def execute(ctx: ToolContext, args: dict) -> str:
         return "Task list cleared."
 
     in_progress = [t for t in cleaned if t["status"] == "in_progress"]
-    body = render_todo_reminder(cleaned)
     note = ""
     if len(in_progress) == 0:
-        note = "\nNote: nothing is in_progress — mark the next task in_progress before you start it."
+        note = " Nothing is in_progress — mark the next task in_progress before you start it."
     elif len(in_progress) > 1:
-        note = "\nNote: more than one task is in_progress — keep it to exactly one at a time."
-    return f"Task list updated.\n{body}{note}"
+        note = " More than one task is in_progress — keep it to exactly one."
+    _done = sum(1 for t in cleaned if t["status"] == "completed")
+    # BRIEF result for the user's screen. The full "Your task list …" reminder
+    # is NOT returned here — it's injected as a model-only system message each
+    # round (see loop.py render_todo_reminder), so returning it here too both
+    # duplicated it for the model AND leaked the internal reminder onto the
+    # user's screen.
+    return f"Task list updated — {_done}/{len(cleaned)} done, {len(in_progress)} in progress.{note}"
 
 
 def is_concurrency_safe(args: dict) -> bool:
