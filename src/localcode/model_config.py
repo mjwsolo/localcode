@@ -32,10 +32,12 @@ from __future__ import annotations
 # tier whose min_ram_gb is satisfied wins, else DEFAULT.
 #
 # Only 16 GB→64K and 64 GB→128K are hardware-measured; 24/32/36 hold at 64K
-# pending real-hardware OOM measurement. 96 GB+ unlocks 256K (every current
-# catalog model trains to >=256K, so on a big machine RAM is the binding cap).
+# pending real-hardware OOM measurement. 96 GB+ stays at 128K: at 256K the
+# Qwen checkpoint path is disabled due a measured Metal SIGKILL, forcing a
+# full prompt prefill every round. 128K keeps four checkpoints and is faster
+# for long agentic tasks; 256K remains an explicit override.
 RAM_CTX_CEILING_TIERS: tuple[tuple[int, int], ...] = (
-    (96, 262144),   # 256K — 96/128/192 GB hold a 256K KV easily
+    (96, 131072),   # 128K — checkpointed fast path; 256K is experimental
     (64, 131072),   # 128K (validated; 256K KV is tight beside a Q8 model on 64 GB)
     (48, 98304),    # 96K
 )
@@ -162,15 +164,15 @@ def keep_recent_for_window(context_window: int) -> int:
 # The always-injected "what I've already done" ledger (Codex-style tool-state
 # awareness) must be COMPACT on a 16 GB Mac (64K window — the window is
 # precious, the ledger is the model's primary surviving memory) and can be
-# RICHER on a 128 GB Mac (256K window — plenty of room, it's a safety net).
+# RICHER on a 128 GB Mac (128K default window; it is still a safety net).
 # A single ladder keyed on the launched window covers every RAM tier
-# (8/16/24/32/36/48/64/96/128/192 GB → 64K…256K via _ram_ctx_ceiling).
+# (8/16/24/32/36/48/64/96/128/192 GB → 64K…128K by default).
 def progress_ledger_budget_chars(context_window_tokens: int) -> int:
     """Max chars for the per-round progress ledger, scaled to the window."""
     w = context_window_tokens or 0
-    if w >= 262144:   # 96 GB+ → 256K
+    if w >= 262144:   # explicit experimental 256K override
         return 3500
-    if w >= 131072:   # 64 GB → 128K
+    if w >= 131072:   # 64 GB+ → 128K
         return 2200
     if w >= 98304:    # 48 GB → 96K
         return 1600
