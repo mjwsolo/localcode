@@ -10,6 +10,24 @@ def test_conservative_goal_classifier_activates_harness_lifecycles() -> None:
     assert infer_goal_state("organize these notes").goal_type == "general_task"
 
 
+def test_build_verb_wins_over_incidental_run_words() -> None:
+    # A build request that also *describes* the finished artifact with run/launch
+    # words ("so I can launch it", "then start it") must stay build_app. The old
+    # classifier let the trailing "launch it"/"start it" phrase flip the whole
+    # task to run_or_launch, after which a freshly-opened dev-server port counted
+    # as a finished build. This pins the class of bug, not one prompt.
+    for text in (
+        "build a web app so I can launch it like a native app",
+        "create an api and then start the server to test it",
+        "make a game I can run in the browser",
+        "implement a dashboard, then open it to check the charts",
+    ):
+        assert infer_goal_state(text).goal_type == "build_app", text
+    # Genuine run/launch requests (no build verb) must stay run_or_launch.
+    for text in ("launch it", "run the app", "start the server", "open the project"):
+        assert infer_goal_state(text).goal_type == "run_or_launch", text
+
+
 def test_task_lifecycle_requires_verification_before_completion() -> None:
     assert transition("planning", TaskEvent.MUTATION_SUCCEEDED).after == TaskStage.IMPLEMENT
     assert transition("implement", TaskEvent.REQUIREMENTS_SATISFIED).after == TaskStage.IMPLEMENT

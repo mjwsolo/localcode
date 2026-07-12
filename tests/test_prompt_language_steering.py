@@ -14,11 +14,10 @@ from localcode.agent.prompts import SYSTEM_PROMPT, project_stack_line
 
 def test_system_prompt_has_language_matching_rule() -> None:
     text = SYSTEM_PROMPT.lower()
-    # The prompt must tell the model to write code valid for the file's actual
-    # language and match the project's conventions (worded concisely — no long
-    # per-language example list, which bloats the prompt for a small model).
-    assert "valid for the file's real language" in text
-    assert "match the project's existing conventions" in text
+    # The prompt must tell the model to match the project's actual language and
+    # conventions (worded concisely — no long per-language example list, which
+    # bloats the prompt for a small model).
+    assert "match the project's existing conventions and language" in text
     assert "conventions" in text
 
 

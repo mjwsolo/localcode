@@ -110,9 +110,7 @@ from .hooks import (
 )
 from .app_tasks import (
     extract_port,
-    format_run_or_launch_summary,
     ground_run_or_launch_text,
-    has_launch_signal,
     has_runtime_verification_signal,
     is_focused_blocking_question,
     looks_like_partial_handoff,
@@ -2152,16 +2150,18 @@ def run_agent_loop(
                 full_response.append(_verified_launch_summary)
             break
 
-        if _goal_state.goal_type == "run_or_launch":
-            _task_port = int(getattr(_task_state, "active_port", 0) or 0)
-            _launched = has_launch_signal(bash_history)
-            _verified = has_runtime_verification_signal(bash_history)
-            if _task_port and (_launched or _verified):
-                grounded_access = format_run_or_launch_summary(_task_port, _verified)
-                _render_markdown(grounded_access, app.console if hasattr(app, 'console') else None)
-                full_response.append(grounded_access)
-                _loop_exit_reason = "verified_run_or_launch" if _verified else "run_or_launch_ready"
-                break
+        # NOTE: there used to be a "run_or_launch + a port opened ⇒ the task is
+        # done" break here. It was an anti-pattern — none of the reference
+        # harnesses (codex, opencode, pi, claude-code) infer completion from a
+        # detected port, a launched process, or output patterns. All of them end
+        # a turn on ONE structural signal: the model returned a message with no
+        # tool calls. That block let `npm run dev` opening a socket count as a
+        # finished app at ~10% of the work. Removed for good. Completion is now
+        # model-driven (the no-tool-calls exit below), backstopped only by the
+        # open-todo gate for the small local models that stop early — the harness
+        # nudges AGAINST stopping, it never invents a "done" signal. If a run
+        # task launches a server, the model reports the URL in its own reply,
+        # exactly like the reference tools do.
 
         # ── Cross-round repeated-call nudge ──
         # The dominant waste in the logs: the model calls the SAME (tool, args)
