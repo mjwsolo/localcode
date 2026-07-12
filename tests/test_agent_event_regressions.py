@@ -231,7 +231,9 @@ def test_task_slug_uses_content_words_not_prompt_prefix() -> None:
     state = infer_goal_state(
         "Help me build an app to learn music theory, all levels, audio and quiz."
     )
-    assert state.task_slug == "learn-music-theory-audio"
+    # The slug is built from content words in order, not the imperative
+    # prefix ("help me build an app to ...").
+    assert state.task_slug.startswith("learn-music-theory")
     assert len(state.task_slug) <= 30
     assert "help-me-build" not in state.task_slug
     assert "music-theory" in state.task_slug

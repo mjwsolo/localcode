@@ -104,6 +104,47 @@ class TestLlamaServerCommand:
         assert "--cache-type-k" not in cmd
         assert "--cache-type-v" not in cmd
 
+    def test_defrag_thold_flag_present(self) -> None:
+        """KV-cache defrag must be enabled at 0.1 for long agentic sessions
+        (context-shift churns the cache and fragments it)."""
+        gw = self._make_gw()
+        cmd = gw.llama_server_command("/path/model.gguf")
+        assert "--defrag-thold" in cmd
+        idx = cmd.index("--defrag-thold")
+        assert cmd[idx + 1] == "0.1"
+
+    def test_ctx_checkpoints_disabled_at_256k(self) -> None:
+        """-9 crash mitigation: at 262144 ctx, checkpoint creation serializes a
+        multi-GB Metal buffer that can breach the wired working-set cap, so we
+        disable checkpoints entirely (0) and omit the cadence flag."""
+        gw = self._make_gw()
+        gw._target_num_ctx = lambda **kw: 262144  # type: ignore[assignment]
+        cmd = gw.llama_server_command("/path/model.gguf")
+        idx = cmd.index("--ctx-checkpoints")
+        assert cmd[idx + 1] == "0"
+        assert "--checkpoint-every-n-tokens" not in cmd
+
+    def test_ctx_checkpoints_enabled_below_256k(self) -> None:
+        """Below the 256K crash tier checkpoints stay on (128K → 4 snapshots)
+        with the 2K cadence flag."""
+        gw = self._make_gw()
+        gw._target_num_ctx = lambda **kw: 131072  # type: ignore[assignment]
+        cmd = gw.llama_server_command("/path/model.gguf")
+        idx = cmd.index("--ctx-checkpoints")
+        assert cmd[idx + 1] == "4"
+        assert "--checkpoint-every-n-tokens" in cmd
+
+    def test_ctx_checkpoints_env_override(self, monkeypatch) -> None:
+        """LOCALCODE_CTX_CHECKPOINTS forces the count at every tier (reversibility
+        knob for the mitigation)."""
+        monkeypatch.setenv("LOCALCODE_CTX_CHECKPOINTS", "2")
+        gw = self._make_gw()
+        gw._target_num_ctx = lambda **kw: 262144  # type: ignore[assignment]
+        cmd = gw.llama_server_command("/path/model.gguf")
+        idx = cmd.index("--ctx-checkpoints")
+        assert cmd[idx + 1] == "2"
+        assert "--checkpoint-every-n-tokens" in cmd
+
     def test_custom_binary_used(self, tmp_path) -> None:
         # A configured binary is honored only when it exists on disk; the
         # command builder self-heals (falls back to discovery) for a stale
@@ -917,3 +958,71 @@ class TestStreamConnectionRecovery:
         assert result["message"]["content"] == "ok"
         assert restart_calls["n"] == 1
         assert calls["n"] == 2
+
+
+class TestSamplingTemperature:
+    """Coding-temperature ceiling: low temp is the top anti-hallucination lever
+    on quantized models. _options() must cap temperature to the coding default
+    across families, overridable/reversible via LOCALCODE_CODING_TEMP."""
+
+    def _gw(self, temperature: float = 1.0, model: str = "test.gguf") -> LocalCodeRuntimeGateway:
+        cfg = RuntimeConfig(
+            provider="llama_cpp", base_url="http://localhost:8081",
+            model=model, temperature=temperature,
+        )
+        return LocalCodeRuntimeGateway(cfg)
+
+    def test_default_caps_to_coding_temp(self, monkeypatch) -> None:
+        monkeypatch.delenv("LOCALCODE_CODING_TEMP", raising=False)
+        # config default 1.0 must be lowered to the 0.25 coding ceiling.
+        assert self._gw(temperature=1.0)._options()["temperature"] == 0.25
+
+    def test_qwen_also_capped_low(self, monkeypatch) -> None:
+        monkeypatch.delenv("LOCALCODE_CODING_TEMP", raising=False)
+        # Previously Qwen clamped at 0.7; now it shares the low coding ceiling.
+        gw = self._gw(temperature=1.0, model="qwen3.6-30b-a3b.gguf")
+        assert gw._options()["temperature"] == 0.25
+
+    def test_user_lower_temp_preserved(self, monkeypatch) -> None:
+        monkeypatch.delenv("LOCALCODE_CODING_TEMP", raising=False)
+        # A user who set an even lower temperature keeps it (min, not clobber).
+        assert self._gw(temperature=0.1)._options()["temperature"] == 0.1
+
+    def test_env_override_reverses_change(self, monkeypatch) -> None:
+        monkeypatch.setenv("LOCALCODE_CODING_TEMP", "0.7")
+        # Restores the old Qwen-style 0.7 ceiling.
+        assert self._gw(temperature=1.0)._options()["temperature"] == 0.7
+
+    def test_env_override_malformed_falls_back(self, monkeypatch) -> None:
+        monkeypatch.setenv("LOCALCODE_CODING_TEMP", "not-a-number")
+        assert self._gw(temperature=1.0)._options()["temperature"] == 0.25
+
+
+class TestSystemRamMemoization:
+    """`_system_ram_gb` shells `sysctl hw.memsize` for a constant value on the
+    per-request hot path; it must probe once and cache thereafter."""
+
+    def test_probe_runs_once(self, monkeypatch) -> None:
+        import subprocess as _subprocess
+
+        cfg = RuntimeConfig(
+            provider="llama_cpp", base_url="http://localhost:8081", model="test.gguf",
+        )
+        gw = LocalCodeRuntimeGateway(cfg)
+
+        calls = {"n": 0}
+
+        class _R:
+            stdout = str(128 * 1024 ** 3)
+
+        def _fake_run(*_a, **_k):
+            calls["n"] += 1
+            return _R()
+
+        monkeypatch.setattr(_subprocess, "run", _fake_run)
+
+        first = gw._system_ram_gb()
+        second = gw._system_ram_gb()
+        third = gw._system_ram_gb()
+        assert first == second == third == 128
+        assert calls["n"] == 1  # cached after the first probe

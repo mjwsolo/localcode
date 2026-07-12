@@ -481,15 +481,59 @@ def test_chat_input_grows_on_typing_and_paste_live():
                 f"typed 3 lines should grow to 3 rows, got {ta.styles.height.value}"
             )
 
-            # A long single-line paste must soft-wrap and grow past one row.
+            # A moderate single-line paste (below the large-paste collapse
+            # thresholds: <4 lines AND <300 chars) stays inline and must
+            # soft-wrap and grow past one row.
             ta.text = ""
             await pilot.pause()
-            ta.post_message(Paste("x" * 400))
+            ta.post_message(Paste("x" * 200))
             await pilot.pause()
             await pilot.pause()
             assert int(ta.styles.height.value) > 1, (
-                "a 400-char paste must wrap and grow the box past one row"
+                "a 200-char paste must wrap and grow the box past one row"
             )
+
+    asyncio.run(scenario())
+
+
+def test_large_paste_collapses_to_chip_and_expands_on_submit():
+    """A large paste is replaced in the composer by a single `[pasted …]`
+    chip (not the full flood); the real text is spliced back in when the
+    message is submitted."""
+    from textual.events import Paste
+
+    async def scenario():
+        app = _new_app()
+        submitted = {}
+        async with app.run_test(size=(80, 40)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            ta = screen.query_one("#chat-input")
+            ta.focus()
+            await pilot.pause()
+
+            # 40-line paste → well over the 4-line collapse threshold.
+            big = "\n".join(f"line {i}" for i in range(40))
+            ta.post_message(Paste(big))
+            await pilot.pause()
+            await pilot.pause()
+
+            # Composer shows a compact chip, not the 40-line flood.
+            assert "[pasted #1 +40 lines]" in ta.text
+            assert "line 39" not in ta.text
+            assert int(ta.styles.height.value) <= 3, (
+                "collapsed paste must not grow the box like the raw flood would"
+            )
+
+            # Capture what _start_turn receives (avoid a real backend turn).
+            screen._start_turn = lambda text: submitted.update(text=text)
+            screen._submit_message(ta.text)
+            await pilot.pause()
+
+            # The submitted message carries the REAL pasted text, expanded.
+            assert "line 0" in submitted["text"]
+            assert "line 39" in submitted["text"]
+            assert "[pasted" not in submitted["text"]
 
     asyncio.run(scenario())
 

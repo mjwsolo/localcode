@@ -1320,7 +1320,7 @@ class LocalCodeApp:
         creation_words = ("make", "build", "create", "generate", "implement")
         quality_words = (
             "app", "game", "website", "dashboard", "ui", "clone",
-            "polish", "authentic", "look like", "feel like", "sonic",
+            "polish", "authentic", "look like", "feel like",
             "beautiful", "high quality", "fidelity", "playable",
         )
         return any(w in text for w in creation_words) and any(w in text for w in quality_words)

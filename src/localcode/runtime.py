@@ -16,6 +16,31 @@ from .model_families import (
 )
 
 
+#: Low default sampling temperature for coding. On quantized local models a
+#: low temperature is the single strongest anti-hallucination lever — Gemma's
+#: 1.0 and Qwen's 0.7 were tuned for prose, not code. Overridable per-user via
+#: the LOCALCODE_CODING_TEMP env var so the change is fully reversible
+#: (=0.7 restores the old Qwen cap, =1.0 the old Gemma behaviour).
+_CODING_TEMPERATURE_DEFAULT = 0.25
+
+
+def _coding_temperature() -> float:
+    """The coding temperature ceiling (default 0.25), overridable via
+    LOCALCODE_CODING_TEMP. A malformed value falls back to the default."""
+    import os
+    raw = os.environ.get("LOCALCODE_CODING_TEMP")
+    if raw is None:
+        return _CODING_TEMPERATURE_DEFAULT
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        return _CODING_TEMPERATURE_DEFAULT
+    # Clamp to a sane range; temperature must be > 0 for the sampler.
+    if val <= 0:
+        return _CODING_TEMPERATURE_DEFAULT
+    return min(val, 2.0)
+
+
 def _strip_thinking_tokens(text: str, family: ModelFamily | None = None) -> str:
     """Strip thinking-channel tokens that leak through in decoded text.
 
@@ -264,6 +289,12 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
         # calls/turns (this gateway is one per session) so a deterministic
         # crash can't restart-loop forever. Reset to 0 on any success.
         self._consecutive_stream_deaths = 0
+        # Memoized physical-RAM probe. `_system_ram_gb()` shells `sysctl
+        # hw.memsize` for a value that never changes for the life of the
+        # process, and it's on the per-chat-request hot path (called from
+        # _target_num_ctx on every request) — caching it removes a subprocess
+        # spawn from every TTFT. None = not yet probed.
+        self._cached_ram_gb: int | None = None
         # llama_cpp is the only HTTP runtime (ollama/mlx/hf removed); diffusion
         # models are architecture-routed to the one-shot CLI, not this endpoint.
         base = self.config.base_url.rstrip("/")
@@ -507,6 +538,15 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
         # a turn's own payload blows past the budget mid-decode, shifting is
         # the safety net. Cost is effectively zero (only fires on overflow).
         cmd.extend(["--context-shift"])
+        # KV-cache defragmentation. Long agentic sessions with context-shift on
+        # churn the KV cache (oldest tokens evicted, new ones appended, cache-reuse
+        # salvaging chunks after compaction gaps), which fragments the cache into
+        # unusable holes and slowly wastes cells until decode stalls or the slot
+        # can't fit a new prompt. `--defrag-thold 0.1` triggers a compaction pass
+        # whenever fragmentation exceeds 10%, reclaiming those holes automatically.
+        # Cheap (only fires when fragmented) and directly helps the long multi-turn
+        # coding sessions this agent runs. Default is off (-1.0).
+        cmd.extend(["--defrag-thold", "0.1"])
         # SSM context checkpoints — critical for hybrid-memory models like
         # Qwen 3.6 where the Mamba-2 state is recurrent and llama-server
         # cannot naturally reuse KV cache across requests. Checkpointing
@@ -525,8 +565,31 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
         # that pushed the server into the memory killer on long tasks. 32 is
         # only worth it at small contexts where each snapshot is tiny; at big
         # windows a handful still gives the multi-turn prefix-reuse speedup.
+        #
+        # ── -9 CRASH MITIGATION (UNVERIFIED CANDIDATE) ──────────────────────
+        # At 262144 ctx we now DISABLE checkpoints entirely (0). Field report:
+        # server SIGKILL'd (-9) with ~68 GB of 128 GB free, pressure_kill=false,
+        # server-log tail "created context checkpoint N", flags
+        # `--ctx-size 262144 --cache-type-v turbo4 --ctx-checkpoints 4`. Likely
+        # cause: creating a 256K context checkpoint serializes the full KV/
+        # recurrent state into a fresh multi-GB Metal buffer; that allocation
+        # path is NOT covered by GGML_METAL_NO_RESIDENCY (which only marks the
+        # primary weight/KV/compute buffers evictable), so the creation spike
+        # crosses Metal's wired working-set ceiling (recommendedMaxWorkingSetSize,
+        # ~75% of RAM — independent of free system RAM) and the kernel kills the
+        # process mid-serialization. Lowering the COUNT (4→2→1) doesn't help: the
+        # crash is during a single checkpoint's CREATION, so only disabling all
+        # creation removes the spike. Trade-off: at 256K (96 GB+ Macs only) turn-2
+        # prompt eval loses the checkpoint prefix-reuse speedup — a slowdown, not
+        # a crash. Reversible/tunable via LOCALCODE_CTX_CHECKPOINTS (a positive
+        # int forces that count at every tier; "0" force-disables).
         _ckpt_ctx = self._target_num_ctx(model_path=model_path)
-        if _ckpt_ctx >= 131072:
+        _ckpt_override = os.environ.get("LOCALCODE_CTX_CHECKPOINTS")
+        if _ckpt_override is not None and _ckpt_override.strip().lstrip("-").isdigit():
+            _ckpts = str(max(0, int(_ckpt_override)))
+        elif _ckpt_ctx >= 262144:
+            _ckpts = "0"   # disabled — see -9 crash mitigation above
+        elif _ckpt_ctx >= 131072:
             _ckpts = "4"
         elif _ckpt_ctx >= 65536:
             _ckpts = "8"
@@ -534,10 +597,15 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
             _ckpts = "16"
         else:
             _ckpts = "32"
-        cmd.extend([
-            "--ctx-checkpoints", _ckpts,
-            "--checkpoint-every-n-tokens", "2048",
-        ])
+        if _ckpts == "0":
+            # Explicitly request zero rolling snapshots; omit the cadence flag
+            # (moot with checkpoints off) so nothing triggers a serialization.
+            cmd.extend(["--ctx-checkpoints", "0"])
+        else:
+            cmd.extend([
+                "--ctx-checkpoints", _ckpts,
+                "--checkpoint-every-n-tokens", "2048",
+            ])
         # Single slot, disable fit check (we manage memory via sysctl)
         cmd.extend(["-np", "1", "-fit", "off"])
         # Tuned launch params: a stored model-opt recommendation applies first,
@@ -794,15 +862,22 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
         return max(KV_FIT_MIN_CTX, (max_ctx // KV_FIT_CTX_MULTIPLE) * KV_FIT_CTX_MULTIPLE)
 
     def _system_ram_gb(self) -> int:
+        # Physical RAM is constant for the process lifetime, so probe once and
+        # memoize — this is called per chat request (via _target_num_ctx) and
+        # each miss shells `sysctl hw.memsize`, a needless per-request TTFT cost.
+        if self._cached_ram_gb is not None:
+            return self._cached_ram_gb
         try:
             import subprocess
             mem_bytes = int(subprocess.run(
                 ["sysctl", "-n", "hw.memsize"],
                 capture_output=True, text=True, timeout=2
             ).stdout.strip())
-            return max(1, mem_bytes // (1024 ** 3))
+            ram_gb = max(1, mem_bytes // (1024 ** 3))
         except Exception:
-            return 16
+            ram_gb = 16
+        self._cached_ram_gb = ram_gb
+        return ram_gb
 
     def _is_large_qwen_gguf(self, model_path: str | None = None) -> bool:
         name = (model_path or self.config.model or "").lower()
@@ -1013,144 +1088,55 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
         return min(num_ctx, self._model_max_ctx(model_path))
 
     def _options(self, num_ctx_override: int | None = None, num_predict_override: int | None = None) -> dict[str, Any]:
-        # Anti-repetition sampler stack — fixes the IQ3_S quantization-
-        # collapse loop ("I'll use bash to run the commands." × 14)
-        # WITHOUT a wall-clock cap. Three layers stacked because no
-        # single sampler reliably breaks Gemma 4 IQ3_S MoE collapses:
+        # Sampler stack that is ACTUALLY forwarded to llama-server by _payload:
+        # temperature + DRY + min_p. Nothing else. (This dict used to also carry
+        # top_p / top_k / repeat_penalty / repeat_last_n / presence_penalty and a
+        # num_ctx — all DEAD: the llama_cpp _payload path never read them, and the
+        # ollama-shaped branch that did has been removed. Deleted to stop the
+        # confusion of "tuned" values that never reached the server.)
         #
-        #   1. DRY (Don't Repeat Yourself) — penalises N-token
-        #      sequences that have appeared in recent output, scaling
-        #      the penalty exponentially with the match length. Bumped
-        #      multiplier 0.8 → 1.5 and allowed_length 2 → 1 to make
-        #      the penalty hit single-token repeats too. Required for
-        #      Gemma 4 IQ3_S where the router collapses onto a few
-        #      experts and emits the same token over and over.
-        #   2. repeat_penalty — independent of DRY; divides logits of
-        #      tokens that have appeared in repeat_last_n by 1.15.
-        #      Catches loops DRY misses (single tokens, short phrases
-        #      below DRY threshold).
-        #   3. min_p — cuts the long tail of low-probability tokens,
-        #      forcing sampling to draw from the genuinely diverse
-        #      head of the distribution rather than collapsing onto
-        #      the single high-probability "loop" continuation.
-        #
-        # Sampler params follow Unsloth's official Gemma 4 config:
-        # temperature=1.0, top_p=0.95, top_k=64. min_p=0.05 added
-        # because Unsloth's repetition fix recommends it for
-        # heavily-quantized MoE models.
-        # Sampler tuning notes (2026-04-27):
-        # - repeat_last_n was 256 → 64. With 256, `repeat_penalty`
-        #   was punishing legitimate repeats of strings the model
-        #   needs to emit verbatim (file paths containing the user's
-        #   account name, recurring function names, JSON keys). Real
-        #   failure: the model emitted several mangled variants of a
-        #   username because the correct tokens were penalty-suppressed.
-        #   64 is tight enough to break adjacent repetition without
-        #   hitting same-string-far-back-in-prompt cases.
-        # - dry_allowed_length was 1 → 2. allowed_length=1 made
-        #   DRY penalise even single-token repeats, which broke
-        #   identifiers that must repeat exactly. allowed_length=2
-        #   still catches phrasal loops (which span many tokens)
-        #   but lets single tokens like "marc" or path components
-        #   repeat freely.
-        # - dry_multiplier kept at 1.5 — when DRY does fire on a
-        #   legit phrasal loop, we want it to bite hard.
+        # Why only DRY + min_p as anti-loop, and NOT the top_p=0.8 / top_k=20 /
+        # repeat_penalty=1.10 bundle: re-adding that bundle caused the documented
+        # 2026-04-29 paraphrase-loop regression — repeat_penalty starved the EOS
+        # token so the model rephrased the same answer 2-3× instead of stopping.
+        #   * DRY (Don't Repeat Yourself) penalises repeated N-GRAMS, scaling the
+        #     penalty exponentially with match length. Unlike repeat_penalty it
+        #     is EOS-neutral (single tokens aren't N-grams), so it breaks phrasal
+        #     loops without suppressing the stop token.
+        #   * min_p trims the low-probability tail that token-collapse loops feed
+        #     on (Unsloth's Gemma-4 repetition fix recommends 0.05 for heavily-
+        #     quantized MoE; Qwen 0.0).
         family = infer_family_from_profile(
             getattr(self.config, "model", "") or getattr(self.config, "profile", "") or ""
         )
-        if family == ModelFamily.QWEN:
-            # Sampler aligned to Unsloth's published Qwen3.6 IQ2_M
-            # non-thinking spec — temperature=0.7, top_p=0.8, top_k=20.
-            #
-            # presence_penalty was 1.5 (Unsloth's documented fix for
-            # the "planning-loop" failure: "Wait, I'll write the
-            # response. Wait, I'll check…"). Removed 2026-04-29 after
-            # this scenario manifested:
-            #
-            #   user: "hows the weather in spain?"
-            #   model: bash → "It's 18°C in Spain right now."
-            #   model: "It's currently 18 °C in Spain."
-            #   model: bash → "The weather in Spain is around 18°C…"
-            #   model: bash → "The weather in Spain is currently…"
-            #
-            # presence_penalty subtracts a fixed amount from the logit
-            # of every token already in context. Once the model emits
-            # an answer, its component tokens — INCLUDING the EOS /
-            # sentence-end tokens that appeared after similar prior
-            # sentences — get penalised for the rest of the round.
-            # Instead of stopping, the model finds different words to
-            # say the same thing, then a third paraphrase. Unsloth's
-            # 1.5 was for the planning-preamble failure (a different
-            # bug class) and we'd been masking it with the missing
-            # sampler-forwarding bug fixed in commit 418b038 today.
-            # DRY (re-enabled below) is the right tool against intra-
-            # round repetition; presence_penalty fights itself.
-            #
-            # DRY itself: previously disabled citing a 2026-04-27
-            # incident where it corrupted usernames inside
-            # `/Users/<name>/...` paths. Root cause was
-            # `dry_penalty_last_n=-1` (whole prompt) — already fixed
-            # to 256 generated tokens. With DRY scoped to the decode
-            # window, prompt-side identifiers are safe AND we catch
-            # intra-round phrasal loops.
-            temperature = min(float(self.config.temperature), 0.7)
-            top_p = 0.8
-            top_k = 20
-            min_p = 0.0
-            repeat_penalty = 1.10
-            repeat_last_n = 64
-            dry_multiplier = 1.5
-            dry_base = 1.75
-            dry_allowed_length = 2
-            dry_penalty_last_n = 256
-            presence_penalty = 0.0
-        else:
-            temperature = float(self.config.temperature)
-            top_p = 0.95
-            top_k = 64
-            min_p = 0.05
-            repeat_penalty = 1.15
-            repeat_last_n = 64
-            dry_multiplier = 1.5
-            dry_base = 1.75
-            dry_allowed_length = 2
-            dry_penalty_last_n = 256
-            # Google publishes no presence_penalty recommendation for
-            # Gemma 4. Leaving at 0.0 (server default) until there's a
-            # sourced reason to deviate.
-            presence_penalty = 0.0
+        # Coding temperature ceiling — low temp is the single strongest anti-
+        # hallucination lever on quantized models, so we cap ALL families to a
+        # low coding default (Gemma's 1.0 / Qwen's 0.7 were prose tunings). This
+        # only ever LOWERS temperature (a user who set a lower config temperature
+        # keeps it) and the ceiling is overridable via LOCALCODE_CODING_TEMP, so
+        # the change is fully reversible.
+        temperature = min(float(self.config.temperature), _coding_temperature())
+        # Qwen wants min_p off; Gemma-4 wants 0.05 (Unsloth's quantized-MoE fix).
+        min_p = 0.0 if family == ModelFamily.QWEN else 0.05
 
         opts: dict[str, Any] = {
             "temperature": temperature,
-            "num_ctx": self._target_num_ctx(num_ctx_override),
-            "top_p": top_p,
-            "top_k": top_k,
             "min_p": min_p,
-            "presence_penalty": presence_penalty,
-            "repeat_penalty": repeat_penalty,
-            "repeat_last_n": repeat_last_n,
-            "dry_multiplier": dry_multiplier,
-            "dry_base": dry_base,
-            "dry_allowed_length": dry_allowed_length,
-            # Limit DRY to the last 256 GENERATED tokens — NOT the whole
-            # prompt (-1). With -1, DRY was penalising any string that
-            # appeared anywhere in the system prompt, file paths, prior
-            # tool results, etc. — including the user's username when
-            # it tried to emit a path. Real failure 2026-04-27: model
-            # produced several mangled username variants because the
-            # username appeared dozens of times in context and DRY
-            # refused to let the correct token sequence repeat. Scoping to 256
-            # generated tokens means DRY catches loops the model
-            # CREATES this round, while leaving legitimate prompt-side
-            # repetition (paths, function names, identifiers) untouched.
-            "dry_penalty_last_n": dry_penalty_last_n,
-            # Sequence breakers RESET DRY's n-gram matching at these tokens, so
-            # a repeated file PATH / identifier isn't treated as a penalizable
-            # loop. Without them (llama.cpp's default breakers don't include
-            # path chars), a path repeated within one round — `cd X && mkdir X
-            # && ls X` — got its username subtokens suppressed and the model
-            # emitted mangled variants of the home-dir username. Breaking on
-            # `/ . _ - space` keeps DRY for phrasal loops but frees paths/idents.
+            "dry_multiplier": 1.5,
+            "dry_base": 1.75,
+            # allowed_length=2 catches phrasal loops (which span many tokens)
+            # but lets single tokens like "marc" or path components repeat.
+            "dry_allowed_length": 2,
+            # Limit DRY to the last 256 GENERATED tokens — NOT the whole prompt
+            # (-1). With -1, DRY penalised any string anywhere in the system
+            # prompt / file paths / prior tool results — including the user's
+            # username when it tried to emit a path (2026-04-27: mangled username
+            # variants). Scoping to 256 generated tokens catches loops the model
+            # CREATES this round while leaving prompt-side repetition untouched.
+            "dry_penalty_last_n": 256,
+            # Sequence breakers RESET DRY's n-gram matching at these tokens so a
+            # repeated file PATH / identifier isn't treated as a penalizable loop
+            # (llama.cpp's default breakers don't include path chars).
             "dry_sequence_breakers": ["\n", "/", ".", "_", "-", " ", ":", "\"", "'"],
         }
         if self.config.mode == "fast":
@@ -1511,6 +1497,17 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
                             f"HTTP {response.status_code} from {self.endpoint}"
                             + (f" — {snippet}" if snippet else "")
                         )
+                    # Model family / thinking-channel markers are CONSTANT for
+                    # the whole stream (they come from the configured profile),
+                    # so resolve them ONCE here instead of recomputing per content
+                    # delta inside the loop. Defaults to Gemma when family is
+                    # unset so prior behaviour holds.
+                    _family = infer_family_from_profile(
+                        getattr(self.config, "profile", "") or ""
+                    )
+                    _adapter = get_adapter(_family)
+                    _open = _adapter.thinking_open
+                    _close = _adapter.thinking_close
                     for line in response.iter_lines():
                         if not line:
                             continue
@@ -1696,17 +1693,9 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
                         content = message.get("content", "")
                         if not content:
                             continue
-                        # Stateful detection of thinking-channel markers in content.
-                        # Markers come from the active model family's adapter — for
-                        # Gemma 4 both open and close are literally `<unused25>`
-                        # (same token); Qwen uses `<think>` / `</think>`. Defaults
-                        # to Gemma when family is unset so prior behaviour holds.
-                        _family = infer_family_from_profile(
-                            getattr(self.config, "profile", "") or ""
-                        )
-                        _adapter = get_adapter(_family)
-                        _open = _adapter.thinking_open
-                        _close = _adapter.thinking_close
+                        # Stateful detection of thinking-channel markers in content
+                        # (_family / _adapter / _open / _close resolved once above
+                        # the stream loop — they're constant for the stream).
                         if self.config.provider == "llama_cpp" and think:
                             if not in_thinking and _open in content:
                                 # Thinking block starts
@@ -2054,144 +2043,98 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
         num_ctx: int | None = None,
         num_predict: int | None = None,
     ) -> dict[str, Any]:
+        # llama_cpp (the tuned llama-server) is the sole HTTP runtime; config.py
+        # coerces any removed provider (ollama/mlx/hf) to it at load, so there is
+        # exactly one payload shape — the OpenAI-compatible /v1/chat/completions
+        # body. (The old ollama-shaped `{"options": opts, ...}` branch and the
+        # never-merged `extra` dict were dead code and have been removed.)
         opts = self._options(num_ctx_override=num_ctx, num_predict_override=num_predict)
-        if self.config.provider == "llama_cpp":
-            extra: dict[str, Any] = {
-                "n_gpu_layers": self.config.llama_cpp_gpu_layers,
-                "n_threads": self.config.llama_cpp_threads,
-                "n_batch": self.config.llama_cpp_batch_size,
-            }
-            # Speed: expert offloading — keep attention on GPU, experts on CPU
-            if self.config.llama_cpp_expert_offload:
-                extra["ot"] = "exps=CPU"
-            # Speed: KV cache compression (asymmetric K/V)
-            if self.config.kv_cache_type_k and self.config.kv_cache_type_k != "f16":
-                extra["cache_type_k"] = self.config.kv_cache_type_k
-            if self.config.kv_cache_type_v and self.config.kv_cache_type_v != "f16":
-                extra["cache_type_v"] = self.config.kv_cache_type_v
-            payload: dict[str, Any] = {
-                "model": self.config.model,
-                "stream": stream,
-                "messages": messages,
-                # v0.2.12 baseline: forward only `temperature` and let
-                # llama-server's defaults handle every other sampler.
-                #
-                # Why we walked back the "forward the full sampler
-                # stack" change: with `repeat_penalty=1.10` /
-                # `repeat_last_n=64` / DRY all forwarded, the model
-                # produced 2-3 paraphrased answers in one round on
-                # simple questions ("hows weather in london" →
-                # three different formattings of the same data, 2 m 30 s,
-                # observed 2026-04-29). v0.2.12 only forwarded
-                # `temperature`; it did not show this loop. So our
-                # carefully-tuned sampler config was *causing* the
-                # rephrase rather than preventing it — most likely
-                # `repeat_penalty` penalising `<|im_end|>` after the
-                # first complete answer. Server defaults win for now;
-                # any future re-introduction must come with a single-
-                # variable A/B and a kept measurement, not a bundle.
-                "temperature": opts["temperature"],
-                "chat_template_kwargs": {"enable_thinking": think},
-            }
-            # Single-knob anti-rephrase: `repeat_penalty=1.05` only.
-            # Added 2026-04-29 after stripping the full sampler stack
-            # killed multi-round looping but left intra-decode rephrase
-            # intact ("hows weather in tokyo" → 3 paraphrased sentences
-            # in one 80-token decode). Why ONLY this one and at 1.05
-            # (not the previous 1.10): the loop with the full stack was
-            # penalty=1.10 + top_p=0.8 + top_k=20 + DRY, which trapped
-            # the model into rephrasing because EOS was penalised AND
-            # the candidate pool was tiny. Server defaults give us
-            # top_p=0.95 / top_k=40 — plenty of escape room — so a
-            # mild 1.05 penalty discourages exact phrase repeats
-            # without starving EOS. If this re-introduces a loop,
-            # revert this hunk and accept occasional rephrase as a
-            # model property of Qwen3.6 IQ2_M.
-            payload["repeat_penalty"] = 1.05
-            # Forward the EOS-NEUTRAL anti-loop samplers that were previously
-            # computed into `opts` and then DROPPED (they only went to the dead
-            # ollama-shaped payload below). DRY penalises repeated N-GRAMS —
-            # not single tokens — so unlike repeat_penalty it does NOT suppress
-            # the EOS/sentence-end tokens that caused the 2026-04-29 paraphrase
-            # regression; min_p trims the low-probability tail that token-
-            # collapse loops feed on. llama-server has DRY OFF by default, so
-            # NOT forwarding these is a real root cause of the repeat-collapse
-            # loops. We deliberately do NOT re-add the aggressive repeat_penalty
-            # /top_k/top_p bundle (that was the regression). A/B back to
-            # temperature-only with LOCALCODE_SAMPLER_MINIMAL=1.
-            import os as _os
-            if _os.environ.get("LOCALCODE_SAMPLER_MINIMAL") != "1":
-                payload["dry_multiplier"] = opts["dry_multiplier"]
-                payload["dry_base"] = opts["dry_base"]
-                payload["dry_allowed_length"] = opts["dry_allowed_length"]
-                payload["dry_penalty_last_n"] = opts["dry_penalty_last_n"]
-                if opts.get("dry_sequence_breakers"):
-                    payload["dry_sequence_breakers"] = opts["dry_sequence_breakers"]
-                if opts.get("min_p", 0):
-                    payload["min_p"] = opts["min_p"]
-            if "num_predict" in opts:
-                _np = opts["num_predict"]
-                # llama-server treats max_tokens=-1 as "use default", which on
-                # some builds caps at ~2048 and silently truncates write_file
-                # args mid-JSON for large file writes. Only forward positive
-                # caps; for -1 ("unlimited") omit the field so the server
-                # uses its true unlimited default and the model can finish
-                # large tool-call argument streams.
-                if isinstance(_np, int) and _np > 0:
-                    payload["max_tokens"] = _np
-            if tools:
-                payload["tools"] = tools
-            # One-shot diagnostic: log the sampler subset of the FIRST
-            # outbound chat-completions payload so we can verify DRY is
-            # actually being forwarded. Set LOCALCODE_DEBUG_SAMPLERS=1
-            # to enable. Self-disables after one log to keep noise down.
-            import logging
-            # Always log the ACTUAL forwarded samplers once per session (was
-            # opt-in) so we can correlate looping with the real server config —
-            # the "control this better" record. Cheap: fires exactly once.
-            if not getattr(self, "_logged_samplers", False):
-                sampler_keys = (
-                    "temperature", "top_p", "top_k", "min_p",
-                    "repeat_penalty", "repeat_last_n",
-                    "dry_multiplier", "dry_base", "dry_allowed_length",
-                    "dry_penalty_last_n",
-                    "presence_penalty", "frequency_penalty",
-                )
-                snapshot = {k: payload.get(k, "<absent>") for k in sampler_keys}
-                logging.getLogger("localcode.samplers").info(
-                    "outbound_samplers tools=%s %s",
-                    bool(tools), snapshot,
-                )
-                self._logged_samplers = True
-            return payload
-
-        payload = {
+        payload: dict[str, Any] = {
             "model": self.config.model,
             "stream": stream,
             "messages": messages,
-            "options": opts,
-            "keep_alive": "30m",
+            "temperature": opts["temperature"],
+            "chat_template_kwargs": {"enable_thinking": think},
         }
-        if not think:
-            payload["think"] = False
+        # Single-knob anti-rephrase: `repeat_penalty=1.05` only.
+        # Added 2026-04-29 after stripping the full sampler stack
+        # killed multi-round looping but left intra-decode rephrase
+        # intact ("hows weather in tokyo" → 3 paraphrased sentences
+        # in one 80-token decode). Why ONLY this one and at 1.05
+        # (not the previous 1.10): the loop with the full stack was
+        # penalty=1.10 + top_p=0.8 + top_k=20 + DRY, which trapped
+        # the model into rephrasing because EOS was penalised AND
+        # the candidate pool was tiny. Server defaults give us
+        # top_p=0.95 / top_k=40 — plenty of escape room — so a
+        # mild 1.05 penalty discourages exact phrase repeats
+        # without starving EOS. If this re-introduces a loop,
+        # revert this hunk and accept occasional rephrase as a
+        # model property of Qwen3.6 IQ2_M.
+        payload["repeat_penalty"] = 1.05
+        # Forward the EOS-NEUTRAL anti-loop samplers (DRY + min_p). DRY
+        # penalises repeated N-GRAMS — not single tokens — so unlike
+        # repeat_penalty it does NOT suppress the EOS/sentence-end tokens that
+        # caused the 2026-04-29 paraphrase regression; min_p trims the low-
+        # probability tail that token-collapse loops feed on. llama-server has
+        # DRY OFF by default, so NOT forwarding these lets repeat-collapse loops
+        # through. We deliberately do NOT re-add the aggressive repeat_penalty
+        # /top_k/top_p bundle (that was the regression). A/B back to
+        # temperature-only with LOCALCODE_SAMPLER_MINIMAL=1.
+        import os as _os
+        if _os.environ.get("LOCALCODE_SAMPLER_MINIMAL") != "1":
+            payload["dry_multiplier"] = opts["dry_multiplier"]
+            payload["dry_base"] = opts["dry_base"]
+            payload["dry_allowed_length"] = opts["dry_allowed_length"]
+            payload["dry_penalty_last_n"] = opts["dry_penalty_last_n"]
+            if opts.get("dry_sequence_breakers"):
+                payload["dry_sequence_breakers"] = opts["dry_sequence_breakers"]
+            if opts.get("min_p", 0):
+                payload["min_p"] = opts["min_p"]
+        if "num_predict" in opts:
+            _np = opts["num_predict"]
+            # llama-server treats max_tokens=-1 as "use default", which on
+            # some builds caps at ~2048 and silently truncates write_file
+            # args mid-JSON for large file writes. Only forward positive
+            # caps; for -1 ("unlimited") omit the field so the server
+            # uses its true unlimited default and the model can finish
+            # large tool-call argument streams.
+            if isinstance(_np, int) and _np > 0:
+                payload["max_tokens"] = _np
         if tools:
             payload["tools"] = tools
-        # Timeout: 120s for streaming, 300s for non-streaming
+        # Log the ACTUAL forwarded samplers once per session so we can correlate
+        # looping with the real server config. Cheap: fires exactly once.
+        import logging
+        if not getattr(self, "_logged_samplers", False):
+            sampler_keys = (
+                "temperature", "top_p", "top_k", "min_p",
+                "repeat_penalty", "repeat_last_n",
+                "dry_multiplier", "dry_base", "dry_allowed_length",
+                "dry_penalty_last_n",
+                "presence_penalty", "frequency_penalty",
+            )
+            snapshot = {k: payload.get(k, "<absent>") for k in sampler_keys}
+            logging.getLogger("localcode.samplers").info(
+                "outbound_samplers tools=%s %s",
+                bool(tools), snapshot,
+            )
+            self._logged_samplers = True
         return payload
 
     def _extract_message(self, data: dict[str, Any]) -> dict[str, Any]:
-        if self.config.provider == "llama_cpp":
-            choices = data.get("choices", [])
-            if not choices:
-                return {}
-            delta = choices[0].get("delta") or choices[0].get("message") or {}
-            result: dict[str, Any] = {
-                "content": delta.get("content", ""),
-                "tool_calls": delta.get("tool_calls") or [],
-            }
-            # Gemma 4 thinking: llama.cpp returns reasoning in reasoning_content
-            thinking = delta.get("reasoning_content", "")
-            if thinking:
-                result["thinking"] = thinking
-            return result
-        return data.get("message", {})
+        # Single provider (llama_cpp): parse the OpenAI-compatible streaming /
+        # non-streaming chat-completions shape. The old ollama `data["message"]`
+        # fallback was dead (provider is coerced to llama_cpp at config load).
+        choices = data.get("choices", [])
+        if not choices:
+            return {}
+        delta = choices[0].get("delta") or choices[0].get("message") or {}
+        result: dict[str, Any] = {
+            "content": delta.get("content", ""),
+            "tool_calls": delta.get("tool_calls") or [],
+        }
+        # Gemma 4 thinking: llama.cpp returns reasoning in reasoning_content
+        thinking = delta.get("reasoning_content", "")
+        if thinking:
+            result["thinking"] = thinking
+        return result

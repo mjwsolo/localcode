@@ -102,14 +102,6 @@ def extract_feature_criteria(runtime, user_text: str, *, max_features: int = 12)
     return out
 
 
-_APP_BUILD_RE = re.compile(
-    r"\b(?:build|make|create|start|scaffold|help me build)\b.{0,80}\b"
-    r"(?:app|website|site|dashboard|frontend|web app|react app|streamlit|flask app)\b",
-    re.IGNORECASE | re.DOTALL,
-)
-_ASK_RE = re.compile(r"\b(?:what|which|where|when|why|how|explain|show)\b", re.IGNORECASE)
-_RUN_RE = re.compile(r"\b(?:run|start|launch|execute|open)\b", re.IGNORECASE)
-_EDIT_RE = re.compile(r"\b(?:fix|edit|change|update|modify|refactor|patch)\b", re.IGNORECASE)
 _SLUG_STOPWORDS = {
     "a",
     "an",
@@ -142,7 +134,6 @@ _SLUG_STOPWORDS = {
     "using",
     "via",
     "with",
-    "levels",
 }
 
 

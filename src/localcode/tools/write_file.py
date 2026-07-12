@@ -160,6 +160,21 @@ def execute(ctx: ToolContext, args: dict) -> str:
     if stub:
         return stub
 
+    # ── Overwrite staleness guard ──
+    # write_file is the create-or-full-rewrite tool, so it does NOT require a
+    # prior read. But if the target was read this session and has since changed
+    # on disk, a blind overwrite would clobber those changes — refuse it. See
+    # tools/read_state.py.
+    try:
+        from . import read_state
+        _guard = read_state.guard_overwrite(
+            ctx.app, path, args["path"], path.is_file()
+        )
+    except Exception:
+        _guard = None
+    if _guard:
+        return _guard
+
     path.parent.mkdir(parents=True, exist_ok=True)
 
     # write_file is the create-or-full-rewrite tool. Rule 9 in the
@@ -203,6 +218,13 @@ def execute(ctx: ToolContext, args: dict) -> str:
         except Exception:
             old_content = ""
     path.write_text(content)
+    # Refresh read-state so a subsequent edit_file on this path (which the model
+    # just created/rewrote) isn't blocked by the read-before-edit guard.
+    try:
+        from . import read_state
+        read_state.record_write(ctx.app, path, content)
+    except Exception:
+        pass
     lines = content.count("\n") + 1
     verb = "Rewrote" if existed else "Created"
 

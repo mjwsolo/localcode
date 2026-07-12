@@ -224,10 +224,54 @@ def _truncate_result(result: str, tool_name: str, ctx_tokens: int = 0) -> str:
 # to constants.py during the T0.1 split; re-exported at the top of
 # this module for back-compat.
 
+# Only these tools' RESULTS are safe to age. They are REPLAYABLE
+# OBSERVATIONS: their output is a snapshot of external state (the filesystem,
+# a search, a shell command) that the model can regenerate on demand by
+# re-running the exact same call. Aging them is lossless-in-effect — the model
+# can always get them back. This mirrors claude-code's `COMPACTABLE_TOOLS` set
+# (microCompact.ts) and opencode's prune (which protects non-replayable tool
+# output). Deliberately EXCLUDED: write_file / edit_file / multi_edit /
+# append_file. Their result is the DIFF of what the model just wrote — the only
+# record in history of the change it made. Aging it away is what made the model
+# "forget" what it wrote after a build failure and rewrite whole files from
+# scratch (churn). Anything we can't attribute to a replayable tool is also left
+# intact (conservative default).
+_REPLAYABLE_TOOLS: frozenset[str] = frozenset({
+    "read_file", "grep", "glob", "list_files", "bash",
+    "web_search", "web_fetch",
+})
+
+
+def _tool_names_by_call_id(messages: list[dict]) -> dict[str, str]:
+    """Map tool_call_id -> tool name by scanning assistant tool_calls, so a
+    tool-role result (which only carries `tool_call_id`) can be attributed to
+    the tool that produced it."""
+    names: dict[str, str] = {}
+    for m in messages:
+        if m.get("role") != "assistant":
+            continue
+        for tc in m.get("tool_calls") or []:
+            tc_id = tc.get("id")
+            name = ((tc.get("function") or {}).get("name") or "").strip()
+            if tc_id and name:
+                names[tc_id] = name
+    return names
+
+
+def _result_tool_name(m: dict, id_to_name: dict[str, str]) -> str:
+    """Best-effort tool name for a tool-role result: explicit `name` field if
+    present (some providers set it), else via the tool_call_id map."""
+    explicit = (m.get("name") or "").strip()
+    if explicit:
+        return explicit
+    return id_to_name.get(m.get("tool_call_id"), "")
+
+
 def _compact_old_tool_results(
     messages: list[dict], keep_recent: int = COMPACT_KEEP_RECENT_TOOL_RESULTS
 ) -> list[dict]:
-    """Return a copy of `messages` with older tool-role results summarized.
+    """Return a copy of `messages` with older REPLAYABLE-OBSERVATION tool
+    results summarized.
 
     Gated on `Feature.TOOL_RESULT_AGING` — when disabled the caller gets
     the input list back unchanged, which is what eval uses to A/B
@@ -235,26 +279,41 @@ def _compact_old_tool_results(
 
     We keep the last `keep_recent` tool results verbatim (the model usually
     only needs the recent ones to decide the next step) and replace earlier
-    ones with a compact "[summarized ...]" placeholder. `keep_recent` scales
-    with the context window (more on a big machine — see
-    `_prepare_model_messages`), so a 128K-window session preserves far more
-    raw tool output than a 16K one instead of crushing both to the same 4.
-    User/assistant/system messages pass through unchanged, and `tool_call_id`
-    is preserved so the chat protocol still reconciles ids correctly.
+    ones with a compact "[summarized ...]" placeholder — but ONLY for tools in
+    `_REPLAYABLE_TOOLS`. write_file/edit_file/multi_edit results (the diffs of
+    what the model wrote) are NEVER aged, so the model doesn't lose sight of
+    its own changes. `keep_recent` scales with the context window (more on a big
+    machine — see `_prepare_model_messages`), floored at 1 so aging never clears
+    the entire working set. User/assistant/system messages pass through
+    unchanged, and `tool_call_id` is preserved so the chat protocol still
+    reconciles ids correctly.
     """
     from ..features import Feature, is_enabled
     if not is_enabled(Feature.TOOL_RESULT_AGING):
         return messages
+    # Floor at 1 so we never age away the entire working set of tool output.
     keep_recent = max(1, keep_recent)
-    tool_idxs = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
-    if len(tool_idxs) <= keep_recent:
+    id_to_name = _tool_names_by_call_id(messages)
+    # Only REPLAYABLE-observation results are age-eligible; keep the last
+    # `keep_recent` of THOSE verbatim (counting non-replayable results toward
+    # the recency window would let a burst of writes push a still-needed read
+    # out of the kept set).
+    ageable_idxs = [
+        i for i, m in enumerate(messages)
+        if m.get("role") == "tool"
+        and _result_tool_name(m, id_to_name) in _REPLAYABLE_TOOLS
+    ]
+    if len(ageable_idxs) <= keep_recent:
         return messages
 
-    cutoff_idx = tool_idxs[-keep_recent]
+    cutoff_idx = ageable_idxs[-keep_recent]
     out: list[dict] = []
     for i, m in enumerate(messages):
         if i >= cutoff_idx or m.get("role") != "tool":
             out.append(m)
+            continue
+        if _result_tool_name(m, id_to_name) not in _REPLAYABLE_TOOLS:
+            out.append(m)  # non-replayable (write/edit diff, etc.) — preserve
             continue
         content = m.get("content") or ""
         if not isinstance(content, str) or len(content) < COMPACT_MIN_CONTENT_CHARS:
@@ -311,42 +370,42 @@ def _semantic_tool_summary(content: str) -> str:
 # this module for back-compat.
 
 def _redact_old_write_args(messages: list[dict]) -> list[dict]:
-    """Return a copy of `messages` with OLD write-tool arguments redacted.
+    """Pass-through: the model's OWN write/edit bodies are NEVER stripped.
 
-    The single biggest source of context bloat on coding-heavy sessions
-    is this: every write_file call carries its full `content` (often
-    hundreds of lines of code) in the assistant's tool_calls arguments.
-    That payload then sits in history forever and is re-shipped to the
-    model on every subsequent round — even though the file is already
-    on disk and a cheap read_file can reload it when needed.
+    History note (this used to strip them, and that was a bug)
+    ----------------------------------------------------------
+    This pass previously replaced older write_file `content` (and edit_file /
+    multi_edit anchors) in the assistant tool_calls with a "[REDACTED — file is
+    on disk, call read_file to reload]" stub, keeping only the last
+    `REDACT_KEEP_RECENT_WRITES` verbatim. The intent was to cut context bloat.
 
-    This mirrors the agent `microcompact` pattern (see
-    `microCompactCore.ts:446`): keep the last N verbatim, replace older
-    ones with a short placeholder that tells the model "the payload is
-    gone but the file is still on disk — use read_file to see it."
-    Applied to write_file, edit_file, multi_edit since those are the
-    tools whose argument payloads dominate history size. Other tools
-    (bash, grep, read_file itself) have bounded or short arg payloads
-    so they don't need redaction — their BULK is in the tool_result
-    instead, which `_compact_old_tool_results` already handles.
+    The real cost (observed in logs): after a build failure the model could no
+    longer SEE what it had written a few rounds earlier — the body was a stub —
+    so instead of a targeted fix it rewrote the whole file from scratch, over
+    and over (churn). What the model wrote is exactly what it needs to reason
+    about its own change; that record must stay in history.
 
-    Leaves the most-recent `REDACT_KEEP_RECENT_WRITES` calls untouched
-    so the model can reference the code it JUST wrote without a
-    read_file round-trip. Preserves tool_call id + name + `path` arg
-    (those are small and needed to reconcile the history chain). Only
-    strips the bulky payload field.
+    The reference agents agree: claude-code's microCompact clears old tool
+    RESULTS but never the write BODIES in assistant messages; codex/opencode
+    likewise summarize whole turns wholesale only when over budget rather than
+    surgically deleting the code the model wrote. So this function no longer
+    strips anything. Context is bounded instead by:
+      * `_compact_old_tool_results` — ages only REPLAYABLE observation results
+        (read/grep/glob/list_files/bash), never write/edit diffs;
+      * `_redact_duplicate_reads` — collapses re-reads of the same path;
+      * `_microcompact_for_prompt_budget` / `_compact_messages` — summarize old
+        turns wholesale when the prompt genuinely approaches the window budget.
 
-    Returns a new list; never mutates the input.
-
-    Gated on `Feature.WRITE_ARG_REDACTION` — disabling returns the
-    input unchanged, which is what eval uses to A/B "how much bloat
-    is this preventing per session?"
+    Kept as a named no-op (rather than deleted) so callers, telemetry, and the
+    A/B feature flag keep working. Still gated on `Feature.WRITE_ARG_REDACTION`.
     """
     from ..features import Feature, is_enabled
     if not is_enabled(Feature.WRITE_ARG_REDACTION):
         return messages
-
-    REDACT_TOOLS = {"write_file", "append_file", "edit_file", "multi_edit"}
+    # Never strip write/edit bodies — see docstring. Older-write redaction is
+    # intentionally disabled; the empty target set makes the rest of this
+    # function a structural no-op while preserving its shape for back-compat.
+    REDACT_TOOLS: set[str] = set()
 
     # Collect (outer_idx, tool_call_idx, tool_name) for every targeted call.
     targets: list[tuple[int, int, str]] = []

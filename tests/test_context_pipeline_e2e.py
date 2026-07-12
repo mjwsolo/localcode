@@ -226,31 +226,43 @@ def main() -> int:
     _validate_protocol(reduced)
     print("✓ tool_call_id chain intact in both raw + reduced")
 
-    # Per-pass deltas
+    # Per-pass deltas (informational). NOTE as of the aging-whitelist change:
+    # `_redact_old_write_args` is a deliberate no-op — the model's own write /
+    # edit bodies are NEVER stripped (stripping them made the model forget what
+    # it wrote and rewrite whole files → churn). Savings now come from
+    # duplicate-read stubbing, REPLAYABLE-observation aging, and the microcompact
+    # budget summarizer inside `_prepare_model_messages`.
     after_writes = _redact_old_write_args(messages)
     saved_writes = _bytes(messages) - _bytes(after_writes)
     after_reads = _redact_duplicate_reads(after_writes)
     saved_reads = _bytes(after_writes) - _bytes(after_reads)
     after_tools = _compact_old_tool_results(after_reads)
     saved_tools = _bytes(after_reads) - _bytes(after_tools)
-    total_saved = saved_writes + saved_reads + saved_tools
-    pct = total_saved * 100 / _bytes(messages)
     print()
-    print(f"  bytes saved by write-arg redaction:   {saved_writes:>10}")
+    print(f"  bytes saved by write-arg redaction:   {saved_writes:>10}  (now a no-op by design)")
     print(f"  bytes saved by dup-read stubbing:     {saved_reads:>10}")
-    print(f"  bytes saved by tool-result aging:     {saved_tools:>10}")
-    print(f"  total saved:                          {total_saved:>10}  ({pct:.1f}%)")
-    print(f"  reduced size:                         {_bytes(reduced):>10} bytes")
+    print(f"  bytes saved by replayable-result aging:{saved_tools:>9}")
     print()
 
-    # Hard assertion: by turn 25 the reduction must be material.
-    # Threshold: ≥40% saved is the bar — anything less means the layered
-    # redaction isn't pulling its weight on a realistic coding session.
+    # Write bodies must NEVER be stripped — the model must be able to see what
+    # it wrote. `_redact_old_write_args` must not shrink the history at all.
+    assert saved_writes == 0, (
+        "write-arg redaction stripped write/edit bodies — that regression is "
+        "exactly what caused whole-file rewrite churn; bodies must be preserved."
+    )
+    print("✓ write/edit bodies are preserved (never stripped)")
+
+    # Hard assertion: the FULL pipeline (including the microcompact budget
+    # summarizer) must materially reduce a realistic 25-turn session. ≥40% is
+    # the bar; write bodies stay, but the wholesale budget summarizer still
+    # bounds the total.
+    pct = (_bytes(messages) - _bytes(reduced)) * 100 / _bytes(messages)
+    print(f"  full-pipeline reduced size:           {_bytes(reduced):>10} bytes  ({pct:.1f}% saved)")
     assert pct >= 40.0, (
-        f"redaction pipeline too weak: only {pct:.1f}% saved on a 25-turn coding session "
+        f"context pipeline too weak: only {pct:.1f}% saved on a 25-turn coding session "
         f"(expected ≥40%). Pipeline isn't pulling its weight."
     )
-    print(f"✓ pipeline saves ≥40% of context bytes on a realistic 25-turn session")
+    print(f"✓ full pipeline saves ≥40% of context bytes on a realistic 25-turn session")
 
     # Bounded growth: simulate progressive turns and check that the
     # reduced size stops growing linearly once redaction kicks in.
@@ -295,7 +307,7 @@ def main() -> int:
     print()
     print("=" * 60)
     print(f"PASS — 25-turn pipeline test")
-    print(f"  saved {total_saved} bytes ({pct:.1f}%) over a 25-turn session")
+    print(f"  saved {_bytes(messages) - _bytes(reduced)} bytes ({pct:.1f}%) over a 25-turn session")
     print(f"  per-turn growth bounded to {growth_ratio*100:.1f}% of unredacted")
     print("=" * 60)
     return 0
