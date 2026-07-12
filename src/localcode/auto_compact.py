@@ -112,9 +112,27 @@ def auto_compact(messages: list[dict], max_chars: int,
     if len(conversation) <= keep_recent:
         return messages, ""
 
+    # NEVER summarize away the task statement. The most recent real user
+    # message (not a synthetic "SYSTEM:" nudge) is the active task; folding it
+    # into the summary made the model ask "what is the actual task?" mid-build
+    # and re-derive the goal from directory names (observed live). Pin it
+    # verbatim: if it falls in the to-be-summarized region, lift it out and
+    # re-append it just before the recent tail.
+    task_msg = None
+    task_idx = None
+    for i in range(len(conversation) - 1, -1, -1):
+        m = conversation[i]
+        if m.get("role") == "user" and isinstance(m.get("content"), str) \
+                and not m["content"].startswith("SYSTEM:"):
+            task_msg, task_idx = m, i
+            break
+
     # Split into old (to summarize) and recent (to keep)
     old = conversation[:-keep_recent]
     recent = conversation[-keep_recent:]
+    pin_task = task_msg is not None and task_idx < len(conversation) - keep_recent
+    if pin_task:
+        old = [m for i, m in enumerate(conversation[:-keep_recent]) if i != task_idx]
 
     summary_text = _build_summary(old)
 
@@ -136,6 +154,10 @@ def auto_compact(messages: list[dict], max_chars: int,
     if system_msg:
         compacted.append(system_msg)
     compacted.append({"role": "system", "content": memo})
+    if pin_task:
+        # The active task statement, verbatim, right after the memo — the model
+        # must always be able to re-read WHAT it was asked to do.
+        compacted.append(task_msg)
     compacted.extend(recent)
 
     return compacted, summary_text
