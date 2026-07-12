@@ -1697,17 +1697,25 @@ class ChatLog(RichLog):
                 self._track_lines()
 
     def _render_approval(self, tool_name: str, command: str) -> None:
-        # Collapse multi-line commands (heredocs etc) to single line.
-        # Don't pre-truncate — the no_wrap+ellipsis widget handles overflow at
-        # the actual terminal width.
-        cmd_oneline = command.replace("\n", " ↵ ").strip()
-        line = Text(no_wrap=True, overflow="ellipsis")
+        line = Text()
         line.append("  Allow ", style=f"bold {C.warning}")
         line.append(f"{tool_name}", style=f"bold {C.warning}")
-        line.append("? ", style=f"bold {C.warning}")
-        line.append(cmd_oneline, style="dim")
+        line.append("?", style=f"bold {C.warning}")
         self.write(line)
         self._track_lines()
+        # Show the complete command. Wrap rather than hiding pipes, redirects,
+        # heredocs, or secondary segments behind an ellipsis.
+        for raw_line in command.strip().splitlines() or [""]:
+            preview = Text("    ")
+            preview.append(raw_line, style="white")
+            self.write(preview)
+            self._track_lines()
+        effects = _approval_effects(tool_name, command)
+        if effects:
+            impact = Text("    affects: ", style="dim")
+            impact.append(" · ".join(effects), style=f"bold {C.warning}")
+            self.write(impact)
+            self._track_lines()
         # First token is what the "always allow" option will whitelist
         # for the rest of the session — e.g. "git", "pip", "python".
         first_token = (command.strip().split() or [""])[0][:20] or tool_name
@@ -1728,6 +1736,24 @@ class ChatLog(RichLog):
         line.append(summary_text, style="dim")
         self.write(line)
         self._track_lines()
+
+
+def _approval_effects(tool_name: str, detail: str) -> list[str]:
+    """Human preview only; the safety decision remains in the policy layer."""
+    lower = detail.lower()
+    effects: list[str] = []
+    if tool_name in {"write_file", "append_file", "edit_file", "multi_edit"}:
+        effects.append("files")
+    if tool_name == "bash":
+        if any(x in lower for x in ("curl ", "wget ", "npm install", "pip install", "brew install", "git push")):
+            effects.append("network")
+        if any(x in lower for x in (">", "tee ", "rm ", "mv ", "cp ", "mkdir ", " install")):
+            effects.append("files")
+        if any(x in lower for x in ("kill ", "pkill ", "killall ", "launchctl ")):
+            effects.append("processes")
+        if any(x in detail for x in ("&&", "||", ";", "|", "$(", "`")):
+            effects.append("compound command")
+    return effects
 
 
 def _is_diff(text: str) -> bool:
