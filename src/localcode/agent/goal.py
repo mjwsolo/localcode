@@ -154,21 +154,30 @@ class GoalState:
 
 
 def infer_goal_state(user_text: str) -> GoalState:
-    # Generalist mode: every turn is general_task. The regex-based branching
-    # (build_app / edit_existing / run_or_launch / question) was driving
-    # false-positive rejections in loop.py and over-greedy followup
-    # downgrades in app.py. Single code path = no classifier confusion.
     text = (user_text or "").strip()
+    lower = text.lower()
+    if re.search(r"\b(build|create|make|scaffold|implement)\b.{0,40}\b(app|application|website|dashboard|api|service|project)\b", lower):
+        goal_type, task_kind = "build_app", "new_app"
+        criteria = ("Requested implementation exists on disk", "Relevant build or tests pass", "Runtime behavior is verified when applicable")
+    elif re.search(r"\b(run|launch|start|serve|open)\b.{0,24}\b(app|server|site|project|it)\b", lower):
+        goal_type, task_kind = "run_or_launch", "run"
+        criteria = ("Target process is running", "Exact access URL or process status is reported")
+    elif re.search(r"\b(fix|change|edit|update|refactor|rename|remove|add)\b", lower):
+        goal_type, task_kind = "edit_existing", "edit"
+        criteria = ("Requested code change exists", "Relevant verification passes")
+    elif re.match(r"^(what|why|how|where|when|who|is|are|can|could|should|does|do)\b", lower) or text.endswith("?"):
+        goal_type, task_kind = "question", "question"
+        criteria = ("Question is answered from grounded evidence",)
+    else:
+        goal_type, task_kind = "general_task", "general_task"
+        criteria = ("Assistant makes concrete progress toward the user's request", "Assistant stops only on completion or a focused blocking question")
     return GoalState(
         raw_user_text=text,
-        goal_type="general_task",
-        task_kind="general_task",
+        goal_type=goal_type,
+        task_kind=task_kind,
         task_slug=_make_task_slug(text),
         goal_summary=text[:240],
-        success_criteria=(
-            "Assistant makes concrete progress toward the user's request",
-            "Assistant stops only on completion or a focused blocking question",
-        ),
+        success_criteria=criteria,
     )
 
 

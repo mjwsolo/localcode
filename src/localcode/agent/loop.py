@@ -591,6 +591,7 @@ def run_agent_loop(
     _MAX_LOOKS_FINE_STREAK = 3
     _deterministic_launch_done = False
     _verified_launch_summary = ""
+    _observed_ttft_ms = 0
 
     if _goal_state.goal_type == "run_or_launch":
         try:
@@ -715,9 +716,15 @@ def run_agent_loop(
                     f"Compacting conversation (≈{estimate_tokens(messages)} tokens "
                     f"of {ctx_tokens} context → summary)..."
                 )
+                _before_compact_count = len(messages)
                 messages[:] = compact(
                     messages, app.engine, context_window=ctx_tokens, ram_gb=_ram_gb
                 )
+                try:
+                    if getattr(app, "hooks", None) is not None:
+                        app.hooks.on_post_compaction(_before_compact_count, len(messages))
+                except Exception:
+                    pass
         except Exception as _compact_err:
             # Never let compaction failure kill the agent loop — continue
             # with the unchanged messages and let the user see the error.
@@ -774,7 +781,8 @@ def run_agent_loop(
             except Exception:
                 _ctx_chars = None
             model_messages = hook_before_model(
-                _prepare_model_messages(messages, ctx_window_chars=_ctx_chars),
+                _prepare_model_messages(messages, ctx_window_chars=_ctx_chars,
+                                        observed_ttft_ms=_observed_ttft_ms),
                 _hook_state,
             )
             # Inject a window-scaled progress ledger (Codex-style tool-state
@@ -872,6 +880,7 @@ def run_agent_loop(
             _round_reasoning_chars = _stream_result.reasoning_chars
             _round_pending_tool_count = _stream_result.pending_tool_count
             _round_ttft_ms = _stream_result.ttft_ms
+            _observed_ttft_ms = _round_ttft_ms
             _round_decode_ms = _stream_result.decode_ms
             _stream_tool_calls = _stream_result.tool_calls
             _primary_round_tool = (
@@ -1412,6 +1421,43 @@ def run_agent_loop(
                         continue  # let it verify before finishing
                 # else: gate clean and either self-verified or already advised →
                 # fall through and accept completion.
+            if (not _blocking_question and _goal_state.goal_type == "edit_existing"
+                    and _changed_code_files(changed_files)
+                    and not ran_build_or_test(bash_history)
+                    and _completion_gate_retries < 1):
+                _completion_gate_retries += 1
+                if _append_nudge(
+                    "SYSTEM: The requested edit exists, but no relevant test, build, "
+                    "typecheck, or import check has passed. Run the narrowest "
+                    "deterministic verification now, fix failures, then finish.",
+                    kind="edit_verify_advise",
+                ):
+                    continue
+            if (not _blocking_question
+                    and _goal_state.goal_type in {"build_app", "edit_existing"}
+                    and changed_files
+                    and "relevant-verification" in _hook_state.verification_registry.requirements
+                    and _hook_state.verification_registry.satisfied("relevant-verification", os.environ)):
+                from .state_machine import TaskEvent, transition
+                _done_transition = transition("verify", TaskEvent.REQUIREMENTS_SATISFIED)
+                _announce_task_stage(_done_transition.after.value)
+            _completion_blocked = (
+                not _blocking_question
+                and _goal_state.goal_type in {"build_app", "edit_existing"}
+                and bool(_changed_code_files(changed_files))
+                and (
+                    "relevant-verification" not in _hook_state.verification_registry.requirements
+                    or not _hook_state.verification_registry.satisfied(
+                        "relevant-verification", os.environ
+                    )
+                )
+            )
+            if _completion_blocked:
+                content = (
+                    "Implementation changes were made, but LocalCode could not record "
+                    "a passing build, test, typecheck, or import check for the current "
+                    "file hashes. The task remains incomplete rather than claiming success."
+                )
             if _goal_state.goal_type == "run_or_launch":
                 _task_port = int(getattr(_task_state, "active_port", 0) or 0)
                 content = ground_run_or_launch_text(content, _task_port)
@@ -1433,7 +1479,11 @@ def run_agent_loop(
                     )
                     _render_markdown(grounded_access, app.console if hasattr(app, 'console') else None)
                     full_response.append(grounded_access)
-            _loop_exit_reason = "blocked_question" if _blocking_question else "model_done"
+            _loop_exit_reason = (
+                "blocked_question" if _blocking_question
+                else "completion_gate:unverified" if _completion_blocked
+                else "model_done"
+            )
             break
 
         # ── Execute tools ──
@@ -1631,18 +1681,10 @@ def run_agent_loop(
             # POST_REJECTION stall path nudges it to retry — model
             # doesn't just stop, it actually splits the work.
             _oversize_stub = oversize_stub_for_tool(tool_name, args, 1_000_000)
+            # edit_file already carries the exact old text as grounded context.
+            # Requiring a separate read first rejected valid one-shot edits and
+            # let small models falsely narrate success after the rejection.
             _edit_sequence_stub = None
-            if (
-                _goal_state.goal_type == "edit_existing"
-                and tool_name in {"write_file", "append_file", "edit_file", "multi_edit", "edit_diff"}
-                and not _edit_context_seen
-            ):
-                _edit_sequence_stub = (
-                    "REJECTED: edit_existing workflow requires context before patching. "
-                    "First locate the relevant files with list_files/grep/glob and read "
-                    "the target file or focused range with read_file. Then apply the "
-                    "smallest targeted edit and verify it."
-                )
 
             # HARD rewrite-stop: the churn NUDGE (limit 3) only advises — logs
             # showed a model rewrite one file 16x while 25-34 nudges fired.
@@ -1739,25 +1781,44 @@ def run_agent_loop(
             _round_tool_exec_ms += int(
                 (time.monotonic() - _tool_started_at) * 1000
             )
-            if _goal_state.goal_type == "build_app":
-                from ..thinking import next_task_stage_after_tool
-                _next_stage = next_task_stage_after_tool(
-                    _current_task_stage_for_thinking(),
-                    tool_name,
-                    succeeded=(
-                        bool(_tool_facts.get("ok", True))
-                        and not tool_result_is_error(str(tool_result))
-                    ),
-                )
-                if _next_stage == "running":
-                    _announce_task_stage(_next_stage)
+            _tool_succeeded = bool(_tool_facts.get("ok", True)) and not tool_result_is_error(str(tool_result))
+            if _goal_state.goal_type in {"build_app", "edit_existing"}:
+                from .state_machine import event_for_tool, transition
+                _stage_event = event_for_tool(tool_name, succeeded=_tool_succeeded)
+                if _stage_event is not None:
+                    _stage_transition = transition(_current_task_stage_for_thinking(), _stage_event)
+                    if _stage_transition.changed:
+                        _announce_task_stage(_stage_transition.after.value)
             if tool_name == "bash":
                 _bash_cmd = str(args.get("command", ""))
                 bash_history.append((_bash_cmd, str(tool_result)))
-                if str(tool_result).startswith("[exit code ") or str(tool_result).startswith("REJECTED:"):
+                from ..execution_policy import assess_shell_execution
+                _execution = assess_shell_execution(_bash_cmd, str(tool_result), int(_tool_facts.get("exit_code", 0 if _tool_succeeded else 1)))
+                if not _execution.task_succeeded:
                     app._last_failed_tool_name = tool_name
                 else:
                     app._last_failed_tool_name = ""
+                if _goal_state.goal_type in {"build_app", "edit_existing"} and ran_build_or_test([(_bash_cmd, str(tool_result))]):
+                    from pathlib import Path as _EvidencePath
+                    from ..evidence import EvidenceRequirement
+                    _verification_files = tuple(
+                        _EvidencePath(path) if _EvidencePath(path).is_absolute()
+                        else _EvidencePath(app.repo_root) / path
+                        for path in changed_files
+                    )
+                    _hook_state.verification_registry.require(EvidenceRequirement(
+                        "relevant-verification", _verification_files, _bash_cmd,
+                        ("PATH", "NODE_ENV", "PYTHONPATH"),
+                    ))
+                    _hook_state.verification_registry.record(
+                        "relevant-verification", environment=os.environ,
+                        passed=_execution.task_succeeded, output=str(tool_result),
+                    )
+                    from .state_machine import TaskEvent, transition
+                    _verify_event = TaskEvent.VERIFICATION_PASSED if _execution.task_succeeded else TaskEvent.VERIFICATION_FAILED
+                    _verify_transition = transition(_current_task_stage_for_thinking(), _verify_event)
+                    if _verify_transition.changed:
+                        _announce_task_stage(_verify_transition.after.value)
                 if _goal_state.goal_type in {"build_app", "run_or_launch"}:
                     port = extract_port(f"{args.get('command', '')}\n{tool_result}")
                     if port:
