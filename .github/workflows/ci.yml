@@ -42,6 +42,13 @@ jobs:
         # instead of an opaque runner SIGTERM (exit 143). Linux tests are all
         # fast (mocked/pure-Python); 120s is a generous ceiling.
         run: pytest tests/test_comprehensive_*.py -v --timeout=120
+      - name: Agent harness regression tests
+        run: |
+          pytest -q \
+            tests/test_agent_state_machine.py \
+            tests/test_evidence_and_lifecycle_hooks.py \
+            tests/test_execution_policies.py \
+            tests/test_code_navigation_and_processes.py
 
   # ── Same gate on macOS arm64 — users run Apple Silicon, so we test the
   # real platform. Also exercises the REAL fresh-venv install (packaging)
@@ -64,6 +71,13 @@ jobs:
         env:
           LOCALCODE_RUN_INSTALL_TEST: "1"   # real pip-install-into-venv smoke
         run: pytest tests/test_comprehensive_*.py -v
+      - name: Agent harness regression tests
+        run: |
+          pytest -q \
+            tests/test_agent_state_machine.py \
+            tests/test_evidence_and_lifecycle_hooks.py \
+            tests/test_execution_policies.py \
+            tests/test_code_navigation_and_processes.py
 
   # ── Packaging must always build ──
   packaging:

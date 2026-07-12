@@ -7,6 +7,7 @@ reuse it to avoid port churn and orphaned background processes.
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -28,6 +29,14 @@ class ProcessRecord:
     verified: bool
     started_at: float
     stopped_at: float = 0.0
+    process_id: str = ""
+    owner: str = "localcode"
+    exit_code: int | None = None
+
+    def __post_init__(self) -> None:
+        if not self.process_id:
+            raw = f"{self.started_at}:{self.pid}:{self.command}".encode()
+            self.process_id = "proc-" + hashlib.sha256(raw).hexdigest()[:12]
 
 
 def registry_path(repo_root: Path | str) -> Path:
@@ -70,7 +79,7 @@ def record_process(repo_root: Path | str, record: ProcessRecord) -> None:
             continue
         if existing.pid == record.pid and existing.started_at == record.started_at:
             continue
-        if existing.cwd == record.cwd and existing.kind == record.kind:
+        if existing.cwd == record.cwd and existing.kind == record.kind and record.kind != "background":
             existing.stopped_at = now
         elif existing.pid > 0 and not _pid_alive(existing.pid):
             existing.stopped_at = now
@@ -103,6 +112,21 @@ def latest_live_record(repo_root: Path | str) -> ProcessRecord | None:
     if changed:
         save_records(repo_root, records)
     return None
+
+
+def find_record(repo_root: Path | str, process_id: str) -> ProcessRecord | None:
+    return next((r for r in reversed(load_records(repo_root)) if r.process_id == process_id), None)
+
+
+def refresh_record(repo_root: Path | str, process_id: str) -> ProcessRecord | None:
+    records = load_records(repo_root)
+    record = next((r for r in records if r.process_id == process_id), None)
+    if record is None:
+        return None
+    if not record.stopped_at and record.pid > 0 and not _pid_alive(record.pid):
+        record.stopped_at = time.time()
+        save_records(repo_root, records)
+    return record
 
 
 def stop_record(repo_root: Path | str, record: ProcessRecord) -> bool:
