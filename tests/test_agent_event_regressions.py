@@ -1040,7 +1040,11 @@ def test_prepare_model_messages_microcompacts_large_turn_history() -> None:
     compacted = _prepare_model_messages(messages)
 
     assert len(compacted) < len(messages)
-    assert "Earlier context summarized" in compacted[1]["content"]
+    # The FIRST real user message (the task statement) is pinned verbatim at
+    # the head — losing it made the model ask "what is the actual task?" mid-
+    # build. The summary follows it.
+    assert compacted[1]["role"] == "user" and compacted[1]["content"] == "request 0"
+    assert "Earlier context summarized" in compacted[2]["content"]
     assert compacted[-1]["role"] == "tool"
 
 
