@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-__all__ = ["should_use_thinking", "next_task_stage_after_tool"]
+__all__ = ["should_use_thinking", "next_task_stage_after_tool", "adaptive_reasoning_policy"]
 
 
 _AUTO_REASONING_HINTS = (
@@ -16,14 +16,29 @@ _AUTO_REASONING_HINTS = (
 )
 
 _THINKING_STAGES = {
+    "discover", "plan", "repair",
     "planning",
     "scaffolding",
 }
 
 _NO_THINKING_STAGES = {
+    "implement", "verify", "complete",
     "running",
     "verified",
 }
+
+
+def adaptive_reasoning_policy(activity: str, *, unexpected_failure: bool = False,
+                              decision_is_reversible: bool = True) -> bool:
+    """Spend reasoning tokens on decisions and surprises, not mechanics."""
+    if unexpected_failure:
+        return True
+    activity = (activity or "").strip().lower().replace("-", "_")
+    if activity in {"planning", "plan", "debugging", "repair", "diagnosis", "architecture", "new_failure"}:
+        return True
+    if activity in {"read", "write", "edit", "implement", "verify", "build", "test", "poll", "wait", "status"}:
+        return False
+    return not decision_is_reversible
 
 
 def next_task_stage_after_tool(

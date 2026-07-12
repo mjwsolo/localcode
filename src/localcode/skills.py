@@ -67,7 +67,22 @@ def skill_dirs(repo_root: Path) -> list[Path]:
     return [
         ensure_home_dirs() / "skills",
         repo_root / ".localcode" / "skills",
+        repo_root / ".agents" / "skills",
+        repo_root / ".claude" / "skills",
+        repo_root / ".opencode" / "skills",
+        Path.home() / ".agents" / "skills",
+        Path.home() / ".claude" / "skills",
+        Path.home() / ".config" / "opencode" / "skills",
     ]
+
+
+def _skill_files(directory: Path) -> list[Path]:
+    """Discover legacy flat markdown plus Agent Skills SKILL.md packages."""
+    if not directory.is_dir():
+        return []
+    files = list(directory.glob("*.md"))
+    files.extend(directory.rglob("SKILL.md"))
+    return sorted(dict.fromkeys(files))
 
 
 def _global_skill_dir() -> Path:
@@ -83,16 +98,16 @@ def list_skills(repo_root: Path) -> list[str]:
     for directory in skill_dirs(repo_root):
         if not directory.exists():
             continue
-        for path in directory.glob("*.md"):
-            names.add(path.stem)
+        for path in _skill_files(directory):
+            names.add(path.parent.name if path.name == "SKILL.md" else path.stem)
     return sorted(names)
 
 
 def load_skill(repo_root: Path, name: str) -> str | None:
     for directory in skill_dirs(repo_root):
-        path = directory / f"{name}.md"
-        if path.exists():
-            return path.read_text(errors="replace")
+        for path in (directory / f"{name}.md", directory / name / "SKILL.md"):
+            if path.exists():
+                return path.read_text(errors="replace")
     return None
 
 
@@ -339,7 +354,7 @@ class SkillRegistry:
     def ordered(self) -> list[Skill]:
         return sorted(self.skills.values(), key=lambda s: s.name)
 
-    def listing(self) -> str:
+    def listing(self, max_chars: int = 6_000) -> str:
         """Block for the system prompt — empty string if no skills registered.
 
         Skips any skill with `disable_model_invocation=True` — the model
@@ -348,7 +363,20 @@ class SkillRegistry:
         visible = [s for s in self.ordered() if not s.disable_model_invocation]
         if not visible:
             return ""
-        return "\n".join(s.one_line() for s in visible)
+        lines: list[str] = []
+        used = 0
+        # Bundled coding fundamentals first, then project/user extensions.
+        visible.sort(key=lambda s: (s.origin != "bundled", s.name))
+        for skill in visible:
+            line = skill.one_line()
+            if lines and used + len(line) + 1 > max_chars:
+                break
+            lines.append(line)
+            used += len(line) + 1
+        hidden = len(visible) - len(lines)
+        if hidden:
+            lines.append(f"- … {hidden} more installed skills; use /skills to inspect them.")
+        return "\n".join(lines)
 
 
 def select_dynamic_skills(
@@ -571,7 +599,7 @@ def load_registry(repo_root: Path) -> SkillRegistry:
     for directory in skill_dirs(repo_root):
         if not directory.is_dir():
             continue
-        for path in sorted(directory.glob("*.md")):
+        for path in _skill_files(directory):
             skill = _parse_skill_file(path, origin=_origin_for(directory))
             if skill is None:
                 continue
