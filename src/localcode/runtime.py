@@ -2055,6 +2055,15 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
             "messages": messages,
             "temperature": opts["temperature"],
             "chat_template_kwargs": {"enable_thinking": think},
+            # Explicit KV prefix-cache opt-in. Recent llama.cpp builds default
+            # this to true for /v1/chat/completions, but TurboQuant is a fork —
+            # never rely on the default for the single biggest local-speed
+            # lever. The agent loop keeps the transcript append-only between
+            # discrete compactions precisely so this cache HITS every round
+            # (see loop.py "Append-only transcript"): prefill dominates local
+            # inference, and a hit turns a 40K-token re-read into just the
+            # few hundred new tokens.
+            "cache_prompt": True,
         }
         # Single-knob anti-rephrase: `repeat_penalty=1.05` only.
         # Added 2026-04-29 after stripping the full sampler stack
