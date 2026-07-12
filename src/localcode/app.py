@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
 import logging
+import re
 from pathlib import Path
 
 from rich.console import Console
@@ -59,6 +60,19 @@ _FOLLOWUP_CHAT_ONLY = {
 
 
 _CODING_TASK_KINDS = {"new_app", "existing_app_edit", "run_or_launch"}
+
+# Any slash-joined token that isn't a URL scheme ("://") — "~/x", "./x", "..",
+# "/Users/…", or "some/dir". Used to detect that the user chose a location
+# themselves, in which case the $HOME build anchor must NOT re-pin repo_root.
+_EXPLICIT_PATH_RE = re.compile(r"(?<!:)(?:~|\.{1,2})?/[\w.\-]+|[\w.\-]+/[\w.\-]+(?!//)")
+
+
+def _prompt_names_explicit_path(user_text: str) -> bool:
+    """True when the user's request mentions a concrete filesystem path."""
+    text = (user_text or "")
+    # Strip URLs first so "https://foo.com/bar" doesn't read as a path.
+    text = re.sub(r"\w+://\S+", " ", text)
+    return bool(_EXPLICIT_PATH_RE.search(text))
 
 
 def _canonical_project_dir_has_files(repo_root: Path, slug: str) -> bool:
@@ -530,11 +544,20 @@ class LocalCodeApp:
         # BEFORE any tool call, so the model builds in one place and the harness
         # (launcher/verify/context) follows it. Only fires in the degenerate
         # $HOME case; a normal in-project launch is untouched.
+        #
+        # NEVER anchor when the user's prompt names a filesystem path: they've
+        # chosen the location themselves, and re-pinning repo_root to an empty
+        # $HOME/<slug> makes every RELATIVE path resolve against the empty
+        # anchor while the model builds at the user's absolute path — observed
+        # live as "Glob(src/utils/*) → empty → 'the file wasn't persisted'" and
+        # a rebuild-from-scratch spiral. False positives here are safe (we just
+        # fall back to unanchored-at-$HOME, the pre-0.3.26 behavior).
         _anchored_resume = False
         if (
             self.repo_root_is_home
             and goal_state.goal_type == "build_app"
             and goal_state.task_kind == "new_app"
+            and not _prompt_names_explicit_path(user_text)
         ):
             _anchored_resume = self._anchor_home_build_root(goal_state.task_slug)
         if (

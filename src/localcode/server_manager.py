@@ -321,6 +321,25 @@ class ServerManager:
         import time as _t
         self._last_activity_ts = _t.time()
 
+    def request_started(self) -> None:
+        """Mark a chat request in flight. The idle watchdog must NEVER
+        suspend the server while a request is live: a single long agentic
+        round (a 10+ minute decode is routine for a 30B+ model on local
+        hardware) used to count as "idle" because activity was only marked at
+        request START — observed live as `idle_suspend idle_s=612` firing
+        mid-build, shutting the server down under an active stream and
+        cascading into back-to-back reloads (35 GB of weights each) and a dead
+        session. Pair with request_finished() in a finally block."""
+        with self._lock:
+            self._inflight = getattr(self, "_inflight", 0) + 1
+        self.mark_activity()
+
+    def request_finished(self) -> None:
+        """Mark a chat request complete (see request_started)."""
+        with self._lock:
+            self._inflight = max(0, getattr(self, "_inflight", 0) - 1)
+        self.mark_activity()
+
     def set_idle_timeout(self, seconds: float) -> None:
         """Update the idle auto-suspend window. 0 disables suspend."""
         self._idle_timeout_s = max(0.0, float(seconds))
@@ -335,6 +354,11 @@ class ServerManager:
                 if self._process is None or self._process.poll() is not None:
                     continue
                 if self._last_activity_ts == 0.0:
+                    continue
+                # A live request is never idle, no matter how long its decode
+                # runs. This is the primary guard; the streaming path also
+                # marks activity per chunk as a belt-and-braces backstop.
+                if getattr(self, "_inflight", 0) > 0:
                     continue
                 idle = _t.time() - self._last_activity_ts
                 if idle >= self._idle_timeout_s:

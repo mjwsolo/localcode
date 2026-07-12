@@ -1338,6 +1338,50 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
         recovery_mode: str = "",
         stream_policy: str = "",
     ) -> Iterator[dict[str, Any]]:
+        """In-flight guard wrapper around the real streaming generator.
+
+        Holds ServerManager's request-in-flight count for the stream's whole
+        lifetime so the idle-suspend watchdog can never shut the server down
+        under an active request. Without this, a long round (10+ min decode —
+        routine for a 30B+ model on local hardware, and prompt-eval of a big
+        context emits no chunks at all) counted as "idle": observed live as
+        `idle_suspend idle_s=612` killing the server mid-build, cascading into
+        back-to-back 35 GB weight reloads and a dead session.
+        """
+        _sm = None
+        try:
+            from .server_manager import ServerManager as _SM
+            _sm = _SM.get()
+            _sm.request_started()
+        except Exception:
+            _sm = None
+        try:
+            yield from self._stream_chat_events_inner(
+                messages,
+                tools=tools,
+                think=think,
+                num_ctx=num_ctx,
+                num_predict=num_predict,
+                recovery_mode=recovery_mode,
+                stream_policy=stream_policy,
+            )
+        finally:
+            if _sm is not None:
+                try:
+                    _sm.request_finished()
+                except Exception:
+                    pass
+
+    def _stream_chat_events_inner(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        think: bool = False,
+        num_ctx: int | None = None,
+        num_predict: int | None = None,
+        recovery_mode: str = "",
+        stream_policy: str = "",
+    ) -> Iterator[dict[str, Any]]:
         # Diffusion models (architecture="diffusion_gemma") cannot be
         # served by llama-server — they generate via the one-shot
         # llama-diffusion-cli runner. Dispatch on the catalog's
