@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import re
 from typing import Any
+from ..evidence import EvidenceRegistry
 __all__ = [
     "TurnState",
     "EvidenceLedger",
@@ -20,6 +21,8 @@ __all__ = [
     "completion_gate",
     "ran_build_or_test",
     "_changed_code_files",
+    "CompletionEvidence",
+    "deterministic_completion",
 ]
 
 
@@ -32,6 +35,7 @@ class TurnState:
     bash_history: list[tuple[str, str]] = field(default_factory=list)
     tools_called: list[str] = field(default_factory=list)
     evidence: "EvidenceLedger" = field(default_factory=lambda: EvidenceLedger())
+    verification_registry: EvidenceRegistry = field(default_factory=EvidenceRegistry)
 
 
 @dataclass
@@ -83,6 +87,22 @@ class QualityVerdict:
     ok: bool
     reason: str = ""
     correction: str = ""
+
+
+@dataclass(frozen=True)
+class CompletionEvidence:
+    criterion: str
+    evidence: tuple[str, ...] = ()
+    satisfied: bool = False
+
+
+def deterministic_completion(criteria: list[CompletionEvidence]) -> QualityVerdict:
+    if not criteria:
+        return QualityVerdict(False, "no-success-criteria", "Define verifiable outcomes first.")
+    missing = [item.criterion for item in criteria if not item.satisfied or not item.evidence]
+    if missing:
+        return QualityVerdict(False, "missing-completion-evidence", "Gather evidence for: " + "; ".join(missing[:5]))
+    return QualityVerdict(True, "success-criteria-satisfied", "Stop: further polish is out of scope.")
 
 
 def before_turn(state: TurnState) -> None:
