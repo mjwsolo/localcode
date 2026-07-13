@@ -1579,7 +1579,62 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
                     _adapter = get_adapter(_family)
                     _open = _adapter.thinking_open
                     _close = _adapter.thinking_close
+                    # ── Stream stall watchdog ──
+                    # Never trust the socket to fail on its own. Observed live
+                    # (2026-07-12): the server logged `done request 200`, the
+                    # client kept blocking in sock_recv for 15+ minutes, and
+                    # the 600 s httpx read-timeout never fired — the whole
+                    # agent hung forever. All reference harnesses bound stream
+                    # idle time and retry. A helper thread closes the response
+                    # if no line arrives within the deadline; the blocked read
+                    # then raises immediately and the existing retry ladder
+                    # takes over (the prefix cache makes the re-prefill cheap).
+                    # Deadlines are DYNAMIC: first chunk must cover worst-case
+                    # prompt prefill (scaled from prompt size at a conservative
+                    # 100 tok/s floor for low-end machines); between chunks a
+                    # local decode should never pause more than ~3 minutes.
+                    import threading as _threading_mod
+                    _stall = {"last": _time_mod_runtime.monotonic(), "seen": False, "fired": False}
+                    _prompt_chars_est = sum(
+                        len(str(m.get("content") or "")) for m in messages
+                    )
+                    _first_deadline_s = max(180.0, 60.0 + (_prompt_chars_est / 3.5) / 100.0)
+                    _inter_deadline_s = 180.0
+
+                    def _stall_watchdog() -> None:
+                        while True:
+                            _time_mod_runtime.sleep(5.0)
+                            try:
+                                if response.is_closed:
+                                    return
+                            except Exception:
+                                return
+                            gap = _time_mod_runtime.monotonic() - _stall["last"]
+                            limit = _inter_deadline_s if _stall["seen"] else _first_deadline_s
+                            if gap > limit:
+                                _stall["fired"] = True
+                                try:
+                                    from .events import emit as _emit_stall
+                                    _emit_stall(
+                                        "stream_stall_abort",
+                                        gap_s=round(gap, 1),
+                                        limit_s=round(limit, 1),
+                                        first_chunk_seen=_stall["seen"],
+                                    )
+                                except Exception:
+                                    pass
+                                try:
+                                    response.close()
+                                except Exception:
+                                    pass
+                                return
+
+                    _threading_mod.Thread(
+                        target=_stall_watchdog, name="lc-stream-stall", daemon=True
+                    ).start()
                     for line in response.iter_lines():
+                        _stall["last"] = _time_mod_runtime.monotonic()
+                        _stall["seen"] = True
                         if not line:
                             continue
                         if self.config.provider == "llama_cpp" and line.startswith("data: "):
