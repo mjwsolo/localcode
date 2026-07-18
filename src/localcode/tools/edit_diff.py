@@ -33,7 +33,7 @@ SCHEMA = {
 def execute(ctx: ToolContext, args: dict) -> str:
     if "path" not in args or "diff" not in args:
         return "Error: 'path' and 'diff' (unified-diff text) required."
-    path = ctx.repo / args["path"]
+    path = ctx.resolve_path(args["path"])
     if not path.exists():
         return f"File not found: {args['path']}"
 
