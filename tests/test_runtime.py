@@ -501,6 +501,11 @@ def test_restart_server_resets_stale_http_client(monkeypatch) -> None:
         def restart(self, cmd, model):
             return True
 
+        def is_running(self) -> bool:
+            # Dead server → _restart_server must take the kill+relaunch
+            # path (the warmup-wait path is only for a live, loading one).
+            return False
+
     monkeypatch.setattr("localcode.server_manager.ServerManager.get", lambda: _Mgr())
 
     assert gw._restart_server() is True

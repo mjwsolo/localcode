@@ -147,7 +147,7 @@ def execute(ctx: ToolContext, args: dict) -> str:
     if "path" not in args:
         return "Error: 'path' argument is required for read_file."
     requested = args["path"]
-    path = ctx.repo / requested
+    path = ctx.resolve_path(requested)
     note = ""
     source_disp = str(requested)
     if not path.exists():
