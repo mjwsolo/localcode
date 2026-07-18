@@ -7,10 +7,14 @@ from types import SimpleNamespace
 
 from localcode.process_registry import load_records
 from localcode.tools import background_process, code_navigation
+from localcode.tools.base import ToolContext
 
 
 def _ctx(root: Path):
-    return SimpleNamespace(repo=root)
+    # Real ToolContext (not a bare namespace) so tools get resolve_path —
+    # the corrupted-absolute-path healer every file tool now routes through.
+    app = SimpleNamespace(repo_root=root)
+    return ToolContext(app=app, out=None)  # type: ignore[arg-type]
 
 
 def test_code_navigation_python_symbols_definitions_and_references(tmp_path: Path) -> None:
