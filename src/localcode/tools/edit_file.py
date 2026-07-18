@@ -310,7 +310,7 @@ def _record_write(ctx: ToolContext, path, content: str) -> None:
 def execute(ctx: ToolContext, args: dict) -> str:
     if "path" not in args:
         return "Error: 'path' argument is required for edit_file."
-    path = ctx.repo / args["path"]
+    path = ctx.resolve_path(args["path"])
     if not path.exists():
         return f"File not found: {args['path']}"
 
