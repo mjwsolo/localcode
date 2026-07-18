@@ -22,7 +22,7 @@ _SKIP = {".git", "__pycache__", "node_modules", ".venv", "venv", ".tox", "dist",
 
 
 def execute(ctx: ToolContext, args: dict) -> str:
-    target = ctx.repo / args.get("path", ".")
+    target = ctx.resolve_path(args.get("path", "."))
     if not target.exists():
         return f"Directory not found: {args.get('path', '.')}"
     entries = []

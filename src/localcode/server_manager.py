@@ -367,7 +367,7 @@ class ServerManager:
                         idle_s=round(idle, 1),
                         threshold_s=self._idle_timeout_s,
                     )
-                    self.shutdown()
+                    self.shutdown(reason="idle_suspend")
             except Exception:
                 # Never let the watchdog crash the process.
                 pass
@@ -414,7 +414,7 @@ class ServerManager:
         with self._lock:
             had_prior = self._process is not None
             _prev_model = self._model_path  # capture before shutdown clears it
-            self._shutdown_locked()
+            self._shutdown_locked(reason="start_or_model_swap")
             # Wait for the OLD server's memory to release before spawning the
             # new one (kernel takes 1-3 s to free wired Metal memory; spawning
             # into that window double-commits). Best-effort: ~11 GB target, 8 s.
@@ -539,7 +539,7 @@ class ServerManager:
         """
         return self.start(cmd, model_path, port=port, timeout_s=timeout_s)
 
-    def shutdown(self, force: bool = False) -> None:
+    def shutdown(self, force: bool = False, reason: str = "") -> None:
         """Stop the server. Idempotent; safe to call multiple times.
 
         ``force=False`` (default, used for model swaps): graceful path —
@@ -552,12 +552,16 @@ class ServerManager:
         on process death anyway, and skipping the 5–10 s graceful
         cleanup is the difference between a snappy exit and the user
         wondering if localcode is hung.
+
+        ``reason`` is recorded on the server_stopped lifecycle event so a
+        restart storm is diagnosable from events.jsonl alone.
         """
         with self._lock:
             if force:
+                self._pending_stop_reason = reason or "app_exit_force"
                 self._force_kill_locked()
             else:
-                self._shutdown_locked()
+                self._shutdown_locked(reason=reason)
 
     def _force_kill_locked(self) -> None:
         """SIGKILL-immediately path for app exit. Must be called with
@@ -626,7 +630,7 @@ class ServerManager:
     # Internals
     # ────────────────────────────────────────────────────────────────
 
-    def _shutdown_locked(self) -> None:
+    def _shutdown_locked(self, reason: str = "") -> None:
         """Must be called with self._lock held.
 
         Supervisor pattern: SIGTERM → wait 3s → SIGKILL → wait 2s. If
@@ -634,7 +638,12 @@ class ServerManager:
         kernel sleep — Metal mmap/GPU). We record that in a marker file
         so the next localcode launch's health check can detect it and
         refuse to start, instead of letting the OS OOM-kill the user.
+
+        `reason` lands on the server_stopped lifecycle event. The restart
+        storm of 2026-07-12 (7 stops in 15 min) was invisible precisely
+        because stops carried no reason — never emit a bare stop again.
         """
+        self._pending_stop_reason = reason or getattr(self, "_pending_stop_reason", "") or "unspecified"
         if self._process is not None:
             pid = self._process.pid
             stuck = False
@@ -662,7 +671,9 @@ class ServerManager:
             if stuck:
                 _mark_stuck_server(pid)
             _lifecycle_log("server_stopped", pid=pid, stuck=stuck,
+                           reason=getattr(self, "_pending_stop_reason", "unspecified"),
                            free_mb_at_stop=_system_free_memory_mb())
+            self._pending_stop_reason = ""
             self._process = None
             self._model_path = None
 
@@ -674,24 +685,68 @@ class ServerManager:
         self._kill_port(self._port)
 
     def _reap_stale_pid_file(self) -> None:
-        """If the PID file exists and points to a live process, kill it. This
-        runs on manager construction so that a fresh app launch starts from
-        a clean slate even if the previous run was SIGKILL'd.
+        """Reconcile the PID file on manager construction.
+
+        HARD-LEARNED (2026-07-12, live): this used to killpg(SIGKILL)
+        whatever pid the file named, unverified. Consequences observed the
+        same day: (a) launching a second localcode killed the first
+        session's HEALTHY server mid-build, twice, ending the user's run;
+        (b) under restart churn a recycled pid let the killpg land on the
+        TUI's own process group — the whole app died with `zsh: killed`
+        and 60 GB free. A world-shared pid file must never be treated as
+        a kill list. Now: only a VERIFIED llama-server (see
+        `_pid_is_our_llama_server`) that is NOT serving healthily gets
+        killed; anything else is left alone and only the file is removed.
         """
         self._kill_pid_file()
+
+    @staticmethod
+    def _pid_is_our_llama_server(pid: int) -> bool:
+        """True iff `pid` is alive AND its command line is a llama-server.
+
+        The pgid==pid check exploits our own spawn signature
+        (start_new_session=True makes every server we launch its own
+        process-group leader). A recycled pid belonging to some other
+        program fails the name check; a process in someone else's group
+        (e.g. the TUI's) fails the leader check. Both must pass before we
+        are willing to signal it.
+        """
+        try:
+            if os.getpgid(pid) != pid:
+                return False
+        except Exception:
+            return False
+        try:
+            out = subprocess.run(
+                ["ps", "-p", str(pid), "-o", "command="],
+                capture_output=True, text=True, timeout=3,
+            ).stdout.strip()
+        except Exception:
+            return False
+        return "llama-server" in out or "llama-diffusion" in out
 
     def _kill_pid_file(self) -> None:
         if not PID_FILE.exists():
             return
+        pid, _file_port = 0, 0
         try:
-            raw = PID_FILE.read_text().strip()
-            pid = int(raw) if raw else 0
+            parts = PID_FILE.read_text().strip().split()
+            pid = int(parts[0]) if parts else 0
+            _file_port = int(parts[1]) if len(parts) > 1 else 0
         except Exception:
             pid = 0
-        if pid > 0:
+        if pid > 0 and self._pid_is_our_llama_server(pid):
+            # A healthy, serving llama-server is NOT stale — it belongs to a
+            # live session (possibly this one, possibly another terminal).
+            # Killing it ends that user's in-flight build. Leave it; the
+            # setup screen's reuse/port-fallback logic handles coexistence.
+            _check_port = _file_port or self._port
+            if _probe_health(_check_port, timeout=1.0):
+                _lifecycle_log("pid_reap_skipped_healthy", pid=pid, port=_check_port)
+                return
             try:
-                pgid = os.getpgid(pid)
-                os.killpg(pgid, signal.SIGKILL)
+                os.killpg(os.getpgid(pid), signal.SIGKILL)
+                _lifecycle_log("pid_reap_killed", pid=pid)
             except ProcessLookupError:
                 pass
             except Exception:
@@ -699,6 +754,8 @@ class ServerManager:
                     os.kill(pid, signal.SIGKILL)
                 except Exception:
                     pass
+        elif pid > 0:
+            _lifecycle_log("pid_reap_skipped_not_ours", pid=pid)
         try:
             PID_FILE.unlink()
         except FileNotFoundError:
@@ -761,9 +818,23 @@ class ServerManager:
         return find_free_port(preferred)
 
     def _kill_port(self, port: int) -> None:
-        """Kill anything bound to `port` via lsof. Best-effort; silent on
+        """Kill a WEDGED llama-server bound to `port`. Best-effort; silent on
         failure (lsof not installed, permission denied, etc.).
+
+        Two guards, both learned live (2026-07-12):
+        - Only signal a process whose command line is a llama-server —
+          this sweep must never SIGKILL an arbitrary process that happens
+          to sit on our port (that's the user's dev server, another app…).
+        - Never signal a HEALTHY llama-server: it belongs to a live session
+          (another terminal). Killing it ends that session's build mid-
+          flight; the caller should use port fallback (8082, 8083, …)
+          instead. Only an unresponsive listener — the actual "wedged
+          zombie blocks every launch until reboot" case this sweep exists
+          for — gets killed.
         """
+        if _probe_health(port, timeout=1.0):
+            _lifecycle_log("port_kill_skipped_healthy", port=port)
+            return
         try:
             r = subprocess.run(
                 ["lsof", "-ti", f":{port}"],
@@ -773,6 +844,16 @@ class ServerManager:
                 try:
                     pid = int(pid_str)
                 except ValueError:
+                    continue
+                try:
+                    out = subprocess.run(
+                        ["ps", "-p", str(pid), "-o", "command="],
+                        capture_output=True, text=True, timeout=3,
+                    ).stdout
+                    if "llama-server" not in out and "llama-diffusion" not in out:
+                        _lifecycle_log("port_kill_skipped_not_ours", port=port, pid=pid)
+                        continue
+                except Exception:
                     continue
                 try:
                     os.kill(pid, signal.SIGKILL)
@@ -786,7 +867,10 @@ class ServerManager:
     def _write_pid_file(self, pid: int) -> None:
         try:
             PID_FILE.parent.mkdir(parents=True, exist_ok=True)
-            PID_FILE.write_text(str(pid))
+            # "pid port" — the port lets the next launch's reaper health-probe
+            # the RIGHT server before deciding it's stale (a bare pid forced it
+            # to probe the default port and mis-kill fallback-port servers).
+            PID_FILE.write_text(f"{pid} {self._port}")
         except Exception:
             # PID file is a recovery aid, not a correctness requirement.
             pass

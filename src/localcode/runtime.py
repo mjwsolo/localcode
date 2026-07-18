@@ -1255,13 +1255,41 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
             return True
 
         from .bootstrap import get_model_path
-        from .server_manager import ServerManager
+        from .server_manager import ServerManager, HEALTH_TIMEOUT_S
         from pathlib import Path
 
         preferred = Path(self.config.model).name if self.config.model else None
         model = get_model_path(preferred)
         if not model:
             return False
+        mgr = ServerManager.get()
+        # NEVER kill a server that is alive and still LOADING. A 30B+ model
+        # takes ~60 s to come up; a request landing during warmup gets a
+        # 503/conn error, and this recovery path used to treat that as "dead"
+        # and restart — killing the almost-loaded server and starting a fresh
+        # 60 s load on the fallback port. Observed live as 4 restarts in
+        # 3 minutes ping-ponging 8081↔8082, each reloading 35 GB of weights,
+        # while the user just saw "crunching". If the process is alive, WAIT
+        # for its health probe instead; only a genuinely dead or wedged
+        # server gets kill+relaunch.
+        if mgr.is_running():
+            try:
+                from .events import emit as _emit_wait
+                _emit_wait("server_warmup_wait", port=mgr.port)
+            except Exception:
+                pass
+            if mgr._wait_healthy(mgr.port, timeout_s=HEALTH_TIMEOUT_S):
+                # Loaded — the server was never broken. Re-point our client
+                # at the live port and carry on with zero reload cost.
+                try:
+                    actual_port = mgr.port
+                    new_base = f"http://localhost:{actual_port}"
+                    if self.config.base_url != new_base:
+                        self.config.base_url = new_base
+                        self.endpoint = f"{new_base}/v1/chat/completions"
+                except Exception:
+                    pass
+                return True
         try:
             if self._client is not None and not self._client.is_closed:
                 self._client.close()
@@ -1269,7 +1297,6 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
             pass
         self._client = None
         cmd = self.llama_server_command(str(model))
-        mgr = ServerManager.get()
         ok = mgr.restart(cmd, str(model))
         # Propagate the (possibly fallback) port back to our config and
         # endpoint URL so downstream HTTP requests hit the live server.
@@ -1552,7 +1579,62 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
                     _adapter = get_adapter(_family)
                     _open = _adapter.thinking_open
                     _close = _adapter.thinking_close
+                    # ── Stream stall watchdog ──
+                    # Never trust the socket to fail on its own. Observed live
+                    # (2026-07-12): the server logged `done request 200`, the
+                    # client kept blocking in sock_recv for 15+ minutes, and
+                    # the 600 s httpx read-timeout never fired — the whole
+                    # agent hung forever. All reference harnesses bound stream
+                    # idle time and retry. A helper thread closes the response
+                    # if no line arrives within the deadline; the blocked read
+                    # then raises immediately and the existing retry ladder
+                    # takes over (the prefix cache makes the re-prefill cheap).
+                    # Deadlines are DYNAMIC: first chunk must cover worst-case
+                    # prompt prefill (scaled from prompt size at a conservative
+                    # 100 tok/s floor for low-end machines); between chunks a
+                    # local decode should never pause more than ~3 minutes.
+                    import threading as _threading_mod
+                    _stall = {"last": _time_mod_runtime.monotonic(), "seen": False, "fired": False}
+                    _prompt_chars_est = sum(
+                        len(str(m.get("content") or "")) for m in messages
+                    )
+                    _first_deadline_s = max(180.0, 60.0 + (_prompt_chars_est / 3.5) / 100.0)
+                    _inter_deadline_s = 180.0
+
+                    def _stall_watchdog() -> None:
+                        while True:
+                            _time_mod_runtime.sleep(5.0)
+                            try:
+                                if response.is_closed:
+                                    return
+                            except Exception:
+                                return
+                            gap = _time_mod_runtime.monotonic() - _stall["last"]
+                            limit = _inter_deadline_s if _stall["seen"] else _first_deadline_s
+                            if gap > limit:
+                                _stall["fired"] = True
+                                try:
+                                    from .events import emit as _emit_stall
+                                    _emit_stall(
+                                        "stream_stall_abort",
+                                        gap_s=round(gap, 1),
+                                        limit_s=round(limit, 1),
+                                        first_chunk_seen=_stall["seen"],
+                                    )
+                                except Exception:
+                                    pass
+                                try:
+                                    response.close()
+                                except Exception:
+                                    pass
+                                return
+
+                    _threading_mod.Thread(
+                        target=_stall_watchdog, name="lc-stream-stall", daemon=True
+                    ).start()
                     for line in response.iter_lines():
+                        _stall["last"] = _time_mod_runtime.monotonic()
+                        _stall["seen"] = True
                         if not line:
                             continue
                         if self.config.provider == "llama_cpp" and line.startswith("data: "):

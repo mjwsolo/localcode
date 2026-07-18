@@ -56,7 +56,7 @@ def execute(ctx: ToolContext, args: dict) -> str:
     action = str(args.get("action", ""))
     symbol = str(args.get("symbol", "")).strip()
     limit = max(1, min(int(args.get("max_results", 50)), 500))
-    target = (ctx.repo / str(args.get("path", ""))).resolve()
+    target = ctx.resolve_path(str(args.get("path", ""))).resolve()
     try:
         target.relative_to(ctx.repo.resolve())
     except ValueError:

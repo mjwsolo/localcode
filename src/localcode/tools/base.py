@@ -41,6 +41,48 @@ class ToolContext:
     def repo(self) -> Path:
         return self.app.repo_root
 
+    def resolve_path(self, raw: str) -> Path:
+        """Resolve a tool `path` argument, healing corrupted repo prefixes.
+
+        Small quantized models corrupt long absolute paths when they copy
+        them between calls. Observed live (2026-07-13): the model turned the
+        workdir `…/localcode-evals/20260713-024502/tempconv` into
+        `…/localcode-evals/2026-0713-0245-02/tempconv` — hyphens
+        hallucinated into the timestamp — and every subsequent write landed
+        in a phantom tree while the real project stayed empty. Same class of
+        fix as fuzzy old_string matching in edit_file: if an absolute path
+        is NOT under repo_root but its leading components are a near-match
+        of repo_root's (difflib ratio ≥ 0.8 per component), remap that
+        prefix onto the real repo_root. Anything else passes through
+        untouched — LocalCode intentionally has full filesystem access, so
+        this heals corruption without adding containment.
+        """
+        p = self.repo / raw
+        try:
+            root = self.repo.resolve()
+            rp = p.resolve()
+            if root == rp or root in rp.parents:
+                return p  # already inside the project — nothing to heal
+            root_parts = root.parts
+            path_parts = rp.parts
+            if len(path_parts) <= len(root_parts):
+                return p
+            import difflib
+            for a, b in zip(root_parts, path_parts):
+                if a == b:
+                    continue
+                if difflib.SequenceMatcher(None, a, b).ratio() < 0.8:
+                    return p  # genuinely different location — respect it
+            healed = root.joinpath(*path_parts[len(root_parts):])
+            try:
+                from ..events import emit as _emit
+                _emit("path_remap", raw=str(raw)[:200], healed=str(healed)[:200])
+            except Exception:
+                pass
+            return healed
+        except Exception:
+            return p
+
 
 @dataclass
 class ToolResult:
