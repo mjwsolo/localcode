@@ -1589,15 +1589,6 @@ class ChatScreen(Screen):
                 model = "local gguf"
             else:
                 model = raw_model or "no model selected"
-        task_stage = ""
-        try:
-            task = getattr(getattr(self.tui.engine, "session", None), "current_task", None)
-            if task is not None and getattr(task, "current_stage", ""):
-                task_stage = str(getattr(task, "current_stage", "")).strip()
-            elif getattr(self.tui.engine, "_last_turn_task_stage", ""):
-                task_stage = str(getattr(self.tui.engine, "_last_turn_task_stage", "")).strip()
-        except Exception:
-            task_stage = ""
         # Server status — short, plain-English action label ("ready",
         # "loading", "stopped", "not connected") — the value word IS the state.
         provider = (config.runtime.provider or "").lower()
@@ -1725,7 +1716,6 @@ class ChatScreen(Screen):
             + f" · {server_label} · permissions: {self._permissions_label()} · "
             f"context: {pct_remaining}% free · "
             f"thinking: {thinking_label}"
-            + (f" · task: {task_stage}" if task_stage else "")
             + f" · model: {short_model}"
         )
         # Use the adaptive `build_tag` chosen above; honour the
