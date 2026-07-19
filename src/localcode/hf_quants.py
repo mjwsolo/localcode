@@ -76,18 +76,37 @@ class Quant:
 
 
 def _quant_from_entry(entry: dict) -> Quant | None:
-    """Build a Quant from one HF tree entry, or None if it's not a .gguf."""
+    """Build a Quant from one HF tree entry, or None if it's not a selectable
+    model-weight quant.
+
+    The browser lists things the user PICKS. It must show only real model-weight
+    quants — never sidecar files, which are tiny and confusing next to a
+    multi-GB model (a 12B repo showing "BF16 · 0.9 GB" rows is the vision
+    projector, not a 12B model). Dropped here:
+      - vision projectors (`mmproj-*.gguf`) — auto-paired with the chosen quant
+        via the catalog's mmproj fields, never selected directly
+      - speculative-decoding draft heads (`mtp-*.gguf`) and anything in a
+        subfolder (e.g. `MTP/…`) — not standalone models
+      - any file with no recognizable quant code (`…-it.gguf` extras)
+    """
     path = entry.get("path", "")
     if not path.lower().endswith(".gguf"):
         return None
     base = path.rsplit("/", 1)[-1]
-    is_mmproj = base.lower().startswith("mmproj")
-    label = _parse_label(path)
-    # Keep only real weight quants and vision projectors. Anything else with
-    # no quant code (MTP drafters, `…-it.gguf` extras) is repo noise — drop it
-    # so the picker never shows rows like "it · 0.5 GB" / "MTP · 0.5 GB".
-    if label is None and not is_mmproj:
+    lowered = base.lower()
+    # Subfolder files (e.g. `MTP/gemma-…-Q4_0.gguf`) are never top-level
+    # selectable weights.
+    if "/" in path:
         return None
+    # Vision projectors and MTP draft heads are sidecars, not pickable models.
+    if lowered.startswith("mmproj") or lowered.startswith("mtp-") or lowered.startswith("mtp_"):
+        return None
+    label = _parse_label(path)
+    # Real weight quants carry a quant code (Q4_K_M, IQ3_S, BF16, …). Anything
+    # else is repo noise — drop it so the picker never shows junk rows.
+    if label is None:
+        return None
+    is_mmproj = False
     # LFS weights store the true size under entry["lfs"]["size"]; fall back to
     # the top-level "size" for non-LFS files.
     lfs = entry.get("lfs") or {}
@@ -95,8 +114,7 @@ def _quant_from_entry(entry: dict) -> Quant | None:
     return Quant(
         filename=path,
         size_gb=round(size_bytes / 1e9, 3),
-        # mmproj sidecars have no quant code — show their precision instead.
-        label=label or (base[:-5].split("-")[-1] if base.lower().endswith(".gguf") else base),
+        label=label,
         is_mmproj=is_mmproj,
     )
 

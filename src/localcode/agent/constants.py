@@ -67,24 +67,26 @@ this; interactive sessions don't)."""
 
 MAX_OUTPUT_TOKENS = -1
 """Per-round generation cap. -1 = unlimited; the model stops at its
-natural EOS. Capping mid-stream truncates valid tool-call JSON into
-unparseable garbage, which then triggers a useless recovery round. A
-prior 5.8-minute round burn was caused by an 8192 cap chopping a
-long-but-valid write_file call.
+natural EOS. This stays -1 deliberately: capping mid-stream truncates
+valid tool-call JSON into unparseable garbage, which then triggers a
+useless recovery round. A prior 5.8-minute round burn was caused by an
+8192 cap chopping a long-but-valid write_file call. So a small per-round
+token cap is the WRONG lever.
 
-The system-level `--ctx-size 32768` is the absolute ceiling: prompt
-+ generation cannot exceed it, so the model can't run forever even
-without a per-round cap. With prompts in the 5-8K-token range, that
-leaves ~24-27K tokens of generation headroom — enough for any
-single source file we'd reasonably emit in one call.
+The runaway backstop is NOT ctx-size. An earlier version of this note
+claimed `--ctx-size 32768` bounded prompt+generation so "the model can't
+run forever" — that is FALSE for long-context models. LocalCode launches
+Qwen (262K trained) with `--ctx-size 131072`; a 6K-token prompt then
+leaves ~125K tokens of generation headroom ≈ ~28 minutes of nonstop
+decode. A real 40-minute / no-output hang (thinking on, no answer emitted)
+was traced to exactly this.
 
-Historical note: bumped from -1 → 8192 on 2026-04-26 after a
-36-minute turn died with HTTP 500 when the model emitted a 42K-token
-edit_file dict-literal that filled the (then 64K) context mid-decode.
-That regression is no longer reachable — ctx-size is now 32768, the
-mid-stream tool-arg watchdog has been gutted to a 180K hard ceiling
-only, and the model's natural EOS lands well inside the budget for
-normal file writes."""
+The correct backstop is the thinking runaway-guard (Feature.THINKING_CAPS
++ MAX_THINKING_SECONDS / MAX_THINKING_CHARS): it aborts a reasoning-only
+phase at 10 min / ~20k tokens regardless of ctx-size, well before the
+context ceiling, and surfaces a clear message. That is why the cap was
+re-enabled 2026-07-19. Leaving MAX_OUTPUT_TOKENS at -1 keeps valid long
+tool calls intact while the thinking guard handles the runaway case."""
 
 
 # ── Thinking-phase safety caps ──────────────────────────────────────
@@ -94,21 +96,24 @@ normal file writes."""
 # `_thinking_abort`, which surfaces a clear user message and ends
 # the turn.
 #
-# Previously only the time cap existed, at 300 s — which a user
-# watching a screen experiences as "frozen for 5 minutes." 90 s is
-# still generous enough for a genuine slow-reason path on IQ2_M
-# (~27 tok/s decode → ~2400 reasoning tokens) but roughly 3×
-# snappier to bail out.
+# These are a RUNAWAY guard, not a reasoning budget. The earlier tight
+# values (90 s / 4000 chars ≈ 1000 tokens) aborted legitimate long
+# reasoning and were disabled 2026-04-27 (see features.THINKING_CAPS).
+# They are re-enabled now with far more generous bounds after a real
+# 29-minute / 94.8k-token runaway on Qwen Q8 with thinking on: the
+# cap must never touch normal reasoning, only a pathological loop.
 #
-# The character cap catches the other failure mode: the model
-# produces reasoning tokens FAST (not slow) but endlessly — tree
-# diagrams, vocabulary lists, full SPAs drafted inline. Rule 23 in
-# the system prompt bans those, but IQ2 compliance is imperfect;
-# 4000 chars ≈ 45 lines ≈ the point where reasoning has clearly
-# exceeded any legit planning budget.
+#   * 600 s (10 min): a genuine slow-reason path on a heavy Q8 model
+#     (~50-75 tok/s) fits comfortably; a 29-minute loop does not.
+#   * 80000 chars (~20k reasoning tokens): well above any legitimate
+#     planning trace; the observed runaway was ~380k chars.
+#
+# With reasoning now streamed live in the TUI, the user also SEES a
+# runaway and can `esc` — the cap is the backstop for unattended /
+# headless runs where no one is watching.
 
-MAX_THINKING_SECONDS = 90
-MAX_THINKING_CHARS = 4000
+MAX_THINKING_SECONDS = 600
+MAX_THINKING_CHARS = 80000
 
 
 # ── Tool-result size policy ─────────────────────────────────────────

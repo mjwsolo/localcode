@@ -770,6 +770,72 @@ class ChatLog(RichLog):
         self._thinking_states[idx] = expanded
         self._render_thinking(text, expanded, idx)
 
+    # ── Live reasoning stream ──────────────────────────────────────────
+    # Show the model's reasoning as it arrives (like Claude Code / Codex),
+    # instead of hiding it behind a spinner and dumping the whole trace at the
+    # end. Each completed line is committed to `_history` as a dimmed
+    # `think_line` entry (with a one-time `think_header`) — append-only, so it
+    # can't flicker, AND it survives `_rerender` (a resize / thinking-toggle
+    # rebuilds the log purely from `_history`, which would otherwise wipe any
+    # lines written outside it).
+
+    def start_thinking_stream(self) -> None:
+        if getattr(self, "_think_stream_active", False):
+            return
+        self._think_stream_buf = ""
+        self._think_stream_active = True
+        self._dispatch_gap("thinking")
+        self._history.append(("think_header",))
+        self._render_think_header()
+
+    def stream_thinking(self, chunk: str) -> None:
+        if not chunk:
+            return
+        if not getattr(self, "_think_stream_active", False):
+            self.start_thinking_stream()
+        self._think_stream_buf += chunk
+        # Commit completed lines; keep the trailing partial buffered so we
+        # never render half a word mid-flight.
+        while "\n" in self._think_stream_buf:
+            line, self._think_stream_buf = self._think_stream_buf.split("\n", 1)
+            self._commit_thinking_line(line)
+
+    def _commit_thinking_line(self, line: str) -> None:
+        line = line.rstrip()
+        if not line:
+            return
+        self._history.append(("think_line", line))
+        self._render_think_line(line)
+
+    def end_thinking_stream(self) -> None:
+        if not getattr(self, "_think_stream_active", False):
+            return
+        if self._think_stream_buf.strip():
+            self._commit_thinking_line(self._think_stream_buf)
+        self._think_stream_buf = ""
+        self._think_stream_active = False
+
+    def _render_think_header(self) -> None:
+        hdr = Text()
+        hdr.append("  ✳ ", style="cyan")
+        hdr.append("thinking…", style="dim italic cyan")
+        self.write(hdr)
+        self._track_lines()
+
+    def _render_think_line(self, line: str) -> None:
+        import textwrap
+        try:
+            avail = self._content_width()
+        except Exception:
+            avail = 76
+        wrapped = textwrap.fill(
+            line, width=max(avail - 4, 30),
+            initial_indent="    ", subsequent_indent="    ",
+        )
+        for wline in wrapped.split("\n"):
+            self.write(Text(wline, style="dim italic"))
+            self._track_lines()
+
     def append_approval(self, tool_name: str, command: str) -> None:
         self._dispatch_gap("approval")
         self._history.append(("approval", tool_name, command))
@@ -1247,6 +1313,15 @@ class ChatLog(RichLog):
             elif kind == "raw":
                 self.write(entry[1])
                 self._track_lines()
+            elif kind == "think_header":
+                # Streamed reasoning header — same gap contract as a thinking
+                # block; the dimmed lines that follow get no inter-line gap.
+                self._dispatch_gap("thinking")
+                self._render_think_header()
+                self._last_kind = "thinking"
+            elif kind == "think_line":
+                self._render_think_line(entry[1])
+                self._last_kind = "thinking"
             else:
                 # Centralized spacing: one rule for every kind transition.
                 self._dispatch_gap(kind)

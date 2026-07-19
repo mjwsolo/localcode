@@ -3,6 +3,43 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.3.32 — 2026-07-19
+
+### UI
+
+- **Reasoning streams live.** The model's thinking now renders in the chat log
+  as it arrives (dimmed, line by line, like Claude Code / Codex) instead of
+  hiding behind a spinner and appearing only at the end. You can see it working
+  every step — no more "9k tokens, no output, is it stuck?". The streamed lines
+  are recorded in history so a resize or toggle doesn't wipe them.
+- **Input scrollbar matches the app.** The chat input's scrollbar was a brand
+  blue that clashed with the grey scrollbars everywhere else; it's now grey.
+
+### Reliability
+
+- **Runaway-reasoning guard re-enabled.** A model can loop in its thinking
+  phase forever (observed: 29 minutes / 94.8k tokens on Qwen Q8, no output).
+  The per-round thinking cap — disabled in April because its old bounds
+  (90 s / 4000 chars) cut *legitimate* reasoning — is back with generous
+  bounds (10 min / ~20k tokens) that only catch a true runaway, never normal
+  thinking. On abort the user now gets a clear message telling them to try
+  `/thinking off` or a faster model.
+- **Turn-ending notices now show in the TUI.** `print_info` wrote only to
+  stdout, so messages like the reasoning-cap abort were invisible in the TUI —
+  a turn would just stop with no explanation. A new `notice` path emits an
+  event the TUI renders.
+
+### Model catalog
+
+- **Removed the confusing QAT duplicates.** The Gemma QAT entries added earlier
+  were single-quant repos that showed up as a second "Gemma 4 12B / 26B" next
+  to the originals and browsed to just one row. Reverted to the clean Gemma
+  lineup; the July-16 refreshed-weights advisory stays.
+- **Quant browser hides sidecar files.** Vision projectors (`mmproj-*`),
+  speculative-decoding draft heads (`mtp-*`), and files in subfolders no longer
+  appear as tiny "0.5 GB" rows in the quant picker — only real, selectable
+  model weights are listed.
+
 ## 0.3.31 — 2026-07-19
 
 ### Security
