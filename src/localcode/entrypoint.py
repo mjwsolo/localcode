@@ -371,8 +371,16 @@ def main(argv: list[str] | None = None) -> None:
     # prior session's messages before showing the chat screen.
     if getattr(args, "resume", None):
         app._resume_session_id = args.resume
+    # Mouse capture OFF by default (same as tui.app.main). Capturing the mouse
+    # disables the terminal's NATIVE text selection, so Cmd+C on an empty
+    # native selection makes the terminal ring its bell — the persistent copy
+    # "beep". This is the entry point `localcode` actually uses; it previously
+    # called app.run() with Textual's mouse=True default, so the beep fix in
+    # tui.app.main never reached it. Opt back in with LOCALCODE_MOUSE=1.
+    import os as _os
+    _mouse = _os.environ.get("LOCALCODE_MOUSE", "0") == "1"
     try:
-        app.run()
+        app.run(mouse=_mouse)
     finally:
         try:
             _reset_terminal_state()

@@ -6,10 +6,15 @@ All notable changes to LocalCode will be documented here. The format follows
 ## 0.3.34 — 2026-07-19
 
 ### Fixed
-- **Copy beep.** Selecting text and copying rang the terminal bell on every
-  copy. The OSC 52 clipboard sequence was terminated with BEL (`\a`); a
-  terminal that doesn't consume the sequence rendered that as an audible beep.
-  Now terminated with `ST` (`ESC \`).
+- **Cmd+C beep — the real cause.** Mouse capture was left ON in the primary
+  `localcode` entry point (`app.run()` with Textual's `mouse=True` default),
+  which disables the terminal's native selection, so Cmd+C on an empty native
+  selection rang the terminal bell. The mouse-off default already existed in
+  the `lc-tui` path but never reached `localcode`. Both entry points now launch
+  with mouse capture off (opt back in with `LOCALCODE_MOUSE=1`).
+- **Copy beep (OSC 52).** The clipboard fallback sequence was terminated with
+  BEL (`\a`); a terminal that doesn't consume it rendered an audible beep. Now
+  terminated with `ST` (`ESC \`).
 
 - **No more "work at `$HOME`".** When launched outside any project (no
   `.git`/`package.json`/etc. marker), the target-location directive fell back
