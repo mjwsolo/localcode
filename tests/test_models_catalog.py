@@ -73,8 +73,10 @@ def test_north_mini_code_profile_and_aliases() -> None:
 # mmproj sidecar; this is the contract the runtime relies on.
 _EXPECTED_VISION = {
     "gemma": True,
-    "gemma-12b": True,
     "gemma-12b-bf16": True,
+    "gemma-12b-qat": True,
+    "gemma-qat": True,
+    "gemma-31b-qat": True,
     "qwen": True,
     "gemma-q8": True,
     "qwen-q8": True,
