@@ -14,12 +14,18 @@ what can execute without the user's consent.
 
 - **Autonomy-independent safety hard-block.** A new pre-dispatch layer runs
   before every tool in every mode (including `full_auto` and headless) and
-  cannot be overridden. It blocks dangerous shell (`curl … | sh`, `dd`,
-  `mkfs`, `rm -rf /`, fork bombs, force-push to main, `DROP DATABASE`) from
-  **both** `bash` and `background_process`, and refuses writes to credential/
-  key files (`~/.ssh/*`, `~/.aws/*`, `id_rsa`, `authorized_keys`, `.netrc`,
-  `credentials`, `/etc/shadow`). Precise basename/segment matching, so editing
-  the project's own `tokenizer.py` or `api_keys.py` is never affected.
+  cannot be overridden. It blocks only catastrophic shell with no legitimate
+  use — `rm -rf /` (or `~`/`$HOME`), `mkfs`, `dd of=/dev/…`, `> /dev/sd*`,
+  `chmod -R 777 /`, fork bombs, `> /etc/`, `wipefs` — from **both** `bash` and
+  `background_process`, and refuses writes to credential/key files (`~/.ssh/*`,
+  `~/.aws/*`, `id_rsa`, `authorized_keys`, `.netrc`, `credentials`,
+  `/etc/shadow`). Matching is anchored and precise: it never fires on a command
+  that merely *mentions* the text (`grep "DROP TABLE"`, `cat notes_about_mkfs.md`)
+  and never on the project's own `tokenizer.py` / `api_keys.py`.
+- **Dangerous-but-legit commands now confirm instead of running silently.**
+  `curl … | sh`, `git push --force`, and `sudo rm` are not hard-blocked (they
+  have real uses) — they now prompt for approval, where before they ran with no
+  prompt.
 - **`background_process` now goes through the approval gate.** Previously it
   ran `shell=True` on the raw model command with no prompt — the same command
   that `bash` would ask about. It is now confirmed like `bash`.

@@ -103,26 +103,59 @@ def _is_blocked_write_path(raw_path: str) -> bool:
     return False
 
 
+# Catastrophic shell commands with NO legitimate agent use — hard-blocked in
+# every mode, never overridable. Deliberately TIGHT: these are anchored to real
+# device/root/home targets so they don't false-positive on a `grep` for the
+# text. "Dangerous but sometimes legitimate" commands (curl|sh installs,
+# force-push, sudo rm) are NOT here — they route through the confirmation gate
+# instead (see _CONFIRM_SHELL_RE), so the user can approve them.
+#
+# NB: SQL patterns (DROP TABLE, DELETE FROM, …) are intentionally absent — bash
+# does not execute SQL, so blocking them here only broke `grep "DROP TABLE"`.
+import re as _re
+
+_HARD_BLOCK_SHELL_RE = [
+    _re.compile(r"\brm\s+-[a-z]*r[a-z]*f[a-z]*\s+(/|~|\$HOME|\$\{HOME\})(\s|/|$)", _re.I),
+    _re.compile(r"\brm\s+-[a-z]*f[a-z]*r[a-z]*\s+(/|~|\$HOME|\$\{HOME\})(\s|/|$)", _re.I),
+    _re.compile(r"\bmkfs\b", _re.I),
+    _re.compile(r"\bdd\b[^\n]*\bof=/dev/", _re.I),
+    _re.compile(r">\s*/dev/(sd|nvme|hd|disk|vd)", _re.I),
+    _re.compile(r"\bchmod\s+-R\s+0*777\s+/(\s|$)", _re.I),
+    _re.compile(r":\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:", _re.I),  # fork bomb
+    _re.compile(r">\s*/etc/", _re.I),
+    _re.compile(r"\bwipefs\b", _re.I),
+]
+
+# Dangerous-but-sometimes-legitimate shell: prompt for approval (overridable),
+# never silently run and never hard-blocked. Anchored so a `grep` for the text
+# doesn't trigger it: the pipe-to-shell must be a real pipeline, force-push a
+# real git invocation.
+_CONFIRM_SHELL_RE = _re.compile(
+    r"(?:\b(?:curl|wget)\b[^\n|]*\|\s*(?:sudo\s+)?(?:ba|z|k|da)?sh\b)"
+    r"|(?:\bgit\s+push\b[^\n]*(?:--force\b|-f\b))"
+    r"|(?:\bsudo\s+rm\b)"
+    r"|(?:\bgit\s+reset\s+--hard\s+origin\b)",
+    _re.I,
+)
+
+
 def _safety_hard_block(name: str, args: dict) -> str | None:
     """Autonomy-independent hard block. Returns a rejection reason, or None.
 
     Runs before every tool dispatch in ALL modes (including FULL_AUTO and
     headless). Covers only operations with no legitimate agent use:
-      - shell commands matching SafetyLayer.BLOCKED_COMMANDS (curl|sh, dd,
-        mkfs, `rm -rf /`, fork bomb, force-push to main, DROP DATABASE, …)
+      - catastrophic shell (rm -rf /, mkfs, dd of=/dev/…, > /dev/sd*, fork
+        bomb, chmod -R 777 /, > /etc/) — see _HARD_BLOCK_SHELL_RE
       - writes to SSH/AWS/GPG key material or credential files
-    Everything else falls through to the normal confirmation flow.
+    Everything else — including curl|sh and force-push — falls through to the
+    normal confirmation flow, which can approve it.
     """
     if name in _SHELL_EXEC_TOOLS:
         cmd = str(args.get("command", "") or "")
         if cmd:
-            try:
-                from ..permissions_v2 import SafetyLayer
-                verdict = SafetyLayer.check_command(cmd)
-                if verdict.get("allowed") is False:
-                    return verdict.get("reason") or "blocked: dangerous command"
-            except Exception:
-                pass
+            for rx in _HARD_BLOCK_SHELL_RE:
+                if rx.search(cmd):
+                    return "blocked: refusing a command that could destroy the disk or system (matched a catastrophic pattern)"
     if name in _FILE_WRITE_TOOLS:
         raw_path = str(args.get("path", "") or args.get("file_path", "") or "")
         if raw_path:
@@ -433,6 +466,10 @@ def _needs_confirmation(name: str, args: dict, app: "LocalCodeApp | None" = None
             return True
     except Exception:
         pass
+    # Dangerous-but-sometimes-legit patterns (remote pipe-to-shell, force-push,
+    # sudo rm) are NOT hard-blocked — confirm them so the user can approve.
+    if _CONFIRM_SHELL_RE.search(cmd):
+        return True
     return any(p in cmd for p in DESTRUCTIVE_PATTERNS)
 
 def _render_markdown(text: str, console: Console | None = None) -> None:
