@@ -15,6 +15,20 @@ All notable changes to LocalCode will be documented here. The format follows
 - **Input scrollbar matches the app.** The chat input's scrollbar was a brand
   blue that clashed with the grey scrollbars everywhere else; it's now grey.
 
+### Reliability
+
+- **Runaway-reasoning guard re-enabled.** A model can loop in its thinking
+  phase forever (observed: 29 minutes / 94.8k tokens on Qwen Q8, no output).
+  The per-round thinking cap — disabled in April because its old bounds
+  (90 s / 4000 chars) cut *legitimate* reasoning — is back with generous
+  bounds (10 min / ~20k tokens) that only catch a true runaway, never normal
+  thinking. On abort the user now gets a clear message telling them to try
+  `/thinking off` or a faster model.
+- **Turn-ending notices now show in the TUI.** `print_info` wrote only to
+  stdout, so messages like the reasoning-cap abort were invisible in the TUI —
+  a turn would just stop with no explanation. A new `notice` path emits an
+  event the TUI renders.
+
 ### Model catalog
 
 - **Removed the confusing QAT duplicates.** The Gemma QAT entries added earlier

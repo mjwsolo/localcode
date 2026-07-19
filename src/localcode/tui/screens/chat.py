@@ -4406,6 +4406,15 @@ class ChatScreen(Screen):
             # Hide any active tool step animation
             if self._active_mode == "tool":
                 self._hide_active_step()
+        elif t == "notice":
+            # User-facing notice (e.g. why a turn ended). Close any live
+            # reasoning stream first so the notice isn't dimmed/indented under it.
+            if getattr(self, "_thinking_streamed", False):
+                log.end_thinking_stream()
+                self._thinking_streamed = False
+            text = p.get("text", "")
+            if text:
+                log.append_info(text)
         elif t == "error":
             # Close a dangling reasoning stream so the error isn't dimmed/indented.
             if getattr(self, "_thinking_streamed", False):

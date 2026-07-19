@@ -162,11 +162,13 @@ FEATURE_DEFAULTS: dict[Feature, bool] = {
     Feature.TOOL_RESULT_AGING: True,
     Feature.CONTEXT_SHIFT: True,
 
-    # Decode safety. THINKING_CAPS disabled by user request 2026-04-27 —
-    # the per-round caps were aborting useful long-reasoning rounds and
-    # causing more failures than they prevented. Re-enable only if the
-    # "15-minute reasoning" failure mode reappears.
-    Feature.THINKING_CAPS: False,
+    # Decode safety. Re-enabled 2026-07-19 after a real 29-minute /
+    # 94.8k-token thinking runaway (Qwen Q8, thinking on) that never
+    # produced output. Disabled 2026-04-27 because the caps were far too
+    # tight (90 s / 4000 chars) and aborted useful reasoning; now paired
+    # with GENEROUS bounds (600 s / 80000 chars, see constants.py) that
+    # only catch a pathological loop, never normal reasoning.
+    Feature.THINKING_CAPS: True,
     Feature.AUTO_NUDGE_RECOVERY: True,
 
     # Runtime — on. The pressure monitor specifically is what

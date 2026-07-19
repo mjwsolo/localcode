@@ -119,6 +119,25 @@ def test_tui_streams_reasoning_live_before_answer(tmp_path, project):
     asyncio.run(scenario())
 
 
+def test_tui_runaway_thinking_is_capped(tmp_path, project):
+    """A pathological reasoning loop (way over the char cap) must be aborted
+    with a clear message, not hang forever. Guards the re-enabled THINKING_CAPS
+    at its generous 80k-char bound."""
+    async def scenario():
+        # One giant unbroken reasoning blob well past MAX_THINKING_CHARS.
+        runaway = "planning " * 12000  # ~96k chars, no answer
+        snap = await _drive(
+            tmp_path, project,
+            [say("(never reached)", thinking=runaway)],
+            "build the thing",
+        )
+        assert snap["model_calls"] >= 1
+        # The abort surfaced a clear reason instead of streaming forever.
+        assert "reasoning exceeded" in snap["log_text"].lower()
+
+    asyncio.run(scenario())
+
+
 def test_tui_tool_call_turn_executes_through_ui(tmp_path, project):
     """A scripted tool round driven entirely from a keystroke: the model
     'calls' write_file, the real tool runs, the file appears on disk, and

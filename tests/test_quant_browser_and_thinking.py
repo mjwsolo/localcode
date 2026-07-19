@@ -148,4 +148,20 @@ def test_thinking_stream_renders_in_real_chatlog():
             await pilot.pause()
             assert log._think_stream_active is False
 
+            # Visual verification (as close as headless allows): the reasoning
+            # actually rendered into the widget's visible rows — header + both
+            # committed lines + the flushed partial.
+            rendered = "\n".join(s.text for s in log.lines)
+            assert "thinking" in rendered.lower()
+            assert "Analyze the request." in rendered
+            assert "Plan the file layout." in rendered
+            assert "Still wr" in rendered
+
+            # And it survives a rerender (resize / toggle rebuilds from history).
+            log._rerender()
+            await pilot.pause()
+            rerendered = "\n".join(s.text for s in log.lines)
+            assert "Analyze the request." in rerendered
+            assert "Plan the file layout." in rerendered
+
     asyncio.run(scenario())

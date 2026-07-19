@@ -94,21 +94,24 @@ normal file writes."""
 # `_thinking_abort`, which surfaces a clear user message and ends
 # the turn.
 #
-# Previously only the time cap existed, at 300 s — which a user
-# watching a screen experiences as "frozen for 5 minutes." 90 s is
-# still generous enough for a genuine slow-reason path on IQ2_M
-# (~27 tok/s decode → ~2400 reasoning tokens) but roughly 3×
-# snappier to bail out.
+# These are a RUNAWAY guard, not a reasoning budget. The earlier tight
+# values (90 s / 4000 chars ≈ 1000 tokens) aborted legitimate long
+# reasoning and were disabled 2026-04-27 (see features.THINKING_CAPS).
+# They are re-enabled now with far more generous bounds after a real
+# 29-minute / 94.8k-token runaway on Qwen Q8 with thinking on: the
+# cap must never touch normal reasoning, only a pathological loop.
 #
-# The character cap catches the other failure mode: the model
-# produces reasoning tokens FAST (not slow) but endlessly — tree
-# diagrams, vocabulary lists, full SPAs drafted inline. Rule 23 in
-# the system prompt bans those, but IQ2 compliance is imperfect;
-# 4000 chars ≈ 45 lines ≈ the point where reasoning has clearly
-# exceeded any legit planning budget.
+#   * 600 s (10 min): a genuine slow-reason path on a heavy Q8 model
+#     (~50-75 tok/s) fits comfortably; a 29-minute loop does not.
+#   * 80000 chars (~20k reasoning tokens): well above any legitimate
+#     planning trace; the observed runaway was ~380k chars.
+#
+# With reasoning now streamed live in the TUI, the user also SEES a
+# runaway and can `esc` — the cap is the backstop for unattended /
+# headless runs where no one is watching.
 
-MAX_THINKING_SECONDS = 90
-MAX_THINKING_CHARS = 4000
+MAX_THINKING_SECONDS = 600
+MAX_THINKING_CHARS = 80000
 
 
 # ── Tool-result size policy ─────────────────────────────────────────
