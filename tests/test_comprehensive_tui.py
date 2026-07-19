@@ -97,6 +97,28 @@ def test_tui_prompt_renders_model_response(tmp_path, project):
     asyncio.run(scenario())
 
 
+def test_tui_streams_reasoning_live_before_answer(tmp_path, project):
+    """The model's reasoning must render live in the log (like Claude Code),
+    not be hidden behind a spinner. Drives a turn whose response is preceded by
+    a thinking block and asserts the reasoning text is in the visible log."""
+    async def scenario():
+        snap = await _drive(
+            tmp_path,
+            project,
+            [say("The answer is 42.",
+                 thinking="Consider the constraints.\nWeigh the options carefully.")],
+            "think about it",
+        )
+        assert snap["model_calls"] >= 1
+        # Reasoning streamed into the visible log, not swallowed.
+        assert "Consider the constraints." in snap["log_text"]
+        assert "Weigh the options carefully." in snap["log_text"]
+        # The final answer still renders too.
+        assert "The answer is 42." in snap["log_text"]
+
+    asyncio.run(scenario())
+
+
 def test_tui_tool_call_turn_executes_through_ui(tmp_path, project):
     """A scripted tool round driven entirely from a keystroke: the model
     'calls' write_file, the real tool runs, the file appears on disk, and

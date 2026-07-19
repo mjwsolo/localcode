@@ -400,13 +400,13 @@ class _ChatTextArea(TextArea):
     DEFAULT_CSS = """
     _ChatTextArea {
         background: ansi_default;
-        /* Scrollbar shows once the input grows past its cap. Force the brand
-           blue + a thin bar — otherwise it inherits the textual-ansi theme's
-           `scrollbar: ansi_blue`, which renders as the terminal's dark navy
-           (the "wrong blue"). */
-        scrollbar-color: #5f87ff;
-        scrollbar-color-hover: #5f87ff;
-        scrollbar-color-active: #7aa2ff;
+        /* Scrollbar shows once the input grows past its cap. Match the rest of
+           the app's grey scrollbars (see styles/app.tcss) instead of a brand
+           blue — otherwise it also inherits the textual-ansi theme's
+           `scrollbar: ansi_blue` navy, which clashes. */
+        scrollbar-color: #333333;
+        scrollbar-color-hover: #555555;
+        scrollbar-color-active: #666666;
         scrollbar-background: ansi_default;
         scrollbar-size-vertical: 1;
         & .text-area--cursor-line {
@@ -1072,6 +1072,7 @@ class ChatScreen(Screen):
         # triangle. Earlier expanded-by-default flooded the chat with
         # multi-paragraph reasoning the user didn't want by default.
         self._thinking_expanded: bool = False
+        self._thinking_streamed: bool = False  # live reasoning shown this turn
         self._slash_matches: list[tuple[str, str]] = []  # current filtered commands
         self._slash_selected: int = 0  # highlighted index in slash menu
         # Search state
@@ -4153,6 +4154,11 @@ class ChatScreen(Screen):
             # Hide animation once content starts flowing
             if self._active_mode:
                 self._hide_active_step()
+            # Close any live reasoning stream before the answer starts so the
+            # dimmed thinking and the answer don't interleave.
+            if getattr(self, "_thinking_streamed", False):
+                log.end_thinking_stream()
+                self._thinking_streamed = False
             chunk = p.get("chunk", "")
             self._stream_buf.append(chunk)
             # Stream tokens to display in real time
@@ -4359,29 +4365,39 @@ class ChatScreen(Screen):
         elif t == "thinking_start":
             self._thinking_phase = "thinking"
             self._thinking_text = ""
+            self._thinking_streamed = False
             self._show_active_thinking("thinking")
         elif t == "thinking_chunk":
             chunk = p.get("chunk", "")
             self._thinking_text += chunk
             self._turn_tokens += max(1, len(chunk) // 4) if chunk else 0
             self._thinking_phase = "thinking"
-            # Do NOT touch the spinner word here — the word rotates on the
-            # 50 ms wall-clock timer in _tick_active, so a fast decode can't
-            # strobe it (and the shimmer stays smooth instead of jumping on
-            # every irregular chunk). Just make sure the animation is running.
-            if self._active_mode != "thinking":
+            # Stream the reasoning to the log live (like Claude Code / Codex)
+            # instead of hiding it. On the first chunk, drop the spinner and
+            # start the dimmed reasoning stream; then feed each chunk.
+            if chunk:
+                if not self._thinking_streamed:
+                    self._hide_active_step()
+                    self._thinking_streamed = True
+                log.stream_thinking(chunk)
+            elif self._active_mode != "thinking" and not self._thinking_streamed:
                 self._show_active_thinking("thinking")
         elif t == "thinking_peek":
             self._thinking_phase = "thinking"
             # thinking_peek carries model text in p["text"]; deliberately
-            # ignore it — the timer picks the placeholder word (see above).
-            if self._active_mode != "thinking":
+            # ignore it — the live stream (thinking_chunk) shows the real text.
+            if self._active_mode != "thinking" and not self._thinking_streamed:
                 self._show_active_thinking("thinking")
         elif t == "thinking_done":
             text = p.get("text", "")
             self._thinking_text = text
             self._hide_active_step()
-            if text.strip():
+            # If we already streamed the reasoning live, it's on screen — just
+            # close the stream. Only fall back to the collapsible block when
+            # nothing streamed (e.g. a model that emits thinking only at the end).
+            if self._thinking_streamed:
+                log.end_thinking_stream()
+            elif text.strip():
                 log.append_thinking(text, expanded=self._thinking_expanded)
         elif t == "stream_start":
             self._thinking_phase = "generating"
@@ -4391,6 +4407,10 @@ class ChatScreen(Screen):
             if self._active_mode == "tool":
                 self._hide_active_step()
         elif t == "error":
+            # Close a dangling reasoning stream so the error isn't dimmed/indented.
+            if getattr(self, "_thinking_streamed", False):
+                log.end_thinking_stream()
+                self._thinking_streamed = False
             msg = p.get("message", "Unknown error")
             log.append_error(msg)
         elif t == "stage":
