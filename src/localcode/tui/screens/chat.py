@@ -697,6 +697,7 @@ _SLASH_COMMANDS = [
     ("/mcp", "List or reload MCP servers from ~/.localcode/mcp.json"),
     ("/skills", "List loaded skills and where they're from"),
     ("/model", "List available models / switch (e.g. /model qwen)"),
+    ("/delete", "Delete a downloaded model to free disk space (asks first)"),
     ("/thinking", "Show / set hidden reasoning policy (off|auto)"),
     ("/sounds", "Toggle completion + approval notification sounds"),
     ("/voice", "Toggle voice mode (push-to-talk dictation into the input box)"),
@@ -2228,6 +2229,8 @@ class ChatScreen(Screen):
             self.action_toggle_search()
         elif text == "/model" or text.startswith("/model "):
             self._handle_model_command(text)
+        elif text == "/delete" or text.startswith("/delete "):
+            self._handle_delete_command(text)
         elif text == "/thinking" or text.startswith("/thinking "):
             self._handle_thinking_command(text)
         elif text == "/status":
@@ -3073,6 +3076,29 @@ class ChatScreen(Screen):
             return
 
         log.append_info("Usage: /vision  (toggle)  ·  /vision status")
+
+    def _handle_delete_command(self, text: str) -> None:
+        """Handle /delete — free disk space by removing downloaded models.
+
+        Three forms, all delegated to `model_delete.run_delete_command`
+        (kept out of the TUI so the safety logic is unit-testable):
+          /delete                    — list downloaded models + sizes
+          /delete <number or name>   — show what would be removed (no delete)
+          /delete <target> confirm   — actually delete
+
+        The in-use model and in-flight downloads are refused outright;
+        nothing is ever removed without the explicit `confirm` token.
+        """
+        from ...model_delete import run_delete_command
+        log = self.query_one("#chat-log", ChatLog)
+        arg = text[len("/delete"):].strip()
+        try:
+            lines = run_delete_command(arg, self.tui.config)
+        except Exception as e:  # noqa: BLE001 — never let /delete crash the app
+            log.append_error(f"/delete failed: {e}")
+            return
+        for kind, line in lines:
+            (log.append_error if kind == "error" else log.append_info)(line)
 
     def _handle_model_command(self, text: str) -> None:
         """Handle /model — open the visual picker or switch directly by key."""
