@@ -27,6 +27,12 @@ All notable changes to LocalCode will be documented here. The format follows
   weights on 2026-07-16 (tool-calling and vision fixes, same filenames).
   Gemma catalog notes now flag that copies downloaded before then are stale;
   use `/delete` and re-download to pick up the fixes.
+- **Delisted the non-QAT Gemma 4 12B Q4 entry** — superseded outright by the
+  12B QAT entry (smaller file, near-BF16 quality). Already-downloaded copies
+  keep working and the repo remains browsable; the curated picker just no
+  longer offers the weaker duplicate. The 26B IQ3_S (only 26B that fits
+  16 GB, measured 95.1% HumanEval), 12B BF16 (reference baseline), and Q8
+  entries remain — their repos carry the refreshed 2026-07-16 weights.
 - Fixed the DiffusionGemma browse note recommending a quant that does not
   exist in its repo (it ships plain Q4_K_M/Q5_K_M/Q6_K/Q8_0/BF16 only).
 
