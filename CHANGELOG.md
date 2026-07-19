@@ -3,7 +3,7 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## Unreleased
+## 0.3.30 — 2026-07-19
 
 ### New features
 
@@ -15,6 +15,20 @@ All notable changes to LocalCode will be documented here. The format follows
   message, partial downloads (`.part` files, undersized GGUFs, and hub resume
   state) are cleaned up, and a vision sidecar shared between quants of the
   same family is only removed with its last remaining model.
+
+### Model catalog
+
+- **Gemma 4 QAT entries** — Unsloth's quantization-aware-trained repos join
+  the catalog: 12B QAT (6.7 GB, lightest full-quality pick for 16 GB Macs),
+  26B-A4B QAT (14.3 GB, for 32 GB), and the catalog's first dense 31B entry
+  (17.3 GB QAT, best on 48-64 GB). QAT weights are trained quantized, so Q4
+  keeps near-BF16 quality.
+- **Re-download advisory** — Google silently refreshed all Gemma 4 GGUF
+  weights on 2026-07-16 (tool-calling and vision fixes, same filenames).
+  Gemma catalog notes now flag that copies downloaded before then are stale;
+  use `/delete` and re-download to pick up the fixes.
+- Fixed the DiffusionGemma browse note recommending a quant that does not
+  exist in its repo (it ships plain Q4_K_M/Q5_K_M/Q6_K/Q8_0/BF16 only).
 
 ## 0.3.23 — 2026-07-12
 
