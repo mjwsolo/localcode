@@ -966,9 +966,8 @@ class TestStreamConnectionRecovery:
 
 
 class TestSamplingTemperature:
-    """Coding-temperature ceiling: low temp is the top anti-hallucination lever
-    on quantized models. _options() must cap temperature to the coding default
-    across families, overridable/reversible via LOCALCODE_CODING_TEMP."""
+    """Temperature is the vendor-recommended value per family (see
+    _sampler_params); a user-set config temperature only ever LOWERS it."""
 
     def _gw(self, temperature: float = 1.0, model: str = "test.gguf") -> LocalCodeRuntimeGateway:
         cfg = RuntimeConfig(
@@ -977,30 +976,23 @@ class TestSamplingTemperature:
         )
         return LocalCodeRuntimeGateway(cfg)
 
-    def test_default_caps_to_coding_temp(self, monkeypatch) -> None:
-        monkeypatch.delenv("LOCALCODE_CODING_TEMP", raising=False)
-        # config default 1.0 must be lowered to the 0.25 coding ceiling.
-        assert self._gw(temperature=1.0)._options()["temperature"] == 0.25
+    def test_gemma_uses_vendor_temp(self) -> None:
+        # Default family is Gemma → vendor temp 1.0 (config default 1.0).
+        assert self._gw(temperature=1.0)._options()["temperature"] == 1.0
 
-    def test_qwen_also_capped_low(self, monkeypatch) -> None:
-        monkeypatch.delenv("LOCALCODE_CODING_TEMP", raising=False)
-        # Previously Qwen clamped at 0.7; now it shares the low coding ceiling.
+    def test_qwen_uses_vendor_coding_temp(self) -> None:
+        # Qwen thinking/precise-coding → 0.6 (the localcode default mode).
         gw = self._gw(temperature=1.0, model="qwen3.6-30b-a3b.gguf")
-        assert gw._options()["temperature"] == 0.25
+        assert gw._options()["temperature"] == 0.6
 
-    def test_user_lower_temp_preserved(self, monkeypatch) -> None:
-        monkeypatch.delenv("LOCALCODE_CODING_TEMP", raising=False)
+    def test_user_lower_temp_preserved(self) -> None:
         # A user who set an even lower temperature keeps it (min, not clobber).
         assert self._gw(temperature=0.1)._options()["temperature"] == 0.1
 
-    def test_env_override_reverses_change(self, monkeypatch) -> None:
-        monkeypatch.setenv("LOCALCODE_CODING_TEMP", "0.7")
-        # Restores the old Qwen-style 0.7 ceiling.
-        assert self._gw(temperature=1.0)._options()["temperature"] == 0.7
-
-    def test_env_override_malformed_falls_back(self, monkeypatch) -> None:
-        monkeypatch.setenv("LOCALCODE_CODING_TEMP", "not-a-number")
-        assert self._gw(temperature=1.0)._options()["temperature"] == 0.25
+    def test_user_cannot_raise_above_vendor(self) -> None:
+        # config temp can't push Qwen above its 0.6 vendor value.
+        gw = self._gw(temperature=2.0, model="qwen3.6-30b-a3b.gguf")
+        assert gw._options()["temperature"] == 0.6
 
 
 class TestSystemRamMemoization:
@@ -1031,3 +1023,38 @@ class TestSystemRamMemoization:
         third = gw._system_ram_gb()
         assert first == second == third == 128
         assert calls["n"] == 1  # cached after the first probe
+
+
+class TestVendorSamplerForwarded:
+    """The FULL vendor sampler must actually reach the llama-server payload —
+    top_k / top_p / min_p / presence_penalty were previously dropped, which is
+    what left Qwen on the server default top_k=40 and ran it away."""
+
+    def _payload(self, model: str, think: bool) -> dict:
+        cfg = RuntimeConfig(provider="llama_cpp", base_url="http://localhost:8081",
+                            model=model, temperature=1.0)
+        gw = LocalCodeRuntimeGateway(cfg)
+        return gw._payload([{"role": "user", "content": "hi"}], stream=True, think=think)
+
+    def test_qwen_thinking_coding_profile(self) -> None:
+        p = self._payload("Qwen3.6-35B-A3B-UD-Q8_K_XL.gguf", think=True)
+        assert p["temperature"] == 0.6
+        assert p["top_p"] == 0.95
+        assert p["top_k"] == 20          # was 40 (server default) — the loop cause
+        assert p["min_p"] == 0.0          # forwarded explicitly, not dropped as falsy
+        assert p["presence_penalty"] == 0.0
+        assert p["repeat_penalty"] == 1.0  # was 1.05 — a penalty starves EOS
+
+    def test_qwen_instruct_profile(self) -> None:
+        p = self._payload("Qwen3.6-35B-A3B-UD-Q8_K_XL.gguf", think=False)
+        assert p["temperature"] == 0.7
+        assert p["top_p"] == 0.8
+        assert p["top_k"] == 20
+        assert p["presence_penalty"] == 1.5
+
+    def test_gemma_vendor_profile(self) -> None:
+        p = self._payload("gemma-4-26B-A4B-it-UD-IQ3_S.gguf", think=True)
+        assert p["temperature"] == 1.0
+        assert p["top_k"] == 64
+        assert p["top_p"] == 0.95
+        assert p["repeat_penalty"] == 1.0

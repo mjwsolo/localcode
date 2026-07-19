@@ -3,6 +3,33 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.3.33 — 2026-07-19
+
+### Sampling — vendor-optimal parameters per model (fixes the reasoning runaway)
+
+The endless-reasoning hang was a **sampling bug**, not just a missing cap. localcode
+was sending Qwen a too-wide `top_k` (40 — the server default, never overridden),
+too-hot temperature, and `repeat_penalty = 1.05` — which Qwen explicitly warns
+against because a repeat penalty **starves the EOS token**, so the model never
+stops. `top_k`, `top_p`, `presence_penalty`, and `min_p = 0` were never forwarded
+to the server at all.
+
+Each model now gets its **official vendor-recommended sampler**, forwarded verbatim:
+
+| Model | temp | top_p | top_k | min_p | presence_pen | repeat_pen |
+|---|---|---|---|---|---|---|
+| **Qwen 3.6** (thinking, coding) | 0.6 | 0.95 | 20 | 0 | 0 | 1.0 |
+| **Qwen 3.6** (instruct) | 0.7 | 0.80 | 20 | 0 | 1.5 | 1.0 |
+| **Gemma 4** | 1.0 | 0.95 | 64 | 0 | 0 | 1.0 |
+| **North-Mini-Code** (Cohere) | 1.0 | 0.95 | 0 (off) | 0 | 0 | 1.0 |
+
+Sources: the Qwen3.6-35B-A3B model card + Unsloth guide, the Gemma team's inference
+config, and Cohere's North-Mini-Code card. The sampler is now the single source of
+truth (the old "tuned but never sent" `_options` knobs and the `_coding_temperature`
+0.25 cap that fought the vendor values are gone). DiffusionGemma is unaffected — it
+runs through its own diffusion sampler, not llama-server. A user-set temperature can
+still only lower the vendor value.
+
 ## 0.3.32 — 2026-07-19
 
 ### UI
