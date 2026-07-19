@@ -22,7 +22,7 @@ what can execute without the user's consent.
   `/etc/shadow`). Matching is anchored and precise: it never fires on a command
   that merely *mentions* the text (`grep "DROP TABLE"`, `cat notes_about_mkfs.md`)
   and never on the project's own `tokenizer.py` / `api_keys.py`.
-- **Dangerous-but-legit commands now confirm instead of running silently.**
+- **High-risk-but-legit commands now confirm instead of running silently.**
   `curl … | sh`, `git push --force`, and `sudo rm` are not hard-blocked (they
   have real uses) — they now prompt for approval, where before they ran with no
   prompt.

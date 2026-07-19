@@ -61,7 +61,7 @@ _SHRINK_GUARD_SOURCE_EXTS = {".py", ".js", ".jsx", ".ts", ".tsx", ".css", ".html
 # run `curl … | sh` via bash OR background_process, or overwrite
 # ~/.ssh/authorized_keys via write_file, entirely unattended. This layer
 # runs before EVERY dispatch regardless of autonomy level or headless, and
-# cannot be overridden. It blocks only unambiguously dangerous operations
+# cannot be overridden. It blocks only unambiguously destructive operations
 # (no legitimate agent use), so it does not add friction to normal work.
 
 # Tools that hand a raw string to a shell.
@@ -106,7 +106,7 @@ def _is_blocked_write_path(raw_path: str) -> bool:
 # Catastrophic shell commands with NO legitimate agent use — hard-blocked in
 # every mode, never overridable. Deliberately TIGHT: these are anchored to real
 # device/root/home targets so they don't false-positive on a `grep` for the
-# text. "Dangerous but sometimes legitimate" commands (curl|sh installs,
+# text. "High-risk but sometimes legitimate" commands (curl|sh installs,
 # force-push, sudo rm) are NOT here — they route through the confirmation gate
 # instead (see _CONFIRM_SHELL_RE), so the user can approve them.
 #
@@ -126,7 +126,7 @@ _HARD_BLOCK_SHELL_RE = [
     _re.compile(r"\bwipefs\b", _re.I),
 ]
 
-# Dangerous-but-sometimes-legitimate shell: prompt for approval (overridable),
+# High-risk-but-sometimes-legitimate shell: prompt for approval (overridable),
 # never silently run and never hard-blocked. Anchored so a `grep` for the text
 # doesn't trigger it: the pipe-to-shell must be a real pipeline, force-push a
 # real git invocation.
@@ -466,7 +466,7 @@ def _needs_confirmation(name: str, args: dict, app: "LocalCodeApp | None" = None
             return True
     except Exception:
         pass
-    # Dangerous-but-sometimes-legit patterns (remote pipe-to-shell, force-push,
+    # High-risk-but-sometimes-legit patterns (remote pipe-to-shell, force-push,
     # sudo rm) are NOT hard-blocked — confirm them so the user can approve.
     if _CONFIRM_SHELL_RE.search(cmd):
         return True
