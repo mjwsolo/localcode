@@ -83,12 +83,17 @@ def _detect_commands(repo_root: str) -> list[tuple[str, list[str], str]]:
         # this proves a recurring miss, widen coverage (e.g. an explicit tsc
         # over stray *.ts outside `include`) rather than assuming src/-only.
         if os.path.isdir(node_modules):
-            if "typecheck" in scripts:
-                cmds.append(("npm run typecheck", ["npm", "run", "--silent", "typecheck"], pj_dir))
-            elif os.path.exists(os.path.join(pj_dir, "tsconfig.json")) and os.path.exists(os.path.join(binp, "tsc")):
+            # SECURITY: this verification runs UNATTENDED (auto-invoked at the
+            # build_app completion gate, no approval). Do NOT run
+            # `npm run <script>` here — a script is an arbitrary shell string
+            # from the repo's package.json, so a malicious/injected repo would
+            # get code execution the moment the agent verifies. Run the real
+            # type-checker binary directly instead: `tsc --noEmit` reads only
+            # tsconfig.json (pure JSON/data) and never executes project code.
+            # eslint is deliberately NOT auto-run — its config (.eslintrc.js /
+            # eslint.config.js) executes JS, which is the same RCE vector.
+            if os.path.exists(os.path.join(pj_dir, "tsconfig.json")) and os.path.exists(os.path.join(binp, "tsc")):
                 cmds.append(("tsc --noEmit", [os.path.join(binp, "tsc"), "--noEmit", "--pretty", "false"], pj_dir))
-            elif "lint" in scripts:
-                cmds.append(("npm run lint", ["npm", "run", "--silent", "lint"], pj_dir))
 
     # ── Python ── ruff for REAL errors only (E9 syntax + F pyflakes: undefined
     # names, bad imports) — not style noise. Falls back to compileall (syntax).

@@ -27,7 +27,9 @@ def execute(ctx: ToolContext, args: dict) -> str:
         return f"Directory not found: {args.get('path', '.')}"
     entries = []
     for p in sorted(target.iterdir()):
-        if p.name.startswith(".") and p.name != ".env":
+        # Hide dotfiles, including .env — do not advertise the secrets file to
+        # a model that a prompt injection could then steer into reading it.
+        if p.name.startswith("."):
             continue
         if p.name in _SKIP:
             continue

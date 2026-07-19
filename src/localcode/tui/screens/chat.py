@@ -698,6 +698,7 @@ _SLASH_COMMANDS = [
     ("/skills", "List loaded skills and where they're from"),
     ("/model", "List available models / switch (e.g. /model qwen)"),
     ("/delete", "Delete a downloaded model to free disk space (asks first)"),
+    ("/hooks", "Show this repo's .localcode/hooks.toml and trust it (runs shell)"),
     ("/thinking", "Show / set hidden reasoning policy (off|auto)"),
     ("/sounds", "Toggle completion + approval notification sounds"),
     ("/voice", "Toggle voice mode (push-to-talk dictation into the input box)"),
@@ -1117,6 +1118,18 @@ class ChatScreen(Screen):
         self._update_status()
         self.query_one("#chat-input", _ChatTextArea).focus()
         log = self.query_one("#chat-log", ChatLog)
+        # Warn if this repo ships hooks that shell out but haven't been trusted.
+        # They are NOT loaded (see hooks.py) — this just tells the user they
+        # exist and how to enable them after review.
+        try:
+            if getattr(getattr(self.tui, "engine", None), "hooks", None) is not None and \
+                    getattr(self.tui.engine.hooks, "untrusted_project_hooks", False):
+                log.append_info(
+                    "⚠ This repo has .localcode/hooks.toml (runs shell commands). "
+                    "It is disabled until you review it with /hooks and run /hooks trust."
+                )
+        except Exception:
+            pass
         # If the user launched with --resume, the TUI app stored prior
         # messages in `_pending_resume_messages`. Replay them into the
         # chat log now so the conversation picks up visually where it
@@ -2231,6 +2244,8 @@ class ChatScreen(Screen):
             self._handle_model_command(text)
         elif text == "/delete" or text.startswith("/delete "):
             self._handle_delete_command(text)
+        elif text == "/hooks" or text.startswith("/hooks "):
+            self._handle_hooks_command(text)
         elif text == "/thinking" or text.startswith("/thinking "):
             self._handle_thinking_command(text)
         elif text == "/status":
@@ -3099,6 +3114,54 @@ class ChatScreen(Screen):
             return
         for kind, line in lines:
             (log.append_error if kind == "error" else log.append_info)(line)
+
+    def _handle_hooks_command(self, text: str) -> None:
+        """Handle /hooks — review and trust this repo's .localcode/hooks.toml.
+
+        Project hooks run shell commands (session start, every prompt, before
+        every tool), so an untrusted repo's hooks are NOT loaded until the user
+        explicitly trusts them here — this is what stops clone-and-open RCE.
+
+          /hooks          — show the file and whether it's trusted
+          /hooks trust    — trust the current content (re-prompts if it changes)
+        """
+        from pathlib import Path
+        from ...hooks import is_project_hooks_trusted, trust_project_hooks
+        log = self.query_one("#chat-log", ChatLog)
+        repo_root = "."
+        try:
+            repo_root = str(getattr(self.tui.engine, "repo_root", ".") or ".")
+        except Exception:
+            pass
+        project_path = Path(repo_root) / ".localcode" / "hooks.toml"
+        arg = text[len("/hooks"):].strip().lower()
+        if not project_path.is_file():
+            log.append_info("No .localcode/hooks.toml in this repo — nothing to trust.")
+            return
+        if arg == "trust":
+            if trust_project_hooks(repo_root):
+                log.append_info(
+                    "Trusted this repo's hooks. They take effect next session "
+                    "(restart LocalCode). Re-run /hooks trust if you edit the file."
+                )
+            else:
+                log.append_error("Could not write the hooks trust store.")
+            return
+        # Bare /hooks — show status + content for review.
+        trusted = is_project_hooks_trusted(repo_root)
+        log.append_info(f"{project_path} — {'TRUSTED' if trusted else 'NOT TRUSTED (hooks disabled)'}")
+        try:
+            body = project_path.read_text()[:4000]
+            for line in body.splitlines():
+                log.append_info(f"  {line}")
+        except Exception as e:  # noqa: BLE001
+            log.append_error(f"Could not read hooks file: {e}")
+            return
+        if not trusted:
+            log.append_info(
+                "These hooks run shell commands. Review them above, then run "
+                "`/hooks trust` to enable them for this repo."
+            )
 
     def _handle_model_command(self, text: str) -> None:
         """Handle /model — open the visual picker or switch directly by key."""
