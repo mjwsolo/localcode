@@ -161,7 +161,7 @@ def test_concurrency_cap_leaves_extras_queued(monkeypatch, not_on_disk):
 
     # Four distinct catalog entries -> four distinct registry keys.
     keys = [bootstrap.start_background_download(_choice(k))
-            for k in ("gemma", "gemma-12b-qat", "gemma-12b-bf16", "qwen")]
+            for k in ("gemma", "gemma-12b", "gemma-12b-bf16", "qwen")]
     assert len(set(keys)) == 4
 
     # Two should reach 'downloading'; the cap holds the other two 'queued'.

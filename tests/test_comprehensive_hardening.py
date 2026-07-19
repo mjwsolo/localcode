@@ -121,7 +121,7 @@ def test_download_refuses_when_disk_too_small(tmp_path, monkeypatch):
     from localcode import bootstrap
     from localcode import models_catalog as catalog
 
-    choice = catalog.by_key("gemma-12b-qat")
+    choice = catalog.by_key("gemma-12b")
     monkeypatch.setattr(catalog, "model_dir", lambda: tmp_path)
     monkeypatch.setattr(type(choice), "local_path",
                         property(lambda self: tmp_path / self.filename))

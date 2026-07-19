@@ -965,12 +965,12 @@ def run_agent_loop(
         # If we bailed on a stuck thinking loop, tell the user explicitly so
         # they know why the turn ended and can try a different prompt.
         if _stream_result.thinking_abort:
-            out.print_info(
+            out.notice(
                 f"Stopped: model reasoning exceeded the per-round cap "
                 f"({MAX_THINKING_SECONDS}s or {MAX_THINKING_CHARS} chars) without "
-                f"emitting a response. Small quantized models (IQ2_M, IQ3_S) often "
-                f"produce better output in fast mode — try `/mode` to switch, or "
-                f"rephrase the task in smaller steps."
+                f"emitting a response. Turn off deep reasoning with `/thinking off`, "
+                f"switch to a faster model with `/model`, or rephrase the task in "
+                f"smaller steps."
             )
 
         # Show thinking summary if present (collapsed, dim)

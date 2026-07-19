@@ -511,7 +511,7 @@ def test_model_identity_line_friendly_name_and_quant():
     from localcode.agent.prompts import model_identity_line
 
     cases = {
-        "gemma-4-12B-it-qat-UD-Q4_K_XL.gguf": "Gemma 4 12B QAT (Q4)",
+        "gemma-4-12b-it-UD-Q4_K_XL.gguf": "Gemma 4 12B (Q4)",
         "Qwen3.6-35B-A3B-UD-IQ2_M.gguf": "Qwen 3.6 35B-A3B (Q2)",
         "diffusiongemma-26B-A4B-it-Q4_K_M.gguf": "DiffusionGemma 26B-A4B (Q4)",
     }
@@ -546,7 +546,7 @@ def test_assembled_system_prompt_contains_model_identity():
     app = SimpleNamespace(
         repo_root=Path("/tmp/x"),
         config=SimpleNamespace(
-            runtime=SimpleNamespace(model="gemma-4-12B-it-qat-UD-Q4_K_XL.gguf")
+            runtime=SimpleNamespace(model="gemma-4-12b-it-UD-Q4_K_XL.gguf")
         ),
         _recent_tool_names=[],
         _last_failed_tool_name="",
@@ -560,8 +560,8 @@ def test_assembled_system_prompt_contains_model_identity():
         network_status="Network: ONLINE",
         use_thinking=False,
     )
-    assert "Gemma 4 12B QAT (Q4)" in result.system_prompt
-    assert "Gemma 4 12B QAT (Q4)" in result.system_prompt
+    assert "Gemma 4 12B (Q4)" in result.system_prompt
+    assert "Gemma 4 12B (Q4)" in result.system_prompt
     assert "exactly" in result.system_prompt.lower()
 
 

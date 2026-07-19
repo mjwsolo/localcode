@@ -355,6 +355,14 @@ class OutputManager:
         if was_running:
             self._start_indicator()
 
+    def notice(self, text: str) -> None:
+        """User-facing notice shown in BOTH the CLI (dim stdout) and the TUI
+        (as an info line). Unlike print_info — which is stdout-only and so is
+        invisible in the TUI — this emits an event the TUI renders. Use it for
+        anything the user must actually see (e.g. why a turn ended)."""
+        self.print_info(text)
+        self._emit_event("notice", text=text)
+
     # ── Indicator (background thread) ────────────────────────────────
 
     def _start_indicator(self) -> None:
