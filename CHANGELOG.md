@@ -11,6 +11,17 @@ All notable changes to LocalCode will be documented here. The format follows
   terminal that doesn't consume the sequence rendered that as an audible beep.
   Now terminated with `ST` (`ESC \`).
 
+- **No more "work at `$HOME`".** When launched outside any project (no
+  `.git`/`package.json`/etc. marker), the target-location directive fell back
+  to the user's home dir and told the model *"the project root is
+  /Users/&lt;name&gt;, create all files under that root"* — so it tried to build in
+  `$HOME` or fought the path the user named in the task. That directive is now
+  suppressed in the unanchored case; the model follows the location from the
+  request.
+- **Scrollbars grey everywhere.** The model/version pickers (and any other
+  scrollable widget) inherited Textual's blue default scroller. A global rule
+  now makes every scrollbar the app's muted grey.
+
 ### Changed
 - **Stronger tool-usage guidance in the system prompt.** When ONLINE, the model
   is now told to prefer its tools — `web_search`/`web_fetch` for current facts,
