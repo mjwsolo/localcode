@@ -699,6 +699,7 @@ _SLASH_COMMANDS = [
     ("/model", "List available models / switch (e.g. /model qwen)"),
     ("/delete", "Delete a downloaded model to free disk space (asks first)"),
     ("/hooks", "Show this repo's .localcode/hooks.toml and trust it (runs shell)"),
+    ("/paste", "Attach an image/screenshot from the clipboard (or press Ctrl+G)"),
     ("/thinking", "Show / set hidden reasoning policy (off|auto)"),
     ("/sounds", "Toggle completion + approval notification sounds"),
     ("/voice", "Toggle voice mode (push-to-talk dictation into the input box)"),
@@ -718,7 +719,7 @@ _SLASH_COMMANDS = [
 # /Users/you/project — is sent to the model as a normal message instead of
 # being rejected as an "Unknown command". Only `!` enters shell mode.
 _KNOWN_COMMANDS = {name for name, _desc in _SLASH_COMMANDS} | {
-    "/quit", "/search", "/copy",
+    "/quit", "/search", "/copy", "/image",
 }
 
 
@@ -2237,6 +2238,10 @@ class ChatScreen(Screen):
             self._handle_delete_command(text)
         elif text == "/hooks" or text.startswith("/hooks "):
             self._handle_hooks_command(text)
+        elif text == "/paste" or text == "/image":
+            log = self.query_one("#chat-log", ChatLog)
+            if not self._attach_clipboard_image():
+                log.append_info("[dim]No image on the clipboard — copy or screenshot one first.[/]")
         elif text == "/thinking" or text.startswith("/thinking "):
             self._handle_thinking_command(text)
         elif text == "/status":
@@ -2902,6 +2907,31 @@ class ChatScreen(Screen):
         except Exception:
             png = None
         if not png:
+            # Empty paste, no readable image. If the user was trying to paste an
+            # image they'd otherwise get NO feedback — show a one-time grey hint
+            # on how image pasting works, tailored to the current model. Guarded
+            # so an accidental empty Cmd+V doesn't spam it.
+            if not getattr(self, "_image_paste_hint_shown", False):
+                try:
+                    from ...models_catalog import current as current_choice
+                    log = self.query_one("#chat-log", ChatLog)
+                    choice = current_choice(self.tui.config)
+                    vis_on = bool(getattr(self.tui.config.runtime, "vision_enabled", False))
+                    if choice is not None and getattr(choice, "supports_vision", False):
+                        if not vis_on:
+                            log.append_info(
+                                "[dim]To paste an image, run /vision to enable image "
+                                "support, then paste again.[/]"
+                            )
+                            self._image_paste_hint_shown = True
+                    else:
+                        log.append_info(
+                            "[dim]To paste images, switch to a vision model "
+                            "(Gemma 4 / Qwen 3.6) with /model, then run /vision.[/]"
+                        )
+                        self._image_paste_hint_shown = True
+                except Exception:
+                    pass
             return False
         import base64
         b64 = base64.b64encode(png).decode("ascii")
