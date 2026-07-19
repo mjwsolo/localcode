@@ -1657,7 +1657,13 @@ def run_agent_loop(
             # "always" adds the command's first token (e.g. "git") to the
             # session allowlist so we stop asking for that family.
             if _needs_confirmation(tool_name, args, app):
+                # `cmd` drives the approval prompt display and the "always
+                # allow `<token>`" key. Shell tools carry a command; file-write
+                # tools carry a path — show that instead of a blank line.
                 cmd = args.get("command", "")
+                if not cmd:
+                    _wpath = args.get("path") or args.get("file_path") or ""
+                    cmd = f"{tool_name} {_wpath}".strip()
                 verdict = "deny"
                 if out._approval_callback is not None:
                     raw = out._approval_callback(tool_name, cmd)
