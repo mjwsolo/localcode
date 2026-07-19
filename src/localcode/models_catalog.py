@@ -176,7 +176,7 @@ CHOICES: list[ModelChoice] = [
         architecture="gemma4-iswa",
         license="Gemma (Google) — research + commercial w/ attribution",
         humaneval_pass_at_1=0.951,  # 156/164 measured on this stack 2026-04-22
-        notes="Comfortable fit on 16 GB Mac. Has Apr-11 chat template + Apr-8 tokenizer fixes. Tool calling via Gemma 4 native format. Measured 95.1% HumanEval pass@1 at IQ3_S + TurboQuant KV on our harness.",
+        notes="Comfortable fit on 16 GB Mac. Has Apr-11 chat template + Apr-8 tokenizer fixes. Tool calling via Gemma 4 native format. Measured 95.1% HumanEval pass@1 at IQ3_S + TurboQuant KV on our harness. Upstream silently refreshed these weights 2026-07-16 (tool-calling + vision fixes, same filenames) — copies downloaded before then are stale; delete and re-download to pick up the fixes.",
         mmproj_filename="mmproj-gemma-4-26B-A4B-F16.gguf",
         mmproj_size_gb=1.2,
         mmproj_hf_filename="mmproj-F16.gguf",
@@ -197,7 +197,9 @@ CHOICES: list[ModelChoice] = [
             "Native multimodal (vision + audio per Google's Gemma 4 announcement). "
             "Apache 2.0 licensed. No HumanEval number yet, but the GGUF/arch/mmproj "
             "filenames are verified against the repo (2026-06-12) and the model passes "
-            "a real chat + tool-call turn on this stack."
+            "a real chat + tool-call turn on this stack. Upstream silently refreshed "
+            "these weights 2026-07-16 (tool-calling + vision fixes, same filenames) — "
+            "copies downloaded before then are stale; delete and re-download."
         ),
         mmproj_filename="mmproj-gemma-4-12b-F16.gguf",
         mmproj_size_gb=0.86,  # 862 MB; repo offers BF16 + F16, both 862 MB
@@ -224,6 +226,73 @@ CHOICES: list[ModelChoice] = [
         ),
         mmproj_filename="mmproj-gemma-4-12b-F16.gguf",
         mmproj_size_gb=0.86,  # 862 MB; repo offers BF16 + F16, both 862 MB
+        mmproj_hf_filename="mmproj-F16.gguf",
+    ),
+    ModelChoice(
+        key="gemma-12b-qat",
+        name="Gemma 4 12B QAT (Q4)",
+        hf_repo="unsloth/gemma-4-12B-it-qat-GGUF",
+        filename="gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
+        size_gb=6.72,
+        active_params="12B (dense)",
+        architecture="gemma4-iswa",
+        license="Apache 2.0",
+        humaneval_pass_at_1=None,
+        notes=(
+            "Quantization-aware-trained 12B — Google trained the quantized weights "
+            "directly, so Q4 keeps near-BF16 quality at 6.7 GB (vs 7.4 GB for the "
+            "post-hoc Q4 entry). Lightest full-quality Gemma pick for 16 GB Macs. "
+            "Repo ships a single UD-Q4_K_XL quant. NOTE: its mmproj sidecar is a "
+            "smaller ~175 MB projector than the 862 MB one in the non-QAT repo — "
+            "vision output is untested on this stack. Filenames verified against "
+            "the repo (2026-07-19); weights carry the 2026-07-17 upstream refresh."
+        ),
+        mmproj_filename="mmproj-gemma-4-12B-qat-F16.gguf",
+        mmproj_size_gb=0.18,
+        mmproj_hf_filename="mmproj-F16.gguf",
+    ),
+    ModelChoice(
+        key="gemma-qat",
+        name="Gemma 4 26B-A4B QAT (Q4)",
+        hf_repo="unsloth/gemma-4-26B-A4B-it-qat-GGUF",
+        filename="gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf",
+        size_gb=14.25,
+        active_params="3.8B (top-8 of 128 experts)",
+        architecture="gemma4-iswa",
+        license="Apache 2.0",
+        humaneval_pass_at_1=None,
+        notes=(
+            "Quantization-aware-trained 26B MoE — same architecture and decode "
+            "speed class as the IQ3_S entry but QAT preserves near-BF16 quality "
+            "at Q4. 14.3 GB weights → needs 32 GB unified memory (the IQ3_S entry "
+            "remains the 16 GB pick). Repo ships a single UD-Q4_K_XL quant. "
+            "Filenames verified against the repo (2026-07-19); weights carry the "
+            "2026-07-17 upstream refresh (tool-calling + vision fixes)."
+        ),
+        mmproj_filename="mmproj-gemma-4-26B-A4B-qat-F16.gguf",
+        mmproj_size_gb=1.19,
+        mmproj_hf_filename="mmproj-F16.gguf",
+    ),
+    ModelChoice(
+        key="gemma-31b-qat",
+        name="Gemma 4 31B QAT (Q4)",
+        hf_repo="unsloth/gemma-4-31B-it-qat-GGUF",
+        filename="gemma-4-31B-it-qat-UD-Q4_K_XL.gguf",
+        size_gb=17.29,
+        active_params="31B (dense)",
+        architecture="gemma4-iswa",
+        license="Apache 2.0",
+        humaneval_pass_at_1=None,
+        notes=(
+            "Largest dense Gemma 4 — first 31B entry in the catalog. QAT Q4 keeps "
+            "near-BF16 quality at 17.3 GB, but dense 31B decode is memory-bandwidth "
+            "bound: expect roughly a third of the 26B MoE's speed. Needs ≥32 GB "
+            "unified memory (tight); comfortable at 48-64 GB. Repo ships a single "
+            "UD-Q4_K_XL quant. Filenames verified against the repo (2026-07-19); "
+            "weights carry the 2026-07-17 upstream refresh."
+        ),
+        mmproj_filename="mmproj-gemma-4-31B-qat-F16.gguf",
+        mmproj_size_gb=1.2,
         mmproj_hf_filename="mmproj-F16.gguf",
     ),
     ModelChoice(
@@ -286,7 +355,7 @@ CHOICES: list[ModelChoice] = [
         architecture="gemma4-iswa",
         license="Gemma (Google) — research + commercial w/ attribution",
         humaneval_pass_at_1=None,
-        notes="High-RAM workstation pick — same MoE architecture as the small Gemma entry, just near-lossless Q8 quant instead of IQ3_S. 3.8B active params = same decode speed class as the IQ3 version (~95 tok/s on M5 Max) at ~99% of BF16 quality vs ~80% on IQ3. Native multimodal — pair with the F16 mmproj for image input. Requires ≥48 GB unified memory; sweet spot on 128 GB Apple Silicon.",
+        notes="High-RAM workstation pick — same MoE architecture as the small Gemma entry, just near-lossless Q8 quant instead of IQ3_S. 3.8B active params = same decode speed class as the IQ3 version (~95 tok/s on M5 Max) at ~99% of BF16 quality vs ~80% on IQ3. Native multimodal — pair with the F16 mmproj for image input. Requires ≥48 GB unified memory; sweet spot on 128 GB Apple Silicon. Upstream silently refreshed these weights 2026-07-16 (tool-calling + vision fixes, same filenames) — copies downloaded before then are stale; delete and re-download.",
         mmproj_filename="mmproj-gemma-4-26B-A4B-F16.gguf",
         mmproj_size_gb=1.2,
         mmproj_hf_filename="mmproj-F16.gguf",
@@ -525,6 +594,57 @@ MODEL_GROUPS: list[ModelGroup] = [
         mmproj_hf_filename="mmproj-F16.gguf",
     ),
     ModelGroup(
+        key="gemma-4-12b-qat",
+        display_name="Gemma 4 12B QAT",
+        maker="Google",
+        hf_repo="unsloth/gemma-4-12B-it-qat-GGUF",
+        family="gemma4",
+        architecture="gemma4-iswa",
+        license="Apache 2.0",
+        notes=(
+            "Quantization-aware-trained 12B — near-BF16 quality at Q4. The repo "
+            "ships a single UD-Q4_K_XL quant plus a smaller ~175 MB mmproj "
+            "(vision untested on this stack)."
+        ),
+        mmproj_filename="mmproj-gemma-4-12B-qat-F16.gguf",
+        mmproj_size_gb=0.18,
+        mmproj_hf_filename="mmproj-F16.gguf",
+    ),
+    ModelGroup(
+        key="gemma-4-26b-a4b-qat",
+        display_name="Gemma 4 26B-A4B QAT",
+        maker="Google",
+        hf_repo="unsloth/gemma-4-26B-A4B-it-qat-GGUF",
+        family="gemma4",
+        architecture="gemma4-iswa",
+        license="Apache 2.0",
+        notes=(
+            "Quantization-aware-trained 26B MoE — near-BF16 quality at Q4, "
+            "~3.8B active (top-8 of 128 experts). Single UD-Q4_K_XL quant; "
+            "needs 32 GB unified memory."
+        ),
+        mmproj_filename="mmproj-gemma-4-26B-A4B-qat-F16.gguf",
+        mmproj_size_gb=1.19,
+        mmproj_hf_filename="mmproj-F16.gguf",
+    ),
+    ModelGroup(
+        key="gemma-4-31b-qat",
+        display_name="Gemma 4 31B QAT",
+        maker="Google",
+        hf_repo="unsloth/gemma-4-31B-it-qat-GGUF",
+        family="gemma4",
+        architecture="gemma4-iswa",
+        license="Apache 2.0",
+        notes=(
+            "Largest dense Gemma 4 — QAT Q4, near-BF16 quality. Single "
+            "UD-Q4_K_XL quant (~17.3 GB); needs ≥32 GB unified memory, "
+            "comfortable at 48-64 GB."
+        ),
+        mmproj_filename="mmproj-gemma-4-31B-qat-F16.gguf",
+        mmproj_size_gb=1.2,
+        mmproj_hf_filename="mmproj-F16.gguf",
+    ),
+    ModelGroup(
         key="qwen-3.6-35b-a3b",
         display_name="Qwen 3.6 35B-A3B",
         maker="Alibaba",
@@ -571,8 +691,10 @@ MODEL_GROUPS: list[ModelGroup] = [
             "one-shot llama-diffusion-cli runner (llama.cpp PR #24423, built "
             "automatically on first setup, ~3-6 min) — NOT llama-server: "
             "output arrives in coarse chunks and weights re-map each turn "
-            "(first turn slow, later turns page-cache fast). Unsloth "
-            "recommends the UD-Q4_K_XL quant (~18 GB RAM). Text-only."
+            "(first turn slow, later turns page-cache fast). The repo ships "
+            "plain quants only (Q4_K_M/Q5_K_M/Q6_K/Q8_0/BF16, no UD-* "
+            "dynamic quants); Q4_K_M (~15.7 GB) is the recommended pick. "
+            "Text-only."
         ),
         # Text-only: no vision sidecar.
     ),
