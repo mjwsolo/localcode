@@ -16,31 +16,6 @@ from .model_families import (
 )
 
 
-#: Low default sampling temperature for coding. On quantized local models a
-#: low temperature is the single strongest anti-hallucination lever — Gemma's
-#: 1.0 and Qwen's 0.7 were tuned for prose, not code. Overridable per-user via
-#: the LOCALCODE_CODING_TEMP env var so the change is fully reversible
-#: (=0.7 restores the old Qwen cap, =1.0 the old Gemma behaviour).
-_CODING_TEMPERATURE_DEFAULT = 0.25
-
-
-def _coding_temperature() -> float:
-    """The coding temperature ceiling (default 0.25), overridable via
-    LOCALCODE_CODING_TEMP. A malformed value falls back to the default."""
-    import os
-    raw = os.environ.get("LOCALCODE_CODING_TEMP")
-    if raw is None:
-        return _CODING_TEMPERATURE_DEFAULT
-    try:
-        val = float(raw)
-    except (TypeError, ValueError):
-        return _CODING_TEMPERATURE_DEFAULT
-    # Clamp to a sane range; temperature must be > 0 for the sampler.
-    if val <= 0:
-        return _CODING_TEMPERATURE_DEFAULT
-    return min(val, 2.0)
-
-
 def _strip_thinking_tokens(text: str, family: ModelFamily | None = None) -> str:
     """Strip thinking-channel tokens that leak through in decoded text.
 
@@ -1088,56 +1063,25 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
         return min(num_ctx, self._model_max_ctx(model_path))
 
     def _options(self, num_ctx_override: int | None = None, num_predict_override: int | None = None) -> dict[str, Any]:
-        # Sampler stack that is ACTUALLY forwarded to llama-server by _payload:
-        # temperature + DRY + min_p. Nothing else. (This dict used to also carry
-        # top_p / top_k / repeat_penalty / repeat_last_n / presence_penalty and a
-        # num_ctx — all DEAD: the llama_cpp _payload path never read them, and the
-        # ollama-shaped branch that did has been removed. Deleted to stop the
-        # confusion of "tuned" values that never reached the server.)
-        #
-        # Why only DRY + min_p as anti-loop, and NOT the top_p=0.8 / top_k=20 /
-        # repeat_penalty=1.10 bundle: re-adding that bundle caused the documented
-        # 2026-04-29 paraphrase-loop regression — repeat_penalty starved the EOS
-        # token so the model rephrased the same answer 2-3× instead of stopping.
-        #   * DRY (Don't Repeat Yourself) penalises repeated N-GRAMS, scaling the
-        #     penalty exponentially with match length. Unlike repeat_penalty it
-        #     is EOS-neutral (single tokens aren't N-grams), so it breaks phrasal
-        #     loops without suppressing the stop token.
-        #   * min_p trims the low-probability tail that token-collapse loops feed
-        #     on (Unsloth's Gemma-4 repetition fix recommends 0.05 for heavily-
-        #     quantized MoE; Qwen 0.0).
+        # Temperature + num_predict only. The FULL sampler (top_p/top_k/min_p/
+        # presence_penalty/repeat_penalty) is family- and thinking-aware and is
+        # assembled in _payload via _sampler_params — the single source of truth,
+        # forwarded verbatim to llama-server. `temperature` here mirrors that
+        # family value (thinking mode, localcode's default) so the retry/
+        # escalation path that reads _options()["temperature"] stays consistent.
         family = infer_family_from_profile(
             getattr(self.config, "model", "") or getattr(self.config, "profile", "") or ""
         )
-        # Coding temperature ceiling — low temp is the single strongest anti-
-        # hallucination lever on quantized models, so we cap ALL families to a
-        # low coding default (Gemma's 1.0 / Qwen's 0.7 were prose tunings). This
-        # only ever LOWERS temperature (a user who set a lower config temperature
-        # keeps it) and the ceiling is overridable via LOCALCODE_CODING_TEMP, so
-        # the change is fully reversible.
-        temperature = min(float(self.config.temperature), _coding_temperature())
-        # Qwen wants min_p off; Gemma-4 wants 0.05 (Unsloth's quantized-MoE fix).
-        min_p = 0.0 if family == ModelFamily.QWEN else 0.05
+        # Vendor-recommended temperature for this family; a user-set config
+        # temperature (LOCALCODE_TEMPERATURE) only ever LOWERS it, never raises.
+        _vendor_t = self._sampler_params(family, thinking=True)["temperature"]
+        try:
+            temperature = min(_vendor_t, float(self.config.temperature))
+        except Exception:
+            temperature = _vendor_t
 
         opts: dict[str, Any] = {
             "temperature": temperature,
-            "min_p": min_p,
-            "dry_multiplier": 1.5,
-            "dry_base": 1.75,
-            # allowed_length=2 catches phrasal loops (which span many tokens)
-            # but lets single tokens like "marc" or path components repeat.
-            "dry_allowed_length": 2,
-            # Limit DRY to the last 256 GENERATED tokens — NOT the whole prompt
-            # (-1). With -1, DRY penalised any string anywhere in the system
-            # prompt / file paths / prior tool results — including the user's
-            # username when it tried to emit a path (2026-04-27: mangled username
-            # variants). Scoping to 256 generated tokens catches loops the model
-            # CREATES this round while leaving prompt-side repetition untouched.
-            "dry_penalty_last_n": 256,
-            # Sequence breakers RESET DRY's n-gram matching at these tokens so a
-            # repeated file PATH / identifier isn't treated as a penalizable loop
-            # (llama.cpp's default breakers don't include path chars).
-            "dry_sequence_breakers": ["\n", "/", ".", "_", "-", " ", ":", "\"", "'"],
         }
         if self.config.mode == "fast":
             opts["num_predict"] = 4096  # cap generation for speed
@@ -1161,6 +1105,49 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
             if not isinstance(cur, int) or cur <= 0 or cur > cap:
                 opts["num_predict"] = cap
         return opts
+
+    def _sampler_params(self, family: "ModelFamily", thinking: bool) -> dict[str, Any]:
+        """Vendor-recommended sampling for the active family + mode.
+
+        These are the EXACT values forwarded to llama-server — no "tuned but
+        never sent" dead knobs. LocalCode is a coding agent, so families with a
+        distinct coding profile use it. Sources (verified 2026-07):
+          * Qwen3.6-35B-A3B model card + Unsloth guide — thinking/precise-coding
+            vs general vs instruct.
+          * Gemma team / Unsloth Gemma inference config.
+
+        Key point on the loop we hit: Qwen's coding profile turns penalties OFF
+        (presence_penalty 0, repeat_penalty 1.0) and relies on a TIGHT sampler
+        (temp 0.6, top_k 20) to stay on-track. A repeat_penalty (the old 1.05)
+        penalises the EOS token → the model never stops → endless reasoning. And
+        top_k had been left at the server default 40, twice Qwen's 20, widening
+        the pool the loop wandered in. min_p 0.0 is a REAL value Qwen wants (keep
+        the tail), so it is forwarded explicitly, never dropped as falsy.
+        """
+        if family == ModelFamily.QWEN:
+            if thinking:
+                # Thinking, precise coding (WebDev) — the localcode default.
+                return {"temperature": 0.6, "top_p": 0.95, "top_k": 20,
+                        "min_p": 0.0, "presence_penalty": 0.0, "repeat_penalty": 1.0}
+            # Non-thinking / instruct.
+            return {"temperature": 0.7, "top_p": 0.80, "top_k": 20,
+                    "min_p": 0.0, "presence_penalty": 1.5, "repeat_penalty": 1.0}
+        if family == ModelFamily.GEMMA4:
+            # Gemma team optimal: temp 1.0, top_k 64, top_p 0.95, min_p 0, rp 1.0.
+            return {"temperature": 1.0, "top_p": 0.95, "top_k": 64,
+                    "min_p": 0.0, "presence_penalty": 0.0, "repeat_penalty": 1.0}
+        if family == ModelFamily.COHERE:
+            # Cohere North-Mini-Code official (used in their own coding
+            # benchmarks): temp 1.0, top_p 0.95, top_k disabled (0 → use p).
+            # It reasons every turn, so the per-turn generation cap in _options
+            # (cohere_generation_cap) is the runaway backstop, not a penalty.
+            return {"temperature": 1.0, "top_p": 0.95, "top_k": 0,
+                    "min_p": 0.0, "presence_penalty": 0.0, "repeat_penalty": 1.0}
+        # Llama / DeepSeek / unknown — safe coding default.
+        # (DiffusionGemma does NOT reach here: it runs through the diffusion
+        # runner with its own Entropy-Bound sampler, not llama-server sampling.)
+        return {"temperature": 0.6, "top_p": 0.95, "top_k": 40,
+                "min_p": 0.05, "presence_penalty": 0.0, "repeat_penalty": 1.05}
 
     def chat_once(
         self,
@@ -2175,11 +2162,23 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
         # body. (The old ollama-shaped `{"options": opts, ...}` branch and the
         # never-merged `extra` dict were dead code and have been removed.)
         opts = self._options(num_ctx_override=num_ctx, num_predict_override=num_predict)
+        family = infer_family_from_profile(
+            getattr(self.config, "model", "") or getattr(self.config, "profile", "") or ""
+        )
+        sampler = self._sampler_params(family, bool(think))
+        # A user-set temperature only ever LOWERS the vendor value (anti-
+        # hallucination), never raises it. config.temperature defaults to 1.0,
+        # so by default the vendor value stands.
+        try:
+            _user_t = float(self.config.temperature)
+        except Exception:
+            _user_t = sampler["temperature"]
+        temperature = min(sampler["temperature"], _user_t)
         payload: dict[str, Any] = {
             "model": self.config.model,
             "stream": stream,
             "messages": messages,
-            "temperature": opts["temperature"],
+            "temperature": temperature,
             "chat_template_kwargs": {"enable_thinking": think},
             # Explicit KV prefix-cache opt-in. Recent llama.cpp builds default
             # this to true for /v1/chat/completions, but TurboQuant is a fork —
@@ -2191,40 +2190,19 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
             # few hundred new tokens.
             "cache_prompt": True,
         }
-        # Single-knob anti-rephrase: `repeat_penalty=1.05` only.
-        # Added 2026-04-29 after stripping the full sampler stack
-        # killed multi-round looping but left intra-decode rephrase
-        # intact ("hows weather in tokyo" → 3 paraphrased sentences
-        # in one 80-token decode). Why ONLY this one and at 1.05
-        # (not the previous 1.10): the loop with the full stack was
-        # penalty=1.10 + top_p=0.8 + top_k=20 + DRY, which trapped
-        # the model into rephrasing because EOS was penalised AND
-        # the candidate pool was tiny. Server defaults give us
-        # top_p=0.95 / top_k=40 — plenty of escape room — so a
-        # mild 1.05 penalty discourages exact phrase repeats
-        # without starving EOS. If this re-introduces a loop,
-        # revert this hunk and accept occasional rephrase as a
-        # model property of Qwen3.6 IQ2_M.
-        payload["repeat_penalty"] = 1.05
-        # Forward the EOS-NEUTRAL anti-loop samplers (DRY + min_p). DRY
-        # penalises repeated N-GRAMS — not single tokens — so unlike
-        # repeat_penalty it does NOT suppress the EOS/sentence-end tokens that
-        # caused the 2026-04-29 paraphrase regression; min_p trims the low-
-        # probability tail that token-collapse loops feed on. llama-server has
-        # DRY OFF by default, so NOT forwarding these lets repeat-collapse loops
-        # through. We deliberately do NOT re-add the aggressive repeat_penalty
-        # /top_k/top_p bundle (that was the regression). A/B back to
-        # temperature-only with LOCALCODE_SAMPLER_MINIMAL=1.
+        # Forward the FULL vendor-recommended sampler (see _sampler_params).
+        # Previously top_k / top_p / presence_penalty were never sent (server
+        # defaults top_k=40 / top_p=0.95 stood) and min_p=0.0 was dropped as
+        # falsy — so Qwen never got its tight top_k=20 / min_p=0 profile and ran
+        # away. These are the exact vendor values; min_p 0.0 is forwarded
+        # explicitly. A/B back to temperature-only with LOCALCODE_SAMPLER_MINIMAL=1.
         import os as _os
         if _os.environ.get("LOCALCODE_SAMPLER_MINIMAL") != "1":
-            payload["dry_multiplier"] = opts["dry_multiplier"]
-            payload["dry_base"] = opts["dry_base"]
-            payload["dry_allowed_length"] = opts["dry_allowed_length"]
-            payload["dry_penalty_last_n"] = opts["dry_penalty_last_n"]
-            if opts.get("dry_sequence_breakers"):
-                payload["dry_sequence_breakers"] = opts["dry_sequence_breakers"]
-            if opts.get("min_p", 0):
-                payload["min_p"] = opts["min_p"]
+            payload["top_p"] = sampler["top_p"]
+            payload["top_k"] = sampler["top_k"]
+            payload["min_p"] = sampler["min_p"]
+            payload["presence_penalty"] = sampler["presence_penalty"]
+            payload["repeat_penalty"] = sampler["repeat_penalty"]
         if "num_predict" in opts:
             _np = opts["num_predict"]
             # llama-server treats max_tokens=-1 as "use default", which on
