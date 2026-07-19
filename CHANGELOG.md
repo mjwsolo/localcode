@@ -3,6 +3,21 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.3.34 — 2026-07-19
+
+### Fixed
+- **Copy beep.** Selecting text and copying rang the terminal bell on every
+  copy. The OSC 52 clipboard sequence was terminated with BEL (`\a`); a
+  terminal that doesn't consume the sequence rendered that as an audible beep.
+  Now terminated with `ST` (`ESC \`).
+
+### Changed
+- **Stronger tool-usage guidance in the system prompt.** When ONLINE, the model
+  is now told to prefer its tools — `web_search`/`web_fetch` for current facts,
+  versions, and library docs, plus its skills — over writing from memory. When
+  OFFLINE, it's told to lean on local skills and installed tools rather than
+  stalling on the missing network.
+
 ## 0.3.33 — 2026-07-19
 
 ### Sampling — vendor-optimal parameters per model (fixes the reasoning runaway)

@@ -262,11 +262,18 @@ def run_agent_loop(
     from ..app import is_online
     online = is_online()
     if online:
-        network_status = "Network: ONLINE — you can download files, install packages, fetch URLs."
+        network_status = (
+            "Network: ONLINE — you can download files, install packages, fetch URLs. "
+            "PREFER your tools over writing from memory: web_search / web_fetch to "
+            "confirm current facts, versions, and library docs; your skills and other "
+            "tools for anything they cover. Don't hand-write what a tool can get right."
+        )
     else:
         network_status = (
             "Network: OFFLINE — NO internet. Do NOT attempt downloads, pip install, curl, wget, or any network requests. "
-            "Use only local files and already-installed packages. Generate sample/mock data locally instead of downloading."
+            "Use only local files, already-installed packages, and your LOCAL skills and "
+            "tools (read/grep/edit, installed CLIs). Generate sample/mock data locally "
+            "instead of downloading."
         )
     def _current_task_stage_for_thinking() -> str:
         stage = str(_last_announced_task_stage or getattr(_task_state, "current_stage", "") or "").strip()
