@@ -3,6 +3,19 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### New features
+
+- **`/delete` slash command** — remove downloaded models to free disk space.
+  Bare `/delete` lists what's on disk with human-readable sizes; `/delete
+  <number or name>` previews exactly which files would be removed and how much
+  space that frees; only `/delete <target> confirm` actually deletes. The
+  currently loaded model and in-flight downloads are refused with a clear
+  message, partial downloads (`.part` files, undersized GGUFs, and hub resume
+  state) are cleaned up, and a vision sidecar shared between quants of the
+  same family is only removed with its last remaining model.
+
 ## 0.3.23 — 2026-07-12
 
 ### Agent harness
