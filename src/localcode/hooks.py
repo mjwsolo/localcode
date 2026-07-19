@@ -34,6 +34,83 @@ from pathlib import Path
 from ._subproc_env import clean_env
 
 
+# ── Project-hooks trust store ──────────────────────────────────────────
+#
+# A repo's `.localcode/hooks.toml` runs shell commands at session start / on
+# every prompt / before every tool. Loading it just because you opened the
+# folder is remote code execution on `git clone && localcode` — the classic
+# "workspace trust" hole. So project hooks are gated: they run ONLY if the
+# user has explicitly trusted this repo path AND the file's content hash still
+# matches what was trusted (editing the hooks re-prompts). Global hooks in the
+# user's own ~/.localcode are always trusted (their own machine, their config).
+
+def _trust_store_path() -> Path:
+    return Path.home() / ".localcode" / "trusted_hooks.json"
+
+
+def _hooks_digest(path: Path) -> str:
+    import hashlib
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _load_trust_store() -> dict:
+    import json
+    p = _trust_store_path()
+    if not p.is_file():
+        return {}
+    try:
+        data = json.loads(p.read_text())
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def is_project_hooks_trusted(repo_root: str) -> bool:
+    """True if this repo's current hooks.toml content is on the trust store."""
+    project_path = Path(repo_root) / ".localcode" / "hooks.toml"
+    if not project_path.is_file():
+        return True  # nothing to trust
+    # Explicit CI/automation opt-in (env vars are trusted per threat model).
+    if os.environ.get("LOCALCODE_TRUST_PROJECT_HOOKS") == "1":
+        return True
+    store = _load_trust_store()
+    try:
+        key = str(Path(repo_root).resolve())
+    except Exception:
+        key = str(repo_root)
+    recorded = store.get(key)
+    if not recorded:
+        return False
+    try:
+        return recorded == _hooks_digest(project_path)
+    except Exception:
+        return False
+
+
+def trust_project_hooks(repo_root: str) -> bool:
+    """Record the current .localcode/hooks.toml content as trusted for this
+    repo. Returns True on success. Call this from an explicit user action
+    (e.g. a `/hooks trust` command) after the user has reviewed the file.
+    """
+    import json
+    project_path = Path(repo_root) / ".localcode" / "hooks.toml"
+    if not project_path.is_file():
+        return False
+    store = _load_trust_store()
+    try:
+        key = str(Path(repo_root).resolve())
+    except Exception:
+        key = str(repo_root)
+    try:
+        store[key] = _hooks_digest(project_path)
+        dest = _trust_store_path()
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(json.dumps(store, indent=2))
+        return True
+    except Exception:
+        return False
+
+
 @dataclass
 class HookResult:
     """Result of running a hook."""
@@ -68,6 +145,10 @@ class HookRunner:
         self.repo_root = repo_root
         self.session_id = session_id
         self.model = model
+        # Set by _load_hooks when a repo ships .localcode/hooks.toml that the
+        # user has NOT trusted — the app reads this to warn and offer /hooks
+        # trust. The untrusted hooks are NOT loaded, so nothing runs.
+        self.untrusted_project_hooks = False
         self.config = self._load_hooks()
         self._base_env = {
             **os.environ,
@@ -85,10 +166,16 @@ class HookRunner:
         if global_path.is_file():
             self._merge_hooks(config, global_path)
 
-        # Project hooks (higher priority — overrides global)
+        # Project hooks (higher priority — overrides global), but ONLY if the
+        # user has explicitly trusted this repo. An untrusted repo's hooks are
+        # never loaded or run — this is what stops `git clone && localcode`
+        # from being remote code execution.
         project_path = Path(self.repo_root) / ".localcode" / "hooks.toml"
         if project_path.is_file():
-            self._merge_hooks(config, project_path)
+            if is_project_hooks_trusted(self.repo_root):
+                self._merge_hooks(config, project_path)
+            else:
+                self.untrusted_project_hooks = True
 
         return config
 
