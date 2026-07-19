@@ -68,10 +68,20 @@ class ModelChoice:
     mmproj_filename: str | None = None
     mmproj_size_gb: float = 0.0  # download size of the mmproj sidecar
     mmproj_hf_filename: str | None = None  # HF-side filename; defaults to mmproj_filename
+    # Integrity pinning (both optional, default = unpinned = current behavior).
+    # `revision` pins the download to a specific git revision (commit SHA or
+    # tag) instead of the mutable `main` branch tip — upstream silently swaps
+    # weights under the same filename (see the Gemma notes), and a pinned
+    # revision makes a swap visible. `sha256` is the expected hex digest of the
+    # GGUF; when set, the download is verified after completion and DELETED +
+    # rejected on mismatch. Populate these as hashes/revisions are captured;
+    # any entry left unpinned downloads exactly as before.
+    revision: str = "main"
+    sha256: str | None = None
 
     @property
     def hf_url(self) -> str:
-        return f"https://huggingface.co/{self.hf_repo}/blob/main/{self.filename}"
+        return f"https://huggingface.co/{self.hf_repo}/blob/{self.revision}/{self.filename}"
 
     @property
     def local_path(self) -> Path:

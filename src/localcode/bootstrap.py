@@ -289,6 +289,50 @@ def _is_complete_download(p: Path, catalog_entry) -> bool:
     return size >= int(expected * 0.97)
 
 
+def _verify_download_integrity(choice, path: Path) -> tuple[bool, str]:
+    """Verify a freshly-downloaded model file against its pinned sha256.
+
+    Returns (ok, reason). When the catalog entry has no `sha256` set (the
+    default), this is a no-op that returns (True, "") — behavior is unchanged
+    for unpinned entries. When a hash IS pinned and the file does not match,
+    the file is DELETED (so a poisoned artifact is never loaded or executed)
+    and (False, reason) is returned.
+
+    This is the integrity backstop the size-only completeness check is not:
+    upstream can swap weights under the same filename, and TLS/host pinning
+    alone does not detect a malicious or corrupted artifact served by a
+    compromised upstream repo.
+    """
+    expected = getattr(choice, "sha256", None)
+    if not expected:
+        return True, ""
+    try:
+        import hashlib
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                h.update(chunk)
+        actual = h.hexdigest()
+    except Exception as e:
+        return False, f"Integrity check could not read {path.name}: {e}"
+    if actual.lower() != str(expected).lower():
+        try:
+            path.unlink()
+        except Exception:
+            pass
+        try:
+            from .events import emit as _emit
+            _emit("download_integrity_fail", filename=choice.filename, expected=str(expected)[:16], actual=actual[:16])
+        except Exception:
+            pass
+        return False, (
+            f"Integrity check FAILED for {choice.filename}: expected sha256 "
+            f"{expected}, got {actual}. The file was deleted — LocalCode will "
+            "not load a model whose contents don't match the pinned hash."
+        )
+    return True, ""
+
+
 def get_model_path(preferred_filename: str | None = None) -> Path | None:
     """Return path to a usable GGUF model, checking multiple locations.
 
@@ -537,7 +581,8 @@ def download_model(
         # fails (exotic FS), fall through and let the download try.
         pass
 
-    url = f"https://huggingface.co/{choice.hf_repo}/resolve/main/{choice.filename}"
+    _rev = getattr(choice, "revision", None) or "main"
+    url = f"https://huggingface.co/{choice.hf_repo}/resolve/{_rev}/{choice.filename}"
     if on_progress:
         on_progress(f"Downloading {choice.filename} (~{choice.size_gb:.1f} GB)...")
 
@@ -559,6 +604,9 @@ def download_model(
         # Resumes via the hub's built-in partial-download handling.
         try:
             if _try_hub_download(choice, model_file, on_progress):
+                ok, reason = _verify_download_integrity(choice, model_file)
+                if not ok:
+                    return False, reason
                 return True, str(model_file)
         except Exception as e:
             last_err = e
@@ -573,6 +621,9 @@ def download_model(
         # Slow path: tuned urllib parallel downloader.
         try:
             _download_parallel(url, model_file, num_threads=32, on_progress=on_progress)
+            ok, reason = _verify_download_integrity(choice, model_file)
+            if not ok:
+                return False, reason
             return True, str(model_file)
         except Exception as e:
             last_err = e
@@ -948,6 +999,10 @@ def _try_hub_download(choice, dest: Path, on_progress: Callable[[str], None] | N
     downloaded_path = hf_hub_download(
         repo_id=choice.hf_repo,
         filename=choice.filename,
+        # Pin to the entry's revision (commit SHA/tag) when set; defaults to
+        # "main" (unchanged behavior). Pinning makes an upstream weight swap
+        # under the same filename visible instead of silent.
+        revision=getattr(choice, "revision", None) or "main",
         local_dir=str(dest.parent),
         tqdm_class=_make_progress_tqdm(on_progress) if on_progress else None,
     )

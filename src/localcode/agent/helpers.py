@@ -53,6 +53,124 @@ __all__: list[str] = []
 _SHRINK_GUARD_SOURCE_EXTS = {".py", ".js", ".jsx", ".ts", ".tsx", ".css", ".html"}
 
 
+# ── Autonomy-independent safety hard-block ─────────────────────────────
+#
+# The approval gate (_needs_confirmation) is a *confirmation* layer: it is
+# skipped in FULL_AUTO and in headless mode (which forces full_auto). That
+# left no backstop at all for those modes — a prompt-injected model could
+# run `curl … | sh` via bash OR background_process, or overwrite
+# ~/.ssh/authorized_keys via write_file, entirely unattended. This layer
+# runs before EVERY dispatch regardless of autonomy level or headless, and
+# cannot be overridden. It blocks only unambiguously destructive operations
+# (no legitimate agent use), so it does not add friction to normal work.
+
+# Tools that hand a raw string to a shell.
+_SHELL_EXEC_TOOLS = {"bash", "background_process"}
+# Tools that write file contents to a path.
+_FILE_WRITE_TOOLS = {"write_file", "append_file", "edit_file", "multi_edit", "edit_diff"}
+
+# Credential / key material that the agent has no legitimate reason to write.
+# Matched on the path BASENAME or a path SEGMENT (never a naive substring, so
+# editing the project's own `tokenizer.py` / `api_keys.py` is never blocked).
+_BLOCKED_WRITE_BASENAMES = frozenset({
+    "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519",
+    "authorized_keys", "known_hosts",
+    ".netrc", ".npmrc", ".pypirc",
+    "credentials", "credentials.json",
+    "shadow", "passwd", "sudoers",
+})
+_BLOCKED_WRITE_SEGMENTS = frozenset({".ssh", ".aws", ".gnupg", ".config/gcloud"})
+
+
+def _is_blocked_write_path(raw_path: str) -> bool:
+    """True if writing this path targets credential/key material.
+
+    Precise matching only: exact basename or an exact path segment. A file
+    named `tokenizer.py` or `password_reset.py` in the project is NOT blocked.
+    """
+    if not raw_path:
+        return False
+    try:
+        p = Path(raw_path).expanduser()
+    except Exception:
+        p = Path(raw_path)
+    name = p.name.lower()
+    if name in _BLOCKED_WRITE_BASENAMES:
+        return True
+    lowered_parts = {part.lower() for part in p.parts}
+    if lowered_parts & _BLOCKED_WRITE_SEGMENTS:
+        return True
+    return False
+
+
+# Catastrophic shell commands with NO legitimate agent use — hard-blocked in
+# every mode, never overridable. Deliberately TIGHT: these are anchored to real
+# device/root/home targets so they don't false-positive on a `grep` for the
+# text. "High-risk but sometimes legitimate" commands (curl|sh installs,
+# force-push, sudo rm) are NOT here — they route through the confirmation gate
+# instead (see _CONFIRM_SHELL_RE), so the user can approve them.
+#
+# NB: SQL patterns (DROP TABLE, DELETE FROM, …) are intentionally absent — bash
+# does not execute SQL, so blocking them here only broke `grep "DROP TABLE"`.
+import re as _re
+
+_HARD_BLOCK_SHELL_RE = [
+    _re.compile(r"\brm\s+-[a-z]*r[a-z]*f[a-z]*\s+(/|~|\$HOME|\$\{HOME\})(\s|/|$)", _re.I),
+    _re.compile(r"\brm\s+-[a-z]*f[a-z]*r[a-z]*\s+(/|~|\$HOME|\$\{HOME\})(\s|/|$)", _re.I),
+    _re.compile(r"\bmkfs\b", _re.I),
+    _re.compile(r"\bdd\b[^\n]*\bof=/dev/", _re.I),
+    _re.compile(r">\s*/dev/(sd|nvme|hd|disk|vd)", _re.I),
+    _re.compile(r"\bchmod\s+-R\s+0*777\s+/(\s|$)", _re.I),
+    _re.compile(r":\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:", _re.I),  # fork bomb
+    _re.compile(r">\s*/etc/", _re.I),
+    _re.compile(r"\bwipefs\b", _re.I),
+]
+
+# High-risk-but-sometimes-legitimate shell: prompt for approval (overridable),
+# never silently run and never hard-blocked. Anchored so a `grep` for the text
+# doesn't trigger it: the pipe-to-shell must be a real pipeline, force-push a
+# real git invocation.
+_CONFIRM_SHELL_RE = _re.compile(
+    r"(?:\b(?:curl|wget)\b[^\n|]*\|\s*(?:sudo\s+)?(?:ba|z|k|da)?sh\b)"
+    r"|(?:\bgit\s+push\b[^\n]*(?:--force\b|-f\b))"
+    r"|(?:\bsudo\s+rm\b)"
+    r"|(?:\bgit\s+reset\s+--hard\s+origin\b)",
+    _re.I,
+)
+
+
+def _safety_hard_block(name: str, args: dict) -> str | None:
+    """Autonomy-independent hard block. Returns a rejection reason, or None.
+
+    Runs before every tool dispatch in ALL modes (including FULL_AUTO and
+    headless). Covers only operations with no legitimate agent use:
+      - catastrophic shell (rm -rf /, mkfs, dd of=/dev/…, > /dev/sd*, fork
+        bomb, chmod -R 777 /, > /etc/) — see _HARD_BLOCK_SHELL_RE
+      - writes to SSH/AWS/GPG key material or credential files
+    Everything else — including curl|sh and force-push — falls through to the
+    normal confirmation flow, which can approve it.
+    """
+    if name in _SHELL_EXEC_TOOLS:
+        cmd = str(args.get("command", "") or "")
+        if cmd:
+            for rx in _HARD_BLOCK_SHELL_RE:
+                if rx.search(cmd):
+                    return "blocked: refusing a command that could destroy the disk or system (matched a catastrophic pattern)"
+    if name in _FILE_WRITE_TOOLS:
+        raw_path = str(args.get("path", "") or args.get("file_path", "") or "")
+        if raw_path:
+            # The agent's sanctioned scratch dir is exempt.
+            try:
+                from ..notebook import is_within_notebook
+                if is_within_notebook(Path(raw_path).expanduser()):
+                    return None
+            except Exception:
+                pass
+            if _is_blocked_write_path(raw_path):
+                return f"blocked: refusing to write credential/key file ({Path(raw_path).name})"
+    return None
+
+
 def _path_within(path: Path, root: Path) -> bool:
     try:
         path.resolve().relative_to(root)
@@ -162,6 +280,24 @@ def _execute_tool_result(app: "LocalCodeApp", name: str, args: dict, out: "Outpu
     wrapping plan-mode policy layer that refuses destructive tools
     while the agent is in plan-explore mode.
     """
+    # Autonomy-independent safety hard-block. Runs FIRST, in every mode
+    # (including FULL_AUTO / headless), and cannot be overridden — this is the
+    # backstop the confirmation gate is not. A prompt-injected model cannot use
+    # bash/background_process to run `curl|sh` or wipe a disk, nor a write tool
+    # to overwrite ~/.ssh/authorized_keys, even with no human present.
+    _blocked = _safety_hard_block(name, args)
+    if _blocked is not None:
+        try:
+            from ..events import emit as _emit_block
+            _emit_block("safety_hard_block", tool=name, reason=str(_blocked)[:200])
+        except Exception:
+            pass
+        return ToolResult(
+            text=f"REJECTED: {_blocked}. This operation is blocked by the safety layer and cannot be auto-approved.",
+            ok=False,
+            facts={"tool": name, "ok": False, "safety_blocked": True},
+        )
+
     try:
         hook = getattr(app, "hooks", None)
         decision = hook.on_pre_tool_use(name, args) if hook is not None else None
@@ -277,20 +413,63 @@ def _needs_confirmation(name: str, args: dict, app: "LocalCodeApp | None" = None
     picks option 2 on a prompt ("always allow `git`"). That set is on
     `app._session_allow` — scoped to this process, cleared on next launch.
     """
-    if name != "bash":
+    # Tools that don't execute shell or mutate files never need confirmation.
+    if name != "bash" and name not in _SHELL_EXEC_TOOLS and name not in _FILE_WRITE_TOOLS:
         return False
+
+    level = None
     if app is not None:
         try:
             from ..autonomy import AutonomyLevel
-            if getattr(app, "_autonomy", None) == AutonomyLevel.FULL_AUTO:
+            level = getattr(app, "_autonomy", None)
+            # FULL_AUTO skips confirmation for everything (the hard-block in
+            # _execute_tool_result still applies — it is not an approval).
+            if level == AutonomyLevel.FULL_AUTO:
                 return False
         except Exception:
-            pass
+            level = None
+
+    # File-write tools: auto-approved in auto_edit (the point of that mode);
+    # in suggest (read-only) mode every write is confirmed. Notebook scratch
+    # writes are never prompted.
+    if name in _FILE_WRITE_TOOLS:
+        try:
+            from ..autonomy import AutonomyLevel
+            if level != AutonomyLevel.SUGGEST:
+                return False
+        except Exception:
+            return False
+        raw_path = str(args.get("path", "") or args.get("file_path", "") or "")
+        if raw_path:
+            try:
+                from ..notebook import is_within_notebook
+                if is_within_notebook(Path(raw_path).expanduser()):
+                    return False
+            except Exception:
+                pass
+        return True
+
+    # Shell-executing tools (bash, background_process).
     cmd = args.get("command", "")
     if app is not None:
         allow = getattr(app, "_session_allow", None)
         if allow and _first_token(cmd) in allow:
             return False
+    # background_process hands a raw string straight to /bin/sh with no
+    # destructive-substring shortcut — always confirm it (unless full_auto or
+    # session-allowed above). In suggest mode, confirm any shell command.
+    if name == "background_process":
+        return True
+    try:
+        from ..autonomy import AutonomyLevel
+        if level == AutonomyLevel.SUGGEST:
+            return True
+    except Exception:
+        pass
+    # High-risk-but-sometimes-legit patterns (remote pipe-to-shell, force-push,
+    # sudo rm) are NOT hard-blocked — confirm them so the user can approve.
+    if _CONFIRM_SHELL_RE.search(cmd):
+        return True
     return any(p in cmd for p in DESTRUCTIVE_PATTERNS)
 
 def _render_markdown(text: str, console: Console | None = None) -> None:

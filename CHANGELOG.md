@@ -3,6 +3,51 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.3.31 — 2026-07-19
+
+### Security
+
+Hardening pass from a full security audit of the tool trust boundary. The
+threat model: the local model's tool output is steerable by prompt injection
+(a hostile README or source comment read into context), so the question is
+what can execute without the user's consent.
+
+- **Autonomy-independent safety hard-block.** A new pre-dispatch layer runs
+  before every tool in every mode (including `full_auto` and headless) and
+  cannot be overridden. It blocks only catastrophic shell with no legitimate
+  use — `rm -rf /` (or `~`/`$HOME`), `mkfs`, `dd of=/dev/…`, `> /dev/sd*`,
+  `chmod -R 777 /`, fork bombs, `> /etc/`, `wipefs` — from **both** `bash` and
+  `background_process`, and refuses writes to credential/key files (`~/.ssh/*`,
+  `~/.aws/*`, `id_rsa`, `authorized_keys`, `.netrc`, `credentials`,
+  `/etc/shadow`). Matching is anchored and precise: it never fires on a command
+  that merely *mentions* the text (`grep "DROP TABLE"`, `cat notes_about_mkfs.md`)
+  and never on the project's own `tokenizer.py` / `api_keys.py`.
+- **High-risk-but-legit commands now confirm instead of running silently.**
+  `curl … | sh`, `git push --force`, and `sudo rm` are not hard-blocked (they
+  have real uses) — they now prompt for approval, where before they ran with no
+  prompt.
+- **`background_process` now goes through the approval gate.** Previously it
+  ran `shell=True` on the raw model command with no prompt — the same command
+  that `bash` would ask about. It is now confirmed like `bash`.
+- **`suggest` (read-only) mode actually confirms writes.** File-write tools
+  now prompt in suggest mode instead of executing silently.
+- **Project hooks require explicit trust.** A repo's `.localcode/hooks.toml`
+  runs shell at session start / on every prompt / before every tool. It is no
+  longer loaded just because you opened the folder — that was remote code
+  execution on `git clone && localcode`. Untrusted project hooks are disabled;
+  review them with `/hooks` and enable with `/hooks trust` (re-prompts if the
+  file changes). Global `~/.localcode/hooks.toml` stays trusted.
+- **No more arbitrary `npm run` at the verify step.** The auto-verification
+  that runs after a build no longer executes `npm run <script>` (an arbitrary
+  shell string from the repo's `package.json`); it runs the `tsc --noEmit`
+  binary directly, which executes no project code.
+- **Download integrity pinning.** Catalog entries gained optional `revision`
+  (pin to a commit SHA/tag instead of the mutable `main` tip) and `sha256`
+  (verified after download; the file is deleted and rejected on mismatch).
+- **`list_files` no longer un-hides `.env`.** It was the one dotfile the
+  listing surfaced; now hidden like the rest so it isn't advertised to the
+  model.
+
 ## 0.3.30 — 2026-07-19
 
 ### New features
