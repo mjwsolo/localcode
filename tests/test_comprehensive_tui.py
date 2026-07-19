@@ -97,6 +97,47 @@ def test_tui_prompt_renders_model_response(tmp_path, project):
     asyncio.run(scenario())
 
 
+def test_tui_streams_reasoning_live_before_answer(tmp_path, project):
+    """The model's reasoning must render live in the log (like Claude Code),
+    not be hidden behind a spinner. Drives a turn whose response is preceded by
+    a thinking block and asserts the reasoning text is in the visible log."""
+    async def scenario():
+        snap = await _drive(
+            tmp_path,
+            project,
+            [say("The answer is 42.",
+                 thinking="Consider the constraints.\nWeigh the options carefully.")],
+            "think about it",
+        )
+        assert snap["model_calls"] >= 1
+        # Reasoning streamed into the visible log, not swallowed.
+        assert "Consider the constraints." in snap["log_text"]
+        assert "Weigh the options carefully." in snap["log_text"]
+        # The final answer still renders too.
+        assert "The answer is 42." in snap["log_text"]
+
+    asyncio.run(scenario())
+
+
+def test_tui_runaway_thinking_is_capped(tmp_path, project):
+    """A pathological reasoning loop (way over the char cap) must be aborted
+    with a clear message, not hang forever. Guards the re-enabled THINKING_CAPS
+    at its generous 80k-char bound."""
+    async def scenario():
+        # One giant unbroken reasoning blob well past MAX_THINKING_CHARS.
+        runaway = "planning " * 12000  # ~96k chars, no answer
+        snap = await _drive(
+            tmp_path, project,
+            [say("(never reached)", thinking=runaway)],
+            "build the thing",
+        )
+        assert snap["model_calls"] >= 1
+        # The abort surfaced a clear reason instead of streaming forever.
+        assert "reasoning exceeded" in snap["log_text"].lower()
+
+    asyncio.run(scenario())
+
+
 def test_tui_tool_call_turn_executes_through_ui(tmp_path, project):
     """A scripted tool round driven entirely from a keystroke: the model
     'calls' write_file, the real tool runs, the file appears on disk, and
