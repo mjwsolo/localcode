@@ -26,9 +26,18 @@ Each model now gets its **official vendor-recommended sampler**, forwarded verba
 Sources: the Qwen3.6-35B-A3B model card + Unsloth guide, the Gemma team's inference
 config, and Cohere's North-Mini-Code card. The sampler is now the single source of
 truth (the old "tuned but never sent" `_options` knobs and the `_coding_temperature`
-0.25 cap that fought the vendor values are gone). DiffusionGemma is unaffected — it
-runs through its own diffusion sampler, not llama-server. A user-set temperature can
-still only lower the vendor value.
+0.25 cap that fought the vendor values are gone). A user-set temperature can still
+only lower the vendor value.
+
+**Both Google models are handled — deliberately differently.** Gemma 4 (above) runs
+autoregressively through llama-server, so it needed explicit params (the server
+default `top_k=40` was wrong). **DiffusionGemma** runs through `llama-diffusion-cli`
+with the Entropy-Bound decoder, whose `--diffusion-eb-t-min/t-max/max-steps` all
+default to **"from model metadata"** — i.e. the model ships its own recommended
+values. So DiffusionGemma correctly inherits them and localcode does NOT override
+them; hardcoding constants there would replace the model's own tuning. Same lesson,
+opposite action: "trust the default" was the bug for llama-server, but is correct for
+the diffusion CLI.
 
 ## 0.3.32 — 2026-07-19
 
