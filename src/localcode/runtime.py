@@ -8,10 +8,11 @@ from typing import Any, Iterator
 import httpx
 
 from .config import RuntimeConfig
+from .reasoning_capabilities import ReasoningControl, reasoning_capabilities
 from .runtime_diffusion import _DiffusionMixin
 
 
-def _thinking_budget_tokens() -> int:
+def _thinking_budget_tokens(configured: int = 0, default: int = 8192) -> int:
     """Per-request reasoning-token budget sent to llama.cpp on thinking rounds.
 
     8192 tokens ≈ 32K chars of genuine planning, but caps a degenerate phrase
@@ -22,7 +23,7 @@ def _thinking_budget_tokens() -> int:
     """
     raw = os.environ.get("LOCALCODE_THINKING_BUDGET", "").strip()
     if not raw:
-        return 8192
+        return configured if configured != 0 else default
     try:
         return int(raw)
     except ValueError:
@@ -2193,12 +2194,15 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
         except Exception:
             _user_t = sampler["temperature"]
         temperature = min(sampler["temperature"], _user_t)
+        _reasoning_caps = reasoning_capabilities(
+            getattr(self.config, "model", ""), getattr(self.config, "provider", "llama_cpp")
+        )
+        effective_think = bool(think and _reasoning_caps.supported)
         payload: dict[str, Any] = {
             "model": self.config.model,
             "stream": stream,
             "messages": messages,
             "temperature": temperature,
-            "chat_template_kwargs": {"enable_thinking": think},
             # Explicit KV prefix-cache opt-in. Recent llama.cpp builds default
             # this to true for /v1/chat/completions, but TurboQuant is a fork —
             # never rely on the default for the single biggest local-speed
@@ -2209,7 +2213,11 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
             # few hundred new tokens.
             "cache_prompt": True,
         }
-        if think:
+        if _reasoning_caps.control is ReasoningControl.CHAT_TEMPLATE:
+            payload["chat_template_kwargs"] = {"enable_thinking": effective_think}
+        elif _reasoning_caps.control is ReasoningControl.EFFORT and effective_think:
+            payload["reasoning_effort"] = "high"
+        if effective_think and _reasoning_caps.supports_budget:
             # Bound the reasoning channel at the sampler, before the stream
             # reaches the Python-side runaway guards.  The bundled llama.cpp
             # recognizes the active chat template's think tags and, when this
@@ -2225,7 +2233,18 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
             # it allows roughly 32K chars of genuine planning, but prevents a
             # degenerate phrase from consuming the remaining 100K+ context.
             # Named + env-overridable (LOCALCODE_THINKING_BUDGET); <=0 omits it.
-            _budget = _thinking_budget_tokens()
+            _catalog_budget = 8192
+            try:
+                from .models_catalog import by_filename, by_key
+                _choice = by_filename(str(self.config.model)) or by_key(str(self.config.model))
+                if _choice is not None:
+                    _catalog_budget = int(_choice.reasoning_budget_tokens)
+            except Exception:
+                pass
+            _budget = _thinking_budget_tokens(
+                int(getattr(self.config, "thinking_budget_tokens", 0) or 0),
+                _catalog_budget,
+            )
             if _budget > 0:
                 payload["thinking_budget_tokens"] = _budget
         # Forward the FULL vendor-recommended sampler (see _sampler_params).
