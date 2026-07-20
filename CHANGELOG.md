@@ -35,6 +35,15 @@ All notable changes to LocalCode will be documented here. The format follows
   stalling on the missing network.
 
 ### Reasoning-loop recovery (small-model degeneration)
+- **`on` no longer reasons on mechanical rounds.** With thinking set to `on`,
+  the reasoning channel is now skipped on rounds explicitly marked mechanical
+  (post-write implement / verify / running / complete) — there is nothing to
+  reason about there, and forcing the degeneration-prone channel onto a
+  mechanical round is what lets a small model spiral into a repetition loop.
+  This bounds loop *incidence* at the policy layer (the `auto` policy already
+  did this); reasoning stages and un-staged rounds still think, so `on` still
+  means "reason deeply". Composes with the three layers below, which catch any
+  residual loop.
 - **Sampler-level thinking budget.** Every thinking request now sends llama.cpp
   a `thinking_budget_tokens` (8192) so the server forces the template's
   end-of-thinking transition and the *same* generation moves on to a tool call,
