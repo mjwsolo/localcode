@@ -80,17 +80,15 @@ def should_use_thinking(
     if policy in {"0", "false", "no", "off", "none", ""}:
         return False
     if policy in {"1", "true", "yes", "on"}:
-        # `on` forces reasoning on genuine decision rounds — but still skips the
-        # channel on rounds we've explicitly marked mechanical (post-write
-        # implement / verify / running / complete): there is nothing to reason
-        # about there, and forcing the degeneration-prone channel onto a
-        # mechanical round is what lets a small quantized model spiral into a
-        # repetition loop. Gating loop INCIDENCE here at the policy layer
-        # composes with the sampler thinking-budget + periodicity detector +
-        # no-think retry, which catch any residual. Reasoning stages and
-        # un-staged rounds still think, so `on` still means "reason deeply".
-        stage = (task_stage or "").strip().lower()
-        return stage not in _NO_THINKING_STAGES
+        # `on` FORCES thinking on every round — it respects the user's explicit
+        # opt-in and never second-guesses it by stage. Stage is inferred from the
+        # last completed action, not what the next round must decide, so a round
+        # after a read/edit during `implement` may genuinely need reasoning;
+        # gating it off here would silently break the contract. Reasoning-loop
+        # prevention lives in the layers that don't lie about intent: the
+        # server-side thinking budget, the periodicity detector, and the
+        # verified no-thinking retry. Use `auto` for stage-aware reasoning.
+        return True
     if policy == "legacy":
         return runtime_mode.endswith("-think")
     if policy == "auto":
