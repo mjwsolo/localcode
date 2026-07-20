@@ -1044,6 +1044,20 @@ class TestVendorSamplerForwarded:
         assert p["min_p"] == 0.0          # forwarded explicitly, not dropped as falsy
         assert p["presence_penalty"] == 0.0
         assert p["repeat_penalty"] == 1.0  # was 1.05 — a penalty starves EOS
+        # llama.cpp enforces this inside the reasoning sampler and then forces
+        # the template's end-thinking sequence, allowing the same generation
+        # to continue into a tool call instead of merely aborting the round.
+        assert p["thinking_budget_tokens"] == 8192
+
+    def test_thinking_budget_env_override(self, monkeypatch) -> None:
+        monkeypatch.setenv("LOCALCODE_THINKING_BUDGET", "4096")
+        p = self._payload("Qwen3.6-35B-A3B-UD-Q8_K_XL.gguf", think=True)
+        assert p["thinking_budget_tokens"] == 4096
+
+    def test_thinking_budget_disabled_when_non_positive(self, monkeypatch) -> None:
+        monkeypatch.setenv("LOCALCODE_THINKING_BUDGET", "0")
+        p = self._payload("Qwen3.6-35B-A3B-UD-Q8_K_XL.gguf", think=True)
+        assert "thinking_budget_tokens" not in p
 
     def test_qwen_instruct_profile(self) -> None:
         p = self._payload("Qwen3.6-35B-A3B-UD-Q8_K_XL.gguf", think=False)
@@ -1051,6 +1065,7 @@ class TestVendorSamplerForwarded:
         assert p["top_p"] == 0.8
         assert p["top_k"] == 20
         assert p["presence_penalty"] == 1.5
+        assert "thinking_budget_tokens" not in p
 
     def test_gemma_vendor_profile(self) -> None:
         p = self._payload("gemma-4-26B-A4B-it-UD-IQ3_S.gguf", think=True)
