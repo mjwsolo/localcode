@@ -3,6 +3,19 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.3.35 — 2026-07-21
+
+### Changed
+- **`/thinking on` is always-on again.** 0.3.34 made `on` skip the reasoning
+  channel on "mechanical" stages. That was wrong on two counts: it silently
+  broke the explicit opt-in (`on` should mean *on*), and the stage reflects the
+  last completed action, not what the next round must decide — a round after a
+  read/edit during `implement` may genuinely need reasoning, and gating it off
+  killed that. Reverted: `on` forces thinking every round; `auto` remains the
+  stage-aware policy. Reasoning-loop prevention stays where it belongs and does
+  not lie about intent — the server-side thinking budget, the periodicity
+  detector, and the verified no-thinking retry (all from 0.3.34).
+
 ## 0.3.34 — 2026-07-19
 
 ### Fixed
