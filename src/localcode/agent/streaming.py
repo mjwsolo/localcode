@@ -8,7 +8,15 @@ import time
 from typing import Any, TYPE_CHECKING
 
 from .constants import MAX_OUTPUT_TOKENS, MAX_THINKING_CHARS, MAX_THINKING_SECONDS
+from .reasoning_loop import reasoning_is_looping
 from ..tools import ALL_SCHEMAS as TOOL_SCHEMAS
+
+# Rolling reasoning-tail window handed to the loop detector, and how many new
+# reasoning chars to accumulate between rescans. The window comfortably exceeds
+# the detector's own clamp so a tight loop always has two copies to anchor on;
+# the stride keeps detection to O(window) amortized per chunk.
+_THINKING_TAIL_CHARS = 2600
+_LOOP_SCAN_STRIDE = 200
 
 if TYPE_CHECKING:
     from ..app import LocalCodeApp
@@ -97,6 +105,16 @@ class StreamRoundResult:
     thinking_shown: bool = False
     content_streaming: bool = False
     thinking_abort: bool = False
+    # Why the thinking phase was aborted: "loop" (degenerate repetition detected
+    # early) or "length" (per-round char/time cap). Drives both the user-facing
+    # notice and the recovery decision (a loop-abort forces a no-thinking retry).
+    thinking_abort_reason: str = ""
+    # Bounded rolling tail of the reasoning stream, kept for the loop detector so
+    # detection stays O(window) per chunk instead of O(total) — see the thinking
+    # handler. Not part of the model transcript.
+    _thinking_tail: str = ""
+    _thinking_total_chars: int = 0
+    _last_loop_scan_total: int = 0
     finish_reason: str = ""
     raw_tail: str = ""
     content_chars: int = 0
@@ -177,14 +195,35 @@ def stream_model_round(
             out.feed_thinking(chunk)
             if result.content_streaming or result.tool_calls:
                 return
+            # Running total (avoids re-summing thinking_parts every chunk) and a
+            # bounded rolling tail for the loop detector, so both guards stay
+            # O(window) per chunk regardless of how long reasoning gets.
+            result._thinking_total_chars += len(chunk)
+            tail = result._thinking_tail + chunk
+            if len(tail) > _THINKING_TAIL_CHARS:
+                tail = tail[-_THINKING_TAIL_CHARS:]
+            result._thinking_tail = tail
             from ..features import Feature, is_enabled
             if is_enabled(Feature.THINKING_CAPS):
-                thinking_chars = sum(len(p) for p in result.thinking_parts)
+                # Degenerate-repetition guard fires FIRST: it catches a tight
+                # loop within a few repeats (~1s), where the length/time cap
+                # would burn minutes. Only rescan every _LOOP_SCAN_STRIDE new
+                # chars to bound cost.
+                if (
+                    result._thinking_total_chars - result._last_loop_scan_total
+                    >= _LOOP_SCAN_STRIDE
+                ):
+                    result._last_loop_scan_total = result._thinking_total_chars
+                    if reasoning_is_looping(result._thinking_tail):
+                        result.thinking_abort = True
+                        result.thinking_abort_reason = "loop"
+                        return
                 if (
                     time.monotonic() - stream_start > MAX_THINKING_SECONDS
-                    or thinking_chars > MAX_THINKING_CHARS
+                    or result._thinking_total_chars > MAX_THINKING_CHARS
                 ):
                     result.thinking_abort = True
+                    result.thinking_abort_reason = "length"
             return
         if typ == "content":
             chunk = _strip_thinking_tokens(event.get("content", ""))
