@@ -81,20 +81,20 @@ leaves ~125K tokens of generation headroom ≈ ~28 minutes of nonstop
 decode. A real 40-minute / no-output hang (thinking on, no answer emitted)
 was traced to exactly this.
 
-The correct backstop is the thinking runaway-guard (Feature.THINKING_CAPS
-+ MAX_THINKING_SECONDS / MAX_THINKING_CHARS): it aborts a reasoning-only
-phase at 10 min / ~20k tokens regardless of ctx-size, well before the
-context ceiling, and surfaces a clear message. That is why the cap was
-re-enabled 2026-07-19. Leaving MAX_OUTPUT_TOKENS at -1 keeps valid long
-tool calls intact while the thinking guard handles the runaway case."""
+The primary control is llama.cpp's per-request `thinking_budget_tokens`: it
+forces the template's end-thinking sequence and lets the SAME generation move
+on to a tool call. Feature.THINKING_CAPS + MAX_THINKING_SECONDS / CHARS are
+compatibility backstops for templates whose thinking tags the server cannot
+identify. Leaving MAX_OUTPUT_TOKENS at -1 keeps valid long tool calls intact
+without leaving the reasoning channel unbounded."""
 
 
 # ── Thinking-phase safety caps ──────────────────────────────────────
 #
-# Bound how much reasoning the model emits before we force a
-# transition to content / tool_calls. Either cap trips a
-# `_thinking_abort`, which surfaces a clear user message and ends
-# the turn.
+# Bound how much reasoning Python will accept if the server-side token budget
+# cannot recognize the model's thinking delimiters. Either cap trips a
+# `_thinking_abort`. Exact periodic loops retry once with thinking disabled;
+# other runaways surface a clear user message.
 #
 # These are a RUNAWAY guard, not a reasoning budget. The earlier tight
 # values (90 s / 4000 chars ≈ 1000 tokens) aborted legitimate long

@@ -113,6 +113,29 @@ def estimate_tokens(messages: list[dict[str, Any]]) -> int:
     return total_chars // _CHARS_PER_TOKEN
 
 
+def _compact_fraction() -> float:
+    """The fraction of the usable window at which auto-compaction fires.
+
+    Default COMPACT_THRESHOLD_FRACTION (0.70). Overridable via
+    LOCALCODE_COMPACT_PCT (1-100, like Claude Code's CLAUDE_AUTOCOMPACT_PCT_
+    OVERRIDE) so a user with a big machine can let context grow closer to the
+    full window before summarising, or compact earlier on a small one. Always
+    relative to the machine's real RAM-scaled context window — never a fixed
+    token count.
+    """
+    import os
+    raw = os.environ.get("LOCALCODE_COMPACT_PCT")
+    if raw is None:
+        return COMPACT_THRESHOLD_FRACTION
+    try:
+        pct = float(raw)
+    except (TypeError, ValueError):
+        return COMPACT_THRESHOLD_FRACTION
+    # Accept either a percent (1-100) or a fraction (0-1); clamp to a sane band.
+    frac = pct / 100.0 if pct > 1.0 else pct
+    return min(max(frac, 0.30), 0.95)
+
+
 def should_compact(
     messages: list[dict[str, Any]],
     context_window: int,
@@ -121,13 +144,16 @@ def should_compact(
     """Return True when the prompt is about to crowd out new generation.
 
     `context_window` is the number of tokens llama-server was launched
-    with (`-c`). `reserve_tokens` is headroom we promise to keep free.
+    with (`-c`) — the machine's real RAM-scaled window. `reserve_tokens` is
+    headroom we promise to keep free. The trigger is always a fraction of THAT
+    window (see `_compact_fraction`), so a 256K-capable machine compacts near
+    256K and a 64K one near 64K.
     """
     est = estimate_tokens(messages)
     available = context_window - reserve_tokens
     if available <= 0:
         return True
-    return est > int(available * COMPACT_THRESHOLD_FRACTION)
+    return est > int(available * _compact_fraction())
 
 
 def _split_at_keep_recent(

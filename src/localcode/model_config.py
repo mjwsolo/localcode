@@ -36,12 +36,30 @@ from __future__ import annotations
 # Qwen checkpoint path is disabled due a measured Metal SIGKILL, forcing a
 # full prompt prefill every round. 128K keeps four checkpoints and is faster
 # for long agentic tasks; 256K remains an explicit override.
+# Dedicated tier for every Apple Silicon RAM variant (MBA/MBP/Studio/Mini).
+# The VALIDATED anchors are 16→64K, 48→96K, 64→128K; every other tier is
+# INTERPOLATED strictly between its validated neighbours (or below the 16 GB
+# floor), so no tier ever exceeds a value that's already been validated on real
+# hardware — a 32 GB machine at 80K uses less KV than the 48 GB-validated 96K
+# and more than the 16 GB-validated 64K. Sizes are multiples of 8192 (clean
+# batch alignment). 256K stays an explicit override, never an auto default
+# (its checkpoint path SIGKILLs on Metal — see runtime.py).
 RAM_CTX_CEILING_TIERS: tuple[tuple[int, int], ...] = (
-    (96, 131072),   # 128K — checkpointed fast path; 256K is experimental
-    (64, 131072),   # 128K (validated; 256K KV is tight beside a Q8 model on 64 GB)
-    (48, 98304),    # 96K
+    (192, 131072),  # 192-512 GB (Studio/Pro) — 128K default; 256K via override
+    (128, 131072),  # 128 GB — 128K
+    (96,  131072),  # 96 GB  — 128K
+    (64,  131072),  # 64 GB  — 128K (validated)
+    (48,  98304),   # 48 GB  — 96K  (validated)
+    (36,  90112),   # 36 GB  — 88K  (interp 64K@16 → 96K@48)
+    (32,  81920),   # 32 GB  — 80K  (was lumped at 64K — the gap, now dedicated)
+    (24,  73728),   # 24 GB  — 72K  (interp)
+    (18,  65536),   # 18 GB  — 64K
+    (16,  65536),   # 16 GB  — 64K  (validated floor)
 )
-RAM_CTX_CEILING_DEFAULT = 65536  # 16-47 GB: 64K (validated on 16 GB)
+# <16 GB is below LocalCode's supported floor; keep the validated 64K rather
+# than a lower value, since _target_num_ctx floors there anyway (a smaller
+# ceiling would just contradict it). 16 GB is the smallest supported Mac.
+RAM_CTX_CEILING_DEFAULT = 65536
 
 
 def ram_ctx_ceiling(ram_gb: int) -> int:
@@ -57,12 +75,22 @@ def ram_ctx_ceiling(ram_gb: int) -> int:
 # (~4x heavier per token, no -fit guard). Much tighter than the turbo ladder
 # so a long unconditional-reasoning turn can't grow the KV cache until OOM.
 # Monotonic; same (min_ram_gb, ctx) high→low form.
+# Dedicated per-variant tier for the cohere2moe model too. Validated anchors:
+# 16→16K, 32→32K, 48→48K, 128→64K; intermediates interpolated between them.
+# Uncompressed f16 KV (~4x heavier than turbo), so every value is much tighter
+# than the turbo ladder above.
 COHERE_CTX_CEILING_TIERS: tuple[tuple[int, int], ...] = (
-    (96, 65536),    # 64K
-    (48, 49152),    # 48K
-    (32, 32768),    # 32K
+    (192, 65536),   # 64K
+    (128, 65536),   # 64K (validated)
+    (96,  65536),   # 64K
+    (64,  57344),   # 56K (interp 48K@48 → 64K@96)
+    (48,  49152),   # 48K (validated)
+    (36,  40960),   # 40K (interp 32K@32 → 48K@48)
+    (32,  32768),   # 32K (validated)
+    (24,  24576),   # 24K (interp 16K@16 → 32K@32)
+    (16,  16384),   # 16K (validated)
 )
-COHERE_CTX_CEILING_DEFAULT = 16384  # <32 GB: 16K (32 GB+ is the recommended floor)
+COHERE_CTX_CEILING_DEFAULT = 16384  # <16 GB: 16K (32 GB+ is the recommended floor)
 
 
 def cohere_ctx_ceiling(ram_gb: int) -> int:
