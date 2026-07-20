@@ -262,11 +262,18 @@ def run_agent_loop(
     from ..app import is_online
     online = is_online()
     if online:
-        network_status = "Network: ONLINE — you can download files, install packages, fetch URLs."
+        network_status = (
+            "Network: ONLINE — you can download files, install packages, fetch URLs. "
+            "PREFER your tools over writing from memory: web_search / web_fetch to "
+            "confirm current facts, versions, and library docs; your skills and other "
+            "tools for anything they cover. Don't hand-write what a tool can get right."
+        )
     else:
         network_status = (
             "Network: OFFLINE — NO internet. Do NOT attempt downloads, pip install, curl, wget, or any network requests. "
-            "Use only local files and already-installed packages. Generate sample/mock data locally instead of downloading."
+            "Use only local files, already-installed packages, and your LOCAL skills and "
+            "tools (read/grep/edit, installed CLIs). Generate sample/mock data locally "
+            "instead of downloading."
         )
     def _current_task_stage_for_thinking() -> str:
         stage = str(_last_announced_task_stage or getattr(_task_state, "current_stage", "") or "").strip()
@@ -431,6 +438,9 @@ def run_agent_loop(
     _todo_stuck_count = 0
     _last_todo_remaining = 10**9
     _edit_recovery_nudges = 0
+    # Set when a round aborts on a detected reasoning loop; forces the very next
+    # round to decode with thinking off so the retry escapes the attractor.
+    _force_no_think_next_round = False
     _MAX_CONSECUTIVE_CORRECTIONS = 2
     _generic_correction_nudges = 0
     # Fires at most once per turn when an identical failing call crosses the
@@ -454,6 +464,11 @@ def run_agent_loop(
     # agent/recovery.py (T0.1-d split).
     _empty_rounds_this_turn = 0
     _MAX_EMPTY_ROUND_RETRIES = MAX_EMPTY_ROUND_RETRIES
+    # Loop-abort decode-recovery: how many times this turn a detected reasoning
+    # loop forced a no-thinking retry. Capped so a model that keeps degenerating
+    # even without the reasoning channel can't spin the turn forever.
+    _thinking_loop_recoveries = 0
+    _MAX_THINKING_LOOP_RECOVERIES = 2
     _last_round_signature: tuple[int, str] | None = None
     _same_round_signature_count = 0
     _same_round_synthetic_rejections = 0
@@ -785,6 +800,16 @@ def run_agent_loop(
             task_stage=round_task_stage,
             user_text=user_text,
         )
+        # Cycle-breaker: the PREVIOUS round degenerated into a reasoning loop and
+        # aborted. Retrying with the reasoning channel still on re-enters the same
+        # attractor (same prompt, same samplers, same template) — a text nudge
+        # alone doesn't change the decode. So force this one retry to decode with
+        # thinking OFF, which actually changes the generation path and lets the
+        # model emit a tool call. This is fault recovery, not a reinterpretation
+        # of the user's `on` setting: normal rounds keep thinking.
+        if _force_no_think_next_round:
+            round_use_thinking = False
+            _force_no_think_next_round = False
         try:
             _ctx_chars = None
             try:
@@ -962,9 +987,48 @@ def run_agent_loop(
             _loop_exit_reason = f"stream_error:{type(exc).__name__}"
             break
 
-        # If we bailed on a stuck thinking loop, tell the user explicitly so
-        # they know why the turn ended and can try a different prompt.
+        # If the server-side reasoning budget could not transition the model,
+        # recover a periodic loop automatically; report other cap aborts.
         if _stream_result.thinking_abort:
+            try:
+                from ..events import emit as _emit_ta
+                _emit_ta(
+                    "thinking_abort",
+                    round_idx=round_num,
+                    reason=_stream_result.thinking_abort_reason or "unknown",
+                )
+            except Exception:
+                pass
+            if (
+                _stream_result.thinking_abort_reason == "loop"
+                and _thinking_loop_recoveries < _MAX_THINKING_LOOP_RECOVERIES
+            ):
+                # Detected a degenerate repetition loop early. This is DECODE
+                # recovery, not an optional textual nudge — do it explicitly and
+                # independently of AUTO_NUDGE_RECOVERY. Drop the aborted (empty)
+                # round entirely (never append its assistant message) and re-run
+                # the SAME round with thinking off (consumed at the top of the
+                # loop), which changes the generation path and breaks the loop.
+                _thinking_loop_recoveries += 1
+                _force_no_think_next_round = True
+                out.notice(
+                    "Model reasoning started repeating itself — retrying this "
+                    "step without deep reasoning so it acts instead of looping."
+                )
+                out._stop_indicator()
+                sys.stdout.write("\r\033[K")
+                sys.stdout.flush()
+                continue  # next round: decodes with think=False
+            if _stream_result.thinking_abort_reason == "loop":
+                # Recovery budget exhausted: the model kept looping even without
+                # the reasoning channel. End the turn with an honest message.
+                out.notice(
+                    "Model kept repeating itself even without deep reasoning — "
+                    "ending the turn. Try `/model` to switch models or split the "
+                    "task into smaller steps."
+                )
+                _loop_exit_reason = "thinking_loop_exhausted"
+                break
             out.notice(
                 f"Stopped: model reasoning exceeded the per-round cap "
                 f"({MAX_THINKING_SECONDS}s or {MAX_THINKING_CHARS} chars) without "

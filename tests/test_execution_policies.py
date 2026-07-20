@@ -41,3 +41,18 @@ def test_deterministic_completion_requires_evidence_and_stops_when_done():
     ])
     assert done.ok
     assert "Stop" in done.correction
+
+
+def test_on_mode_skips_mechanical_stages():
+    """`on` forces reasoning on decision/un-staged rounds but skips the
+    degeneration-prone channel on explicitly-mechanical stages — bounding
+    reasoning-loop incidence at the policy layer without breaking the opt-in."""
+    from localcode.thinking import should_use_thinking as s
+    # Mechanical stages: thinking off even under `on`.
+    for stage in ("implement", "verify", "running", "complete", "verified"):
+        assert s("", "on", goal_type="build_app", task_stage=stage) is False, stage
+    # Decision / reasoning stages and un-staged rounds: still think.
+    for stage in ("plan", "discover", "repair", "scaffolding", ""):
+        assert s("", "on", goal_type="build_app", task_stage=stage) is True, stage
+    # `off` is still unconditionally off.
+    assert s("", "off", goal_type="build_app", task_stage="plan") is False
