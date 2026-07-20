@@ -119,20 +119,40 @@ def test_tui_streams_reasoning_live_before_answer(tmp_path, project):
     asyncio.run(scenario())
 
 
-def test_tui_runaway_thinking_is_capped(tmp_path, project):
-    """A pathological reasoning loop (way over the char cap) must be aborted
-    with a clear message, not hang forever. Guards the re-enabled THINKING_CAPS
-    at its generous 80k-char bound."""
+def test_tui_runaway_thinking_loop_is_caught_early(tmp_path, project):
+    """A degenerate REPETITION loop (a phrase cycling forever) must be caught by
+    the periodicity detector within a few repeats — not left to burn to the 80k
+    length cap minutes later — and trigger automatic no-thinking recovery rather
+    than a give-up message."""
     async def scenario():
-        # One giant unbroken reasoning blob well past MAX_THINKING_CHARS.
-        runaway = "planning " * 12000  # ~96k chars, no answer
+        # Tight periodic loop: the failure mode the detector targets.
+        runaway = "planning " * 12000  # exactly periodic, no answer
         snap = await _drive(
             tmp_path, project,
             [say("(never reached)", thinking=runaway)],
             "build the thing",
         )
         assert snap["model_calls"] >= 1
-        # The abort surfaced a clear reason instead of streaming forever.
+        # Recovery message, not the length-cap "reasoning exceeded" give-up text.
+        assert "repeating itself" in snap["log_text"].lower()
+
+    asyncio.run(scenario())
+
+
+def test_tui_nonperiodic_runaway_hits_length_cap(tmp_path, project):
+    """Non-repeating reasoning that simply runs too long still hits the char/time
+    cap and aborts with the clear 'reasoning exceeded' message. Guards the
+    THINKING_CAPS length backstop for the case the loop detector won't fire on."""
+    async def scenario():
+        # Strictly increasing tokens: long but NOT periodic, so only the length
+        # cap should stop it.
+        runaway = " ".join(str(i) for i in range(30000))  # ~150k varied chars
+        snap = await _drive(
+            tmp_path, project,
+            [say("(never reached)", thinking=runaway)],
+            "build the thing",
+        )
+        assert snap["model_calls"] >= 1
         assert "reasoning exceeded" in snap["log_text"].lower()
 
     asyncio.run(scenario())

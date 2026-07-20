@@ -438,6 +438,9 @@ def run_agent_loop(
     _todo_stuck_count = 0
     _last_todo_remaining = 10**9
     _edit_recovery_nudges = 0
+    # Set when a round aborts on a detected reasoning loop; forces the very next
+    # round to decode with thinking off so the retry escapes the attractor.
+    _force_no_think_next_round = False
     _MAX_CONSECUTIVE_CORRECTIONS = 2
     _generic_correction_nudges = 0
     # Fires at most once per turn when an identical failing call crosses the
@@ -792,6 +795,16 @@ def run_agent_loop(
             task_stage=round_task_stage,
             user_text=user_text,
         )
+        # Cycle-breaker: the PREVIOUS round degenerated into a reasoning loop and
+        # aborted. Retrying with the reasoning channel still on re-enters the same
+        # attractor (same prompt, same samplers, same template) — a text nudge
+        # alone doesn't change the decode. So force this one retry to decode with
+        # thinking OFF, which actually changes the generation path and lets the
+        # model emit a tool call. This is fault recovery, not a reinterpretation
+        # of the user's `on` setting: normal rounds keep thinking.
+        if _force_no_think_next_round:
+            round_use_thinking = False
+            _force_no_think_next_round = False
         try:
             _ctx_chars = None
             try:
@@ -969,16 +982,26 @@ def run_agent_loop(
             _loop_exit_reason = f"stream_error:{type(exc).__name__}"
             break
 
-        # If we bailed on a stuck thinking loop, tell the user explicitly so
-        # they know why the turn ended and can try a different prompt.
+        # If the server-side reasoning budget could not transition the model,
+        # recover a periodic loop automatically; report other cap aborts.
         if _stream_result.thinking_abort:
-            out.notice(
-                f"Stopped: model reasoning exceeded the per-round cap "
-                f"({MAX_THINKING_SECONDS}s or {MAX_THINKING_CHARS} chars) without "
-                f"emitting a response. Turn off deep reasoning with `/thinking off`, "
-                f"switch to a faster model with `/model`, or rephrase the task in "
-                f"smaller steps."
-            )
+            if _stream_result.thinking_abort_reason == "loop":
+                # Detected a degenerate repetition loop early. Break the cycle by
+                # retrying the next round with thinking off (set below) rather
+                # than telling the user to give up — recovery is automatic.
+                _force_no_think_next_round = True
+                out.notice(
+                    "Model reasoning started repeating itself — retrying this "
+                    "step without deep reasoning so it acts instead of looping."
+                )
+            else:
+                out.notice(
+                    f"Stopped: model reasoning exceeded the per-round cap "
+                    f"({MAX_THINKING_SECONDS}s or {MAX_THINKING_CHARS} chars) without "
+                    f"emitting a response. Turn off deep reasoning with `/thinking off`, "
+                    f"switch to a faster model with `/model`, or rephrase the task in "
+                    f"smaller steps."
+                )
 
         # Show thinking summary if present (collapsed, dim)
         # Skip if already emitted when content started streaming

@@ -2190,6 +2190,22 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
             # few hundred new tokens.
             "cache_prompt": True,
         }
+        if think:
+            # Bound the reasoning channel at the sampler, before the stream
+            # reaches the Python-side runaway guards.  The bundled llama.cpp
+            # recognizes the active chat template's think tags and, when this
+            # budget is exhausted, forces the matching end tag so the SAME
+            # generation can proceed to text/tool calls.  This preserves the
+            # one-pass reasoning -> action protocol used by Codex, OpenCode,
+            # and pi while adopting Claude Code's separately bounded thinking
+            # budget.  It is the primary transition mechanism; the streaming
+            # char/time/periodicity checks remain compatibility backstops for
+            # templates whose reasoning tags cannot be identified.
+            #
+            # 8K tokens is deliberately not a terse "reasoning quality" cap:
+            # it allows roughly 32K chars of genuine planning, but prevents a
+            # degenerate phrase from consuming the remaining 100K+ context.
+            payload["thinking_budget_tokens"] = 8192
         # Forward the FULL vendor-recommended sampler (see _sampler_params).
         # Previously top_k / top_p / presence_penalty were never sent (server
         # defaults top_k=40 / top_p=0.95 stood) and min_p=0.0 was dropped as
