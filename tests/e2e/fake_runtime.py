@@ -109,6 +109,10 @@ class FakeRuntime(LocalCodeRuntimeGateway):
         # on this to prove what actually reached "the model" (e.g. that an
         # image part or a tool result was included).
         self.calls: list[list[dict[str, Any]]] = []
+        # The `think` flag passed on each call, in order. Tests assert on this
+        # to prove decode-mode recovery (e.g. a loop abort retries with think
+        # off).
+        self.think_calls: list[bool] = []
         self._cursor = 0
 
     # The single seam the agent loop uses.
@@ -124,6 +128,7 @@ class FakeRuntime(LocalCodeRuntimeGateway):
     ) -> Iterator[dict[str, Any]]:
         # Defensive copy so later loop mutation can't rewrite history.
         self.calls.append([dict(m) for m in messages])
+        self.think_calls.append(bool(think))
 
         if self._cursor < len(self.script):
             response = self.script[self._cursor]

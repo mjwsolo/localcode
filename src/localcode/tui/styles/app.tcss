@@ -21,6 +21,20 @@ Screen {
     overflow: hidden;
 }
 
+/* ── Global scrollbar colour ──
+   Every scrollable widget's scrollbar is the app's muted grey, not the
+   textual-ansi theme's blue accent. Applied with the universal selector so
+   NO widget (chat log, input box, model picker, setup, diff panes, or any
+   future one) can reintroduce the "wrong blue" scroller — the per-widget
+   declarations elsewhere are now just belt-and-suspenders. */
+* {
+    scrollbar-color: #333333;
+    scrollbar-color-hover: #555555;
+    scrollbar-color-active: #666666;
+    scrollbar-background: ansi_default;
+    scrollbar-corner-color: ansi_default;
+}
+
 
 
 /* ── Brand bar (bottom, screens without a status row) ──

@@ -3,6 +3,60 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.3.34 — 2026-07-19
+
+### Fixed
+- **Cmd+C beep — the real cause.** Mouse capture was left ON in the primary
+  `localcode` entry point (`app.run()` with Textual's `mouse=True` default),
+  which disables the terminal's native selection, so Cmd+C on an empty native
+  selection rang the terminal bell. The mouse-off default already existed in
+  the `lc-tui` path but never reached `localcode`. Both entry points now launch
+  with mouse capture off (opt back in with `LOCALCODE_MOUSE=1`).
+- **Copy beep (OSC 52).** The clipboard fallback sequence was terminated with
+  BEL (`\a`); a terminal that doesn't consume it rendered an audible beep. Now
+  terminated with `ST` (`ESC \`).
+
+- **No more "work at `$HOME`".** When launched outside any project (no
+  `.git`/`package.json`/etc. marker), the target-location directive fell back
+  to the user's home dir and told the model *"the project root is
+  /Users/&lt;name&gt;, create all files under that root"* — so it tried to build in
+  `$HOME` or fought the path the user named in the task. That directive is now
+  suppressed in the unanchored case; the model follows the location from the
+  request.
+- **Scrollbars grey everywhere.** The model/version pickers (and any other
+  scrollable widget) inherited Textual's blue default scroller. A global rule
+  now makes every scrollbar the app's muted grey.
+
+### Changed
+- **Stronger tool-usage guidance in the system prompt.** When ONLINE, the model
+  is now told to prefer its tools — `web_search`/`web_fetch` for current facts,
+  versions, and library docs, plus its skills — over writing from memory. When
+  OFFLINE, it's told to lean on local skills and installed tools rather than
+  stalling on the missing network.
+
+### Reasoning-loop recovery (small-model degeneration)
+- **`on` no longer reasons on mechanical rounds.** With thinking set to `on`,
+  the reasoning channel is now skipped on rounds explicitly marked mechanical
+  (post-write implement / verify / running / complete) — there is nothing to
+  reason about there, and forcing the degeneration-prone channel onto a
+  mechanical round is what lets a small model spiral into a repetition loop.
+  This bounds loop *incidence* at the policy layer (the `auto` policy already
+  did this); reasoning stages and un-staged rounds still think, so `on` still
+  means "reason deeply". Composes with the three layers below, which catch any
+  residual loop.
+- **Sampler-level thinking budget.** Every thinking request now sends llama.cpp
+  a `thinking_budget_tokens` (8192) so the server forces the template's
+  end-of-thinking transition and the *same* generation moves on to a tool call,
+  instead of the reasoning channel running unbounded. This is the primary fix;
+  the char/time caps are now compatibility backstops for templates whose think
+  tags the server can't identify.
+- **Degenerate-loop detector + auto-recovery.** A content-agnostic detector
+  spots an exact repetition loop in the reasoning stream (a phrase cycling
+  forever) within about a second, and the round retries once with thinking
+  disabled — a decoding-mode switch that actually breaks the loop, instead of
+  burning minutes to the length cap. Non-repeating runaways still hit the
+  char/time cap with a clear message.
+
 ## 0.3.33 — 2026-07-19
 
 ### Sampling — vendor-optimal parameters per model (fixes the reasoning runaway)

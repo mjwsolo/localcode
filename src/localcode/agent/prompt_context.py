@@ -122,6 +122,18 @@ def build_target_grounding_block(repo_root: Any, goal_state: Any) -> str:
         root = str(repo_root or "")
     if not root:
         return ""
+    # Don't anchor to $HOME. When localcode is launched outside any project
+    # (no .git/package.json/etc. marker found), repo_root falls back to the
+    # user's home dir. Telling the model "the project root is /Users/<name>,
+    # create all files under that root" then makes it try to build in $HOME —
+    # or conflict with the path the user actually named in the task ("work at
+    # root vs. the Anki/... path they gave"). In that unanchored case, emit no
+    # directive and let the model follow the location from the user's request.
+    try:
+        if Path(root) == Path.home():
+            return ""
+    except Exception:
+        pass
     return (
         "\n\nTarget location (work here, do not drift):\n"
         f"- The project root is: {root}\n"

@@ -85,6 +85,11 @@ class LocalCodeTUI(App):
 
     BINDINGS = [
         Binding("ctrl+c", "copy_or_quit", "Copy/Quit", show=False, priority=True),
+        # Attach an image from the OS clipboard. Cmd+V can't be relied on for
+        # images: most terminals send NO paste event when the clipboard holds
+        # an image and no text, so the paste hook never fires. This dedicated
+        # key reads the clipboard directly, terminal-independent.
+        Binding("ctrl+g", "attach_image", "Attach image", show=False, priority=True),
     ]
 
     SCREENS = {
@@ -394,6 +399,19 @@ class LocalCodeTUI(App):
         _hint = getattr(screen, "flash_exit_hint", None)
         if callable(_hint):
             _hint()
+
+    def action_attach_image(self) -> None:
+        """Ctrl+G: pull an image off the OS clipboard and attach it (works even
+        when the terminal won't deliver a Cmd+V paste event for an image)."""
+        screen = self.screen
+        handler = getattr(screen, "_attach_clipboard_image", None)
+        if callable(handler):
+            try:
+                if not handler():
+                    log = screen.query_one("#chat-log")
+                    log.append_info("[dim]No image on the clipboard — copy or screenshot one first.[/]")
+            except Exception:
+                pass
 
     # Route bridge messages to the active screen
     def on_agent_event(self, event: AgentEvent) -> None:

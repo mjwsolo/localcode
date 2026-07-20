@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from typing import Any, Iterator
 
@@ -8,6 +9,24 @@ import httpx
 
 from .config import RuntimeConfig
 from .runtime_diffusion import _DiffusionMixin
+
+
+def _thinking_budget_tokens() -> int:
+    """Per-request reasoning-token budget sent to llama.cpp on thinking rounds.
+
+    8192 tokens ≈ 32K chars of genuine planning, but caps a degenerate phrase
+    before it eats the remaining 100K+ context. Overridable per deployment /
+    model family via LOCALCODE_THINKING_BUDGET; <= 0 disables the budget (falls
+    back to the Python-side char/time/periodicity guards only). Not yet
+    calibrated per model — see the open item to tune it against eval data.
+    """
+    raw = os.environ.get("LOCALCODE_THINKING_BUDGET", "").strip()
+    if not raw:
+        return 8192
+    try:
+        return int(raw)
+    except ValueError:
+        return 8192
 
 
 from .model_families import (
@@ -2190,6 +2209,25 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
             # few hundred new tokens.
             "cache_prompt": True,
         }
+        if think:
+            # Bound the reasoning channel at the sampler, before the stream
+            # reaches the Python-side runaway guards.  The bundled llama.cpp
+            # recognizes the active chat template's think tags and, when this
+            # budget is exhausted, forces the matching end tag so the SAME
+            # generation can proceed to text/tool calls.  This preserves the
+            # one-pass reasoning -> action protocol used by Codex, OpenCode,
+            # and pi while adopting Claude Code's separately bounded thinking
+            # budget.  It is the primary transition mechanism; the streaming
+            # char/time/periodicity checks remain compatibility backstops for
+            # templates whose reasoning tags cannot be identified.
+            #
+            # 8K tokens is deliberately not a terse "reasoning quality" cap:
+            # it allows roughly 32K chars of genuine planning, but prevents a
+            # degenerate phrase from consuming the remaining 100K+ context.
+            # Named + env-overridable (LOCALCODE_THINKING_BUDGET); <=0 omits it.
+            _budget = _thinking_budget_tokens()
+            if _budget > 0:
+                payload["thinking_budget_tokens"] = _budget
         # Forward the FULL vendor-recommended sampler (see _sampler_params).
         # Previously top_k / top_p / presence_penalty were never sent (server
         # defaults top_k=40 / top_p=0.95 stood) and min_p=0.0 was dropped as

@@ -116,6 +116,13 @@ class ModelPickerScreen(Screen):
         overflow-y: auto;       /* scroll instead of clipping */
         padding: 1 2;
         border: round #5f87ff;
+        /* Grey scrollbar (matches the app); the blue border stays as the brand
+           accent, but the scroller must not be the clashing default blue. */
+        scrollbar-color: #333333;
+        scrollbar-color-hover: #555555;
+        scrollbar-color-active: #666666;
+        scrollbar-background: ansi_default;
+        scrollbar-size-vertical: 1;
     }
     #picker-list {
         background: ansi_default;

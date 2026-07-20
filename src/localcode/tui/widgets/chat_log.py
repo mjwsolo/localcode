@@ -415,7 +415,11 @@ class ChatLog(RichLog):
         def _osc52() -> bool:
             try:
                 fd = os.open("/dev/tty", os.O_WRONLY)
-                os.write(fd, f"\033]52;c;{encoded}\a".encode())
+                # Terminate the OSC with ST (ESC \) rather than BEL (\a). Both are
+                # valid OSC terminators, but a terminal that doesn't consume the
+                # OSC 52 clipboard sequence renders a stray BEL as an audible
+                # beep on every copy. ST avoids that.
+                os.write(fd, f"\033]52;c;{encoded}\033\\".encode())
                 os.close(fd)
                 return True
             except OSError:
