@@ -34,6 +34,20 @@ All notable changes to LocalCode will be documented here. The format follows
   OFFLINE, it's told to lean on local skills and installed tools rather than
   stalling on the missing network.
 
+### Reasoning-loop recovery (small-model degeneration)
+- **Sampler-level thinking budget.** Every thinking request now sends llama.cpp
+  a `thinking_budget_tokens` (8192) so the server forces the template's
+  end-of-thinking transition and the *same* generation moves on to a tool call,
+  instead of the reasoning channel running unbounded. This is the primary fix;
+  the char/time caps are now compatibility backstops for templates whose think
+  tags the server can't identify.
+- **Degenerate-loop detector + auto-recovery.** A content-agnostic detector
+  spots an exact repetition loop in the reasoning stream (a phrase cycling
+  forever) within about a second, and the round retries once with thinking
+  disabled — a decoding-mode switch that actually breaks the loop, instead of
+  burning minutes to the length cap. Non-repeating runaways still hit the
+  char/time cap with a clear message.
+
 ## 0.3.33 — 2026-07-19
 
 ### Sampling — vendor-optimal parameters per model (fixes the reasoning runaway)
