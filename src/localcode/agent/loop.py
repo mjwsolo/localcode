@@ -464,6 +464,11 @@ def run_agent_loop(
     # agent/recovery.py (T0.1-d split).
     _empty_rounds_this_turn = 0
     _MAX_EMPTY_ROUND_RETRIES = MAX_EMPTY_ROUND_RETRIES
+    # Loop-abort decode-recovery: how many times this turn a detected reasoning
+    # loop forced a no-thinking retry. Capped so a model that keeps degenerating
+    # even without the reasoning channel can't spin the turn forever.
+    _thinking_loop_recoveries = 0
+    _MAX_THINKING_LOOP_RECOVERIES = 2
     _last_round_signature: tuple[int, str] | None = None
     _same_round_signature_count = 0
     _same_round_synthetic_rejections = 0
@@ -985,23 +990,52 @@ def run_agent_loop(
         # If the server-side reasoning budget could not transition the model,
         # recover a periodic loop automatically; report other cap aborts.
         if _stream_result.thinking_abort:
-            if _stream_result.thinking_abort_reason == "loop":
-                # Detected a degenerate repetition loop early. Break the cycle by
-                # retrying the next round with thinking off (set below) rather
-                # than telling the user to give up — recovery is automatic.
+            try:
+                from ..events import emit as _emit_ta
+                _emit_ta(
+                    "thinking_abort",
+                    round_idx=round_num,
+                    reason=_stream_result.thinking_abort_reason or "unknown",
+                )
+            except Exception:
+                pass
+            if (
+                _stream_result.thinking_abort_reason == "loop"
+                and _thinking_loop_recoveries < _MAX_THINKING_LOOP_RECOVERIES
+            ):
+                # Detected a degenerate repetition loop early. This is DECODE
+                # recovery, not an optional textual nudge — do it explicitly and
+                # independently of AUTO_NUDGE_RECOVERY. Drop the aborted (empty)
+                # round entirely (never append its assistant message) and re-run
+                # the SAME round with thinking off (consumed at the top of the
+                # loop), which changes the generation path and breaks the loop.
+                _thinking_loop_recoveries += 1
                 _force_no_think_next_round = True
                 out.notice(
                     "Model reasoning started repeating itself — retrying this "
                     "step without deep reasoning so it acts instead of looping."
                 )
-            else:
+                out._stop_indicator()
+                sys.stdout.write("\r\033[K")
+                sys.stdout.flush()
+                continue  # next round: decodes with think=False
+            if _stream_result.thinking_abort_reason == "loop":
+                # Recovery budget exhausted: the model kept looping even without
+                # the reasoning channel. End the turn with an honest message.
                 out.notice(
-                    f"Stopped: model reasoning exceeded the per-round cap "
-                    f"({MAX_THINKING_SECONDS}s or {MAX_THINKING_CHARS} chars) without "
-                    f"emitting a response. Turn off deep reasoning with `/thinking off`, "
-                    f"switch to a faster model with `/model`, or rephrase the task in "
-                    f"smaller steps."
+                    "Model kept repeating itself even without deep reasoning — "
+                    "ending the turn. Try `/model` to switch models or split the "
+                    "task into smaller steps."
                 )
+                _loop_exit_reason = "thinking_loop_exhausted"
+                break
+            out.notice(
+                f"Stopped: model reasoning exceeded the per-round cap "
+                f"({MAX_THINKING_SECONDS}s or {MAX_THINKING_CHARS} chars) without "
+                f"emitting a response. Turn off deep reasoning with `/thinking off`, "
+                f"switch to a faster model with `/model`, or rephrase the task in "
+                f"smaller steps."
+            )
 
         # Show thinking summary if present (collapsed, dim)
         # Skip if already emitted when content started streaming

@@ -31,7 +31,7 @@ def _chat_log_text(app) -> str:
     return "\n".join(s.text for s in log.lines)
 
 
-async def _drive(tmp_path, project, script, keystrokes_text):
+async def _drive(tmp_path, project, script, keystrokes_text, configure=None):
     """Boot the TUI on the chat screen with a fake backend, type a line,
     press Enter, wait for the agent worker to finish, and return a plain
     snapshot of what happened.
@@ -54,6 +54,8 @@ async def _drive(tmp_path, project, script, keystrokes_text):
         app.engine = backend
         backend.out.set_event_callback(app.bridge.on_event)
         backend.out.set_approval_callback(app.bridge.request_approval)
+        if configure is not None:
+            configure(backend)
 
         chat_input = app.screen.query_one("#chat-input")
         chat_input.value = keystrokes_text
@@ -70,6 +72,8 @@ async def _drive(tmp_path, project, script, keystrokes_text):
             "log_text": _chat_log_text(app),
             "input_value": app.screen.query_one("#chat-input").value,
             "model_calls": len(backend.engine.calls),
+            "think_calls": list(backend.engine.think_calls),
+            "calls": backend.engine.calls,
         }
 
 
@@ -119,22 +123,43 @@ def test_tui_streams_reasoning_live_before_answer(tmp_path, project):
     asyncio.run(scenario())
 
 
-def test_tui_runaway_thinking_loop_is_caught_early(tmp_path, project):
-    """A degenerate REPETITION loop (a phrase cycling forever) must be caught by
-    the periodicity detector within a few repeats — not left to burn to the 80k
-    length cap minutes later — and trigger automatic no-thinking recovery rather
-    than a give-up message."""
+def test_tui_runaway_thinking_loop_recovers_with_no_think_retry(tmp_path, project):
+    """A degenerate REPETITION loop must be caught by the periodicity detector
+    and trigger a REAL decode-mode retry — not just a printed message. Proves the
+    recovery actually runs (regression guard for the dead-code path where
+    detect_stall returns None on a thinking abort and the turn just ends):
+
+      1. exactly two model requests occurred
+      2. the second request decoded with think=False
+      3. the second response produced the final answer
+      4. the aborted empty round added no message to history
+    """
     async def scenario():
-        # Tight periodic loop: the failure mode the detector targets.
         runaway = "planning " * 12000  # exactly periodic, no answer
+
+        def force_thinking_on(backend):
+            backend.config.runtime.internal_thinking_mode = "on"
+
         snap = await _drive(
             tmp_path, project,
-            [say("(never reached)", thinking=runaway)],
+            [say("(loops)", thinking=runaway), say("Fixed it.")],
             "build the thing",
+            configure=force_thinking_on,
         )
-        assert snap["model_calls"] >= 1
-        # Recovery message, not the length-cap "reasoning exceeded" give-up text.
+        # 1. Exactly two requests: the aborted one + the no-think retry.
+        assert snap["model_calls"] == 2, snap["think_calls"]
+        # 2. First decoded with thinking on; the retry forced it off.
+        assert snap["think_calls"] == [True, False]
+        # 3. The retry's final answer rendered.
+        assert "Fixed it." in snap["log_text"]
         assert "repeating itself" in snap["log_text"].lower()
+        # 4. The aborted round appended nothing — the retry sees the same
+        #    message list the first call saw (no empty assistant message).
+        assert len(snap["calls"][1]) == len(snap["calls"][0])
+        assert not any(
+            m.get("role") == "assistant" and not (m.get("content") or "").strip()
+            for m in snap["calls"][1]
+        )
 
     asyncio.run(scenario())
 

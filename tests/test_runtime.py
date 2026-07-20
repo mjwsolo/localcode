@@ -1049,6 +1049,16 @@ class TestVendorSamplerForwarded:
         # to continue into a tool call instead of merely aborting the round.
         assert p["thinking_budget_tokens"] == 8192
 
+    def test_thinking_budget_env_override(self, monkeypatch) -> None:
+        monkeypatch.setenv("LOCALCODE_THINKING_BUDGET", "4096")
+        p = self._payload("Qwen3.6-35B-A3B-UD-Q8_K_XL.gguf", think=True)
+        assert p["thinking_budget_tokens"] == 4096
+
+    def test_thinking_budget_disabled_when_non_positive(self, monkeypatch) -> None:
+        monkeypatch.setenv("LOCALCODE_THINKING_BUDGET", "0")
+        p = self._payload("Qwen3.6-35B-A3B-UD-Q8_K_XL.gguf", think=True)
+        assert "thinking_budget_tokens" not in p
+
     def test_qwen_instruct_profile(self) -> None:
         p = self._payload("Qwen3.6-35B-A3B-UD-Q8_K_XL.gguf", think=False)
         assert p["temperature"] == 0.7
