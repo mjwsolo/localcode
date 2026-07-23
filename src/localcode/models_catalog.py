@@ -78,6 +78,10 @@ class ModelChoice:
     # any entry left unpinned downloads exactly as before.
     revision: str = "main"
     sha256: str | None = None
+    reasoning_control: str = "chat_template"
+    reasoning_budget_tokens: int = 8192
+    preserves_reasoning: bool = True
+    supports_parallel_tools: bool = False
 
     @property
     def hf_url(self) -> str:
@@ -133,7 +137,7 @@ class ModelChoice:
         hidden-reasoning stream to toggle (the status bar shows `n/a`); every
         other catalog arch supports it. Derived from the architecture.
         """
-        return not str(self.architecture or "").lower().startswith("diffusion")
+        return self.reasoning_control != "none"
 
     @property
     def supports_audio_in(self) -> bool:
@@ -267,6 +271,8 @@ CHOICES: list[ModelChoice] = [
             "Apache 2.0. GGUF Q4_K_M is ~15.7 GiB, so treat as a 32 GB+ unified-memory pick until "
             "this stack has measured load/runtime behavior. No LocalCode HumanEval number yet."
         ),
+        reasoning_control="none",
+        reasoning_budget_tokens=0,
     ),
     ModelChoice(
         key="north-mini-code",
@@ -285,6 +291,7 @@ CHOICES: list[ModelChoice] = [
             "on first use (one-time, ~5-12 min) and serves it with stock flags. "
             "Apache 2.0. ~17.9 GiB; recommend 32 GB+ unified memory."
         ),
+        reasoning_budget_tokens=0,
     ),
     ModelChoice(
         key="gemma-q8",

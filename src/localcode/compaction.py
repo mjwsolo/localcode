@@ -113,6 +113,51 @@ def estimate_tokens(messages: list[dict[str, Any]]) -> int:
     return total_chars // _CHARS_PER_TOKEN
 
 
+def protocol_errors(messages: list[dict[str, Any]]) -> list[str]:
+    """Return tool-call/tool-result trajectory violations in transcript order."""
+    pending: set[str] = set()
+    errors: list[str] = []
+    for index, message in enumerate(messages):
+        if message.get("role") == "assistant":
+            for call in message.get("tool_calls") or []:
+                call_id = str(call.get("id") or "")
+                if not call_id:
+                    errors.append(f"assistant[{index}] has a tool call without an id")
+                else:
+                    pending.add(call_id)
+        elif message.get("role") == "tool":
+            call_id = str(message.get("tool_call_id") or "")
+            if call_id not in pending:
+                errors.append(f"tool[{index}] has no preceding call: {call_id}")
+            else:
+                pending.remove(call_id)
+    errors.extend(f"tool call has no result: {call_id}" for call_id in sorted(pending))
+    return errors
+
+
+def normalize_tool_protocol(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Fill legacy/malformed missing tool IDs deterministically in place."""
+    awaiting: list[str] = []
+    serial = 0
+    for message in messages:
+        if message.get("role") == "assistant":
+            for call in message.get("tool_calls") or []:
+                call_id = str(call.get("id") or "")
+                if not call_id:
+                    serial += 1
+                    call_id = f"localcode_call_{serial}"
+                    call["id"] = call_id
+                awaiting.append(call_id)
+        elif message.get("role") == "tool":
+            call_id = str(message.get("tool_call_id") or "")
+            if not call_id and awaiting:
+                call_id = awaiting[0]
+                message["tool_call_id"] = call_id
+            if call_id in awaiting:
+                awaiting.remove(call_id)
+    return messages
+
+
 def _compact_fraction() -> float:
     """The fraction of the usable window at which auto-compaction fires.
 
@@ -290,4 +335,7 @@ def compact(
     compacted: list[dict[str, Any]] = list(sys_msgs)
     compacted.append({"role": "system", "content": memo})
     compacted.extend(keep)
+    normalize_tool_protocol(compacted)
+    if protocol_errors(compacted):
+        return messages
     return compacted

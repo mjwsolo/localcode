@@ -3,6 +3,37 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.3.36 — 2026-07-21
+
+### Added
+- **Capability-aware reasoning requests.** A typed model/provider registry
+  (`reasoning_capabilities.py`) now drives request construction: llama.cpp gets
+  chat-template thinking controls, OpenAI-style providers get `reasoning_effort`,
+  the sampler thinking-budget is only sent for templates that can enforce it, and
+  diffusion models can no longer accidentally enable a reasoning channel they
+  don't have.
+- **Compaction protocol validation.** Compaction now refuses to emit a transcript
+  with a dangling tool call or an orphaned tool result — it returns the original
+  messages instead, preventing a class of wedged-model states.
+- **Configurable round cap + reasoning flags.** New `max_rounds` setting
+  (0 = unlimited, as before; positive caps the loop for batch/eval), plus
+  `run` CLI flags `--max-rounds`, `--thinking {off,auto,on}`, and
+  `--thinking-budget` so a headless run can set the reasoning policy and budget
+  without env vars. Explicit recovery-lifecycle events (`recovery_scheduled` /
+  `recovery_completed` / `recovery_exhausted`, `generation_aborted`) for
+  observability.
+- **Honest headless exit codes.** `run --json` now returns a non-zero exit with
+  status `incomplete` (and the loop's exit reason) when a turn ends without
+  completing, instead of always reporting `ok`.
+- **Bounded continuation** for output-limit truncation: valid visible text is
+  preserved and the model is asked to resume from the exact cutoff (capped, no
+  recap), while partial tool calls are still discarded and never executed.
+
+### Changed
+- Per-round recovery state is now a single immutable `NextRoundPolicy` snapshot
+  instead of a parallel boolean, and `on` remains unconditionally on (the 0.3.35
+  contract).
+
 ## 0.3.35 — 2026-07-21
 
 ### Changed

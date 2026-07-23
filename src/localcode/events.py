@@ -159,10 +159,15 @@ EVENT_BUCKETS: dict[str, str] = {
     # model behavior
     "thinking_abort":         "model",
     "model_loop_detected":    "model",
+    "generation_started":     "model",
+    "generation_aborted":     "model",
     # recovery
     "auto_nudge":             "recovery",
     "compaction":             "recovery",
     "server_reconnect":       "recovery",
+    "recovery_scheduled":     "recovery",
+    "recovery_completed":     "recovery",
+    "recovery_exhausted":     "recovery",
     # error
     "error":                  "error",
 }

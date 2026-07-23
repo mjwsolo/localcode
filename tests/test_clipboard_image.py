@@ -73,7 +73,10 @@ def test_build_user_message_text_only_profile_ignores_images():
     assert msg == {"role": "user", "content": "hi"}
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="clipboard reader is macOS-only")
+@pytest.mark.skipif(
+    sys.platform != "darwin" or __import__("os").environ.get("LOCALCODE_RUN_CLIPBOARD_TESTS") != "1",
+    reason="set LOCALCODE_RUN_CLIPBOARD_TESTS=1 on macOS to mutate the system clipboard",
+)
 def test_read_clipboard_png_round_trip(tmp_path):
     # Write a real PNG to disk, load it onto the clipboard as PNG image
     # DATA (not a file URL), then assert the reader returns valid PNG bytes.

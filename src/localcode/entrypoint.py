@@ -128,6 +128,12 @@ def build_parser() -> argparse.ArgumentParser:
                           "pair with LOCALCODE_SERVER_FLAVOR=vanilla)")
     run.add_argument("--timeout", type=int, default=0,
                      help="abort after N seconds (0 = no limit)")
+    run.add_argument("--max-rounds", type=int, default=None,
+                     help="maximum model/tool rounds (0 = unlimited)")
+    run.add_argument("--thinking", choices=["off", "auto", "on"], default=None,
+                     help="hidden-reasoning policy for this run")
+    run.add_argument("--thinking-budget", type=int, default=None,
+                     help="reasoning-token budget (0 = model default, negative = disable)")
     run.add_argument("--quiet", action="store_true",
                      help="suppress streamed agent output; print only the final answer")
     run.add_argument("--json", action="store_true",
@@ -351,6 +357,14 @@ def main(argv: list[str] | None = None) -> None:
         console.print(f"\n{'[green]✓[/]' if ok else '[yellow]⚠[/]'} {msg}")
         sys.exit(0 if ok else 1)
     if args.command == "run":
+        if args.max_rounds is not None:
+            if args.max_rounds < 0:
+                parser.error("--max-rounds must be 0 or greater")
+            config.runtime.max_rounds = args.max_rounds
+        if args.thinking is not None:
+            config.runtime.internal_thinking_mode = args.thinking
+        if args.thinking_budget is not None:
+            config.runtime.thinking_budget_tokens = args.thinking_budget
         sys.exit(_run_headless(config, args, console))
 
     # --preview-screen: visual-test a screen in isolation. Mocks the
