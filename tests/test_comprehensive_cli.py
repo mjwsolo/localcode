@@ -14,6 +14,17 @@ from pathlib import Path
 
 import pytest
 
+
+def test_headless_reasoning_and_round_flags_parse():
+    from localcode.entrypoint import build_parser
+    args = build_parser().parse_args([
+        "run", "--goal", "x", "--max-rounds", "7",
+        "--thinking", "auto", "--thinking-budget", "4096",
+    ])
+    assert args.max_rounds == 7
+    assert args.thinking == "auto"
+    assert args.thinking_budget == 4096
+
 _SRC = str(Path(__file__).resolve().parent.parent / "src")
 
 

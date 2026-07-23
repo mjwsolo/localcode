@@ -44,6 +44,7 @@ class JsonlEmitter:
         self.prompt_tokens = 0
         self.completion_tokens = 0
         self.total_tokens = 0
+        self.last_turn_end: dict[str, Any] = {}
 
     def _write(self, obj: dict[str, Any]) -> None:
         # Single line, no pretty-printing — each line must be one valid
@@ -67,6 +68,8 @@ class JsonlEmitter:
             self.prompt_tokens += _as_int(payload.get("prompt_tokens"))
             self.completion_tokens += _as_int(payload.get("completion_tokens"))
             self.total_tokens += _as_int(payload.get("total_tokens"))
+        elif event_type == "turn_end":
+            self.last_turn_end = dict(payload)
         record: dict[str, Any] = {"type": event_type}
         record.update(payload)
         self._write(record)
@@ -199,7 +202,12 @@ def run_headless_json(config, args) -> int:
         except Exception:
             pass
 
-    return _emit_result("ok", 0, "completed", result_text or "")
+    turn_end = emitter.last_turn_end
+    completion = str(turn_end.get("completion_status") or "")
+    reason = str(turn_end.get("loop_exit_reason") or "completed")
+    if completion and completion != "completed":
+        return _emit_result("incomplete", 1, reason, result_text or "")
+    return _emit_result("ok", 0, reason, result_text or "")
 
 
 def open_clean_stdout() -> TextIO:
