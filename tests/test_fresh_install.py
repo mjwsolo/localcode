@@ -161,9 +161,10 @@ def test_tui_on_mount_binary_exists():
 
 
 # ── Test 9: CLI autobootstrap sets correct config after run_setup ──
-def test_cli_bootstrap_sets_llama_cpp():
+def test_cli_bootstrap_sets_llama_cpp(monkeypatch, tmp_path):
     """Verify CLI autobootstrap path ends with provider=llama_cpp."""
     from localcode.performance import recommend_preset, apply_preset
+    monkeypatch.setenv("LOCALCODE_HOME", str(tmp_path))
 
     config = _fresh_config()
     machine = _mock_machine_16gb()

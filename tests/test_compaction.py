@@ -19,6 +19,7 @@ from localcode.compaction import (
     KEEP_RECENT_TOKENS_MAX,
     _keep_recent_for_window,
     compact,
+    protocol_errors,
 )
 
 
@@ -112,6 +113,21 @@ def test_ram_none_defaults_to_llm_for_backcompat():
     assert rt.called == 1, "ram_gb=None preserves the original LLM behaviour"
 
 
+def test_compaction_preserves_tool_protocol_pairs():
+    out = compact(_long_history(), _RecordingRuntime(), context_window=65536,
+                  ram_gb=16, keep_recent_tokens=_KEEP)
+    assert protocol_errors(out) == []
+
+
+def test_protocol_validator_detects_orphan_and_dangling_calls():
+    assert protocol_errors([{"role": "tool", "tool_call_id": "missing", "content": "x"}])
+    assert protocol_errors([{
+        "role": "assistant", "content": "", "tool_calls": [
+            {"id": "dangling", "function": {"name": "read_file", "arguments": "{}"}}
+        ],
+    }])
+
+
 def test_keep_recent_scales_with_window():
     tiny = _keep_recent_for_window(16384)
     big = _keep_recent_for_window(262144)
@@ -132,3 +148,27 @@ def test_nothing_to_summarize_returns_unchanged():
     out = compact(short, rt, context_window=262144, ram_gb=128)
     assert out is short, "no old slice → return the input unchanged"
     assert rt.called == 0
+
+
+def test_normalize_tool_protocol_fills_missing_ids():
+    from localcode.compaction import normalize_tool_protocol, protocol_errors
+    msgs = [
+        {"role": "assistant", "tool_calls": [{"function": {"name": "read"}}]},  # no id
+        {"role": "tool", "content": "result"},  # no tool_call_id
+    ]
+    normalize_tool_protocol(msgs)
+    # Both sides now carry the same synthesized id, so the transcript validates.
+    assert msgs[0]["tool_calls"][0]["id"]
+    assert msgs[1]["tool_call_id"] == msgs[0]["tool_calls"][0]["id"]
+    assert protocol_errors(msgs) == []
+
+
+def test_normalize_tool_protocol_leaves_wellformed_untouched():
+    from localcode.compaction import normalize_tool_protocol, protocol_errors
+    msgs = [
+        {"role": "assistant", "tool_calls": [{"id": "abc", "function": {"name": "read"}}]},
+        {"role": "tool", "tool_call_id": "abc", "content": "r"},
+    ]
+    normalize_tool_protocol(msgs)
+    assert msgs[0]["tool_calls"][0]["id"] == "abc"
+    assert protocol_errors(msgs) == []
