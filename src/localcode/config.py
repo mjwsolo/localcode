@@ -50,6 +50,8 @@ temperature = 1.0
 max_context_chars = 200000
 request_timeout_seconds = 600
 max_retries = 3
+max_rounds = 0
+thinking_budget_tokens = 0
 
 [search]
 provider = "duckduckgo"
@@ -96,6 +98,8 @@ class RuntimeConfig:
     adaptive_execution: bool = False
     escalation_enabled: bool = False
     low_overhead_mode: bool = True
+    max_rounds: int = 0  # 0 = unlimited interactive loop; positive for batch/eval
+    thinking_budget_tokens: int = 0  # 0 = catalog default; negative disables
     laptop_26b_runtime_mode: str = "turbo"
     internal_thinking_mode: str = "off"
     quant_preset: str = "balanced"
@@ -227,6 +231,8 @@ def save_config(config: AppConfig) -> Path:
         f"adaptive_execution = {'true' if config.runtime.adaptive_execution else 'false'}\n"
         f"escalation_enabled = {'true' if config.runtime.escalation_enabled else 'false'}\n"
         f"low_overhead_mode = {'true' if config.runtime.low_overhead_mode else 'false'}\n"
+        f"max_rounds = {config.runtime.max_rounds}\n"
+        f"thinking_budget_tokens = {config.runtime.thinking_budget_tokens}\n"
         f'laptop_26b_runtime_mode = "{config.runtime.laptop_26b_runtime_mode}"\n'
         f'internal_thinking_mode = "{config.runtime.internal_thinking_mode}"\n'
         f'quant_preset = "{config.runtime.quant_preset}"\n'
@@ -313,6 +319,8 @@ def load_config() -> AppConfig:
         adaptive_execution=str(os.environ.get("LOCALCODE_ADAPTIVE_EXECUTION", runtime_data.get("adaptive_execution", True))).lower() in {"1", "true", "yes", "on"},
         escalation_enabled=str(os.environ.get("LOCALCODE_ESCALATION_ENABLED", runtime_data.get("escalation_enabled", True))).lower() in {"1", "true", "yes", "on"},
         low_overhead_mode=str(os.environ.get("LOCALCODE_LOW_OVERHEAD_MODE", runtime_data.get("low_overhead_mode", False))).lower() in {"1", "true", "yes", "on"},
+        max_rounds=max(0, int(os.environ.get("LOCALCODE_MAX_ROUNDS", runtime_data.get("max_rounds", runtime_data.get("max_turns", 0))))),
+        thinking_budget_tokens=int(os.environ.get("LOCALCODE_THINKING_BUDGET", runtime_data.get("thinking_budget_tokens", 0))),
         laptop_26b_runtime_mode=os.environ.get("LOCALCODE_LAPTOP_26B_RUNTIME_MODE", runtime_data.get("laptop_26b_runtime_mode", "auto")),
         internal_thinking_mode=os.environ.get("LOCALCODE_INTERNAL_THINKING_MODE", runtime_data.get("internal_thinking_mode", "off")),
         quant_preset=os.environ.get("LOCALCODE_QUANT_PRESET", runtime_data.get("quant_preset", "balanced")),
@@ -447,6 +455,10 @@ def _apply_project_config(config: AppConfig, project_root: Path | None = None) -
         config.runtime.laptop_26b_runtime_mode = str(rt["laptop_26b_runtime_mode"]).strip() or "auto"
     if "internal_thinking_mode" in rt:
         config.runtime.internal_thinking_mode = str(rt["internal_thinking_mode"]).strip() or "off"
+    if "max_rounds" in rt:
+        config.runtime.max_rounds = max(0, int(rt["max_rounds"]))
+    if "thinking_budget_tokens" in rt:
+        config.runtime.thinking_budget_tokens = int(rt["thinking_budget_tokens"])
     if "planner_hints_enabled" in rt:
         config.runtime.planner_hints_enabled = str(rt["planner_hints_enabled"]).lower() in {"1", "true", "yes", "on"}
 

@@ -85,6 +85,8 @@ from .recovery import (
 )
 from .tool_orchestration import prefetch_parallel_tool_calls
 from .streaming import finish_thinking_display, stream_model_round
+from .round_policy import NextRoundPolicy
+from .recovery_controller import content_length_recovery
 from .tool_execution import (
     _HARD_STOP_THRESHOLD,
     ToolExecutionState,
@@ -438,9 +440,10 @@ def run_agent_loop(
     _todo_stuck_count = 0
     _last_todo_remaining = 10**9
     _edit_recovery_nudges = 0
-    # Set when a round aborts on a detected reasoning loop; forces the very next
-    # round to decode with thinking off so the retry escapes the attractor.
-    _force_no_think_next_round = False
+    _next_round_policy: NextRoundPolicy | None = None
+    _content_length_recoveries = 0
+    _content_recovery_active = False
+    _MAX_CONTENT_LENGTH_RECOVERIES = 3
     _MAX_CONSECUTIVE_CORRECTIONS = 2
     _generic_correction_nudges = 0
     # Fires at most once per turn when an identical failing call crosses the
@@ -699,9 +702,11 @@ def run_agent_loop(
     # `itertools.count()` gives an unbounded loop; positive
     # MAX_ROUNDS still works for eval / batch use cases.
     import itertools as _itertools
+    _configured_max_rounds = max(0, int(getattr(app.config.runtime, "max_rounds", 0) or 0))
+    _effective_max_rounds = _configured_max_rounds or MAX_ROUNDS
     _round_iter = (
         () if _deterministic_launch_done else
-        _itertools.count() if MAX_ROUNDS <= 0 else range(MAX_ROUNDS)
+        _itertools.count() if _effective_max_rounds <= 0 else range(_effective_max_rounds)
     )
     for round_num in _round_iter:
         # Cancel check — user typed "stop" while the turn was running.
@@ -800,16 +805,23 @@ def run_agent_loop(
             task_stage=round_task_stage,
             user_text=user_text,
         )
-        # Cycle-breaker: the PREVIOUS round degenerated into a reasoning loop and
-        # aborted. Retrying with the reasoning channel still on re-enters the same
-        # attractor (same prompt, same samplers, same template) — a text nudge
-        # alone doesn't change the decode. So force this one retry to decode with
-        # thinking OFF, which actually changes the generation path and lets the
-        # model emit a tool call. This is fault recovery, not a reinterpretation
-        # of the user's `on` setting: normal rounds keep thinking.
-        if _force_no_think_next_round:
-            round_use_thinking = False
-            _force_no_think_next_round = False
+        from ..reasoning_capabilities import reasoning_capabilities
+        _reasoning_caps = reasoning_capabilities(
+            str(getattr(app.config.runtime, "model", "")),
+            str(getattr(app.config.runtime, "provider", "llama_cpp")),
+        )
+        _requested_thinking = bool(round_use_thinking)
+        round_use_thinking = bool(round_use_thinking and _reasoning_caps.supported)
+        # Single source of truth for this round's decode mode. Normal rounds
+        # carry the round's own thinking decision; a recovery round scheduled by
+        # the PREVIOUS round (a reasoning-loop abort) carries use_thinking=False,
+        # which decodes without the reasoning channel and breaks the attractor.
+        # A text nudge alone re-enters the same attractor (same prompt/samplers/
+        # template) — changing the decode is what actually escapes it. Fault
+        # recovery only; it does not reinterpret the user's `on` setting.
+        _round_policy = _next_round_policy or NextRoundPolicy(round_use_thinking)
+        _next_round_policy = None
+        round_use_thinking = _round_policy.use_thinking
         try:
             _ctx_chars = None
             try:
@@ -902,6 +914,14 @@ def run_agent_loop(
                     ]
             except Exception:
                 pass
+            from ..compaction import normalize_tool_protocol, protocol_errors
+            normalize_tool_protocol(model_messages)
+            _protocol_errors = protocol_errors(model_messages)
+            if _protocol_errors:
+                raise ValueError(
+                    "invalid tool transcript before generation: "
+                    + "; ".join(_protocol_errors[:5])
+                )
             round_tool_schemas = schemas_for_goal(
                 _goal_state.goal_type,
                 user_text,
@@ -930,9 +950,26 @@ def run_agent_loop(
                         len(str(m.get("content") or "")) for m in model_messages
                     ),
                     use_thinking=bool(round_use_thinking),
+                    requested_thinking=_requested_thinking,
+                    effective_thinking=bool(round_use_thinking),
+                    reasoning_family=_reasoning_caps.family,
+                    reasoning_control=_reasoning_caps.control.value,
+                    thinking_budget_tokens=int(
+                        getattr(app.config.runtime, "thinking_budget_tokens", 0) or 0
+                    ),
+                    recovery_reason=_round_policy.recovery_reason,
+                    recovery_attempt=_round_policy.recovery_attempt,
                     max_output_tokens=int(MAX_OUTPUT_TOKENS),
                     tool_schema_count=len(round_tool_schemas),
                     tool_schemas=round_tool_names,
+                )
+                _emit_round(
+                    "generation_started",
+                    turn_id=_turn_id,
+                    round_idx=round_num,
+                    requested_thinking=_requested_thinking,
+                    effective_thinking=bool(round_use_thinking),
+                    reasoning_family=_reasoning_caps.family,
                 )
             except Exception:
                 pass
@@ -977,6 +1014,29 @@ def run_agent_loop(
                 _stream_result.total_tokens
                 or ((_stream_result.prompt_tokens or 0) + (_stream_result.completion_tokens or 0))
             )
+            if _round_policy.recovery_reason and not _stream_result.thinking_abort:
+                try:
+                    from ..events import emit as _emit_recovered
+                    _emit_recovered(
+                        "recovery_completed",
+                        reason=_round_policy.recovery_reason,
+                        attempt=_round_policy.recovery_attempt,
+                        finish_reason=_stream_result.finish_reason,
+                    )
+                except Exception:
+                    pass
+            if _content_recovery_active and _stream_result.finish_reason != "length":
+                try:
+                    from ..events import emit as _emit_content_recovered
+                    _emit_content_recovered(
+                        "recovery_completed",
+                        reason="max_output_tokens",
+                        attempts=_content_length_recoveries,
+                        finish_reason=_stream_result.finish_reason,
+                    )
+                except Exception:
+                    pass
+                _content_recovery_active = False
         except KeyboardInterrupt:
             out.print_info("Interrupted.")
             _loop_exit_reason = "stream_interrupt"
@@ -1010,7 +1070,14 @@ def run_agent_loop(
                 # the SAME round with thinking off (consumed at the top of the
                 # loop), which changes the generation path and breaks the loop.
                 _thinking_loop_recoveries += 1
-                _force_no_think_next_round = True
+                _next_round_policy = _round_policy.recover_without_thinking("reasoning_loop")
+                try:
+                    from ..events import emit as _emit_recovery
+                    _emit_recovery("generation_aborted", reason="reasoning_loop", round_idx=round_num)
+                    _emit_recovery("recovery_scheduled", reason="reasoning_loop", mode="no_thinking",
+                                   attempt=_thinking_loop_recoveries)
+                except Exception:
+                    pass
                 out.notice(
                     "Model reasoning started repeating itself — retrying this "
                     "step without deep reasoning so it acts instead of looping."
@@ -1148,6 +1215,47 @@ def run_agent_loop(
             )
         except Exception:
             pass
+
+        # Claude-style bounded continuation for ordinary content truncation.
+        # Keep valid visible content, but ask the model to resume directly from
+        # the cutoff without recap. Partial tool calls are handled separately
+        # below and are always discarded rather than executed.
+        if (
+            _round_finish_reason == "length"
+            and not tool_calls
+            and not _round_pending_tool_count
+        ):
+            _length_decision = content_length_recovery(
+                _content_length_recoveries, _MAX_CONTENT_LENGTH_RECOVERIES
+            )
+            if _length_decision.action == "retry":
+                _content_length_recoveries = _length_decision.attempt
+                _content_recovery_active = True
+                # This fragment is valid user-visible output. Preserve it in
+                # the turn result before continuing; only partial tool calls
+                # are discarded.
+                if content:
+                    full_response.append(content)
+                messages.append({
+                    "role": "user",
+                    "content": _length_decision.message,
+                })
+                _ephemeral_nudge_indices.append(len(messages) - 1)
+                try:
+                    from ..events import emit as _emit_continue
+                    _emit_continue("recovery_scheduled", reason="max_output_tokens",
+                                   mode="continue_from_cutoff", attempt=_content_length_recoveries)
+                except Exception:
+                    pass
+                continue
+            try:
+                from ..events import emit as _emit_exhausted
+                _emit_exhausted("recovery_exhausted", reason="max_output_tokens",
+                                attempts=_content_length_recoveries)
+            except Exception:
+                pass
+            _loop_exit_reason = "max_output_recovery_exhausted"
+            break
 
         if _same_round_signature_count >= 5:
             try:
@@ -2414,8 +2522,8 @@ def run_agent_loop(
         # (i.e. `range(MAX_ROUNDS)` was consumed without a `break`).
         # When MAX_ROUNDS<=0 we use `itertools.count()` which never
         # exhausts, so this branch only fires for a positive cap.
-        if MAX_ROUNDS > 0:
-            out.print_info(f"Reached max rounds ({MAX_ROUNDS})")
+        if _effective_max_rounds > 0:
+            out.print_info(f"Reached max rounds ({_effective_max_rounds})")
             _loop_exit_reason = "max_rounds"
 
     # Fallback: if we somehow exited without setting a reason, mark
