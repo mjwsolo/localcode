@@ -1,0 +1,5 @@
+{"type":"run_start","schema_version":"1.0"}
+{"type":"tool_call","name":"bash"}
+{"type":"tool_result","name":"bash","status":"error"}
+{"type":"round_end","round_idx":0}
+{"type":"result","status":"incomplete","exit_code":1,"reason":"truncated_tool_call_exhausted","tokens":{"prompt":3,"completion":3,"total":6}}

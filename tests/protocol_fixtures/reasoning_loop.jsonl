@@ -1,0 +1,7 @@
+{"type":"run_start","schema_version":"1.0","run_id":"r-002"}
+{"type":"round_start","round_idx":0}
+{"type":"thinking_abort","reason":"loop","round_idx":0}
+{"type":"recovery_scheduled","reason":"reasoning_loop","mode":"no_thinking","attempt":1}
+{"type":"round_end","round_idx":0}
+{"type":"turn_end","completion_status":"stopped_early","loop_exit_reason":"thinking_loop_exhausted"}
+{"type":"result","status":"incomplete","exit_code":1,"reason":"thinking_loop_exhausted","final_text":"","tokens":{"prompt":900,"completion":80,"total":980}}
