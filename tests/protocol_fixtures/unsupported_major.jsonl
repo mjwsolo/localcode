@@ -1,0 +1,2 @@
+{"type":"run_start","schema_version":"2.0","run_id":"r-005"}
+{"type":"result","status":"ok","exit_code":0,"reason":"completed","tokens":{"prompt":1,"completion":1,"total":2}}

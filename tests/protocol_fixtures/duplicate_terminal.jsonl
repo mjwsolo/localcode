@@ -1,0 +1,3 @@
+{"type":"run_start","schema_version":"1.0"}
+{"type":"result","status":"ok","exit_code":0,"reason":"completed","tokens":{"prompt":1,"completion":1,"total":2}}
+{"type":"result","status":"ok","exit_code":0,"reason":"completed","tokens":{"prompt":1,"completion":1,"total":2}}
