@@ -23,7 +23,7 @@
 ## Install
 
 ```bash
-pip install localcode
+pip install localcode      # or: uv pip install localcode
 ```
 
 ## Run
@@ -32,8 +32,6 @@ pip install localcode
 cd your-project
 localcode
 ```
-
-That's it. First launch builds the inference server and downloads the model (~5 min, one time). After that, startup is ~15 seconds.
 
 ## Docs
 
