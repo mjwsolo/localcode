@@ -1,0 +1,6 @@
+{"type":"run_start","schema_version":"1.9","run_id":"r-004"}
+{"type":"quantum_reasoning_step","novel_field":"future","round_idx":0}
+{"type":"tool_call","name":"read_file","brand_new_field":42}
+{"type":"tool_result","name":"read_file","status":"ok"}
+{"type":"round_end","round_idx":0}
+{"type":"result","status":"ok","exit_code":0,"reason":"completed","final_text":"ok","tokens":{"prompt":10,"completion":2,"total":12}}
