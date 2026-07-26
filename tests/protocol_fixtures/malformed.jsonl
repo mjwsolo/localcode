@@ -1,0 +1,5 @@
+{"type":"run_start","schema_version":"1.0"}
+this is not json at all
+{"type":"round_end","round_idx":0}
+{ broken json
+{"type":"result","status":"ok","exit_code":0,"reason":"completed","tokens":{"prompt":5,"completion":5,"total":10}}

@@ -1,0 +1,13 @@
+{"type":"run_start","schema_version":"1.0","run_id":"r-001","localcode_version":"0.3.36"}
+{"type":"turn_start"}
+{"type":"round_start","round_idx":0}
+{"type":"tool_call","name":"read_file","round_idx":0}
+{"type":"tool_result","name":"read_file","status":"ok","round_idx":0}
+{"type":"round_end","round_idx":0}
+{"type":"round_start","round_idx":1}
+{"type":"tool_call","name":"write_file","round_idx":1}
+{"type":"tool_result","name":"write_file","status":"ok","round_idx":1}
+{"type":"round_end","round_idx":1}
+{"type":"turn_tokens","prompt_tokens":"1200","completion_tokens":"340","total_tokens":"1540"}
+{"type":"turn_end","completion_status":"completed","loop_exit_reason":"completed"}
+{"type":"result","status":"ok","exit_code":0,"reason":"completed","final_text":"Done.","tokens":{"prompt":1200,"completion":340,"total":1540}}
