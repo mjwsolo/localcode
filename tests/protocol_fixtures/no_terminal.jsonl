@@ -1,0 +1,4 @@
+{"type":"run_start","schema_version":"1.0","run_id":"r-003"}
+{"type":"round_start","round_idx":0}
+{"type":"tool_call","name":"bash"}
+{"type":"round_end","round_idx":0}
