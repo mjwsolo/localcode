@@ -180,21 +180,21 @@ def guard_edit(app: Any, path: Path, display_path: str) -> str | None:
     reason = check(app, path)
     if reason == "unread":
         return (
-            f"Error: read {display_path} before editing it. You are editing a "
+            f"REJECTED: read {display_path} before editing it. You are editing a "
             f"file you have not read this session, so `old_string` is being "
             f"matched against text you have not seen. Call read_file "
             f"path={display_path!r} first, then edit with an exact anchor."
         )
     if reason == "partial":
         return (
-            f"Error: you only read PART of {display_path} (offset/limit or a "
+            f"REJECTED: you only read PART of {display_path} (offset/limit or a "
             f"truncated view). Read the whole file — or at least the full "
             f"region around your edit — before editing, so `old_string` "
             f"matches the current text. Call read_file path={display_path!r}."
         )
     if reason == "stale":
         return (
-            f"Error: {display_path} changed on disk since you read it (an edit "
+            f"REJECTED: {display_path} changed on disk since you read it (an edit "
             f"elsewhere, a formatter, or another process). Your `old_string` "
             f"may no longer match. Re-read it (read_file path={display_path!r}) "
             f"to get the current text, then edit again."
@@ -215,7 +215,7 @@ def guard_overwrite(app: Any, path: Path, display_path: str, existed: bool) -> s
         return None
     if check(app, path) == "stale":
         return (
-            f"Error: {display_path} changed on disk since you last read it. "
+            f"REJECTED: {display_path} changed on disk since you last read it. "
             f"Overwriting now would silently clobber those changes. Re-read it "
             f"(read_file path={display_path!r}) to see the current contents, "
             f"then rewrite intentionally."

@@ -70,10 +70,14 @@ LocalCode is early software. Hardware support is expected to broaden, but only t
 
 | Mac | Memory | Status | Notes |
 | --- | ---: | --- | --- |
-| M4 MacBook | 16 GB | Tested | Primary development and validation machine |
+| M5 Apple Silicon | up to 128 GB | Tested | Primary development machine (M5 Max) |
+| M4 MacBook | 16 GB | Tested | Validated at the 16 GB floor |
 | M1/M2/M3 Apple Silicon | 16 GB+ | Not yet tested | Expected to work, but needs validation |
 | M4 Apple Silicon | 24 GB+ | Not yet tested | Expected to support larger contexts, but needs validation |
 | Intel Mac | Any | Not supported | LocalCode targets Apple Silicon |
+
+> Linux installs and runs in CI for development, but Apple Silicon is the
+> supported target — the Metal-accelerated inference path is Mac-only.
 
 ## Models
 

@@ -59,7 +59,7 @@ def test_edit_unread_file_refused_once_armed(tmp_path: Path) -> None:
     ctx = _ctx(tmp_path)
     _read(ctx, "a.py")  # arms the session
     out = edit_file(ctx, {"path": "b.py", "old_string": "bravo", "new_string": "x"})
-    assert out.startswith("Error:")
+    assert out.startswith("REJECTED:")
     assert "read" in out.lower() and "b.py" in out
     assert (tmp_path / "b.py").read_text() == "bravo\n"  # unchanged
 
@@ -69,7 +69,7 @@ def test_partial_read_does_not_satisfy_guard(tmp_path: Path) -> None:
     ctx = _ctx(tmp_path)
     _read(ctx, "a.py", offset=1)  # partial (offset > 0)
     out = edit_file(ctx, {"path": "a.py", "old_string": "l2", "new_string": "X"})
-    assert out.startswith("Error:")
+    assert out.startswith("REJECTED:")
     assert "part" in out.lower()
 
 
@@ -92,7 +92,7 @@ def test_stale_file_refused(tmp_path: Path) -> None:
     st = p.stat()
     os.utime(p, (st.st_atime, st.st_mtime + 10))
     out = edit_file(ctx, {"path": "a.py", "old_string": "ALPHA", "new_string": "x"})
-    assert out.startswith("Error:")
+    assert out.startswith("REJECTED:")
     assert "changed on disk" in out
 
 
@@ -139,7 +139,7 @@ def test_write_overwrite_of_stale_file_refused(tmp_path: Path) -> None:
     st = p.stat()
     os.utime(p, (st.st_atime, st.st_mtime + 10))
     out = write_file(ctx, {"path": "a.py", "content": "my full rewrite\n"})
-    assert out.startswith("Error:")
+    assert out.startswith("REJECTED:")
     assert "clobber" in out
     assert (tmp_path / "a.py").read_text() == "changed by someone else\n"
 
@@ -289,3 +289,17 @@ def test_redact_old_write_args_never_strips_bodies() -> None:
     # Every write body must survive — none redacted.
     assert dumped.count("print('hello')") == 5 * 200
     assert "REDACTED" not in dumped
+
+
+def test_guard_steers_render_calm_not_red():
+    """Read-before-edit / staleness guards are deliberate STEERS (the model
+    re-reads and recovers), not failures. They must use the REJECTED prefix so
+    the loop renders them as a calm neutral note, not an alarming red error
+    block (the pre-marketing UX wart where a blocked write flashed red)."""
+    from localcode.tools import read_state as rs
+    import inspect
+    src = inspect.getsource(rs.guard_edit) + inspect.getsource(rs.guard_overwrite)
+    # No guard steer may start with a bare "Error:" (that path renders red).
+    assert 'f"Error:' not in src, "guard steers must not use the red Error: prefix"
+    # They must use REJECTED so loop.py's is_rejected calm-render path catches them.
+    assert 'REJECTED:' in src
