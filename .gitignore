@@ -90,3 +90,6 @@ nohup.out
 bench_*.json
 SESSION_HANDOFF.md
 .gstack/
+
+# Internal planning/strategy docs — never publish
+docs/plans/
