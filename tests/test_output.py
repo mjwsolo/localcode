@@ -129,6 +129,20 @@ class TestToolResult:
         assert om.state.tool_actions[0].status == "error"
         om._stop_indicator()
 
+    def test_tool_error_renders_amber_not_red(self) -> None:
+        """A tool error is normal recoverable agentic work — it renders calm
+        amber (\\033[33m), never alarm red (\\033[31m). Red is reserved for a
+        terminal, turn-ending failure via set_error."""
+        om = OutputManager()
+        buf = io.StringIO()
+        with patch("sys.stdout", buf):
+            idx = om.log_tool("edit_file", "a.py")
+            om.tool_result("REJECTED: read a.py before editing it", error=True, idx=idx)
+        out = buf.getvalue()
+        assert "\033[33m" in out          # amber
+        assert "\033[31m" not in out      # never red at tool level
+        om._stop_indicator()
+
     def test_tool_result_tree_indentation(self) -> None:
         """Output should use tree connector characters."""
         om = OutputManager()

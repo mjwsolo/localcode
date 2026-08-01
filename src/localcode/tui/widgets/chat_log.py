@@ -1588,7 +1588,10 @@ class ChatLog(RichLog):
                 prefix = "    ⎿ " if i == 0 else "    │ "
                 line = Text(no_wrap=True, overflow="ellipsis")
                 line.append(prefix, style="dim")
-                line.append(l[:200], style="bold red" if i == 0 else "red")
+                # Calm amber (C.warning), not alarm red: a tool error is normal
+                # recoverable agentic work, not a failure the user must act on.
+                # Red stays reserved for terminal, turn-ending errors.
+                line.append(l[:200], style=f"bold {C.warning}" if i == 0 else C.warning)
                 self.write(line)
             if len(err_lines) > len(shown):
                 tail = Text(no_wrap=True)

@@ -285,8 +285,11 @@ class OutputManager:
         self._stop_indicator()
         lines = result.strip().splitlines()
         if error:
+            # A tool returning an error is normal, recoverable agentic operation
+            # (the model reads it and adjusts) — render it calm amber, NOT alarm
+            # red. Red is reserved for a terminal, turn-ending failure (set_error).
             for line in lines[:5]:
-                sys.stdout.write(f"\033[31m  └ {line[:90]}\033[0m\n")
+                sys.stdout.write(f"\033[33m  └ {line[:90]}\033[0m\n")
         elif lines:
             max_lines = 8
             for i, line in enumerate(lines[:max_lines]):
