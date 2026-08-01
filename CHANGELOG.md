@@ -3,6 +3,21 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.3.37 — 2026-08-01
+
+### Fixed
+- **Calmer error UX.** A tool returning an error is normal, recoverable agentic
+  work (the model reads it and adjusts) — but LocalCode painted every one in
+  alarm-red, so routine successful runs *looked* like they were failing. Now:
+  guardrail steers (read-before-edit / overwrite-staleness redirects) render as
+  a quiet neutral note, other recovered tool errors render calm amber, and red
+  is reserved exclusively for terminal, turn-ending failures.
+
+### Docs
+- README tested-hardware table adds the M5 (M5 Max, 128 GB) primary-dev row and
+  notes that Linux is CI/dev-only while Apple Silicon (Metal) is the supported
+  target.
+
 ## 0.3.36 — 2026-07-21
 
 ### Added
