@@ -171,3 +171,25 @@ def test_redact_masks_secret_fields_recursively():
     assert red["servers"][0]["url"] == "http://x"
     # input not mutated
     assert cfg["api_key"] == "sk-live-xxx"
+
+
+# ── regression: missing terminal fields must be "", never "None" ─────
+
+def test_missing_terminal_fields_are_empty_not_none_string():
+    """A result event may omit optional fields (final_text especially). The
+    normalized outcome must surface "" for a missing field, never the literal
+    string "None" — regression: str(None) is truthy, so a trailing `or ""`
+    could not rescue it."""
+    # final_text omitted (the common case — it's optional)
+    out = outcome_from_parse(parse_stream(
+        ['{"type":"result","status":"ok","reason":"completed"}']))
+    assert out.final_text == ""
+    # status omitted entirely
+    out2 = outcome_from_parse(parse_stream(
+        ['{"type":"result","reason":"completed"}']))
+    assert out2.status == ""
+    assert out2.raw_reason == "completed"
+    # present values still pass through untouched
+    out3 = outcome_from_parse(parse_stream(
+        ['{"type":"result","status":"ok","reason":"completed","final_text":"hi"}']))
+    assert out3.final_text == "hi"
