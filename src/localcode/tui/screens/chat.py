@@ -4008,6 +4008,14 @@ class ChatScreen(Screen):
             # was still running ask() — two agent loops mutating one session.
             if event.worker.name == "run_agent_turn":
                 self._on_turn_done()
+        elif event.state == WorkerState.CANCELLED:
+            # Esc-to-interrupt cancels the worker (`_interrupt_turn` calls
+            # `w.cancel()`), so a cancelled agent turn lands here — NOT in the
+            # SUCCESS branch. Without this the turn never finalizes: the
+            # `◆ thinking…` indicator keeps animating and `_agent_busy` stays
+            # True (input wedged) after a cancel. Mirror the SUCCESS/ERROR cleanup.
+            if event.worker.name == "run_agent_turn":
+                self._on_turn_done()
 
     def _recover_stuck_state(self) -> None:
         """Clear blocking flags after a worker crash so the UI can't wedge.

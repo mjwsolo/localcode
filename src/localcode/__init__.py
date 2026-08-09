@@ -8,4 +8,4 @@ from importlib.metadata import PackageNotFoundError, version as _pkg_version
 try:
     __version__ = _pkg_version("localcode")
 except PackageNotFoundError:  # not installed (e.g. raw source checkout)
-    __version__ = "0.3.38"
+    __version__ = "0.3.39"
