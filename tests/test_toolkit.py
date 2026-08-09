@@ -411,3 +411,18 @@ class TestMCPTransportConfig:
                                                 "url": "https://x"})
         with pytest.raises(RuntimeError):
             cli._make_transport()
+
+
+def test_glob_excludes_noise_before_truncating(tmp_path):
+    """Regression: the noise-dir exclusion must run BEFORE the 100-item cut,
+    or a repo whose newest 100 matches are node_modules/.venv hides real source."""
+    import types
+    from localcode.tools import glob_tool
+    (tmp_path / "real_module.py").write_text("x = 1\n")          # older mtime
+    nm = tmp_path / "node_modules" / "pkg"
+    nm.mkdir(parents=True)
+    for i in range(120):                                          # newer, would fill first 100
+        (nm / f"f{i}.py").write_text("y\n")
+    out = glob_tool.execute(types.SimpleNamespace(repo=tmp_path), {"pattern": "**/*.py"})
+    assert "real_module.py" in out          # was hidden past the [:100] cut
+    assert "node_modules" not in out        # noise excluded
