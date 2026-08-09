@@ -152,8 +152,10 @@ def outcome_from_parse(parsed: ParseResult) -> RunOutcome:
     result carrying an error status counts toward `tool_failures`.
     """
     terminal = parsed.terminal
-    status = str(terminal.get("status") if terminal else "") or ""
-    reason = str(terminal.get("reason") if terminal else "") or ""
+    # Coalesce a missing/None field to "" BEFORE str(), otherwise str(None)
+    # yields the literal "None" (truthy, so a trailing `or ""` can't rescue it).
+    status = str(terminal.get("status") or "") if terminal else ""
+    reason = str(terminal.get("reason") or "") if terminal else ""
 
     # A protocol violation (missing/duplicate terminal) is itself a category —
     # the stream can't be trusted, so we don't pretend to know the LocalCode
@@ -190,7 +192,7 @@ def outcome_from_parse(parsed: ParseResult) -> RunOutcome:
         status=status,
         category=category,
         raw_reason=reason,
-        final_text=str(terminal.get("final_text") if terminal else "") or "",
+        final_text=str(terminal.get("final_text") or "") if terminal else "",
         prompt_tokens=prompt,
         completion_tokens=completion,
         total_tokens=total,

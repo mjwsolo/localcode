@@ -3,6 +3,29 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.3.38 — 2026-08-09
+
+### Fixed
+
+- **Honest headless exit codes (for real this time).** `localcode run --json`
+  decided its exit status from `emitter.last_turn_end`, but `turn_end` is
+  emitted to the events file, not through the `OutputManager` callback the
+  emitter listens on — so that dict was always empty and *every* headless run
+  exited `0` / `status:"ok"` / `reason:"completed"`, even on `stall_exhausted`,
+  `max_rounds`, `blocked_question`, or an errored loop. CI and eval consumers
+  keying on the exit code treated every failure as a pass. The exit decision
+  now reads the completion status the loop persists on the app each turn.
+- **`glob` no longer hides real files behind noise directories.** The
+  `.git` / `node_modules` / `.venv` / `__pycache__` exclusion ran *after* the
+  100-item cap, so in a repo whose 100 most-recently-modified matches were
+  dominated by `node_modules/` the tool returned truncated results — or "No
+  matches" — while real source sat just past the cut. Exclude first, then cap.
+- **Protocol outcome: a missing terminal field no longer becomes the string
+  `"None"`.** `outcome_from_parse` used `str(x.get(k) if x else "") or ""`; a
+  `result` event without an optional field (`final_text` is optional) produced
+  the literal `"None"` (truthy, so the trailing `or ""` couldn't rescue it),
+  polluting every normalized `RunOutcome`. Coalesce to `""` before `str()`.
+
 ## 0.3.37 — 2026-08-01
 
 ### Fixed
