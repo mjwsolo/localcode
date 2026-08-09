@@ -3,6 +3,22 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.3.39 — 2026-08-09
+
+### Fixed
+
+- **The reasoning ("thinking") indicator no longer lingers after you press Esc.**
+  Esc-to-interrupt cancels the turn worker, which lands in `WorkerState.CANCELLED`
+  — but the worker-state handler only cleaned up on `SUCCESS`/`ERROR`, so a cancel
+  never finalized the turn: the animated `◆ thinking…` indicator kept spinning
+  and input stayed wedged (`_agent_busy` stuck `True`). Cancelled agent turns now
+  finalize like any other, so the indicator disappears and input is restored.
+
+### Docs
+
+- Dropped the redundant "Intel Mac — Not supported" row from the tested-hardware
+  table; the Apple Silicon requirement is already stated under Requirements.
+
 ## 0.3.38 — 2026-08-09
 
 ### Fixed
