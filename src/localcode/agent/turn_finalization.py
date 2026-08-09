@@ -123,6 +123,7 @@ def finalize_turn(
         app._last_turn_task_status = task_status
         app._last_turn_task_stage = final_task_stage
         app._last_turn_blocked_reason = blocked_reason
+        app._last_turn_loop_exit_reason = loop_exit_reason
         app._last_turn_goal = goal_state.as_dict()
     except Exception as exc:
         _emit_finalization_error(turn_id, "turn_store_update", exc)

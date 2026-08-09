@@ -98,6 +98,25 @@ def _as_int(value: Any) -> int:
         return 0
 
 
+def _terminal_from_status(
+    *, completion_status: str, blocked_reason: str, loop_exit_reason: str,
+    final_text: str = "",
+) -> tuple[str, int, str, str]:
+    """Map the loop's persisted turn status to a headless (status, exit, reason).
+
+    A completion_status of `completed` (the only success value from
+    `status_for_exit`) exits 0/`ok`; any other non-empty status (blocked,
+    interrupted, stopped_early, error, incomplete) exits 1/`incomplete`. An
+    unset status falls through to `ok` so a run that never populated it isn't
+    reported as a false failure.
+    """
+    completion = (completion_status or "").strip()
+    reason = (blocked_reason or loop_exit_reason or "completed").strip() or "completed"
+    if completion and completion != "completed":
+        return "incomplete", 1, reason, final_text or ""
+    return "ok", 0, reason, final_text or ""
+
+
 def run_headless_json(config, args) -> int:
     """Headless run that emits the agent event stream as JSONL on stdout.
 
@@ -202,12 +221,17 @@ def run_headless_json(config, args) -> int:
         except Exception:
             pass
 
-    turn_end = emitter.last_turn_end
-    completion = str(turn_end.get("completion_status") or "")
-    reason = str(turn_end.get("loop_exit_reason") or "completed")
-    if completion and completion != "completed":
-        return _emit_result("incomplete", 1, reason, result_text or "")
-    return _emit_result("ok", 0, reason, result_text or "")
+    # `turn_end` is emitted to the events file, not through the OutputManager
+    # callback, so `emitter.last_turn_end` is always empty and can't drive the
+    # exit code. Read the status the loop persisted on the app instead
+    # (finalize_turn sets these `_last_turn_*` attrs every turn).
+    status, code, reason, text = _terminal_from_status(
+        completion_status=str(getattr(app, "_last_turn_completion_status", "") or ""),
+        blocked_reason=str(getattr(app, "_last_turn_blocked_reason", "") or ""),
+        loop_exit_reason=str(getattr(app, "_last_turn_loop_exit_reason", "") or ""),
+        final_text=result_text or "",
+    )
+    return _emit_result(status, code, reason, text)
 
 
 def open_clean_stdout() -> TextIO:

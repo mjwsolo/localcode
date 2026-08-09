@@ -196,3 +196,23 @@ def test_emitter_accumulates_tokens():
     lines = [json.loads(l) for l in buf.getvalue().splitlines() if l.strip()]
     result = lines[-1]
     assert result["tokens"] == {"prompt": 13, "completion": 7, "total": 20}
+
+
+def test_terminal_from_status_maps_failure_to_nonzero_exit():
+    """Regression: headless exit code must reflect the loop's real completion
+    status. Previously it read the always-empty `emitter.last_turn_end`, so a
+    stalled/blocked/errored run still reported ('ok', 0)."""
+    from localcode.headless_json import _terminal_from_status as T
+    # the only success value from status_for_exit
+    assert T(completion_status="completed", blocked_reason="",
+             loop_exit_reason="model_done")[:2] == ("ok", 0)
+    # a stalled run must NOT report success
+    assert T(completion_status="incomplete", blocked_reason="",
+             loop_exit_reason="stall_exhausted")[:2] == ("incomplete", 1)
+    # blocked-on-user-input: non-zero exit, reason carries the blocked text
+    s, code, reason, _ = T(completion_status="blocked_user_input",
+                           blocked_reason="need creds",
+                           loop_exit_reason="blocked_question")
+    assert (s, code) == ("incomplete", 1) and reason == "need creds"
+    # an unpopulated status is not a false failure
+    assert T(completion_status="", blocked_reason="", loop_exit_reason="")[:2] == ("ok", 0)
