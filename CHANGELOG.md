@@ -3,6 +3,20 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.3.40 — 2026-08-15
+
+### Model catalog
+
+- **Qwen 3.8 27B** — added Unsloth's new `Qwen3.8-27B-GGUF`: a **dense**
+  vision-language model (image input via the F16 mmproj), **thinking on by
+  default**, native **262K** context. Two curated quants — **UD-Q4_K_XL**
+  (17.9 GB, ≥32 GB Macs) and near-lossless **UD-Q8_K_XL** (31.5 GB, ≥64 GB).
+  It runs on the bundled TurboQuant server's native `qwen35` dense architecture
+  (turbo4 KV + context checkpoints), and automatically gets Qwen's vendor-optimal
+  sampler (temp 0.6 thinking / 0.7 instruct, top_k 20, min_p 0), the Qwen
+  tool-calling adapter, and the chat-template thinking budget — full parity with
+  the existing Qwen 3.6 entries.
+
 ## 0.3.39 — 2026-08-09
 
 ### Fixed
