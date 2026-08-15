@@ -78,6 +78,8 @@ _EXPECTED_VISION = {
     "qwen": True,
     "gemma-q8": True,
     "qwen-q8": True,
+    "qwen38": True,
+    "qwen38-q8": True,
     "diffusiongemma": False,
     "north-mini-code": False,
 }
@@ -243,3 +245,18 @@ class TestEstimateDecodeTokS:
         assert 60 <= result <= 105, (
             f"Gemma IQ3 estimated {result} tok/s on M5 Max — expected 60-105 range"
         )
+
+
+def test_qwen38_dense_vision_entry_wired():
+    """Qwen 3.8 27B: dense qwen35 arch (natively served), vision + thinking,
+    and it resolves to the QWEN sampler/family so it gets Qwen's tight profile."""
+    from localcode.models_catalog import by_filename
+    from localcode.model_families import infer_family_from_profile, ModelFamily
+    for fn in ("Qwen3.8-27B-UD-Q4_K_XL.gguf", "Qwen3.8-27B-UD-Q8_K_XL.gguf"):
+        c = by_filename(fn)
+        assert c is not None, f"{fn} missing from catalog"
+        assert c.architecture == "qwen35"          # dense arch the TurboQuant server ships
+        assert c.supports_vision is True            # mmproj sidecar present
+        assert c.supports_thinking is True          # qwen thinking channel
+        assert c.mmproj_hf_filename == "mmproj-F16.gguf"
+        assert infer_family_from_profile(c.key) == ModelFamily.QWEN
