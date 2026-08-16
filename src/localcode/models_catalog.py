@@ -323,6 +323,21 @@ CHOICES: list[ModelChoice] = [
         mmproj_size_gb=0.9,
         mmproj_hf_filename="mmproj-F16.gguf",
     ),
+    ModelChoice(
+        key="qwen38",
+        name="Qwen 3.8 27B (Q4)",
+        hf_repo="unsloth/Qwen3.8-27B-GGUF",
+        filename="Qwen3.8-27B-UD-Q4_K_XL.gguf",
+        size_gb=17.9,
+        active_params="27B dense (hybrid attention + Mamba-2 SSM, 1 MTP layer)",
+        architecture="qwen35",
+        license="Apache 2.0",
+        humaneval_pass_at_1=None,
+        notes="Dense 27B — every parameter active each token (no MoE routing), so it's heavier per token than the 35B-A3B MoE but denser in capability. Hybrid attention + Mamba-2 SSM with a multi-token-prediction (MTP) layer; the TurboQuant fork loads the transformer stack and skips the MTP block at inference. UD-Q4_K_XL keeps attention/embedding above 4-bit. Needs ~32 GB unified memory to fit with context; comfortable on 48-64 GB Apple Silicon. Pair with the F16 mmproj for image input.",
+        mmproj_filename="mmproj-Qwen3.8-27B-F16.gguf",
+        mmproj_size_gb=0.9,
+        mmproj_hf_filename="mmproj-F16.gguf",
+    ),
 ]
 
 
@@ -556,6 +571,25 @@ MODEL_GROUPS: list[ModelGroup] = [
             "multi-region mmap patch (llama-cpp-turboquant commit 3d66675b8)."
         ),
         mmproj_filename="mmproj-Qwen3.6-35B-A3B-F16.gguf",
+        mmproj_size_gb=0.9,
+        mmproj_hf_filename="mmproj-F16.gguf",
+    ),
+    ModelGroup(
+        key="qwen-3.8-27b",
+        display_name="Qwen 3.8 27B",
+        maker="Alibaba",
+        hf_repo="unsloth/Qwen3.8-27B-GGUF",
+        family="qwen",
+        architecture="qwen35",
+        license="Apache 2.0",
+        notes=(
+            "Alibaba's dense 27B — all params active per token (no MoE routing). "
+            "Hybrid attention + Mamba-2 SSM with a multi-token-prediction layer; "
+            "the TurboQuant fork serves the transformer stack and skips the MTP "
+            "block. Native multimodal: pair any quant with the F16 mmproj for "
+            "image input. Tool calling via Qwen/Hermes format."
+        ),
+        mmproj_filename="mmproj-Qwen3.8-27B-F16.gguf",
         mmproj_size_gb=0.9,
         mmproj_hf_filename="mmproj-F16.gguf",
     ),
