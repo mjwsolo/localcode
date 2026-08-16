@@ -788,6 +788,12 @@ class ChatLog(RichLog):
             return
         self._think_stream_buf = ""
         self._think_stream_active = True
+        # Live-partial state: the trailing (not-yet-newline) line is rendered
+        # in place and rewritten as words arrive, so thinking flows word-by-word
+        # like the answer instead of snapping a whole line at a time.
+        self._think_partial_written = 0   # sublines the live partial occupies
+        self._think_partial_start = -1    # log index where the live partial begins
+        self._think_last_flush = 0.0      # monotonic ts of last partial flush
         self._dispatch_gap("thinking")
         self._history.append(("think_header",))
         self._render_think_header()
@@ -798,13 +804,70 @@ class ChatLog(RichLog):
         if not getattr(self, "_think_stream_active", False):
             self.start_thinking_stream()
         self._think_stream_buf += chunk
-        # Commit completed lines; keep the trailing partial buffered so we
-        # never render half a word mid-flight.
+        # Finalize every COMPLETE line (text before a newline): draw its final
+        # wrapped form, record it to history, and lock it in so the next partial
+        # starts fresh below it.
         while "\n" in self._think_stream_buf:
             line, self._think_stream_buf = self._think_stream_buf.split("\n", 1)
-            self._commit_thinking_line(line)
+            line = line.rstrip()
+            if line:
+                self._render_think_partial(line)
+                self._history.append(("think_line", line))
+            # Lock in whatever we just drew; the next partial is independent.
+            self._think_partial_written = 0
+            self._think_partial_start = -1
+        # Live-render the trailing partial word-by-word, rate-capped exactly like
+        # the content stream (word boundary + coalesce window). This is the fix
+        # for "jerky thinking": before, thinking only flushed on '\n', so at slow
+        # decode a whole line froze for ~2 s then snapped in.
+        tail = self._think_stream_buf
+        if not tail:
+            return
+        boundary = tail[-1] in self._STREAM_WORD_BOUNDARIES
+        now = time.monotonic()
+        if boundary and (now - self._think_last_flush) >= self._STREAM_COALESCE_SEC:
+            self._render_think_partial(tail)
+            self._think_last_flush = now
+
+    def _render_think_partial(self, text: str) -> None:
+        """Draw `text` as the current live thinking line, rewriting in place.
+
+        Mirrors the content stream's pop-and-rewrite (`_flush_stream`) but scoped
+        to ONE logical line (bounded cost) and guarded by an at-tail check so we
+        never pop lines another writer owns.
+        """
+        import textwrap
+        # Pop this partial's previous render — only if it's still the tail.
+        if self._think_partial_start >= 0 and self._think_partial_written > 0:
+            expected_tail = self._think_partial_start + self._think_partial_written
+            if expected_tail == len(self.lines):
+                for _ in range(self._think_partial_written):
+                    self.lines.pop()
+                self._line_counter = max(0, self._line_counter - self._think_partial_written)
+                self._line_cache.clear()
+            # else: lost the tail (a tool widget/rerender wrote after us) — leave
+            # the stale render; we restart the partial at the new bottom.
+        self._think_partial_start = len(self.lines)
+        self._think_partial_written = 0
+        try:
+            avail = self._content_width()
+        except Exception:
+            avail = 76
+        wrapped = textwrap.fill(
+            text, width=max(avail - 4, 30),
+            initial_indent="    ", subsequent_indent="    ",
+        )
+        follow = self.scroll_offset.y >= self.max_scroll_y - 2
+        for wline in wrapped.split("\n"):
+            self.write(Text(wline, style="dim italic"))
+            self._track_lines()
+            self._think_partial_written += 1
+        if follow:
+            self.scroll_end(animate=False)
 
     def _commit_thinking_line(self, line: str) -> None:
+        # Retained for `append_thinking` / non-streaming callers. The live
+        # streaming path uses `_render_think_partial` for word-by-word flow.
         line = line.rstrip()
         if not line:
             return
@@ -814,9 +877,13 @@ class ChatLog(RichLog):
     def end_thinking_stream(self) -> None:
         if not getattr(self, "_think_stream_active", False):
             return
-        if self._think_stream_buf.strip():
-            self._commit_thinking_line(self._think_stream_buf)
+        tail = self._think_stream_buf.strip()
+        if tail:
+            self._render_think_partial(tail)
+            self._history.append(("think_line", tail))
         self._think_stream_buf = ""
+        self._think_partial_written = 0
+        self._think_partial_start = -1
         self._think_stream_active = False
 
     def _render_think_header(self) -> None:
