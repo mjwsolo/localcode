@@ -4586,6 +4586,19 @@ class ChatScreen(Screen):
             verdict, label = "always", "always-allowed for this session"
         elif key in ("3", "n", "escape"):
             verdict, label = "deny", "denied"
+        elif key == "4":
+            # Stop asking entirely: approve this AND flip the session to
+            # FULL_AUTO so nothing prompts for the rest of the session.
+            # Same mechanism as `/permissions` toggling off; re-enable with
+            # `/permissions`.
+            verdict, label = "always", "permissions OFF — auto-approving everything this session (/permissions to re-enable)"
+            try:
+                _eng = self.tui.engine
+                if _eng is not None:
+                    _eng._autonomy = AutonomyLevel.FULL_AUTO
+                    apply_autonomy_to_permissions(_eng.perms, get_policy(AutonomyLevel.FULL_AUTO))
+            except Exception:
+                pass
 
         if verdict is not None:
             # Clear the gate FIRST so any exception below can't leave the
@@ -4598,6 +4611,8 @@ class ChatScreen(Screen):
                 inp = self.query_one("#chat-input", _ChatTextArea)
                 inp.disabled = False
                 inp.focus()
+                # Reflect a permissions-off flip (key "4") in the status bar now.
+                self._update_status()
         else:
             # Invalid key while a decision is required — silence reads as
             # "frozen / broken". Ring the bell and re-show the choices so
@@ -4606,7 +4621,7 @@ class ChatScreen(Screen):
                 self.app.bell()
             except Exception:
                 pass
-            log.append_info("  [dim]press 1/y allow · 2 always · 3/n/Esc deny[/]")
+            log.append_info("  [dim]press 1/y allow · 2 always · 3/n/Esc deny · 4 stop asking[/]")
 
         # Block ALL other keys during approval
         event.prevent_default()
