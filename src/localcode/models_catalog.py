@@ -294,6 +294,32 @@ CHOICES: list[ModelChoice] = [
         reasoning_budget_tokens=0,
     ),
     ModelChoice(
+        key="muse-glimmer",
+        name="Muse Glimmer 30B (Q4)",
+        hf_repo="unsloth/Muse-Glimmer-30B-GGUF",
+        filename="Muse-Glimmer-30B-UD-Q4_K_XL.gguf",
+        size_gb=15.9,
+        active_params="30B dense (+ perception encoder for vision)",
+        architecture="muse_glimmer",
+        license="Apache 2.0",
+        humaneval_pass_at_1=None,
+        notes=(
+            "Meta's Muse Glimmer 30B (Meta Superintelligence Lab, Aug 2026) — a "
+            "multimodal agentic model purpose-built for local deployment: multi-step "
+            "reasoning, tool use, failure recovery, and vision in one model. Unsloth "
+            "Dynamic UD-Q4_K_XL quant. Its muse_glimmer arch isn't in the TurboQuant "
+            "server, so LocalCode builds a dedicated stock llama-server from current "
+            "llama.cpp (PR #26841) on first use (one-time, ~5-12 min) and serves it "
+            "with stock flags + --jinja (required by its chat template). Pair with the "
+            "BF16 perception encoder for image input. ~15.9 GiB; recommend 32 GB+ "
+            "unified memory."
+        ),
+        mmproj_filename="mmproj-Muse-Glimmer-30B-BF16.gguf",
+        mmproj_size_gb=3.85,
+        mmproj_hf_filename="mmproj-Muse-Glimmer-30B-BF16.gguf",
+        reasoning_budget_tokens=0,
+    ),
+    ModelChoice(
         key="gemma-q8",
         name="Gemma 4 26B-A4B (Q8)",
         hf_repo="unsloth/gemma-4-26B-A4B-it-GGUF",
@@ -367,7 +393,7 @@ def _system_ram_gb() -> int:
 # Architectures we never AUTO-recommend (users can still pick them explicitly in
 # the model picker): diffusion needs a separate one-shot runner — not the
 # standard llama-server — and cohere2_moe is unvalidated on this stack.
-_NO_AUTO_RECOMMEND_ARCHS = {"diffusion_gemma", "cohere2_moe"}
+_NO_AUTO_RECOMMEND_ARCHS = {"diffusion_gemma", "cohere2_moe", "muse_glimmer"}
 
 # Capability order for auto-recommend, best → worst for coding-agent use. This
 # is deliberately NOT raw file size: the big MoEs measure ~95% HumanEval here
@@ -607,6 +633,27 @@ MODEL_GROUPS: list[ModelGroup] = [
             "builds a dedicated llama-server from llama.cpp PR #24260 on first "
             "use and serves it with stock flags. 256K context. Text-only."
         ),
+    ),
+    ModelGroup(
+        key="muse-glimmer-30b",
+        display_name="Muse Glimmer 30B",
+        maker="Meta",
+        hf_repo="unsloth/Muse-Glimmer-30B-GGUF",
+        family="muse",
+        architecture="muse_glimmer",
+        license="Apache 2.0",
+        notes=(
+            "Meta's multimodal agentic model for local deployment (Meta "
+            "Superintelligence Lab, Aug 2026): multi-step reasoning, tool use, "
+            "failure recovery, native vision. Unsloth Dynamic quants. Its "
+            "muse_glimmer arch isn't in the TurboQuant server — LocalCode builds a "
+            "dedicated stock llama-server from llama.cpp PR #26841 on first use and "
+            "serves it with stock flags + --jinja. Pair with the BF16 perception "
+            "encoder for image input."
+        ),
+        mmproj_filename="mmproj-Muse-Glimmer-30B-BF16.gguf",
+        mmproj_size_gb=3.85,
+        mmproj_hf_filename="mmproj-Muse-Glimmer-30B-BF16.gguf",
     ),
     ModelGroup(
         key="diffusiongemma-26b-a4b",
