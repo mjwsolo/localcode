@@ -250,28 +250,37 @@ def _tc(tc_id, name, args):
             "function": {"name": name, "arguments": json.dumps(args)}}
 
 
-def test_replayable_results_aged_write_results_preserved() -> None:
+def test_hot_reads_protected_writes_preserved_old_bash_aged() -> None:
+    """Aging preserves write diffs AND the latest read of each hot file (so the
+    model doesn't re-read files it already has), while still aging older
+    non-read replayable output (e.g. bash) to bound context."""
     from localcode.agent.context import _compact_old_tool_results
     big = "x" * 600  # > COMPACT_MIN_CONTENT_CHARS
     msgs = [
         {"role": "system", "content": "sys"},
+        {"role": "assistant", "content": "", "tool_calls": [_tc("b1", "bash", {})]},
+        {"role": "tool", "tool_call_id": "b1", "content": "BASH-OLD " + big},
         {"role": "assistant", "content": "", "tool_calls": [_tc("r1", "read_file", {"path": "a.py"})]},
-        {"role": "tool", "tool_call_id": "r1", "content": "READFILE-OLD " + big},
+        {"role": "tool", "tool_call_id": "r1", "content": "READFILE-A " + big},
         {"role": "assistant", "content": "", "tool_calls": [_tc("w1", "write_file", {"path": "b.py"})]},
         {"role": "tool", "tool_call_id": "w1", "content": "WRITE-DIFF " + big},
+        {"role": "assistant", "content": "", "tool_calls": [_tc("b2", "bash", {})]},
+        {"role": "tool", "tool_call_id": "b2", "content": "BASH-RECENT " + big},
         {"role": "assistant", "content": "", "tool_calls": [_tc("r2", "read_file", {"path": "c.py"})]},
-        {"role": "tool", "tool_call_id": "r2", "content": "READFILE-RECENT " + big},
+        {"role": "tool", "tool_call_id": "r2", "content": "READFILE-C " + big},
     ]
     out = _compact_old_tool_results(msgs, keep_recent=1)
     by_id = {m.get("tool_call_id"): m for m in out if m.get("role") == "tool"}
-    # Old replayable read result is aged (summarized + materially shrunk).
-    assert "summarized" in by_id["r1"]["content"]
-    assert ("x" * 600) not in by_id["r1"]["content"]
-    assert len(by_id["r1"]["content"]) < len("READFILE-OLD " + big)
+    # Old bash output (replayable, NOT a hot read) is aged/shrunk.
+    assert ("x" * 600) not in by_id["b1"]["content"]
+    assert len(by_id["b1"]["content"]) < len("BASH-OLD " + big)
+    # The latest read of each hot file is PROTECTED from aging (the re-read fix).
+    assert by_id["r1"]["content"] == "READFILE-A " + big
+    assert by_id["r2"]["content"] == "READFILE-C " + big
     # Write result (the diff of what the model wrote) is NEVER aged.
     assert by_id["w1"]["content"] == "WRITE-DIFF " + big
     # Most-recent replayable result kept verbatim (keep_recent=1).
-    assert by_id["r2"]["content"] == "READFILE-RECENT " + big
+    assert by_id["b2"]["content"] == "BASH-RECENT " + big
 
 
 def test_redact_old_write_args_never_strips_bodies() -> None:

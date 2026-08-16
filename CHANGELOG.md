@@ -3,6 +3,25 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.3.49 — 2026-08-17
+
+### Fixed
+
+- **The agent stops re-reading files it already has.** Real session traces showed
+  ~68% of all `read_file` calls were re-reads of a handful of actively-used files
+  (one `App.tsx` read 40× after being written), making long coding tasks feel
+  read-heavy instead of write-heavy. Root cause: context aging treated `read_file`
+  results as "replayable" and aged them out after the recent window (while write/
+  edit diffs are never aged), so a file the model read fell out of context and it
+  re-read it — and the system prompt told it to. Fix:
+  - Context aging now **protects the latest read of the ~5 hottest (most-recently-
+    read) files** from being aged out, mirroring how write/edit results are kept —
+    bounded so prefill/TTFT stays capped.
+  - System prompt: explicit "you already have a file's content after reading OR
+    writing it — do NOT re-read to verify"; prefer a complete `write_file` /
+    `multi_edit` over long read→edit→read loops; batch changes and verify ONCE
+    instead of rebuilding after every edit.
+
 ## 0.3.48 — 2026-08-17
 
 ### Added
