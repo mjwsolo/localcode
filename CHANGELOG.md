@@ -3,6 +3,16 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.3.48 — 2026-08-17
+
+### Added
+
+- **Approval prompt now has a `4` = "stop asking" option.** On any permission
+  prompt, pressing `4` approves the current action AND turns off approval prompts
+  for the rest of the session (flips autonomy to FULL_AUTO — everything
+  auto-approved), the same state `/permissions` toggles. Re-enable prompts with
+  `/permissions`. Prompt hint and the invalid-key reminder updated to show it.
+
 ## 0.3.47 — 2026-08-16
 
 ### Fixed
