@@ -45,6 +45,8 @@ def _backend_for(arch: str) -> str:
         return "diffusion_cli"
     if "cohere" in a:
         return "cohere_server"
+    if "muse" in a:
+        return "muse_server"
     return "turboquant_server"
 
 
@@ -67,10 +69,13 @@ def _make_gw(tmp_path: Path, choice, ram_gb: int) -> LocalCodeRuntimeGateway:
     turbo.write_text("#!/bin/sh\n")
     cohere = tmp_path / "llama-server-cohere"
     cohere.write_text("#!/bin/sh\n")
+    muse = tmp_path / "llama-server-muse"
+    muse.write_text("#!/bin/sh\n")
     diff = tmp_path / "llama-diffusion-cli"
     diff.write_text("#!/bin/sh\n")
     cfg.llama_cpp_binary = str(turbo)
     cfg.cohere_server_binary = str(cohere)
+    cfg.muse_server_binary = str(muse)
     cfg.diffusion_cli_binary = str(diff)
     gw = LocalCodeRuntimeGateway(cfg)
     return gw
@@ -92,6 +97,7 @@ def test_every_choice_is_wellformed(choice):
     assert choice.size_gb and choice.size_gb > 0
     assert choice.architecture in {
         "gemma4-iswa", "qwen35moe", "qwen35", "diffusion_gemma", "cohere2_moe",
+        "muse_glimmer",
     }, f"unknown arch {choice.architecture!r}"
     # by_filename must round-trip to a choice carrying the same architecture
     # (this is the dispatch key the runtime keys off).
@@ -136,9 +142,19 @@ def test_server_command_is_sane_for_every_ram(tmp_path, choice, ram_gb):
         for i, tok in enumerate(cmd):
             if tok in ("--cache-type-v", "--cache-type-k"):
                 assert cmd[i + 1] not in _TURBO_CACHE_VALUES, "cohere = stock KV only"
+    elif backend == "muse_server":
+        assert cmd[0].endswith("llama-server-muse")
+        assert "--jinja" in cmd, "Muse Glimmer requires --jinja (its chat template)"
+        # Stock binary: none of the TurboQuant-only flags / KV values.
+        for flag in _TURBO_ONLY:
+            assert flag not in cmd, f"muse server must not get {flag}"
+        for i, tok in enumerate(cmd):
+            if tok in ("--cache-type-v", "--cache-type-k"):
+                assert cmd[i + 1] not in _TURBO_CACHE_VALUES, "muse = stock KV only"
     else:
         assert cmd[0].endswith("llama-server")
         assert not cmd[0].endswith("llama-server-cohere")
+        assert not cmd[0].endswith("llama-server-muse")
 
     # Common required flags.
     assert "--model" in cmd and "--port" in cmd

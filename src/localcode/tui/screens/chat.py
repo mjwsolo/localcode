@@ -3328,6 +3328,22 @@ class ChatScreen(Screen):
                         f"Couldn't build the cohere2moe server: {res}")
                     return
                 engine.config.cohere_server_binary = res
+            # muse_glimmer (Meta Muse Glimmer): same story — the TurboQuant
+            # binary lacks the arch, so build the dedicated stock server on an
+            # in-chat /model swap that bypasses the setup screen.
+            if "muse" in _arch:
+                from ...bootstrap import ensure_muse_server
+                self.app.call_from_thread(
+                    self._set_download_line, "Building Muse Glimmer server (one-time)…")
+                ok, res = ensure_muse_server(
+                    on_progress=lambda m: self.app.call_from_thread(self._set_download_line, m))
+                self.app.call_from_thread(self._clear_download_line)
+                if not ok:
+                    self.app.call_from_thread(
+                        self._on_server_restart_failed,
+                        f"Couldn't build the Muse Glimmer server: {res}")
+                    return
+                engine.config.muse_server_binary = res
             # _restart_server now returns the healthcheck result that
             # ServerManager.restart already waits for (up to 120 s for a
             # 10 GB model cold-load). The previous code threw away that

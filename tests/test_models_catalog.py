@@ -79,6 +79,7 @@ _EXPECTED_VISION = {
     "gemma-q8": True,
     "qwen-q8": True,
     "qwen38": True,
+    "muse-glimmer": True,
     "diffusiongemma": False,
     "north-mini-code": False,
 }

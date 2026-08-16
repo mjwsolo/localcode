@@ -3,6 +3,29 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.3.45 — 2026-08-16
+
+### Added
+
+- **Meta Muse Glimmer 30B support.** Meta's multimodal agentic model built for
+  local deployment (Meta Superintelligence Lab, Aug 2026; Apache 2.0) — multi-step
+  reasoning, tool use, failure recovery, and vision in one 30B model. Uses the
+  unsloth GGUF (`unsloth/Muse-Glimmer-30B-GGUF`, UD-Q4_K_XL, 15.9 GB) with the
+  BF16 perception encoder for image input. Its `muse_glimmer` architecture isn't
+  in the TurboQuant server, so — like North-Mini-Code and DiffusionGemma —
+  LocalCode builds a dedicated stock `llama-server` from current llama.cpp (PR
+  #26841) on first use (one-time, ~5-12 min, cached) and serves it with stock
+  flags + `--jinja` (required by its chat template). Pickable in the model
+  picker; experimental (not auto-recommended — runs without TurboQuant KV
+  compression). 32 GB+ unified memory recommended.
+
+  Verified live on the rebuilt server: loads (multimodal), coherent text and
+  code, correct arithmetic, native tool-calling via `--jinja`, vision (described
+  a test image), and a full multi-round agentic task through LocalCode's runtime
+  (write + read + todo across ~8 rounds, 73k-token accumulated context,
+  `model_done`). New `ensure_muse_server` builder + `muse_server_binary` config +
+  runtime routing; catalog/test guards updated.
+
 ## 0.3.44 — 2026-08-16
 
 ### Fixed

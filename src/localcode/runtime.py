@@ -402,6 +402,43 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
             # No cohere binary yet — fall through; setup builds it on select,
             # and _restart_server surfaces a clear error if it's truly missing.
 
+        # ── muse_glimmer (Meta Muse Glimmer 30B) ──────────────────────
+        # The TurboQuant fork doesn't have Meta's muse_glimmer arch; LocalCode
+        # builds a dedicated stock llama-server from llama.cpp master (PR
+        # #26841). Stock binary → STOCK flags only (no turbo4 KV / -fit /
+        # --ctx-checkpoints). The model card is explicit that `--jinja` is
+        # mandatory (its chat template drives tool calls and the <|eom|> stop
+        # handling). Multimodal: pass --mmproj when vision is on and the
+        # perception encoder is present on disk.
+        if "muse" in _arch:
+            from .bootstrap import muse_server_path
+            mbin = (self.config.muse_server_binary or "").strip()
+            if not (mbin and _P(mbin).is_file()):
+                found = muse_server_path()
+                mbin = str(found) if found else ""
+            if mbin:
+                cmd = [
+                    mbin,
+                    "--model", model_path,
+                    "--port", str(port),
+                    "--ctx-size", str(self._target_num_ctx(model_path=model_path)),
+                    "--threads", str(threads),
+                    "--flash-attn", "on",
+                    "--mmap", "-ngl", "999",
+                    "--jinja",
+                    "-b", "512", "-ub", "512",
+                ]
+                try:
+                    if getattr(self.config, "vision_enabled", False):
+                        from .models_catalog import by_filename as _bf_muse
+                        _mc = _bf_muse(_P(model_path).name)
+                        if _mc is not None and _mc.mmproj_path and _mc.mmproj_path.is_file():
+                            cmd.extend(["--mmproj", str(_mc.mmproj_path)])
+                except Exception:
+                    pass
+                return cmd
+            # No muse binary yet — fall through; setup builds it on select.
+
         # ── Vanilla / stock llama.cpp compatibility (Linux CI, no Metal) ──
         # The bundled server is a TurboQuant fork whose flags (turbo4 KV,
         # -fit, --ctx-checkpoints, --spec-type) stock llama.cpp rejects.
