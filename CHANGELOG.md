@@ -3,6 +3,20 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.3.43 — 2026-08-16
+
+### Fixed
+
+- **Setup screen no longer claims "one-time download" for a model that's
+  already on disk.** The model step used a binary-GiB size threshold
+  (`size_gb * 1024**3`) to decide "downloaded vs partial", but the catalog's
+  `size_gb` is decimal GB — so a fully-present model read ~7% undersized and
+  was labelled "Resume model (~38.5 GB)" with a misleading "one-time download ·
+  cached for future launches" caption every launch. It now reuses the canonical
+  `_is_complete_download` check (decimal GB, 3% tolerance): a present model
+  shows "Model ready (~N GB)" and a "loading into memory" note; the
+  download-framing captions only appear when a download is actually pending.
+
 ## 0.3.42 — 2026-08-16
 
 ### Added
