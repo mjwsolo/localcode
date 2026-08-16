@@ -294,6 +294,43 @@ def _compact_old_tool_results(
     # Floor at 1 so we never age away the entire working set of tool output.
     keep_recent = max(1, keep_recent)
     id_to_name = _tool_names_by_call_id(messages)
+    # Protect the LATEST read_file result for the few HOTTEST (most-recently-read)
+    # files from aging. read_file is "replayable", so aging its result out is
+    # cheap in theory — but in practice the model REPLAYS it (re-reads), and real
+    # traces showed ~68% of all reads were re-reads of a handful of actively-used
+    # files (App.tsx read 40× after being written). Keeping each hot file's
+    # current content in context (like write/edit diffs, which are never aged)
+    # makes the prompt's "don't re-read, it's already above" actually true.
+    # Bounded to _PROTECT_HOT_READS distinct paths so prefill/TTFT stays capped.
+    _PROTECT_HOT_READS = 5
+    _read_paths: dict[str, str] = {}
+    for _m in messages:
+        if _m.get("role") != "assistant":
+            continue
+        for _tc in _m.get("tool_calls") or []:
+            if ((_tc.get("function") or {}).get("name") or "").strip() != "read_file":
+                continue
+            _tcid = _tc.get("id")
+            if not _tcid:
+                continue
+            try:
+                _raw = (_tc.get("function") or {}).get("arguments") or "{}"
+                _a = _raw if isinstance(_raw, dict) else json.loads(_raw)
+            except Exception:
+                continue
+            _p = _a.get("path")
+            if isinstance(_p, str) and _p:
+                _read_paths[_tcid] = _p
+    _path_latest_idx: dict[str, int] = {}
+    for i, _m in enumerate(messages):
+        if _m.get("role") == "tool":
+            _p = _read_paths.get(_m.get("tool_call_id"))
+            if _p:
+                _path_latest_idx[_p] = i  # highest index = most recent read
+    protected_read_idxs = {
+        idx for _p, idx in
+        sorted(_path_latest_idx.items(), key=lambda kv: -kv[1])[:_PROTECT_HOT_READS]
+    }
     # Only REPLAYABLE-observation results are age-eligible; keep the last
     # `keep_recent` of THOSE verbatim (counting non-replayable results toward
     # the recency window would let a burst of writes push a still-needed read
@@ -302,6 +339,7 @@ def _compact_old_tool_results(
         i for i, m in enumerate(messages)
         if m.get("role") == "tool"
         and _result_tool_name(m, id_to_name) in _REPLAYABLE_TOOLS
+        and i not in protected_read_idxs
     ]
     if len(ageable_idxs) <= keep_recent:
         return messages
@@ -311,6 +349,9 @@ def _compact_old_tool_results(
     for i, m in enumerate(messages):
         if i >= cutoff_idx or m.get("role") != "tool":
             out.append(m)
+            continue
+        if i in protected_read_idxs:
+            out.append(m)  # hot file's current content — keep so it isn't re-read
             continue
         if _result_tool_name(m, id_to_name) not in _REPLAYABLE_TOOLS:
             out.append(m)  # non-replayable (write/edit diff, etc.) — preserve
