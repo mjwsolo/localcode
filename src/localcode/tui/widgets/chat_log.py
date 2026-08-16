@@ -1875,7 +1875,9 @@ class ChatLog(RichLog):
         hint.append("2", style="bold white")
         hint.append(f" always allow `{first_token}` (this session)  ", style="dim")
         hint.append("3", style="bold white")
-        hint.append(" deny", style="dim")
+        hint.append(" deny  ", style="dim")
+        hint.append("4", style="bold white")
+        hint.append(" stop asking (this session)", style="dim")
         self.write(hint)
         self._track_lines()
 
