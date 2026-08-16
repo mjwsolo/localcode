@@ -130,34 +130,57 @@ class SetupScreen(Screen):
         # screen-resize hook on this class still compiles.
         return
 
-    def _render_steps(self) -> str:
-        # Substitute the actually-selected model's size into the "Download model"
-        # label so the user sees the real number, not a hardcoded ~10GB.
-        # If a partial download exists on disk (from a prior aborted attempt),
-        # surface that as "Resume download" so the user knows we're picking up
-        # where they left off — not starting over.
+    def _model_state(self) -> tuple[str, float | None]:
+        """Disk state of the chosen model: ('present'|'partial'|'absent', size_gb).
+
+        - present: the GGUF is fully on disk (≥99% of catalog size) — this
+          launch only *loads* it, no download happens.
+        - partial: a `.incomplete` sidecar or an undersized final exists — a
+          download will *resume*.
+        - absent: nothing on disk — a fresh download is needed.
+        size_gb is None only when there's no selectable model.
+        """
         try:
             from ...models_catalog import current as current_choice
+            # Reuse the canonical completeness check so we agree with the rest
+            # of the app on what "downloaded" means. It compares against DECIMAL
+            # GB (size_gb * 1000**3); an earlier inline check here used binary
+            # GiB (1024**3), which over-counts by ~7% and made every fully
+            # present model read as "partial" → the bogus "Resume model /
+            # one-time download" caption on a model already on disk.
+            from ...bootstrap import _is_complete_download
             cfg = getattr(self.app, "config", None)
             chosen = current_choice(cfg) if cfg is not None else None
-            if chosen is not None:
-                verb = "Download"
-                # huggingface_hub writes `.incomplete` sidecars; our urllib
-                # fallback pre-allocates the final filename. Detect both.
-                partial = chosen.local_path
-                incomplete = partial.with_name(partial.name + ".incomplete")
-                has_partial = (
-                    (partial.exists() and partial.stat().st_size > 0
-                     and partial.stat().st_size < int(chosen.size_gb * 1024 ** 3 * 0.99))
-                    or incomplete.exists()
-                )
-                if has_partial:
-                    verb = "Resume"
-                model_label = f"{verb} model (~{chosen.size_gb:.1f} GB)"
-            else:
-                model_label = "Download model"
+            if chosen is None:
+                return ("absent", None)
+            final = chosen.local_path
+            if _is_complete_download(final, chosen):
+                return ("present", chosen.size_gb)
+            # huggingface_hub writes `.incomplete` sidecars; our urllib
+            # fallback pre-allocates the final filename. Either → a resumable
+            # partial. Otherwise nothing is on disk yet.
+            incomplete = final.with_name(final.name + ".incomplete")
+            has_partial = (
+                (final.exists() and final.stat().st_size > 0) or incomplete.exists()
+            )
+            return ("partial" if has_partial else "absent", chosen.size_gb)
         except Exception:
+            return ("absent", None)
+
+    def _render_steps(self) -> str:
+        # Substitute the actually-selected model's size into the model step
+        # label, and pick a verb that matches what's actually happening: a
+        # fully-present model is only *loaded* (not downloaded), a partial is
+        # *resumed*, and a missing one is *downloaded*.
+        state, size_gb = self._model_state()
+        if size_gb is None:
             model_label = "Download model"
+        elif state == "present":
+            model_label = f"Model ready (~{size_gb:.1f} GB)"
+        elif state == "partial":
+            model_label = f"Resume download (~{size_gb:.1f} GB)"
+        else:
+            model_label = f"Download model (~{size_gb:.1f} GB)"
 
         lines = ["[bold]Setup[/]\n"]
         for i, (key, label) in enumerate(self.STEPS):
@@ -321,6 +344,22 @@ class SetupScreen(Screen):
             steps = self._render_steps()
             self.query_one("#setup-status", Static).update(status)
             self.query_one("#setup-steps", Static).update(steps)
+            # Only show the download-framing captions when a download is
+            # actually going to happen. A fully-present model is just being
+            # loaded into memory — "one-time download" / "resumes where it
+            # left off" would be a lie there.
+            if self._model_state()[0] == "present":
+                self.query_one("#setup-onetime-note", Static).update(
+                    "[dim italic]loading into memory · first launch after boot is slower[/]"
+                )
+                self.query_one("#setup-quit-hint", Static).update("")
+            else:
+                self.query_one("#setup-onetime-note", Static).update(
+                    "[dim italic]one-time download · cached for future launches[/]"
+                )
+                self.query_one("#setup-quit-hint", Static).update(
+                    "[dim]Esc to quit — the download resumes where it left off next launch.[/]"
+                )
             self.refresh()
         except Exception:
             pass
