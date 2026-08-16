@@ -3,6 +3,32 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.3.47 — 2026-08-16
+
+### Fixed
+
+- **A reasoning cap trip no longer throws the whole turn away.** When the model
+  reasoned past the per-round cap *without a detected loop* (e.g. a slow dense
+  model doing a big planning pass), the turn hard-failed with "Stopped: model
+  reasoning exceeded the per-round cap" and produced nothing. Now a cap trip is
+  handled exactly like a detected loop: the aborted (empty) round is dropped and
+  re-run with thinking OFF (up to the recovery budget), so the model **acts**
+  instead of planning forever; only if it keeps over-reasoning does the turn end,
+  with an honest message. Observed on Qwen 3.8 27B Q8: 10 min of legitimate
+  planning, then total failure.
+- **The reasoning time cap was tuned for fast models and aborted slow ones
+  mid-thought.** It assumed ~50-75 tok/s; a dense model at ~17 tok/s hit the 600 s
+  cap at only ~5.7k reasoning tokens — well under the 80k-char runaway limit, i.e.
+  it aborted *normal* reasoning. Raised to 1800 s so the speed-independent char
+  cap (~20k tokens) and the ~1 s structural loop detector remain the real guards.
+
+### Notes
+
+- **Hidden thinking is off by default** (`internal_thinking_mode = "off"`; a fresh
+  config resolves to off). Turn it on per-session with `/thinking auto`. Reasoning
+  models (Qwen 3.x, Muse Glimmer) are much faster to first action with thinking
+  off, especially the slower dense quants.
+
 ## 0.3.46 — 2026-08-16
 
 ### Fixed

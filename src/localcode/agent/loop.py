@@ -1089,50 +1089,54 @@ def run_agent_loop(
                 )
             except Exception:
                 pass
-            if (
-                _stream_result.thinking_abort_reason == "loop"
-                and _thinking_loop_recoveries < _MAX_THINKING_LOOP_RECOVERIES
-            ):
-                # Detected a degenerate repetition loop early. This is DECODE
-                # recovery, not an optional textual nudge — do it explicitly and
-                # independently of AUTO_NUDGE_RECOVERY. Drop the aborted (empty)
-                # round entirely (never append its assistant message) and re-run
-                # the SAME round with thinking off (consumed at the top of the
-                # loop), which changes the generation path and breaks the loop.
+            _abort_reason = _stream_result.thinking_abort_reason or "unknown"
+            _is_loop = _abort_reason == "loop"
+            if _thinking_loop_recoveries < _MAX_THINKING_LOOP_RECOVERIES:
+                # The model over-reasoned WITHOUT emitting a response — either a
+                # detected periodic loop OR it blew the time/char cap. BOTH are
+                # recoverable and BOTH used to be handled differently (loop
+                # retried, cap hard-failed and threw the whole turn away). Now
+                # they share one path: drop the aborted (empty) round entirely
+                # (never append its assistant message) and re-run the SAME round
+                # with thinking OFF (consumed at the top of the loop), which
+                # forces the model to ACT instead of planning forever. This is
+                # DECODE recovery, not an optional nudge — critical for slow
+                # dense models (Qwen 3.8 27B Q8 ~17 tok/s) where legitimate
+                # planning can brush the time cap without any real loop.
                 _thinking_loop_recoveries += 1
-                _next_round_policy = _round_policy.recover_without_thinking("reasoning_loop")
+                _rec_reason = "reasoning_loop" if _is_loop else "reasoning_cap"
+                _next_round_policy = _round_policy.recover_without_thinking(_rec_reason)
                 try:
                     from ..events import emit as _emit_recovery
-                    _emit_recovery("generation_aborted", reason="reasoning_loop", round_idx=round_num)
-                    _emit_recovery("recovery_scheduled", reason="reasoning_loop", mode="no_thinking",
+                    _emit_recovery("generation_aborted", reason=_rec_reason, round_idx=round_num)
+                    _emit_recovery("recovery_scheduled", reason=_rec_reason, mode="no_thinking",
                                    attempt=_thinking_loop_recoveries)
                 except Exception:
                     pass
                 out.notice(
                     "Model reasoning started repeating itself — retrying this "
                     "step without deep reasoning so it acts instead of looping."
+                    if _is_loop else
+                    "Model kept reasoning without acting — retrying this step "
+                    "without deep reasoning so it produces a response."
                 )
                 out._stop_indicator()
                 sys.stdout.write("\r\033[K")
                 sys.stdout.flush()
                 continue  # next round: decodes with think=False
-            if _stream_result.thinking_abort_reason == "loop":
-                # Recovery budget exhausted: the model kept looping even without
-                # the reasoning channel. End the turn with an honest message.
-                out.notice(
-                    "Model kept repeating itself even without deep reasoning — "
-                    "ending the turn. Try `/model` to switch models or split the "
-                    "task into smaller steps."
-                )
-                _loop_exit_reason = "thinking_loop_exhausted"
-                break
+            # Recovery budget exhausted — the model kept over-reasoning even
+            # without the reasoning channel. End the turn honestly.
             out.notice(
-                f"Stopped: model reasoning exceeded the per-round cap "
-                f"({MAX_THINKING_SECONDS}s or {MAX_THINKING_CHARS} chars) without "
-                f"emitting a response. Turn off deep reasoning with `/thinking off`, "
-                f"switch to a faster model with `/model`, or rephrase the task in "
-                f"smaller steps."
+                "Model kept repeating itself even without deep reasoning — "
+                "ending the turn. Try `/model` to switch models or split the "
+                "task into smaller steps."
+                if _is_loop else
+                "Model kept reasoning without producing a response even with "
+                "deep reasoning disabled — ending the turn. Try `/model` for a "
+                "faster model, `/thinking off`, or split the task into smaller steps."
             )
+            _loop_exit_reason = "thinking_loop_exhausted"
+            break
 
         # Show thinking summary if present (collapsed, dim)
         # Skip if already emitted when content started streaming

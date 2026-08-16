@@ -112,7 +112,16 @@ without leaving the reasoning channel unbounded."""
 # runaway and can `esc` — the cap is the backstop for unattended /
 # headless runs where no one is watching.
 
-MAX_THINKING_SECONDS = 600
+# NOTE: the CHAR cap is the real, speed-independent runaway guard (~20k
+# reasoning tokens); the structural loop detector catches periodic loops in
+# ~1s. The TIME cap is only a final backstop, and it must scale to the SLOWEST
+# model we ship: at ~15 tok/s (dense Qwen 3.8 27B Q8 / Muse Glimmer, not the
+# ~50-75 tok/s MoEs this was first tuned for), 80k chars ≈ 20k tokens ≈ 22 min
+# of legitimate reasoning. A 600s cap tripped that at ~5.7k tokens — aborting
+# NORMAL slow reasoning, the exact thing this cap must never do. 1800s (30 min)
+# keeps the char cap + loop detector as the real guards. Either way a trip now
+# recovers via a no-think retry (see loop.py), so the turn is never thrown away.
+MAX_THINKING_SECONDS = 1800
 MAX_THINKING_CHARS = 80000
 
 
