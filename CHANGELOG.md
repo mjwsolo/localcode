@@ -3,6 +3,22 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.3.46 — 2026-08-16
+
+### Fixed
+
+- **Live "thinking" now streams word-by-word instead of lurching a whole line at
+  a time.** The reasoning stream (`stream_thinking`) only flushed on a newline,
+  so the on-screen thinking froze until a line completed, then snapped the whole
+  line in at once — very visible on slow/dense models (e.g. Qwen 3.8 27B at ~17
+  tok/s, where a line takes ~2 s). The answer stream already flushed on word
+  boundaries; thinking now does the same, rendering the trailing partial line in
+  place (pop-and-rewrite, scoped to one logical line, guarded by an at-tail
+  check) and committing to history on newline. Verified with the real-widget
+  Textual pilot + unit tests. Note: this is a smoothness fix; raw generation
+  speed is still governed by the model — dense models (Qwen 3.8, Muse Glimmer)
+  decode slower than the ~3B-active MoEs (Qwen 3.6, Gemma MoE).
+
 ## 0.3.45 — 2026-08-16
 
 ### Added

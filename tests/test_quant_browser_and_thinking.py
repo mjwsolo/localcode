@@ -59,19 +59,30 @@ def test_no_catalog_gemma_duplicates():
 # ── Live reasoning stream: buffer partials, flush whole lines ───────────
 
 class _FakeLog:
-    """Minimal stand-in exercising ChatLog's thinking-stream methods."""
+    """Stand-in exercising ChatLog's thinking-stream methods, including the
+    in-place partial rewrite (pop + re-render) the word-by-word path uses.
+    `lines` emulates RichLog.lines (pop-able); `written` is the cumulative
+    record of everything ever rendered."""
     def __init__(self):
+        import types as _t
         self.written = []
+        self.lines = []
         self._history = []
         self._think_stream_active = False
         self._think_stream_buf = ""
+        self._line_counter = 0
+        self._line_cache = {}
+        self.scroll_offset = _t.SimpleNamespace(y=0)
+        self.max_scroll_y = 0
 
     # Methods copied-by-reference from ChatLog via bind below.
     def write(self, renderable):
-        self.written.append(str(getattr(renderable, "plain", renderable)))
+        s = str(getattr(renderable, "plain", renderable))
+        self.written.append(s)
+        self.lines.append(s)
 
     def _track_lines(self):
-        pass
+        self._line_counter += 1
 
     def _dispatch_gap(self, _kind):
         pass
@@ -79,35 +90,49 @@ class _FakeLog:
     def _content_width(self):
         return 80
 
+    def scroll_end(self, **kwargs):
+        pass
+
 
 def _bind_stream_methods(obj):
     from localcode.tui.widgets.chat_log import ChatLog
     import types
     for name in ("start_thinking_stream", "stream_thinking",
                  "_commit_thinking_line", "_render_think_header",
-                 "_render_think_line", "end_thinking_stream"):
+                 "_render_think_line", "_render_think_partial",
+                 "end_thinking_stream"):
         setattr(obj, name, types.MethodType(getattr(ChatLog, name), obj))
+    # Stream-pacing constants are ChatLog class attrs; the fake isn't a
+    # subclass, so copy them over (kept in sync with the real values).
+    for const in ("_STREAM_WORD_BOUNDARIES", "_STREAM_COALESCE_SEC"):
+        setattr(obj, const, getattr(ChatLog, const))
 
 
-def test_thinking_stream_flushes_whole_lines_only():
+def test_thinking_stream_commits_lines_and_streams_partial_words():
     log = _FakeLog()
     _bind_stream_methods(log)
-    log.stream_thinking("First reasoning line\nSecond li")
-    # Header + first complete line written; partial "Second li" still buffered.
+    # A complete line, then a partial that ENDS on a word boundary (space) —
+    # the fix streams that partial live instead of freezing until the newline.
+    log.stream_thinking("First reasoning line\nSecond word ")
     joined = " ".join(log.written)
     assert "thinking" in joined.lower()
     assert "First reasoning line" in joined
-    assert "Second li" not in joined
-    assert log._think_stream_buf == "Second li"
+    # NEW behavior: the trailing partial renders word-by-word before any newline.
+    assert "Second word" in joined
+    assert log._think_stream_buf == "Second word "
+    # The completed line is locked into history; the live partial is not (yet).
+    assert ("think_line", "First reasoning line") in log._history
 
 
 def test_thinking_stream_end_flushes_partial():
     log = _FakeLog()
     _bind_stream_methods(log)
+    # Ends on 'e' (no word boundary) → stays buffered, not yet rendered.
     log.stream_thinking("partial tail with no newline")
     assert "partial tail" not in " ".join(log.written)  # buffered, not flushed
     log.end_thinking_stream()
     assert "partial tail with no newline" in " ".join(log.written)
+    assert ("think_line", "partial tail with no newline") in log._history
     assert log._think_stream_active is False
 
 
