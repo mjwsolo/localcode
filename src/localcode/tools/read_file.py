@@ -174,6 +174,25 @@ def execute(ctx: ToolContext, args: dict) -> str:
             "exactly from now on; do NOT guess more spellings.]\n\n"
         )
         path = real
+    if path.is_dir():
+        # The model routinely read_file's a directory (confusing it with
+        # list_files), gets IsADirectoryError, and burns a whole round before
+        # retrying with list_files. Just hand back the listing + a nudge so the
+        # round is productive instead of wasted.
+        try:
+            entries = sorted(
+                p.name + ("/" if p.is_dir() else "") for p in path.iterdir()
+            )
+        except Exception as e:
+            return f"Error: '{source_disp}' is a directory and could not be listed: {e}"
+        shown = entries[:200]
+        more = f"\n  … ({len(entries) - len(shown)} more)" if len(entries) > len(shown) else ""
+        body = "\n".join(f"  {e}" for e in shown) or "  (empty)"
+        return (
+            f"'{source_disp}' is a directory, not a file ({len(entries)} entries). "
+            f"read_file needs a FILE path; use list_files for directories. Contents:\n"
+            f"{body}{more}"
+        )
     content = path.read_text(errors="replace")
     lines = content.splitlines()
     default_limit, max_default_chars = _dynamic_read_defaults(ctx)

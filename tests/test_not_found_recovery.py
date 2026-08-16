@@ -95,6 +95,21 @@ def test_real_file_reads_unchanged(tmp_path):
     assert "instead of" not in out
 
 
+def test_read_file_on_directory_returns_listing_not_error(tmp_path):
+    # read_file on a directory should return its listing + a nudge, not error —
+    # so the model doesn't burn a round before retrying with list_files.
+    from localcode.tools.read_file import execute
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "a.py").write_text("x")
+
+    out = execute(_ctx(tmp_path), {"path": "."})
+
+    assert "is a directory" in out
+    assert "a.py" in out and "sub/" in out
+    assert not out.startswith("Error")
+    assert "list_files" in out
+
+
 # ── recovery.detect_not_found_loop (layer 2) ────────────────────────
 
 
