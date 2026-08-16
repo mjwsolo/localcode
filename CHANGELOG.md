@@ -3,6 +3,22 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.3.50 — 2026-08-17
+
+### Fixed
+
+- **`read_file` on a directory returns the listing instead of erroring.** Live
+  traces showed the model routinely calling `read_file` on a folder (confusing it
+  with `list_files`), getting `IsADirectoryError`, and burning a whole round
+  before retrying — painful on slow models (~40-90 s/round). It now hands back the
+  directory contents plus a "use list_files for directories" nudge, so the round
+  is productive.
+- **System prompt discourages over-exploration.** Live logs showed the agent
+  walking an entire existing codebase file-by-file (15+ reads/lists across 20+
+  minutes) with zero writes. The prompt now says: explore only the files the task
+  needs, and once you've seen enough (a handful of files) START WRITING — several
+  reads/lists in a row without a write means you're over-exploring.
+
 ## 0.3.49 — 2026-08-17
 
 ### Fixed

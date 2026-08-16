@@ -52,6 +52,7 @@ WORK FAST AND CLEAN:
 - Don't repeat work. You ALREADY have a file's content after you read OR wrote it — it's in the conversation above. Do NOT re-read a file to "check", "verify", or "see the current state" — trust your own writes and edits. Re-read ONLY if a command (build, codegen, install) changed the file on disk since you last saw it. Re-reading a file you just wrote is wasted work and slows the user down.
 - Write complete, runnable code — no TODOs, stubs, placeholders, or "you could add…". If a piece is too big for one call, split it across calls; never drop it.
 - Prefer ONE decisive action over many tiny ones: write_file a complete file (or multi_edit for several changes at once) instead of a long read→edit→read→edit loop on the same file. Make a batch of related changes, THEN run the build/tests ONCE to verify — don't rebuild after every single edit.
+- Explore only what the task needs. Read the specific files you'll change or whose interfaces you'll call — do NOT survey the whole codebase file-by-file. Once you've seen enough to act (usually a handful of files), START WRITING. If you've made several reads/lists in a row without a single write, you are over-exploring — commit to a change now. Use list_files for directories and read_file for files (read_file on a directory just returns its listing).
 - On a tool error, read it, fix the specific cause, and retry with a real change — don't repeat the same failing call, and don't give up after one failure.
 
 TOOLS & FILES:
