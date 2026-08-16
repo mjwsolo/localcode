@@ -1239,6 +1239,97 @@ def ensure_cohere_server(
         return False, f"cohere server build failed: {e}"
 
 
+# ── Muse Glimmer server (Meta Muse-Glimmer-30B) ─────────────────────
+#
+# The TurboQuant llama-server doesn't have Meta's muse_glimmer architecture.
+# Upstream llama.cpp added it in PR #26841 (merged 2026-08-10, first shipped in
+# release b10353), so — exactly like the cohere2moe and diffusion runners — we
+# build a stock llama-server from current master ONCE and cache it. Muse Glimmer
+# is an ordinary autoregressive multimodal model, served over the normal HTTP
+# path with stock (non-TurboQuant) flags; it just needs a binary with the arch
+# compiled in. Master is well past b10353, so the arch is present.
+_MUSE_BIN_NAME = "llama-server-muse"
+
+
+def muse_server_path(config=None) -> Path | None:
+    """Locate an existing muse_glimmer-capable llama-server binary, or None."""
+    if config is not None:
+        p = (getattr(config.runtime, "muse_server_binary", "") or "").strip()
+        if p and Path(p).is_file():
+            return Path(p)
+    cached = Path.home() / ".local" / "share" / "localcode" / _MUSE_BIN_NAME
+    if cached.is_file():
+        return cached
+    return None
+
+
+def ensure_muse_server(
+    on_progress: Callable[[str], None] | None = None,
+) -> tuple[bool, str]:
+    """Build (once) and cache a llama-server with muse_glimmer support.
+
+    Returns (ok, binary_path_or_error). Idempotent — short-circuits if a
+    cached binary exists. First build is several minutes of cmake.
+    """
+    existing = muse_server_path()
+    if existing is not None:
+        return True, str(existing)
+
+    def _say(msg: str) -> None:
+        if on_progress:
+            on_progress(msg)
+
+    if not shutil.which("git"):
+        return False, "git is required to build the Muse Glimmer server (xcode-select --install)."
+    if not _ensure_cmake():
+        return False, "cmake is required to build the Muse Glimmer server (brew install cmake)."
+
+    data_dir = Path.home() / ".local" / "share" / "localcode"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    src = data_dir / "llama.cpp-muse"
+
+    def _run(cmd: list[str], cwd: Path | None, timeout: int) -> tuple[bool, str]:
+        r = subprocess.run(cmd, cwd=str(cwd) if cwd else None,
+                           capture_output=True, text=True, timeout=timeout, check=False)
+        if r.returncode != 0:
+            tail = (r.stderr or r.stdout or "").strip().splitlines()[-8:]
+            return False, "\n".join(tail)
+        return True, ""
+
+    try:
+        if not (src / "CMakeLists.txt").is_file():
+            _say("Fetching llama.cpp (Muse Glimmer support, one-time)...")
+            shutil.rmtree(src, ignore_errors=True)
+            # master is past b10353 (PR #26841), so it has the muse_glimmer arch.
+            ok, err = _run(["git", "clone", "--depth", "1", _DIFFUSION_LLAMA_REPO, str(src)],
+                           cwd=None, timeout=600)
+            if not ok:
+                return False, f"git clone failed:\n{err}"
+
+        _say("Building llama-server with muse_glimmer (one-time, ~5-12 min)...")
+        ok, err = _run(["cmake", "-B", "build", "-DCMAKE_BUILD_TYPE=Release",
+                        "-DGGML_METAL=ON", "-DLLAMA_CURL=OFF"], cwd=src, timeout=600)
+        if not ok:
+            return False, f"cmake configure failed:\n{err}"
+        ok, err = _run(["cmake", "--build", "build", "-j", "--config", "Release",
+                        "--target", "llama-server"], cwd=src, timeout=3600)
+        if not ok:
+            return False, f"cmake build failed:\n{err}"
+
+        built = src / "build" / "bin" / "llama-server"
+        if not built.is_file():
+            return False, f"build finished but {built} is missing."
+        dest = data_dir / _MUSE_BIN_NAME
+        shutil.copyfile(built, dest)
+        dest.chmod(0o755)
+        _say("Muse Glimmer server ready.")
+        return True, str(dest)
+    except subprocess.TimeoutExpired as e:
+        return False, f"build step timed out: {' '.join(map(str, e.cmd))}"
+    except Exception as e:
+        return False, f"Muse Glimmer server build failed: {e}"
+
+
 def build_turboquant(on_progress: Callable[[str], None] | None = None) -> tuple[bool, str]:
     """Build the TurboQuant llama.cpp fork from source with Metal support."""
     source = _find_turboquant_source()
