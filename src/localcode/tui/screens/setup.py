@@ -727,6 +727,28 @@ class SetupScreen(Screen):
             # the cohere binary on its own via cohere_server_path().
             save_config(config)
 
+        # muse_glimmer (Meta Muse Glimmer): the TurboQuant server lacks the
+        # arch, so build a dedicated stock llama-server from llama.cpp master
+        # (PR #26841) one-time before launching. Serves over the normal HTTP path.
+        if _arch_choice is not None and "muse" in str(
+            getattr(_arch_choice, "architecture", "")
+        ):
+            from ...bootstrap import ensure_muse_server
+
+            def _muse_progress(msg: str) -> None:
+                self._status_text = msg
+
+            ok, result = ensure_muse_server(on_progress=_muse_progress)
+            if not ok:
+                self.app.call_from_thread(lambda e=result: self._show_error(
+                    msg="Couldn't build the Muse Glimmer server.",
+                    code="E1002",
+                    details=e,
+                ))
+                return
+            config.runtime.muse_server_binary = result
+            save_config(config)
+
         # Launch server
         gw = LocalCodeRuntimeGateway(config.runtime)
         from ...bootstrap import _turboquant_binary_path as _tbp
