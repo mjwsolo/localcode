@@ -3,6 +3,24 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.3.44 — 2026-08-16
+
+### Fixed
+
+- **Qwen 3.x sessions no longer crash with "Lost connection / HTTP 500" after
+  the first few turns.** Each round the agent appends an ephemeral context block
+  (ledger + filesystem state + todo list) as a trailing `system` message. Qwen
+  3.x's chat template raises `System message must be at the beginning` on any
+  non-leading system message, which llama-server returns as HTTP 500 — so once
+  that block became non-empty (a real multi-turn session with file changes), it
+  fired **every round** and ended the turn with E3102. Qwen-family models now
+  receive that block as a `user` turn instead (verified live: identical content
+  returns 500 as `system`, 200 as `user`); Gemma keeps `system` (a user turn
+  made it re-greet each round). Regression test in
+  `tests/test_ephemeral_context_role.py`. This was latent in 0.3.42's Qwen 3.8
+  support — single-tool smoke tests never populated the block, so it only
+  surfaced under real multi-turn use.
+
 ## 0.3.43 — 2026-08-16
 
 ### Fixed
