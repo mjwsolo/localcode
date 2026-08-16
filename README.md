@@ -88,11 +88,9 @@ On launch, LocalCode recommends the best model for **your Mac's RAM** — there'
 | Gemma 4 26B-A4B | 11.2 GB (Q3) | 3.8B (8/128 experts) | 24 GB | gemma4-iswa |
 | Qwen 3.6 35B-A3B | 10.7 GB (Q2) | 3.0B (8+1/256) | 24 GB | qwen35moe |
 | DiffusionGemma 26B-A4B † | 15.7 GB (Q4) | 4B (diffusion MoE) | 32 GB | diffusion_gemma |
-| Qwen 3.8 27B (vision) | 17.9 GB (Q4) | 27B (dense) | 32 GB | qwen35 |
 | North-Mini-Code 30B-A3B † | 17.9 GB (Q4) | 3B (30B MoE) | 36 GB | cohere2_moe |
 | Gemma 4 12B (full) | 23.8 GB (BF16) | 12B (dense) | 48 GB | gemma4-iswa |
 | Gemma 4 26B-A4B | 28 GB (Q8) | 3.8B (8/128 experts) | 64 GB | gemma4-iswa |
-| Qwen 3.8 27B (vision) | 31.5 GB (Q8) | 27B (dense) | 64 GB | qwen35 |
 | Qwen 3.6 35B-A3B | 38.5 GB (Q8) | 3.0B (8+1/256) | 96 GB | qwen35moe |
 
 *Min RAM* is the threshold for auto-recommendation (weights ≤ ~55% of unified memory, leaving room for KV cache + OS); you can still pick a heavier model manually. **†** experimental — pickable but **not** auto-recommended (DiffusionGemma needs a separate runner; `cohere2_moe` is unvalidated on this stack).

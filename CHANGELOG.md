@@ -3,6 +3,24 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.3.41 — 2026-08-16
+
+### Reverted
+
+- **Qwen 3.8 27B removed.** 0.3.40 added it to the catalog, but a live load test
+  showed the bundled TurboQuant server **cannot load it**: Qwen 3.8 is a hybrid
+  attention+SSM model with a Multi-Token-Prediction (`nextn`) layer that the
+  server's `qwen35` loader doesn't handle — it treats the MTP layer as an SSM
+  layer and crashes with a missing-tensor error (`blk.64.ssm_conv1d.weight`).
+  Rather than ship a model that fails to load, the entry is removed until the
+  server supports the architecture.
+
+### Added
+
+- Catalog consistency test: every downloadable `ModelChoice` must map to a
+  `MODEL_GROUPS` picker entry, so a future catalog addition can never again be
+  invisible in the model picker.
+
 ## 0.3.40 — 2026-08-15
 
 ### Model catalog
