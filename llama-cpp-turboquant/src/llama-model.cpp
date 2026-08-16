@@ -2437,16 +2437,26 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
                 ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
 
-                // Mark recurrent layers (linear attention layers)
+                // Multi-Token-Prediction (nextn) layers are trailing prediction
+                // heads, not part of the transformer stack. Exclude them from
+                // recurrent marking, tensor loading and the forward pass.
+                // Defaults to 0, so models without an MTP layer are unaffected.
+                ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);
+                const uint32_t n_transformer = hparams.n_layer - hparams.nextn_predict_layers;
+                hparams.n_layer_kv_from_start = n_transformer;
+
+                // Mark recurrent (linear-attention) layers over the real
+                // transformer layers only; an MTP layer is neither recurrent nor
+                // a full-attention layer (it carries its own nextn tensors).
                 {
                     uint32_t full_attn_interval = 4;
                     ml.get_key(LLM_KV_FULL_ATTENTION_INTERVAL, full_attn_interval, false);
                     for (uint32_t i = 0; i < hparams.n_layer; ++i) {
-                        hparams.recurrent_layer_arr[i] = ((i + 1) % full_attn_interval != 0);
+                        hparams.recurrent_layer_arr[i] = (i < n_transformer) && ((i + 1) % full_attn_interval != 0);
                     }
                 }
 
-                switch (hparams.n_layer) {
+                switch (n_transformer) {
                     case 24: type = hparams.n_embd == 1024 ? LLM_TYPE_0_8B : LLM_TYPE_2B; break;
                     case 32: type = hparams.n_embd == 2560 ? LLM_TYPE_4B : LLM_TYPE_9B; break;
                     case 64: type = LLM_TYPE_27B; break;
@@ -7487,6 +7497,20 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
                         layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
                         layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+
+                        // A trailing Multi-Token-Prediction (nextn) layer is a full
+                        // attention+FFN block (loaded above) PLUS prediction-head
+                        // tensors. Claim those too so the loader's tensor count
+                        // matches the GGUF; the forward pass skips this layer, so
+                        // they are loaded-but-unused. No-op when nextn_predict_layers
+                        // is 0 (every model without an MTP head).
+                        if (hparams.nextn_predict_layers > 0 &&
+                            (uint32_t) i >= hparams.n_layer - hparams.nextn_predict_layers) {
+                            layer.nextn.eh_proj          = create_tensor(tn(LLM_TENSOR_NEXTN_EH_PROJ,          "weight", i), { 2 * n_embd, n_embd }, 0);
+                            layer.nextn.enorm            = create_tensor(tn(LLM_TENSOR_NEXTN_ENORM,            "weight", i), { n_embd }, 0);
+                            layer.nextn.hnorm            = create_tensor(tn(LLM_TENSOR_NEXTN_HNORM,            "weight", i), { n_embd }, 0);
+                            layer.nextn.shared_head_norm = create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "weight", i), { n_embd }, 0);
+                        }
                     }
                 } break;
             case LLM_ARCH_MIMO2:

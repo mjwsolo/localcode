@@ -91,7 +91,7 @@ def test_every_choice_is_wellformed(choice):
     assert choice.filename and choice.filename.endswith(".gguf")
     assert choice.size_gb and choice.size_gb > 0
     assert choice.architecture in {
-        "gemma4-iswa", "qwen35moe", "diffusion_gemma", "cohere2_moe",
+        "gemma4-iswa", "qwen35moe", "qwen35", "diffusion_gemma", "cohere2_moe",
     }, f"unknown arch {choice.architecture!r}"
     # by_filename must round-trip to a choice carrying the same architecture
     # (this is the dispatch key the runtime keys off).
