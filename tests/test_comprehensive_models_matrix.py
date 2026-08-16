@@ -91,7 +91,7 @@ def test_every_choice_is_wellformed(choice):
     assert choice.filename and choice.filename.endswith(".gguf")
     assert choice.size_gb and choice.size_gb > 0
     assert choice.architecture in {
-        "gemma4-iswa", "qwen35moe", "qwen35", "diffusion_gemma", "cohere2_moe",
+        "gemma4-iswa", "qwen35moe", "diffusion_gemma", "cohere2_moe",
     }, f"unknown arch {choice.architecture!r}"
     # by_filename must round-trip to a choice carrying the same architecture
     # (this is the dispatch key the runtime keys off).
@@ -162,3 +162,18 @@ def test_recommended_model_dispatches_to_a_real_backend(tmp_path, ram_gb):
     assert _backend_for(choice.architecture) in {
         "diffusion_cli", "cohere_server", "turboquant_server",
     }
+
+
+def test_every_choice_has_a_picker_group():
+    """Every downloadable ModelChoice must map to a MODEL_GROUPS entry — the
+    picker lists GROUPS, not choices, so a choice without a group is invisible
+    in the UI (the Qwen 3.8 regression: catalog had it, picker didn't)."""
+    group_repos = {g.hf_repo for g in catalog.MODEL_GROUPS}
+    orphans = [c.key for c in catalog.CHOICES if c.hf_repo not in group_repos]
+    assert not orphans, f"choices with no MODEL_GROUPS entry (invisible in picker): {orphans}"
+
+
+def test_every_picker_group_has_a_downloadable_quant():
+    choice_repos = {c.hf_repo for c in catalog.CHOICES}
+    empty = [g.key for g in catalog.MODEL_GROUPS if g.hf_repo not in choice_repos]
+    assert not empty, f"picker groups with no downloadable quant: {empty}"
