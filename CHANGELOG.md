@@ -3,6 +3,29 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.3.42 — 2026-08-16
+
+### Added
+
+- **Qwen 3.8 27B — now fully supported.** 0.3.41 removed it because the bundled
+  server couldn't load the architecture; this release fixes the TurboQuant fork
+  so it loads and runs. Qwen 3.8 is a dense 27B hybrid attention + Mamba-2 SSM
+  model with a Multi-Token-Prediction (`nextn`) layer. The `qwen35` loader now:
+  - reads `nextn.predict_layers` and treats only the real transformer blocks as
+    attention/SSM layers (the trailing MTP block is no longer misread as an SSM
+    layer — that was the `blk.64.ssm_conv1d.weight` crash);
+  - registers and loads the four `nextn.*` tensors (classified as per-layer
+    repeating tensors, so their `blk.N.nextn.*` names resolve);
+  - runs the forward pass over the transformer stack only, skipping the MTP block.
+
+  Verified with live runs on the rebuilt static server: loads (health 200,
+  arch `qwen35`, 65 layers), coherent text and code generation, correct
+  arithmetic, tool-calling (`list_files` emitted in Qwen/Hermes format), and
+  vision (CLIP mmproj loads; correctly described a test image). A Gemma 4 12B
+  regression run confirms existing models still load on the same binary.
+  Catalog entry: `Qwen3.8-27B-UD-Q4_K_XL` (17.9 GB Q4, 32 GB+ Macs), with the
+  F16 mmproj for image input.
+
 ## 0.3.41 — 2026-08-16
 
 ### Reverted
