@@ -164,13 +164,16 @@ def test_tui_runaway_thinking_loop_recovers_with_no_think_retry(tmp_path, projec
     asyncio.run(scenario())
 
 
-def test_tui_nonperiodic_runaway_hits_length_cap(tmp_path, project):
-    """Non-repeating reasoning that simply runs too long still hits the char/time
-    cap and aborts with the clear 'reasoning exceeded' message. Guards the
-    THINKING_CAPS length backstop for the case the loop detector won't fire on."""
+def test_tui_nonperiodic_runaway_recovers_without_thinking(tmp_path, project):
+    """Non-repeating reasoning that simply runs too long trips the char/time cap.
+    It no longer hard-fails the turn: like a detected loop, it now RECOVERS by
+    re-running the step with thinking off (up to the recovery budget), then ends
+    honestly if the model keeps over-reasoning. Guards that a slow model's cap
+    trip is salvaged instead of throwing the whole turn away."""
     async def scenario():
         # Strictly increasing tokens: long but NOT periodic, so only the length
-        # cap should stop it.
+        # cap should stop it. The mock re-emits it every round (ignores think),
+        # so recovery is exhausted and the turn ends with the honest message.
         runaway = " ".join(str(i) for i in range(30000))  # ~150k varied chars
         snap = await _drive(
             tmp_path, project,
@@ -178,7 +181,12 @@ def test_tui_nonperiodic_runaway_hits_length_cap(tmp_path, project):
             "build the thing",
         )
         assert snap["model_calls"] >= 1
-        assert "reasoning exceeded" in snap["log_text"].lower()
+        # Collapse wrapping/indent so the multi-line notice matches as one string.
+        low = " ".join(snap["log_text"].lower().split())
+        # New behavior: the cap trip triggers a no-think RETRY (recovery), never
+        # the old "reasoning exceeded" hard-stop that threw the turn away.
+        assert "without deep reasoning" in low
+        assert "reasoning exceeded" not in low
 
     asyncio.run(scenario())
 
