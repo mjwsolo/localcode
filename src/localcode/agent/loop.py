@@ -119,6 +119,25 @@ from .app_tasks import (
     looks_like_partial_handoff,
 )
 
+
+def ephemeral_context_role(family: object) -> str:
+    """Role for the trailing per-round context block (ledger + fs-state + todo).
+
+    Gemma keeps ``system`` — as a user turn it re-greeted every round. But
+    Qwen 3.x's chat template raises ``System message must be at the beginning``
+    on ANY non-leading system message, which llama-server surfaces as HTTP 500
+    on every round once this block is non-empty (verified live: identical
+    content returns 500 as ``system``, 200 as ``user``). Qwen-family models
+    therefore receive it as a ``user`` turn.
+
+    `family` is the reasoning-caps family string (e.g. ``qwen35``,
+    ``qwen35moe``, ``gemma4-iswa``); anything falsy or non-qwen keeps the
+    historical ``system`` role.
+    """
+    fam = str(family or "").lower()
+    return "user" if fam.startswith("qwen") else "system"
+
+
 def run_agent_loop(
     app: "LocalCodeApp",
     user_text: str,
@@ -904,13 +923,24 @@ def run_agent_loop(
                 _fs_state = build_filesystem_state(changed_files)
             except Exception:
                 _fs_state = ""
-            # Inject ledger + fs-state + todo as ONE trailing SYSTEM message (not
-            # role:user — as a user turn the model re-greeted every round). Ephemeral.
+            # Inject ledger + fs-state + todo as ONE trailing ephemeral message.
+            # Role matters and is model-dependent:
+            #   - Gemma keeps role:system — as a user turn it re-greeted every round.
+            #   - Qwen 3.x's chat template raises "System message must be at the
+            #     beginning" on ANY non-leading system message → HTTP 500 every
+            #     round once this block is non-empty (verified live: identical
+            #     content returns 500 as `system`, 200 as `user`). Those families
+            #     must receive it as a user turn instead.
+            # TODO: replace the family gate with a real per-template capability
+            # probe if more families turn out to reject trailing system messages.
             try:
                 _ctx_block = "\n\n".join(b for b in (_ledger, _fs_state, _todo_note) if b)
                 if _ctx_block:
+                    _ctx_role = ephemeral_context_role(
+                        getattr(_reasoning_caps, "family", "")
+                    )
                     model_messages = list(model_messages) + [
-                        {"role": "system", "content": _ctx_block}
+                        {"role": _ctx_role, "content": _ctx_block}
                     ]
             except Exception:
                 pass
