@@ -3,6 +3,19 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.3.51 — 2026-08-17
+
+### Fixed
+
+- **An empty or malformed stream chunk no longer crashes the turn with "Lost
+  connection to the model server".** The SSE reader stripped the `data: ` prefix
+  then called `json.loads(line)` directly — so an empty `data:` payload, a
+  keepalive comment (`: ...`), or a whitespace-only line raised `Expecting value:
+  line 1 column 1 (char 0)`, which aborted the whole stream and surfaced as a
+  connection loss (seen live on a large-context Muse Glimmer Q8 run with ~19k-token
+  prompts). The reader now skips empty/comment/non-JSON chunks and keeps reading;
+  a single hiccup can't kill the turn.
+
 ## 0.3.50 — 2026-08-17
 
 ### Fixed
