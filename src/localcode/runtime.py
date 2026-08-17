@@ -1685,7 +1685,20 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
                             line = line[6:]
                             if line == "[DONE]":
                                 break
-                        data = json.loads(line)
+                        # SSE hygiene: an empty `data:` payload, a keepalive
+                        # comment (`: ...`), or a whitespace-only line is NOT
+                        # JSON. `json.loads("")` raises "Expecting value: line 1
+                        # column 1 (char 0)", which used to abort the whole
+                        # stream and surface as "Lost connection to the model
+                        # server". A single malformed/empty chunk must never kill
+                        # the turn — skip it and keep reading the stream.
+                        line = line.strip()
+                        if not line or line.startswith(":"):
+                            continue
+                        try:
+                            data = json.loads(line)
+                        except (json.JSONDecodeError, ValueError):
+                            continue
                         if "error" in data:
                             raise RuntimeErrorWithContext(_error_message(data["error"]))
                         # Capture finish_reason if the chunk carries one. Most
