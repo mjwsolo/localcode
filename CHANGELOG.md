@@ -3,6 +3,21 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.3.55 — 2026-08-18
+
+### Changed
+
+- **Inject installed dependency versions into the prompt (environment ground
+  truth — the Claude Code / Codex pattern).** The "Project stack" line already
+  named the stack from marker files; it now also lists the actual installed major
+  versions from `package.json` (e.g. `tailwindcss@4, @tailwindcss/vite@4, dexie@4,
+  react@19`). The system prompt tells the model to use the CLI/API for THOSE
+  versions, not from memory, and to do a step by hand (write the config file) when
+  a setup command fails with "unknown command / could not determine executable"
+  — a version mismatch, not a retry candidate. Directly targets the class of
+  failure where a model runs a deprecated command (e.g. `npx tailwindcss init`,
+  removed in Tailwind v4) because it can't see the installed version.
+
 ## 0.3.54 — 2026-08-18
 
 ### Changed
