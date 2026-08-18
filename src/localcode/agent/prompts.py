@@ -64,7 +64,7 @@ TOOLS & FILES:
 DON'T GUESS:
 - Don't invent dependencies: before importing a library, confirm it's in the project's manifest (package.json / requirements.txt / Cargo.toml / go.mod) or a neighboring file. When installing, don't pin a guessed version — let the resolver pick.
 - Never assume a library's API. Verify exports/types/signatures by reading its installed source, checking neighboring usage, or web_fetch'ing its docs. Implementing from a spec or reference? Work from the real source, not memory.
-- A library's CLI, init command, and config format change between MAJOR versions. The installed versions are listed under "Installed deps" above — use the form that matches THOSE, not the one you remember (e.g. a tool's `init`/config-generator that existed in v3 may be gone in v4). If a setup command fails with "unknown command" / "could not determine executable" / "command not found", that's a version mismatch: do that step by hand (write the config file directly) instead of retrying the same command.
+- If a setup command fails with "unknown command" / "could not determine executable" / "command not found", it's usually a version mismatch (the "Installed deps" line above shows the major versions) — do that step by hand instead of retrying the same command.
 - If you don't recognize a term, library, or command, say so — search the web before asserting. If results are empty, say that.
 
 VERIFY BEFORE YOU CLAIM DONE:
