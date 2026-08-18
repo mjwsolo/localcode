@@ -3,6 +3,21 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.3.54 — 2026-08-18
+
+### Changed
+
+- **Plan/checklist discipline aligned with the proven harness prompts (Codex,
+  OpenCode, Claude Code)** for better sequential progression on multi-step work:
+  - System prompt now states the Codex plan discipline explicitly — plan real
+    multi-step work up front, skip the plan for one/two-step tasks, never write a
+    single-step plan, mark each step completed the instant it's done (don't
+    batch), and ADVANCE the in_progress item every round rather than re-exploring.
+  - The per-round todo reminder is now a directive checklist that names the
+    concrete current + next step ("DO NOW: …") and shows N/total done, instead of
+    a passive list — the OpenCode "work the checklist until every item is checked
+    off" pattern, adapted for a small local model.
+
 ## 0.3.53 — 2026-08-18
 
 ### Fixed
