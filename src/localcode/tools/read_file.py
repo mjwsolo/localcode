@@ -193,6 +193,22 @@ def execute(ctx: ToolContext, args: dict) -> str:
             f"read_file needs a FILE path; use list_files for directories. Contents:\n"
             f"{body}{more}"
         )
+    # Binary guard: reading an image / .gguf / compiled artifact would dump raw
+    # bytes into the model's context (garbage that wastes tokens and can derail
+    # it). Detect via a NUL byte in the head — the standard text/binary
+    # heuristic — reading only the first 8 KB so a multi-GB file stays cheap.
+    try:
+        with open(path, "rb") as _fh:
+            _head = _fh.read(8192)
+        if b"\x00" in _head:
+            _sz = path.stat().st_size
+            return (
+                f"'{source_disp}' is a BINARY file ({_sz} bytes) — not shown, "
+                f"because reading it would dump raw bytes into context. It is not "
+                f"a text file; open it with the appropriate tool if you need it."
+            )
+    except Exception:
+        pass
     content = path.read_text(errors="replace")
     lines = content.splitlines()
     default_limit, max_default_chars = _dynamic_read_defaults(ctx)
