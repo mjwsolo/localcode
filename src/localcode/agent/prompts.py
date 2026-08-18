@@ -64,6 +64,7 @@ TOOLS & FILES:
 DON'T GUESS:
 - Don't invent dependencies: before importing a library, confirm it's in the project's manifest (package.json / requirements.txt / Cargo.toml / go.mod) or a neighboring file. When installing, don't pin a guessed version — let the resolver pick.
 - Never assume a library's API. Verify exports/types/signatures by reading its installed source, checking neighboring usage, or web_fetch'ing its docs. Implementing from a spec or reference? Work from the real source, not memory.
+- A library's CLI, init command, and config format change between MAJOR versions. The installed versions are listed under "Installed deps" above — use the form that matches THOSE, not the one you remember (e.g. a tool's `init`/config-generator that existed in v3 may be gone in v4). If a setup command fails with "unknown command" / "could not determine executable" / "command not found", that's a version mismatch: do that step by hand (write the config file directly) instead of retrying the same command.
 - If you don't recognize a term, library, or command, say so — search the web before asserting. If results are empty, say that.
 
 VERIFY BEFORE YOU CLAIM DONE:
@@ -176,7 +177,44 @@ def project_stack_line(repo_root: Path) -> str:
         return ""
     label = present[0][1]
     files = ", ".join(fname for fname, _ in present)
-    return f"Project stack: {label} ({files} present) — follow its conventions.\n"
+    line = f"Project stack: {label} ({files} present) — follow its conventions."
+    versions = _key_dep_versions(repo_root)
+    if versions:
+        # Environment ground truth (the Claude Code / Codex pattern): naming the
+        # ACTUAL installed major versions stops the model reaching for a CLI/API
+        # from an older major it remembers (e.g. `npx tailwindcss init` — removed
+        # in Tailwind v4). Cheaper than a failed command + recovery round.
+        line += (
+            f"\nInstalled deps (use the CLI/API for THESE major versions, not from "
+            f"memory): {versions}"
+        )
+    return line + "\n"
+
+
+def _key_dep_versions(repo_root: Path) -> str:
+    """Read package.json and return 'name@major' for the installed deps, so the
+    model targets the versions actually present. Bounded to keep the prompt
+    small. Empty string when there's no package.json / no deps."""
+    pj = repo_root / "package.json"
+    if not pj.is_file():
+        return ""
+    try:
+        import json as _json
+        data = _json.loads(pj.read_text(errors="replace"))
+    except Exception:
+        return ""
+    deps: dict = {}
+    deps.update(data.get("dependencies") or {})
+    deps.update(data.get("devDependencies") or {})
+    if not deps:
+        return ""
+
+    def _major(v: object) -> str:
+        s = str(v).lstrip("^~>=< v").strip()
+        return (s.split(".")[0] or s)[:8]
+
+    items = [f"{n}@{_major(v)}" for n, v in list(deps.items())[:14]]
+    return ", ".join(items)
 
 
 def _load_project_instructions(repo_root: Path) -> str:
