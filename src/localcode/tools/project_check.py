@@ -93,7 +93,28 @@ def _detect_commands(repo_root: str) -> list[tuple[str, list[str], str]]:
             # eslint is deliberately NOT auto-run — its config (.eslintrc.js /
             # eslint.config.js) executes JS, which is the same RCE vector.
             if os.path.exists(os.path.join(pj_dir, "tsconfig.json")) and os.path.exists(os.path.join(binp, "tsc")):
-                cmds.append(("tsc --noEmit", [os.path.join(binp, "tsc"), "--noEmit", "--pretty", "false"], pj_dir))
+                tsc = os.path.join(binp, "tsc")
+                # Modern Vite/React/Vue scaffolds use TS PROJECT REFERENCES: the
+                # root tsconfig.json is a solution file (`"references": [...]`,
+                # no `include`), so `tsc --noEmit` on it type-checks NOTHING and
+                # reports a FALSE clean — the exact hole that let a build with 3
+                # real tsc errors complete as "verified". The referenced projects
+                # are only checked in build mode (`tsc -b`), which is what
+                # `npm run build` runs. Detect references and use -b so the gate
+                # sees the SAME errors the real build would. `tsc -b` still reads
+                # only tsconfig JSON (no package.json scripts), so the unattended
+                # RCE note above holds; scaffolds set noEmit in the referenced
+                # configs, so nothing but a .tsbuildinfo is produced.
+                _uses_refs = False
+                try:
+                    _cfg = json.load(open(os.path.join(pj_dir, "tsconfig.json"))) or {}
+                    _uses_refs = bool(_cfg.get("references"))
+                except Exception:
+                    _uses_refs = False
+                if _uses_refs:
+                    cmds.append(("tsc -b", [tsc, "-b", "--pretty", "false"], pj_dir))
+                else:
+                    cmds.append(("tsc --noEmit", [tsc, "--noEmit", "--pretty", "false"], pj_dir))
 
     # ── Python ── ruff for REAL errors only (E9 syntax + F pyflakes: undefined
     # names, bad imports) — not style noise. Falls back to compileall (syntax).
