@@ -37,19 +37,13 @@ Why JSONL
   • Each line is independently parseable — `jq` / `awk` / Python
     `json.loads` all work without a custom parser.
   • Easy to tail: `tail -f .localcode/events.jsonl | jq .`
-  • Trivial to ship to a remote sink (Phase 2): batch N lines, POST
-    JSON array; same format the dev team consumes locally.
   • Append-only file plays well with `git ignore` and never needs
     truncation — if it grows past ~50 MB on disk, rotate manually.
 
-Phase 2 (cloud push, NOT IMPLEMENTED YET)
------------------------------------------
-  • Background thread reads tail of events.jsonl, batches every N
-    seconds, POSTs to a configured endpoint, marks watermark.
-  • Opt-in via `LOCALCODE_TELEMETRY_URL` env var (privacy default).
-  • Sampling for high-volume types (`tool_call`, `redaction`) so the
-    endpoint isn't overwhelmed at 1M-user scale.
-  • Local file remains source of truth; remote is best-effort.
+This log is LOCAL-ONLY. Nothing here is transmitted off the machine: no
+uploader, no endpoint, no `LOCALCODE_TELEMETRY_URL`. Any future remote/cloud
+sink would be a new, opt-in feature that must first strip user content (prompts,
+outputs, file paths) — not a flip of a flag documented here.
 
 Performance
 -----------
