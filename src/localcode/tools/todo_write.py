@@ -90,15 +90,38 @@ def render_todo_reminder(todos: list[dict]) -> str:
     """
     if not todos:
         return ""
-    lines = ["Your task list (keep exactly one in_progress; update it as you go):"]
     marks = {"completed": "[x]", "in_progress": "[~]", "pending": "[ ]"}
+    done = sum(1 for t in todos if t.get("status") == "completed")
+    total = len(todos)
+    lines = [
+        f"YOUR PLAN — {done}/{total} done. This is your contract: work it top to "
+        f"bottom and ADVANCE it every round. Never redo a [x] item."
+    ]
     for i, t in enumerate(todos, 1):
         status = t.get("status", "pending")
         mark = marks.get(status, "[ ]")
         label = t.get("content", "")
         if status == "in_progress" and t.get("activeForm"):
             label = t["activeForm"]
-        lines.append(f"{i}. {mark} {label}")
+        lines.append(f"  {i}. {mark} {label}")
+    # Name the concrete current + next step and FORCE a real action this round —
+    # a weak model left with a passive list drifts back into re-reading/looping.
+    cur = next((t for t in todos if t.get("status") == "in_progress"), None)
+    nxt = next((t for t in todos if t.get("status") == "pending"), None)
+    if cur:
+        lines.append(
+            f"→ DO NOW: {cur.get('content', '')}. Take a real write_file/edit_file/"
+            f"bash action toward it THIS round. The moment it's finished, mark it "
+            f"completed and start the next item. Do NOT re-read files you already "
+            f"have or re-explore the codebase."
+        )
+    elif nxt:
+        lines.append(
+            f"→ Nothing is in_progress. Mark '{nxt.get('content', '')}' in_progress "
+            f"and DO it now — don't stop to re-plan."
+        )
+    else:
+        lines.append("→ Every item is [x] — run the whole thing once to verify, then finish.")
     return "\n".join(lines)
 
 
