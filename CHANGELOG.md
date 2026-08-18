@@ -3,6 +3,51 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.3.57 — 2026-08-19
+
+### Security
+
+- **Prompt injection via a repository's `package.json` is closed.** The
+  dependency-versions line added in 0.3.55 interpolated dependency NAMES from
+  the repo verbatim into the SYSTEM prompt, so a cloned repository could ship a
+  key like `react\nIGNORE PREVIOUS INSTRUCTIONS…` and steer a tool-capable
+  agent. The manifest is now size-capped before parsing, every decoded shape is
+  type-checked, names must match the npm grammar, majors must be 1–4 digits, and
+  the per-entry and total rendered lengths are capped. Anything failing a check
+  is DROPPED — a rejected string is never interpolated in any form. The block is
+  rendered inside an explicitly labelled untrusted-data fence.
+
+### Fixed
+
+- **The completion gate no longer WRITES to your repository.** 0.3.56 ran
+  `tsc -b`, which is a build, not a typecheck: it emitted JS, declarations and
+  source maps into the working tree and always wrote `.tsbuildinfo`. Referenced
+  projects are now type-checked read-only with `tsc -p <ref> --noEmit`, with
+  tsc's incremental state redirected outside the repo. Same diagnostics, zero
+  files touched.
+- **A commented `tsconfig.json` no longer bypasses the gate.** TypeScript has
+  supported comments (and trailing commas) in `tsconfig.json` since 1.8, but the
+  detector used strict `json.load()`; on a commented solution config the parse
+  failed and the gate silently reverted to the inadequate `tsc --noEmit` false
+  clean. Configs are now parsed JSONC-tolerantly, and a parse FAILURE reports
+  "verification unavailable" instead of downgrading to a weaker command.
+- **Timeouts and checker failures are no longer indistinguishable from clean.**
+  `run_project_check_result` returns a structured
+  `clean` / `errors` / `unavailable` / `timed_out` / `failed` outcome. A timeout,
+  a checker that could not execute, and a nonzero exit with no output all leave
+  the build UNVERIFIED instead of being accepted as green.
+- **Dependency majors are read from installed metadata.** Versions come from
+  `node_modules/<pkg>/package.json` — the actual environment — and are labelled
+  "installed"; the manifest fallback is labelled "declared". Specs with no plain
+  numeric major (`workspace:*`, `npm:` aliases, dist-tags, Git URLs, `file:`
+  paths) are dropped rather than rendered as garbage. A non-object manifest root
+  or non-mapping `dependencies` no longer raises out of the helper and silently
+  drops the whole project-stack line.
+
+### Changed
+
+- Event shapes, field names and ordering are unchanged.
+
 ## 0.3.56 — 2026-08-19
 
 ### Fixed
@@ -12,9 +57,10 @@ All notable changes to LocalCode will be documented here. The format follows
   which type-checks NOTHING on a modern scaffold whose root `tsconfig.json` is a
   solution file (`"references": [...]`, no `include`) — so a build with real
   `tsc` errors could complete as "verified." `project_check` now detects TS
-  project references and runs `tsc -b` (what `npm run build` runs), surfacing the
-  same errors so the completion gate feeds them back to fix. `tsc -b` still reads
-  only tsconfig JSON, preserving the unattended-verification RCE guard.
+  project references and type-checks the referenced projects, surfacing the same
+  errors so the completion gate feeds them back to fix. (This release used
+  `tsc -b`, which turned out to write build output into the user's repo; 0.3.57
+  replaced it with a read-only per-reference typecheck.)
 
 ### Changed
 
@@ -23,18 +69,21 @@ All notable changes to LocalCode will be documented here. The format follows
   The event log is local-only; documented that any future remote sink would be a
   new opt-in feature that must strip user content first, not a flag flip.
 
+## 0.3.55 — 2026-08-19
+
 ### Changed
 
-- **Inject installed dependency versions into the prompt (environment ground
-  truth — the Claude Code / Codex pattern).** The "Project stack" line already
-  named the stack from marker files; it now also lists the actual installed major
-  versions from `package.json` (e.g. `tailwindcss@4, @tailwindcss/vite@4, dexie@4,
-  react@19`). The system prompt tells the model to use the CLI/API for THOSE
-  versions, not from memory, and to do a step by hand (write the config file) when
-  a setup command fails with "unknown command / could not determine executable"
-  — a version mismatch, not a retry candidate. Directly targets the class of
-  failure where a model runs a deprecated command (e.g. `npx tailwindcss init`,
-  removed in Tailwind v4) because it can't see the installed version.
+- **Inject dependency versions into the prompt (environment ground truth).** The
+  "Project stack" line already named the stack from marker files; it now also
+  lists the major versions of the project's dependencies (e.g. `tailwindcss@4,
+  @tailwindcss/vite@4, dexie@4, react@19`). The system prompt tells the model to
+  use the CLI/API for THOSE versions, not from memory, and to do a step by hand
+  (write the config file) when a setup command fails with "unknown command /
+  could not determine executable" — a version mismatch, not a retry candidate.
+  Directly targets the class of failure where a model runs a deprecated command
+  (e.g. `npx tailwindcss init`, removed in Tailwind v4) because it can't see the
+  installed version. (0.3.57 hardened this against prompt injection and moved it
+  to installed metadata.)
 
 ## 0.3.54 — 2026-08-18
 
