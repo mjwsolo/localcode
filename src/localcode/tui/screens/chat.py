@@ -4416,7 +4416,7 @@ class ChatScreen(Screen):
             self._thinking_text += chunk
             self._turn_tokens += max(1, len(chunk) // 4) if chunk else 0
             self._thinking_phase = "thinking"
-            # Stream the reasoning to the log live (like Claude Code / Codex)
+            # Stream the reasoning to the log live
             # instead of hiding it. On the first chunk, drop the spinner and
             # start the dimmed reasoning stream; then feed each chunk.
             if chunk:

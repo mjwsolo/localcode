@@ -1675,10 +1675,20 @@ def run_agent_loop(
                 # errors back. Catches semantic errors (wrong names, missing
                 # imports) the per-write syntax check can't. See project_check.
                 _proj_errors = None
+                _check_unverified = ""
                 try:
-                    from ..tools.project_check import run_project_check
+                    from ..tools.project_check import run_project_check_result
                     out.print_info("Verifying — running the project's typecheck…")
-                    _proj_errors = run_project_check(str(app.repo_root), ctx_tokens=_ctx_tokens_turn)
+                    _check = run_project_check_result(
+                        str(app.repo_root), ctx_tokens=_ctx_tokens_turn)
+                    if _check.is_red:
+                        _proj_errors = _check.detail
+                    elif _check.status in ("timed_out", "failed"):
+                        # NOT clean: the checker timed out or failed to produce a
+                        # result. Treating that as green is a FALSE CLEAN — the
+                        # one thing this gate exists to prevent — so the build
+                        # stays unverified and the model is asked to verify.
+                        _check_unverified = _check.detail or _check.status
                 except Exception:
                     _proj_errors = None
                 try:
@@ -1706,6 +1716,10 @@ def run_agent_loop(
                     _ephemeral_nudge_indices.append(len(messages) - 1)
                     _last_nudge_kind = "build_verify_errors"
                     continue  # don't accept completion — the gate is red
+                if _check_unverified:
+                    out.print_info(f"Typecheck did not complete ({_check_unverified}) "
+                                   f"— build stays unverified.")
+                    _self_verified = False
                 if not _self_verified and _build_verify_nudges < 1:
                     # Gate is clean (checker passed OR none configured) AND the
                     # model never ran a build/test itself — advise ONCE to verify.
