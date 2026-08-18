@@ -63,3 +63,21 @@ def test_read_text_file_still_works(tmp_path):
     (tmp_path / "t.py").write_text("print('ok')\n")
     out = read_file.execute(_ctx(tmp_path), {"path": "t.py"})
     assert "print('ok')" in out
+
+
+def test_bash_missing_command_is_clear_error_not_crash(tmp_path):
+    from localcode.tools import bash
+    out = bash.execute(_ctx(tmp_path), {})
+    assert "command" in out and out.startswith("Error")
+
+
+def test_bash_empty_command_is_error(tmp_path):
+    from localcode.tools import bash
+    out = bash.execute(_ctx(tmp_path), {"command": "   "})
+    assert out.startswith("Error")
+
+
+def test_bash_accepts_cmd_alias(tmp_path):
+    from localcode.tools import bash
+    out = bash.execute(_ctx(tmp_path), {"cmd": "echo aliased_ok"})
+    assert "aliased_ok" in out and not out.startswith("Error")

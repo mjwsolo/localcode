@@ -3,6 +3,16 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.3.53 — 2026-08-18
+
+### Fixed
+
+- **`bash` no longer crashes with a `KeyError` when the model omits `command`**
+  (or uses a common alias). It now returns a clear "command is required" message,
+  and accepts `cmd`/`code`/`script`/`shell` as aliases for the command — small
+  models frequently emit those. (bash output was already capped at 30 KB via
+  `RESULT_LIMITS`; that's unchanged.)
+
 ## 0.3.52 — 2026-08-18
 
 ### Fixed

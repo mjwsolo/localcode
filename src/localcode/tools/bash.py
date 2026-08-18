@@ -833,7 +833,20 @@ def _redirect_shell_dir_listing(cmd: str) -> str:
 
 
 def execute(ctx: ToolContext, args: dict) -> str:
-    cmd = _normalize_repo_root_variants(args["command"], str(ctx.repo))
+    # Guard the required arg before dereferencing it. A small model that omits
+    # `command` (or uses a common alias like `cmd`) must get a clear, recoverable
+    # message — not an unhandled KeyError that reads as a tool crash.
+    raw_cmd = args.get("command")
+    if not isinstance(raw_cmd, str):
+        for _alias in ("cmd", "code", "script", "bash", "shell"):
+            _v = args.get(_alias)
+            if isinstance(_v, str):
+                raw_cmd = _v
+                break
+    if not isinstance(raw_cmd, str) or not raw_cmd.strip():
+        return ("Error: 'command' is required for bash — the shell command to run "
+                "(e.g. {\"command\": \"npm run build\"}).")
+    cmd = _normalize_repo_root_variants(raw_cmd, str(ctx.repo))
     # Block ANY use of process-attaching debuggers — lldb / dtrace /
     # spindump / sample. The agent kept invoking these to debug perceived
     # hangs, which:
