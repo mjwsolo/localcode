@@ -775,7 +775,7 @@ class ChatLog(RichLog):
         self._render_thinking(text, expanded, idx)
 
     # ── Live reasoning stream ──────────────────────────────────────────
-    # Show the model's reasoning as it arrives (like Claude Code / Codex),
+    # Show the model's reasoning as it arrives,
     # instead of hiding it behind a spinner and dumping the whole trace at the
     # end. Each completed line is committed to `_history` as a dimmed
     # `think_line` entry (with a one-time `think_header`) — append-only, so it
