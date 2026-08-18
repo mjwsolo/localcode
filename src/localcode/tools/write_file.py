@@ -131,6 +131,12 @@ def execute(ctx: ToolContext, args: dict) -> str:
         if code is not None:
             return str(LocalCodeError(code=code, detail=detail))
         return f"[E4101] {detail}"
+    # A MISSING `content` key is almost always an omission (the model dropped it),
+    # and defaulting to "" would silently overwrite an existing file with nothing.
+    # Require the key; an explicit "" is still allowed (a deliberate empty file).
+    if "content" not in args:
+        return ("Error: 'content' is required for write_file — the full file body "
+                "to write. Pass content=\"\" only if you truly want an empty file.")
     content = args.get("content", "")
 
     # Defense-in-depth: reject the in-memory redaction stub before it

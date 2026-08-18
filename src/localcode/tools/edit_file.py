@@ -325,6 +325,15 @@ def execute(ctx: ToolContext, args: dict) -> str:
     if _guard:
         return _guard
 
+    # Guard required args BEFORE dereferencing them — a small model that omits
+    # `new_string` (or `old_string`) must get a clear, recoverable message, not
+    # an unhandled KeyError that reads as a tool crash.
+    if "old_string" not in args:
+        return ("Error: 'old_string' is required for edit_file — the exact text "
+                "to find. To create or fully rewrite a file, use write_file.")
+    if "new_string" not in args:
+        return ("Error: 'new_string' is required for edit_file — the replacement "
+                "text. Use an empty string \"\" to delete the matched text.")
     content = path.read_text(errors="replace")
     old = args["old_string"]
     new = args["new_string"]

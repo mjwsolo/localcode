@@ -3,6 +3,20 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.3.52 — 2026-08-18
+
+### Fixed
+
+- **File-tool hardening** (found by adversarial edge-case probing):
+  - `edit_file` no longer **crashes with a `KeyError`** when the model omits
+    `new_string` or `old_string` — it returns a clear, recoverable message.
+  - `read_file` on a **binary file** (image, `.gguf`, compiled artifact) is
+    refused with a one-line note instead of dumping raw bytes into context
+    (bounded 8 KB NUL-byte check, so multi-GB files stay cheap).
+  - `write_file` with a **missing `content` key** is refused instead of silently
+    creating/overwriting the file with `""` (an omitted content arg used to clobber
+    an existing file). An explicit `content=""` is still allowed for a real empty file.
+
 ## 0.3.51 — 2026-08-17
 
 ### Fixed
