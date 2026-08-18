@@ -3,7 +3,25 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## 0.3.55 — 2026-08-18
+## 0.3.56 — 2026-08-19
+
+### Fixed
+
+- **Build-completion typecheck gate now catches errors in Vite/React/TS
+  scaffolds.** The gate that blocks "done" on a red build ran `tsc --noEmit`,
+  which type-checks NOTHING on a modern scaffold whose root `tsconfig.json` is a
+  solution file (`"references": [...]`, no `include`) — so a build with real
+  `tsc` errors could complete as "verified." `project_check` now detects TS
+  project references and runs `tsc -b` (what `npm run build` runs), surfacing the
+  same errors so the completion gate feeds them back to fix. `tsc -b` still reads
+  only tsconfig JSON, preserving the unattended-verification RCE guard.
+
+### Changed
+
+- **events.py telemetry docs corrected.** Removed the stale "Phase 2 cloud push"
+  / `LOCALCODE_TELEMETRY_URL` design note (never implemented, zero code paths).
+  The event log is local-only; documented that any future remote sink would be a
+  new opt-in feature that must strip user content first, not a flag flip.
 
 ### Changed
 
