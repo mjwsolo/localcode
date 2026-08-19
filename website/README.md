@@ -48,27 +48,42 @@ website/
 │   │   └── docs.css           Starlight --sl-* → localcode token mapping
 │   ├── assets/brand/          finder-mark.svg, lockup-horizontal.svg
 │   └── content/docs/          Markdown pages
-└── public/                    favicon.svg, social-preview.svg
+└── public/                    favicon.svg, social-preview.svg,
+                               brand/hero-banner.svg
 ```
 
 ## Brand
 
 **Tokens** (`src/styles/tokens.css`) — the palette is fixed:
 
+The palette is a **cool ramp built on hue 225**. Neutrals sit on hue ~210 so
+they read as the same family; the accent is the only saturated hue.
+
 | Token | Value | Use |
 | --- | --- | --- |
-| `--lc-ink` | `#14110F` | Dark ground |
-| `--lc-bone` | `#F7F4EF` | Light ground |
-| `--lc-surface` | `#2A2622` | Raised dark surface |
-| `--lc-muted-dark` | `#5C5751` | Muted text on light |
-| `--lc-muted-light` | `#A8A099` | Muted text on dark |
-| `--lc-amber` | `#FFB020` | Accent — **dark backgrounds only** |
-| `--lc-ember` | `#B24A0B` | Accent — **light backgrounds only** |
-| `--lc-verify` | `#5FD08A` | Pass / verified |
-| `--lc-fault` | `#FF6B57` | Fail |
+| `--lc-ink` | `#0B0E11` | Dark ground |
+| `--lc-bone` | `#F5F7F8` | Light ground |
+| `--lc-surface` | `#171C21` | Raised dark surface |
+| `--lc-muted-dark` | `#5A6672` | Muted text on light |
+| `--lc-muted-light` | `#8C98A3` | Muted text on dark |
+| `--lc-amber` | `#47E6A1` | Accent — **dark backgrounds only** |
+| `--lc-ember` | `#2457E6` | Accent — **light backgrounds only**, hue 225 |
+| `--lc-verify` | `#3FCF8E` | Pass / verified |
+| `--lc-fault` | `#FF5A5F` | Fail |
 
-Use `--lc-accent`, which resolves to amber or ember for the active theme,
+Use `--lc-accent`, which resolves to the correct one for the active theme,
 rather than picking one by hand.
+
+Two names are now historical: `--lc-amber` and `--lc-ember` are the dark-ground
+and light-ground accents, not the warm hues they were originally named for. The
+names are kept so the ~40 call sites across the landing page, the docs theme and
+the brand SVGs stay in sync; renaming them is a mechanical follow-up, not a
+design decision.
+
+`#5B86FF` appears in the standalone brand SVGs (favicon, social preview,
+banner). It is the on-dark lift of `#2457E6` — same hue 225, raised luminance so
+the mark's core holds against ink at 16px. Those files cannot read CSS custom
+properties, which is why the value is written out.
 
 **Finder Mark** — two concentric orthogonal square rings with a solid core
 offset down and right, hand-authored on a 32-unit grid with every edge on a
@@ -76,8 +91,21 @@ offset down and right, hand-authored on a 32-unit grid with every edge on a
 (not an `<img>`) so the rings inherit `currentColor` and the core follows
 `--lc-mark-core`.
 
-Deliberately absent: violet/blue gradients, glassmorphism, glow, neural
-meshes, generic AI imagery.
+**Hero composition** — the hero has **no image**. Its second column is the real
+transcript panel (`TerminalDemo`), so the strongest thing on the page is the
+product doing its job rather than a decorative shape. The Finder Mark appears
+three times, each time structurally: the nav lockup, the privacy callout, and
+the panel's title bar. Everything is inline SVG and text, so the hero ships zero
+image bytes, stays selectable and searchable, and scales with zoom.
+
+**`public/brand/hero-banner.svg`** — a 5 KB hand-authored banner for README and
+social use, built from the same two parts: mark + wordmark on the left, a flat
+version of the transcript panel on the right. Flat fills, orthogonal geometry,
+one accent hue.
+
+Deliberately absent everywhere: gradients, glow, blur, glassmorphism, flow
+fields, particle or neural meshes, device mockups, and any generated or stock
+imagery.
 
 ## Typography
 
@@ -95,8 +123,9 @@ face fails to load.
 
 ### Outlined SVG text — pre-publication requirement
 
-`src/assets/brand/lockup-horizontal.svg` and `public/social-preview.svg` use
-**live `<text>`** in a Martian Mono font stack. That renders correctly in a
+`src/assets/brand/lockup-horizontal.svg`, `public/social-preview.svg` and
+`public/brand/hero-banner.svg` use **live `<text>`** in a Martian Mono font
+stack. That renders correctly in a
 browser (the face is loaded on the page) but **not** when the SVG is opened
 standalone, embedded in a third-party surface, or sent to print. Convert the
 text to outlines before either file is used as a distributed brand asset — this

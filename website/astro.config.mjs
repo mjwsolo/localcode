@@ -53,7 +53,7 @@ export default defineConfig({
       head: [
         {
           tag: 'meta',
-          attrs: { name: 'theme-color', content: '#14110F' },
+          attrs: { name: 'theme-color', content: '#0B0E11' },
         },
       ],
       sidebar: [

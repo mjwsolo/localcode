@@ -10,50 +10,50 @@
 }
 
 :root[data-theme='dark'] {
-  --sl-color-accent-low: #4a2e07;
-  --sl-color-accent: #b8790f;
+  --sl-color-accent-low: #0d3d2a;
+  --sl-color-accent: #1f9c68;
   --sl-color-accent-high: var(--lc-amber);
   /* Starlight's scale runs white -> gray-1..7 -> black as "brightest text" to
      "page ground". In dark mode that reads literally. */
   --sl-color-white: var(--lc-bone);
   --sl-color-text-invert: var(--lc-ink);
-  --sl-color-gray-1: #eae5dd;
-  --sl-color-gray-2: #cec7bd;
+  --sl-color-gray-1: #e2e7eb;
+  --sl-color-gray-2: #c2cad2;
   --sl-color-gray-3: var(--lc-muted-light);
-  --sl-color-gray-4: #6f6960;
-  --sl-color-gray-5: #3a352f;
+  --sl-color-gray-4: #626d78;
+  --sl-color-gray-5: #232a2d;
   --sl-color-gray-6: var(--lc-surface);
   --sl-color-black: var(--lc-ink);
   --sl-color-bg: var(--lc-ink);
   --sl-color-bg-nav: var(--lc-ink);
   --sl-color-bg-sidebar: var(--lc-ink);
-  --sl-color-bg-inline-code: #2f2b26;
-  --sl-color-hairline-light: #3a352f;
+  --sl-color-bg-inline-code: #1e252b;
+  --sl-color-hairline-light: #232a2d;
   --sl-color-text-accent: var(--lc-amber);
 }
 
 :root[data-theme='light'] {
-  --sl-color-accent-low: #f3e2d2;
+  --sl-color-accent-low: #dbe4fd;
   --sl-color-accent: var(--lc-ember);
-  --sl-color-accent-high: #7c330a;
+  --sl-color-accent-high: #15308c;
   /* In LIGHT mode Starlight INVERTS the scale: --sl-color-white is the
      strongest *foreground* (headings, site title) and --sl-color-black is the
      page ground. Mapping white -> #fff here put white headings on bone. */
   --sl-color-white: var(--lc-ink);
   --sl-color-text-invert: var(--lc-bone);
-  --sl-color-gray-1: #221e1a;
-  --sl-color-gray-2: #3d3831;
+  --sl-color-gray-1: #171c21;
+  --sl-color-gray-2: #333d47;
   --sl-color-gray-3: var(--lc-muted-dark);
-  --sl-color-gray-4: #8b847c;
-  --sl-color-gray-5: #ded7cc;
-  --sl-color-gray-6: #efeae2;
-  --sl-color-gray-7: #f4f0ea;
+  --sl-color-gray-4: #7d8894;
+  --sl-color-gray-5: #cdd3da;
+  --sl-color-gray-6: #e4e9ee;
+  --sl-color-gray-7: #eef1f4;
   --sl-color-black: var(--lc-bone);
   --sl-color-bg: var(--lc-bone);
   --sl-color-bg-nav: var(--lc-bone);
   --sl-color-bg-sidebar: var(--lc-bone);
-  --sl-color-bg-inline-code: #ece6dd;
-  --sl-color-hairline-light: #ded7cc;
+  --sl-color-bg-inline-code: #e2e8ee;
+  --sl-color-hairline-light: #cdd3da;
   --sl-color-text-accent: var(--lc-ember);
 }
 

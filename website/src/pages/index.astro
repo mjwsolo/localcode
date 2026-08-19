@@ -53,7 +53,7 @@ const proof = [
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title}</title>
     <meta name="description" content={description} />
-    <meta name="theme-color" content="#14110F" />
+    <meta name="theme-color" content="#0B0E11" />
     <link rel="icon" href={href('favicon.svg')} type="image/svg+xml" />
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
@@ -148,23 +148,10 @@ const proof = [
             </p>
           </div>
 
-          <div class="lc-hero__mark" aria-hidden="true">
-            <FinderMark size={340} class="lc-hero__markshape" />
+          <div class="lc-hero__proof">
+            <p class="lc-hero__overline">One turn, start to green</p>
+            <TerminalDemo />
           </div>
-        </div>
-      </section>
-
-      <!-- Terminal -->
-      <section class="lc-section lc-section--dark">
-        <div class="lc-section__inner">
-          <h2 class="lc-h2">One turn, start to green</h2>
-          <p class="lc-lede">
-            Read the file. Make the edit. Run the repo's own checks. When they
-            come back red, read the failure and fix it. On a request localcode
-            reads as an edit, finishing without a passing check is reported as
-            incomplete rather than done.
-          </p>
-          <TerminalDemo />
         </div>
       </section>
 
@@ -172,6 +159,12 @@ const proof = [
       <section class="lc-section">
         <div class="lc-section__inner">
           <h2 class="lc-h2">Built for the constraint, not around it</h2>
+          <p class="lc-lede">
+            Read the file. Make the edit. Run the repo's own checks. When they
+            come back red, read the failure and fix it. On a request localcode
+            reads as an edit, finishing without a passing check is reported as
+            incomplete rather than done.
+          </p>
           <div class="lc-grid">
             {proof.map((card, i) => (
               <article class="lc-card">

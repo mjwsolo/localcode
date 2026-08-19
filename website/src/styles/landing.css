@@ -144,30 +144,44 @@ code {
 .lc-hero__inner {
   max-width: var(--lc-maxw);
   margin: 0 auto;
-  padding: 5rem 1.5rem 4.5rem;
+  padding: 4.5rem 1.5rem 4rem;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.02fr);
   gap: 3rem;
   align-items: center;
 }
 
-.lc-hero__mark {
-  color: var(--lc-line);
-  line-height: 0;
-}
-.lc-hero__markshape {
-  --lc-mark-core: var(--lc-accent);
-  max-width: 100%;
-  height: auto;
+/* The hero's second column is the product itself — a real transcript panel,
+   not a decorative shape. Nothing here is an <img>: the panel is text and the
+   mark is inline SVG, so the hero adds no image bytes and stays selectable,
+   searchable and legible at any zoom. */
+.lc-hero__proof {
+  min-width: 0;
 }
 
-@media (max-width: 1000px) {
+.lc-hero__overline {
+  margin: 0 0 0.85rem;
+  font-family: var(--lc-font-code);
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--lc-text-muted);
+}
+
+/* Slightly tighter type here than in a full-width section, so the widest
+   transcript line fits the column instead of scrolling on every desktop. */
+.lc-hero__proof .lc-term__body {
+  font-size: 0.8rem;
+}
+
+@media (max-width: 1040px) {
   .lc-hero__inner {
     grid-template-columns: minmax(0, 1fr);
+    gap: 2.5rem;
     padding-top: 3.5rem;
   }
-  .lc-hero__mark {
-    display: none;
+  .lc-hero__proof .lc-term__body {
+    font-size: 0.78rem;
   }
 }
 
@@ -329,10 +343,10 @@ code {
 .lc-section--dark {
   background: var(--lc-ink);
   color: var(--lc-bone);
-  border-color: #3a352f;
+  border-color: #232a2d;
   --lc-text: var(--lc-bone);
   --lc-text-muted: var(--lc-muted-light);
-  --lc-line: #3a352f;
+  --lc-line: #232a2d;
   --lc-accent: var(--lc-amber);
   --lc-page: var(--lc-ink);
   --lc-page-2: var(--lc-surface);
@@ -364,9 +378,9 @@ code {
 
 .lc-term {
   margin: 0;
-  border: 1px solid #3a352f;
+  border: 1px solid #232a2d;
   border-radius: var(--lc-radius);
-  background: #1b1815;
+  background: #10151a;
   overflow: hidden;
 }
 
@@ -376,7 +390,7 @@ code {
   gap: 0.85rem;
   padding: 0.6rem 0.9rem;
   background: var(--lc-surface);
-  border-bottom: 1px solid #3a352f;
+  border-bottom: 1px solid #232a2d;
   font-family: var(--lc-font-code);
   font-size: 0.78rem;
   color: var(--lc-muted-light);
@@ -438,13 +452,13 @@ code {
 .lc-term__body .l--note {
   /* Between --lc-muted-dark and --lc-muted-light: recedes behind the tool
      lines without dropping under 4.5:1 on the terminal ground. */
-  color: #918a80;
+  color: #7b8792;
 }
 
 .lc-term__disclaimer {
   margin: 0;
   padding: 0.75rem 1.1rem;
-  border-top: 1px solid #3a352f;
+  border-top: 1px solid #232a2d;
   background: var(--lc-ink);
   font-size: 0.78rem;
   color: var(--lc-muted-light);
