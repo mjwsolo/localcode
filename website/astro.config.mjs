@@ -15,7 +15,7 @@ export default defineConfig({
     starlight({
       title: 'localcode',
       description:
-        'An open-source coding agent that runs local models on Apple Silicon. No API key. No remote inference.',
+        'An open-source coding agent that runs local models on Apple Silicon. No API key, and no remote inference unless you point it at one.',
       components: {
         // Inline SVG lockup so the Finder Mark inherits the theme colour.
         // (Starlight's built-in `logo` renders an <img>, where currentColor

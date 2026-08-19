@@ -82,5 +82,5 @@ about where a search goes.
 UI turn traces are **not** written to `~/.localcode/telemetry/turns.jsonl` any
 more; that file was consolidated into the per-project
 `<project>/.localcode/events.jsonl` as `ui_turn_end` records. Set
-`LOCALCODE_TELEMETRY=0` to stop emitting them. Either way the data stays on your
-machine.
+`LOCALCODE_TELEMETRY=0` to stop emitting them. Either way localcode does not
+upload the records.

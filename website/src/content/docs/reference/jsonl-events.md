@@ -89,8 +89,9 @@ This matters in practice: `run --json` cannot read the turn's final status off
 its own stdout stream, which is why it reads the status the loop persisted on
 the app object instead.
 
-The project log is written whether or not you use `--json`, is append-only, and
-never leaves the machine. Tail it alongside a run:
+The project log is written whether or not you use `--json` and is append-only.
+localcode never uploads it — no code path reads it for transmission. Tail it
+alongside a run:
 
 ```sh
 tail -f .localcode/events.jsonl | jq .

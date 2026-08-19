@@ -93,13 +93,14 @@ All three are open-licensed and redistributable. Every stack ends in a system
 fallback (`ui-monospace` / `-apple-system`), so the page degrades cleanly if a
 face fails to load.
 
-### Font bundling — still outstanding
+### Outlined SVG text — pre-publication requirement
 
 `src/assets/brand/lockup-horizontal.svg` and `public/social-preview.svg` use
 **live `<text>`** in a Martian Mono font stack. That renders correctly in a
 browser (the face is loaded on the page) but **not** when the SVG is opened
-standalone, embedded in a third-party surface, or sent to print. Before either
-file is used as a distributed brand asset, convert the text to outlines.
+standalone, embedded in a third-party surface, or sent to print. Convert the
+text to outlines before either file is used as a distributed brand asset — this
+is required before publication, not a nice-to-have.
 
 ## What is real and what is illustrative
 
@@ -125,8 +126,11 @@ file is used as a distributed brand asset, convert the text to outlines.
   and `pytest -q` are real; every line of output text is written for the page.
   It contains **no durations, timings, token counts or throughput figures** —
   the check line reads `48 passed`, with no elapsed time.
-- **No performance claims** appear anywhere on the site, and no benchmark
-  command or screen is implied — there isn't one. The model picker's tok/s
+- **No measured throughput claims** appear anywhere on the site, and no
+  benchmark command or screen is implied — there isn't one. Architectural
+  statements about *why* something is faster or slower (active parameters,
+  memory bandwidth) do appear; what is absent is any figure presented as a
+  measurement of performance. The model picker's tok/s
   figures are documented as a calculated estimate (bytes-per-token over assumed
   realised bandwidth, plus a compute floor), not a measurement. The one other
   quantitative figure — TurboQuant's ~3.8× KV-cache compression versus `f16` —
@@ -140,6 +144,8 @@ file is used as a distributed brand asset, convert the text to outlines.
 
 Two things are deliberately left unset because this preview has no deployment
 origin yet. Both need doing before the site is published:
+
+These are pre-publication requirements, not optional polish.
 
 1. **`og:image`.** No Open Graph image tag is emitted. OG requires an absolute
    URL, and the only candidate origin
