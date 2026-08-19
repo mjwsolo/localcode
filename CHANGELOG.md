@@ -3,6 +3,24 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.3.58 — 2026-08-19
+
+### Added
+
+- **`inspect_symbol` tool — read a library's REAL API instead of guessing it.**
+  Given a package name (and optional symbol), it resolves the installed types
+  (`node_modules/**/*.d.ts` for JS/TS, site-packages `.pyi`/source for Python)
+  and returns the actual signature — e.g. `inspect_symbol(module=fsrs,
+  symbol=repeat)` returns `repeat(card, now): Record<Rating, RecordLogItem>`, so
+  the model indexes the result by the rating instead of hallucinating
+  `repeat()[1]`. This is the direct fix for the API-guessing failure class
+  (observed live in an Anki build). It's the "LSP hover" capability exposed as an
+  on-demand TOOL, not a persistent language-server daemon — filesystem-only, no
+  code execution, cheap enough for a 16 GB Mac already running a large local
+  model. The DON'T GUESS prompt section now points the model at it before calling
+  an unfamiliar third-party API. (MCP client support already exists for users who
+  want a full language-server via `~/.localcode/mcp.json`.)
+
 ## 0.3.57 — 2026-08-19
 
 ### Security
