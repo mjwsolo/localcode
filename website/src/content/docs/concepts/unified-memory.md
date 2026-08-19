@@ -25,18 +25,20 @@ recommends the most capable. See
 ## Why the KV cache matters so much
 
 localcode runs a llama.cpp fork with **TurboQuant KV cache compression**:
-asymmetric `q8_0`-K plus `turbo4`-V quantisation, about 3.8× smaller than
-`f16`. Compressing the cache is what buys back enough headroom to run a useful
-context on a 16 GB machine, and it is why the K/V cache types are exposed as
-configuration (`kv_cache_type_k`, `kv_cache_type_v`).
+asymmetric `q8_0`-K plus `turbo4`-V quantisation. The fork's own figure for
+that pairing is roughly 3.8× smaller than `f16` — a property of the
+quantisation scheme, not a benchmark of your machine. Compressing the cache is
+what buys back headroom for a longer context, and it is why the K/V cache types
+are exposed as configuration (`kv_cache_type_k`, `kv_cache_type_v`).
 
 ## Why Mixture-of-Experts models are the mid-range pick
 
 Decode speed on Apple Silicon is bounded by memory bandwidth — how many bytes
 have to be read per token. An MoE model activates only a few billion of its
-parameters per token, so it reads far fewer bytes than a dense model of the
-same total size. You get a larger model's capability at a smaller model's
-per-token bandwidth cost, which is exactly the trade a laptop wants.
+parameters per token, so it reads far fewer bytes per token than a dense model
+of the same total size. That is the architectural trade the mid-range picks are
+making; how it lands in tokens per second depends on your chip, and localcode
+publishes no throughput figures.
 
 ## Headroom, in practice
 

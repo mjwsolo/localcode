@@ -3,10 +3,10 @@
  * Terminal treatment: read → edit → failed check → recovery → verified.
  *
  * IMPORTANT — this is an ILLUSTRATIVE DESIGN PREVIEW, not a recorded run.
- * No timings, token counts, or benchmark numbers are shown, because none of
- * them would be real. The tool names (`read_file`, `edit_file`, `bash`) and
- * the verification command (`pytest -q`) are the ones localcode actually
- * uses; the surrounding prose is written for this page.
+ * No timings, durations, token counts, or throughput figures appear here,
+ * because none of them would be measured. The tool names (`read_file`,
+ * `edit_file`, `bash`) are real localcode tools and `pytest -q` is a real
+ * command the model can run; the output text is written for this page.
  */
 interface Row {
   cls: string;
@@ -34,7 +34,7 @@ const rows: Row[] = [
   { cls: 'l l--ok', glyph: '\u2022', tool: 'edit_file', arg: '(src/timeutil.py)' },
   { cls: 'l l--note', text: '  require at least one unit; keep the compound branch' },
   { cls: 'l l--ok', glyph: '\u2022', tool: 'bash', arg: '(pytest -q)' },
-  { cls: 'l l--verifytext', text: '  \u2713 48 passed in 1.2s' },
+  { cls: 'l l--verifytext', text: '  \u2713 48 passed' },
   BLANK,
   { cls: 'l l--note', text: '  changed 1 file \u00b7 verified with the repo\u2019s own test command' },
 ];

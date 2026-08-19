@@ -26,7 +26,7 @@ const tiers = [
     model: 'Qwen 3.6 35B-A3B',
     quant: 'Q2',
     weights: 10.7,
-    note: 'MoE — 3.0B active params per token, so decode stays laptop-fast.',
+    note: 'MoE — 3.0B of 35B parameters active per token, so far fewer bytes are read per token than a dense model this size.',
   },
   {
     ram: 64,

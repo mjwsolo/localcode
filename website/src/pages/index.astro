@@ -30,10 +30,12 @@ const proof = [
   },
   {
     title: 'Finishes with evidence',
-    body: `A turn ends when the work is demonstrably done, not when the model
-      sounds confident. localcode builds a verification plan from your repo —
-      ruff, pytest, npm test, cargo test — and runs it.`,
-    link: { label: 'How verification works', href: href('concepts/verification') },
+    body: `A code-changing turn either carries a build, typecheck or test that
+      passed against the current file contents, or localcode reports it
+      incomplete instead of claiming success. On build-shaped work it re-runs
+      the project's own typecheck itself and won't let the turn end while
+      that is red.`,
+    link: { label: 'What is actually enforced', href: href('concepts/verification') },
   },
   {
     title: 'Designed for local models',
@@ -57,8 +59,12 @@ const proof = [
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
     <meta property="og:type" content="website" />
-    <meta property="og:image" content={href('social-preview.svg')} />
-    <meta name="twitter:card" content="summary_large_image" />
+    {/*
+      og:image is intentionally omitted until this site has a real deployment
+      origin — Open Graph needs an absolute URL, and a root-relative one is
+      silently ignored by every scraper. public/social-preview.svg is ready;
+      see website/README.md → "Deployment-time requirements".
+    */}
     <script is:inline>
       // Match Starlight's theme storage so the landing page and the docs
       // agree on light/dark across navigation.
@@ -115,8 +121,9 @@ const proof = [
             <p class="lc-sub">{description}</p>
             <p class="lc-privacy">
               <FinderMark size={18} class="lc-privacy__mark" />
-              Your code and prompts stay on your Mac unless you explicitly use a
-              network tool.
+              Your code and prompts are never sent to a model provider. They
+              leave your Mac only when a network tool runs — web search, web
+              fetch, an MCP server, or a shell command.
             </p>
 
             <CopyCommand command="pip install -U localcode" label="install" />
@@ -146,7 +153,9 @@ const proof = [
           <h2 class="lc-h2">One turn, start to green</h2>
           <p class="lc-lede">
             Read the file. Make the edit. Run the repo's own checks. When they
-            fail, read the failure and fix it — then prove it passed.
+            come back red, read the failure and fix it — then finish on a check
+            that passed, because a code change with no passing check is reported
+            incomplete rather than done.
           </p>
           <TerminalDemo />
         </div>
@@ -188,8 +197,9 @@ const proof = [
             <h2 class="lc-h2">Where the boundary is</h2>
             <p class="lc-lede">
               localcode is honest about this rather than claiming to be
-              "fully offline". Inference runs on your machine; a few specific
-              actions reach the network, and you can see all of them.
+              "fully offline". Inference runs on your machine; twelve specific
+              paths can reach the network, and the boundary page names every
+              one of them — including who has to approve it.
             </p>
             <a class="lc-btn lc-btn--primary" href={href('concepts/network-boundary')}>
               Read the network boundary
@@ -208,17 +218,24 @@ const proof = [
             </li>
             <li class="is-net">
               <span class="tag">network</span>
-              <span class="txt">Downloading a model from Hugging Face (first run)</span>
-            </li>
-            <li class="is-net">
-              <span class="tag">network</span>
               <span class="txt">
-                The <code>web_search</code> and <code>web_fetch</code> tools
+                Downloading a model from Hugging Face, and a connectivity probe
+                that sends no data
               </span>
             </li>
             <li class="is-net">
               <span class="tag">network</span>
-              <span class="txt">Any MCP server you configure, and any command you approve</span>
+              <span class="txt">
+                The <code>web_search</code> and <code>web_fetch</code> tools, and any
+                MCP server you configure
+              </span>
+            </li>
+            <li class="is-net">
+              <span class="tag">network</span>
+              <span class="txt">
+                Shell commands — which run without a prompt under full-auto and
+                in headless runs
+              </span>
             </li>
           </ul>
         </div>
