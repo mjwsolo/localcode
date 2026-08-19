@@ -53,8 +53,10 @@ localcode unstick            # recover a wedged model server
 3. It starts the bundled `llama-server` on `http://localhost:8081` and points
    the agent at it.
 
-From then on, generation happens on your Mac. See
-[Network Boundary](/localcode/concepts/network-boundary) for the full list of
+From then on, generation happens wherever `runtime.base_url` points — by
+default, that server on your Mac. Changing it (or `LOCALCODE_BASE_URL`) sends
+your prompts and code context to whatever you name instead; the value is not
+validated. See [Network Boundary](/localcode/concepts/network-boundary) for
 what does and does not leave the machine.
 
 ## Where localcode keeps things

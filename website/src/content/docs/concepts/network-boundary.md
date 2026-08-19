@@ -1,12 +1,12 @@
 ---
 title: Network Boundary
-description: Every outbound path localcode has, what triggers it, and what stays on your Mac.
+description: The outbound paths localcode is known to have, what triggers them, and what stays on your Mac by default.
 ---
 
 **In the default, supported configuration, inference runs on your Mac: no API
 key, no model provider, no remote fallback.** Several other things do reach the
 network, and one configuration change moves inference itself off the machine.
-This page lists all of them rather than rounding down to "offline".
+This page names them rather than rounding down to "offline".
 
 ## Scope: the default configuration
 
@@ -45,7 +45,13 @@ This is a supported thing to do (it is how you drive a llama-server on another
 machine on your LAN), but it is outside the local-only claim. If local-only is
 the reason you are here, leave `base_url` alone and check it with `/status`.
 
-## Every outbound path
+## Known outbound paths
+
+This inventory was compiled by reading the source, and it is the set the
+maintainers of this page know about. Treat it as thorough rather than proven
+complete: an optional dependency or a newly added tool can introduce a path
+that is not listed here yet. If local-only matters to you, verify at the
+network layer as well.
 
 | # | What | Where it goes | When |
 | --- | --- | --- | --- |
@@ -62,11 +68,36 @@ the reason you are here, leave `base_url` alone and check it with `/status`.
 | 11 | **MCP servers** | Wherever you pointed them | Whenever the model calls one of their tools — **never prompts** |
 | 12 | **Shell commands** | Wherever the command goes | Whenever a `bash` call runs — see the approval note below |
 | 13 | **Custom inference endpoint** | Whatever `base_url` names | Every turn, if you changed it. Carries your prompts and code context |
+| 14 | **Semantic-index embedding model** | Hugging Face | The first time the code-search index is built, if `sentence-transformers` is installed. See below |
 
 The `search` config section has keys for Google, Brave and SerpAPI. The
 `web_search` tool the model actually calls does **not** read them — it always
 queries DuckDuckGo through the `ddgs` package. Setting a key changes nothing
 about where a search goes.
+
+## The semantic index can pull a model in the background
+
+localcode's code search has two legs: a lexical one, and a semantic one backed
+by an embedding index. When a turn needs search context and no index exists
+yet, localcode kicks off a **one-time background build** — on a daemon thread,
+with no prompt and no progress in the chat.
+
+If `sentence-transformers` is importable, that build loads an embedding model,
+downloading it from Hugging Face on first use:
+
+- **`all-MiniLM-L6-v2`** (~22M params) is the default.
+- **`nomic-ai/nomic-embed-text-v1.5`** (~137M params) is used *only* when you
+  set `LOCALCODE_TRUST_REMOTE_CODE=1`.
+
+That environment variable is not a formality. `nomic-embed-text-v1.5` requires
+`trust_remote_code=True`, which means sentence-transformers **downloads and
+executes Python from the model repository** on your machine. localcode defaults
+away from it for exactly that reason. Do not set it unless you have decided to
+trust that repository as executable code.
+
+`sentence-transformers` is not one of localcode's declared dependencies. If it
+is not installed, the index falls back to a local scikit-learn TF-IDF build and
+nothing is downloaded.
 
 ## Approvals: the network tools never ask
 
@@ -82,10 +113,15 @@ For shell commands, which is where confirmation does apply:
 
 - **`suggest`** — every shell command is confirmed, and so is every file write.
 - **`auto_edit`** (the interactive default) — file writes go through without
-  asking, and so do ordinary shell commands. Confirmation fires only for
-  commands matching the risky-pattern list (piping a download into a shell, a
-  force-push, `sudo rm`, `git reset --hard origin`) or the destructive-pattern
-  list. A plain `curl` or `pip install` is **not** confirmed at this level.
+  asking. A `bash` command is confirmed when it matches the risky-shell pattern
+  list (piping a download into a shell, a force-push, `sudo rm`,
+  `git reset --hard origin`) **or** the destructive substring list, which is
+  broad: it includes `pip install`, `npm install`, `brew install`, `npm run`,
+  `python `, `node `, `git push`, `sudo `, `rm -r`, `docker rm` and
+  `kubectl delete`. A bare `curl https://…` is on neither list and runs
+  unprompted; `curl … | sh` is caught.
+- **`background_process`** is confirmed at every level except `full_auto`,
+  whatever the command.
 - **`full_auto`** — nothing is confirmed. The autonomy-independent hard blocks
   still apply.
 
@@ -122,9 +158,11 @@ release binary, the `git clone` for experimental runners), `hf_quants.py` (the
 repo tree API), `voice.py` (speech assets), `tools/web_search.py` and
 `tools/web_fetch.py`, `skills.py` (install from URL), and the MCP client.
 
-`runtime.py`, `launcher.py` and `server_manager.py` address
-`config.runtime.base_url` — localhost only for as long as you leave that
-setting alone. They are not pinned to loopback.
+`runtime.py`, `launcher.py` and `server_manager.py` address whatever
+`config.runtime.base_url` holds. They are not pinned to loopback, so they are
+local exactly as long as that setting is.
+
+`embeddings.py` is the semantic-index path described above.
 
 You can also watch what happened after the fact:
 

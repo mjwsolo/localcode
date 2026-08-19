@@ -18,7 +18,7 @@ const href = (path: string) => `${base}/${path.replace(/^\//, '')}`;
 
 const title = 'localcode — Your coding agent. On your Mac.';
 const description =
-  'An open-source coding agent that runs local models on Apple Silicon. No API key. No remote inference.';
+  'An open-source coding agent that runs local models on Apple Silicon. No API key, and no remote inference unless you point it at one.';
 
 const proof = [
   {
@@ -142,8 +142,9 @@ const proof = [
             </div>
             <p class="lc-fine">
               Requires an Apple Silicon Mac, 16 GB unified memory, Python 3.10+,
-              and disk for one model. The first launch downloads a model —
-              after that, inference is local.
+              and disk for one model. The first launch downloads a model; after
+              that, inference runs against whatever <code>base_url</code> points
+              at, which by default is a server on your own machine.
             </p>
           </div>
 
@@ -203,9 +204,9 @@ const proof = [
             <h2 class="lc-h2">Where the boundary is</h2>
             <p class="lc-lede">
               localcode is honest about this rather than claiming to be
-              "fully offline". In the default configuration inference is local;
-              the boundary page names every outbound path, including the ones
-              that never stop to ask you.
+              "fully offline". Inference is local in the default configuration
+              and configurable out of it; the boundary page names the outbound
+              paths, including the ones that never stop to ask you.
             </p>
             <a class="lc-btn lc-btn--primary" href={href('concepts/network-boundary')}>
               Read the network boundary
