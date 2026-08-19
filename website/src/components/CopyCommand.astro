@@ -1,0 +1,38 @@
+---
+/**
+ * A copyable one-line command. Progressive enhancement: without JS it is
+ * still readable, selectable text.
+ */
+interface Props {
+  command: string;
+  label?: string;
+}
+const { command, label = 'Install' } = Astro.props;
+---
+
+<div class="lc-copy" data-command={command}>
+  <span class="lc-copy__label">{label}</span>
+  <code class="lc-copy__cmd"><span class="lc-copy__sigil">$</span>{command}</code>
+  <button type="button" class="lc-copy__btn" aria-label={`Copy: ${command}`}>Copy</button>
+</div>
+
+<script>
+  for (const root of document.querySelectorAll<HTMLElement>('.lc-copy')) {
+    const btn = root.querySelector<HTMLButtonElement>('.lc-copy__btn');
+    const command = root.dataset.command ?? '';
+    if (!btn || !command) continue;
+    btn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(command);
+        btn.textContent = 'Copied';
+        btn.dataset.state = 'copied';
+      } catch {
+        btn.textContent = 'Press ⌘C';
+      }
+      setTimeout(() => {
+        btn.textContent = 'Copy';
+        delete btn.dataset.state;
+      }, 1600);
+    });
+  }
+</script>

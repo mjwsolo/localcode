@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 208 32" width="208" height="32" role="img" aria-label="localcode">
+  <title>localcode</title>
+  <!--
+    Horizontal lockup: Finder Mark + lowercase wordmark.
+    NOTE: the wordmark is live text in a Martian Mono font stack. Before this
+    file is used for print or third-party placement the text must be converted
+    to outlines (see website/README.md, "Font bundling").
+  -->
+  <g fill="none" stroke="currentColor" stroke-width="2.5">
+    <rect x="3" y="3" width="26" height="26" />
+    <rect x="9.5" y="9.5" width="13" height="13" />
+  </g>
+  <rect x="14.5" y="14.5" width="6" height="6" fill="var(--lc-mark-core, #B24A0B)" />
+  <text x="44" y="22" fill="currentColor"
+        font-family="'Martian Mono', 'Commit Mono', ui-monospace, SFMono-Regular, Menlo, monospace"
+        font-size="17" font-weight="600" letter-spacing="-0.4">localcode</text>
+</svg>

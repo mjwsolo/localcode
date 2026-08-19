@@ -1,0 +1,68 @@
+---
+/**
+ * Terminal treatment: read → edit → failed check → recovery → verified.
+ *
+ * IMPORTANT — this is an ILLUSTRATIVE DESIGN PREVIEW, not a recorded run.
+ * No timings, token counts, or benchmark numbers are shown, because none of
+ * them would be real. The tool names (`read_file`, `edit_file`, `bash`) and
+ * the verification command (`pytest -q`) are the ones localcode actually
+ * uses; the surrounding prose is written for this page.
+ */
+interface Row {
+  cls: string;
+  sigil?: string;
+  glyph?: string;
+  tool?: string;
+  arg?: string;
+  text?: string;
+}
+
+const NEWLINE = String.fromCharCode(10);
+const BLANK: Row = { cls: 'l' };
+
+const rows: Row[] = [
+  { cls: 'l l--prompt', sigil: '>', text: 'make parse_duration accept "1h30m"' },
+  BLANK,
+  { cls: 'l l--ok', glyph: '\u2022', tool: 'read_file', arg: '(src/timeutil.py)' },
+  { cls: 'l l--note', text: '  found parse_duration \u2014 handles "90m" and "2h", not compound units' },
+  { cls: 'l l--ok', glyph: '\u2022', tool: 'edit_file', arg: '(src/timeutil.py)' },
+  BLANK,
+  { cls: 'l l--fail', glyph: '\u00d7', tool: 'bash', arg: '(pytest -q)' },
+  { cls: 'l l--failtext', text: '  1 failed \u2014 test_parse_duration_rejects_garbage' },
+  { cls: 'l l--note', text: '  the new regex made every unit optional, so "" now parses' },
+  BLANK,
+  { cls: 'l l--ok', glyph: '\u2022', tool: 'edit_file', arg: '(src/timeutil.py)' },
+  { cls: 'l l--note', text: '  require at least one unit; keep the compound branch' },
+  { cls: 'l l--ok', glyph: '\u2022', tool: 'bash', arg: '(pytest -q)' },
+  { cls: 'l l--verifytext', text: '  \u2713 48 passed in 1.2s' },
+  BLANK,
+  { cls: 'l l--note', text: '  changed 1 file \u00b7 verified with the repo\u2019s own test command' },
+];
+
+// The trailing newline is baked into each row here rather than emitted as a
+// JSX expression, which keeps the <pre> body free of escape sequences.
+const lines = rows.map((row) => ({
+  cls: row.cls,
+  sigil: row.sigil ? row.sigil + ' ' : '',
+  glyph: row.glyph ? row.glyph + ' ' : '',
+  tool: row.tool ?? '',
+  arg: row.arg ?? '',
+  tail: (row.text ?? '') + NEWLINE,
+}));
+---
+
+<figure class="lc-term lc-on-dark">
+  <figcaption class="lc-term__bar">
+    <span class="lc-term__dots" aria-hidden="true"><i></i><i></i><i></i></span>
+    <span class="lc-term__title">localcode — ~/work/timeutil</span>
+    <span class="lc-term__tag">design preview</span>
+  </figcaption>
+
+  <pre class="lc-term__body"><code>{lines.map((line) => (<span class={line.cls}><span class="sigil">{line.sigil}</span><span class="glyph">{line.glyph}</span><span class="tool">{line.tool}</span><span class="arg">{line.arg}</span>{line.tail}</span>))}</code></pre>
+
+  <p class="lc-term__disclaimer">
+    Illustrative transcript — a design preview of the run loop, not a recorded
+    session or a benchmark. Tool names and the verification command are real;
+    the output text is written for this page.
+  </p>
+</figure>

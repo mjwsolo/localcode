@@ -1,0 +1,63 @@
+/*
+  localcode design tokens.
+
+  Palette is fixed by the approved brand direction. Two accents exist because
+  the same hue cannot carry contrast on both grounds:
+    --lc-amber  is for DARK backgrounds only
+    --lc-ember  is for LIGHT backgrounds only
+  Use --lc-accent (resolved per theme below) rather than picking one by hand.
+*/
+:root {
+  --lc-ink: #14110f;
+  --lc-bone: #f7f4ef;
+  --lc-surface: #2a2622;
+  --lc-muted-dark: #5c5751;
+  --lc-muted-light: #a8a099;
+  --lc-amber: #ffb020;
+  --lc-ember: #b24a0b;
+  --lc-verify: #5fd08a;
+  --lc-fault: #ff6b57;
+
+  --lc-font-display: 'Martian Mono', ui-monospace, SFMono-Regular, 'SF Mono',
+    Menlo, Consolas, monospace;
+  --lc-font-body: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    'Helvetica Neue', Arial, sans-serif;
+  --lc-font-code: 'Commit Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo,
+    Consolas, monospace;
+
+  --lc-radius: 4px;
+  --lc-maxw: 1120px;
+}
+
+/* Light ground: ink text on bone, ember accent. */
+:root[data-theme='light'] {
+  --lc-page: var(--lc-bone);
+  --lc-page-2: #ffffff;
+  --lc-text: var(--lc-ink);
+  --lc-text-muted: var(--lc-muted-dark);
+  --lc-line: #ded7cc;
+  --lc-accent: var(--lc-ember);
+  --lc-mark-core: var(--lc-ember);
+}
+
+/* Dark ground: bone text on ink, amber accent. */
+:root[data-theme='dark'] {
+  --lc-page: var(--lc-ink);
+  --lc-page-2: var(--lc-surface);
+  --lc-text: var(--lc-bone);
+  --lc-text-muted: var(--lc-muted-light);
+  --lc-line: #3a352f;
+  --lc-accent: var(--lc-amber);
+  --lc-mark-core: var(--lc-amber);
+}
+
+/* The terminal treatment is always a dark ground, so it always uses amber. */
+.lc-on-dark {
+  --lc-page: var(--lc-ink);
+  --lc-page-2: var(--lc-surface);
+  --lc-text: var(--lc-bone);
+  --lc-text-muted: var(--lc-muted-light);
+  --lc-line: #3a352f;
+  --lc-accent: var(--lc-amber);
+  --lc-mark-core: var(--lc-amber);
+}

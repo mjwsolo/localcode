@@ -1,0 +1,76 @@
+/*
+  Starlight theme mapping. Starlight ships a full set of `--sl-*` custom
+  properties; we re-point the ones that carry brand identity at the localcode
+  tokens and otherwise leave its layout alone.
+*/
+:root {
+  --sl-font: var(--lc-font-body);
+  --sl-font-mono: var(--lc-font-code);
+  --sl-nav-height: 3.75rem;
+}
+
+:root[data-theme='dark'] {
+  --sl-color-accent-low: #4a2e07;
+  --sl-color-accent: #b8790f;
+  --sl-color-accent-high: var(--lc-amber);
+  --sl-color-white: var(--lc-bone);
+  --sl-color-gray-1: #eae5dd;
+  --sl-color-gray-2: #cec7bd;
+  --sl-color-gray-3: var(--lc-muted-light);
+  --sl-color-gray-4: #6f6960;
+  --sl-color-gray-5: #3a352f;
+  --sl-color-gray-6: var(--lc-surface);
+  --sl-color-black: var(--lc-ink);
+  --sl-color-bg: var(--lc-ink);
+  --sl-color-bg-nav: var(--lc-ink);
+  --sl-color-bg-sidebar: var(--lc-ink);
+  --sl-color-bg-inline-code: #2f2b26;
+  --sl-color-hairline-light: #3a352f;
+  --sl-color-text-accent: var(--lc-amber);
+}
+
+:root[data-theme='light'] {
+  --sl-color-accent-low: #f3e2d2;
+  --sl-color-accent: var(--lc-ember);
+  --sl-color-accent-high: #7c330a;
+  --sl-color-white: #ffffff;
+  --sl-color-gray-1: #221e1a;
+  --sl-color-gray-2: #3d3831;
+  --sl-color-gray-3: var(--lc-muted-dark);
+  --sl-color-gray-4: #8b847c;
+  --sl-color-gray-5: #ded7cc;
+  --sl-color-gray-6: #efeae2;
+  --sl-color-gray-7: #f4f0ea;
+  --sl-color-black: var(--lc-bone);
+  --sl-color-bg: var(--lc-bone);
+  --sl-color-bg-nav: var(--lc-bone);
+  --sl-color-bg-sidebar: var(--lc-bone);
+  --sl-color-bg-inline-code: #ece6dd;
+  --sl-color-hairline-light: #ded7cc;
+  --sl-color-text-accent: var(--lc-ember);
+}
+
+/* Display face for headings — geometric, lowercase-friendly. */
+.sl-markdown-content h1,
+.sl-markdown-content h2,
+.sl-markdown-content h3,
+.content-panel h1,
+site-title {
+  font-family: var(--lc-font-display);
+  letter-spacing: -0.02em;
+}
+
+.sl-markdown-content h2 {
+  border-top: 1px solid var(--sl-color-hairline-light);
+  padding-top: 1.25rem;
+}
+
+/* Callout used on preview-stub pages. */
+.lc-stub {
+  border: 1px solid var(--sl-color-hairline-light);
+  border-left: 3px solid var(--sl-color-text-accent);
+  border-radius: var(--lc-radius);
+  padding: 0.85rem 1rem;
+  font-size: 0.9rem;
+  color: var(--sl-color-gray-3);
+}
