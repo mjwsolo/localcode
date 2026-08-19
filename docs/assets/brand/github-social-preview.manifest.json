@@ -1,0 +1,21 @@
+{
+  "output": "github-social-preview.png",
+  "width": 1280,
+  "height": 640,
+  "bytes": 59985,
+  "sha256": "2db32346f45a8abba1b83a14360d3dbbef9436127656e1a421ed0678db312215",
+  "renderer": {
+    "playwright": "1.62.1",
+    "chromiumRevision": "1234",
+    "platform": "darwin-arm64"
+  },
+  "inputs": {
+    "svg": "ff941ac956f06fe8",
+    "fonts": {
+      "martian-mono/files/martian-mono-latin-400-normal.woff2": "bb677c9c5cf5b384",
+      "martian-mono/files/martian-mono-latin-600-normal.woff2": "e6d4bb7a1594d254",
+      "inter/files/inter-latin-400-normal.woff2": "8909904ab6c872eb",
+      "commit-mono/files/commit-mono-latin-400-normal.woff2": "86132abb57fc615f"
+    }
+  }
+}

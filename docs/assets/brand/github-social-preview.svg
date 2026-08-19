@@ -1,9 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640"
      role="img" aria-labelledby="lc-social-title lc-social-desc">
   <title id="lc-social-title">localcode — Your coding agent. On your Mac.</title>
-  <desc id="lc-social-desc">The localcode Finder Mark and lowercase wordmark on a dark
-    ground, with the tagline "Your coding agent. On your Mac.", the line "Local models on
-    Apple Silicon. No API key. Local inference by default.", and a footer reading
+  <desc id="lc-social-desc">The localcode House Mark, a flat geometric redraw of the
+    repository's house logo, beside the lowercase localcode wordmark on a dark ground.
+    Below them the tagline "Your coding agent. On your Mac.", then "Local models on
+    Apple Silicon. No API key. Local inference by default.", then a footer reading
     "Apache-2.0 · Apple Silicon · pip install -U localcode".</desc>
 
   <!--
