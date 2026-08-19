@@ -16,29 +16,50 @@ All notable changes to LocalCode will be documented here. The format follows
   the per-entry and total rendered lengths are capped. Anything failing a check
   is DROPPED — a rejected string is never interpolated in any form. The block is
   rendered inside an explicitly labelled untrusted-data fence.
+- **Terminal newlines no longer slip past validation.** Python's `$` also
+  matches immediately BEFORE a final newline, so `^…$` accepted a dependency
+  named `some-name\n` and a version of `1\n.x` — from both the declared and the
+  installed source — putting real line breaks inside the system prompt. Every
+  validator now uses `\A…\Z` anchors with `fullmatch`, and the rendered block is
+  additionally checked for line breaks and fence characters before it is used.
 
 ### Fixed
 
-- **The completion gate no longer WRITES to your repository.** 0.3.56 ran
+- **The completion gate no longer writes to your repository.** 0.3.56 ran
   `tsc -b`, which is a build, not a typecheck: it emitted JS, declarations and
   source maps into the working tree and always wrote `.tsbuildinfo`. Referenced
   projects are now type-checked read-only with `tsc -p <ref> --noEmit`, with
-  tsc's incremental state redirected outside the repo. Same diagnostics, zero
-  files touched.
+  tsc's incremental state redirected to a verified out-of-repo scratch
+  directory. If no such directory can be created the check REFUSES to run and
+  reports unverified — the earlier fallback ran without the redirect and put a
+  `.tsbuildinfo` back inside the project while reporting clean.
+- **TypeScript reference graphs are covered honestly.** A config carrying BOTH
+  `references` and its own `include`/`files` is now type-checked itself instead
+  of being treated as a pure solution file; an unresolvable reference is an
+  error rather than something to skip because a sibling resolved; and
+  truncation — of the project list, of visited configs, or of graph depth — is
+  reported as unverified. Silently checking less than the whole project can no
+  longer read as clean.
 - **A commented `tsconfig.json` no longer bypasses the gate.** TypeScript has
   supported comments (and trailing commas) in `tsconfig.json` since 1.8, but the
   detector used strict `json.load()`; on a commented solution config the parse
   failed and the gate silently reverted to the inadequate `tsc --noEmit` false
-  clean. Configs are now parsed JSONC-tolerantly, and a parse FAILURE reports
-  "verification unavailable" instead of downgrading to a weaker command.
+  clean. Configs are now parsed JSONC-tolerantly in a single string-aware scan —
+  the earlier trailing-comma regex was not string-aware and rewrote a path
+  literal like `"./bad,}"` into `"./bad}"`, losing that project's errors. A
+  parse FAILURE reports "verification unavailable" instead of downgrading.
 - **Timeouts and checker failures are no longer indistinguishable from clean.**
   `run_project_check_result` returns a structured
-  `clean` / `errors` / `unavailable` / `timed_out` / `failed` outcome. A timeout,
-  a checker that could not execute, and a nonzero exit with no output all leave
-  the build UNVERIFIED instead of being accepted as green.
+  `clean` / `errors` / `unavailable` / `timed_out` / `failed` outcome, and a
+  no-verdict result now persists for the whole turn: it forces bounded retries,
+  blocks the FINAL completion even when the verification registry was satisfied
+  by an earlier unrelated command, and its reason is carried in the result text
+  so it appears in the TUI and under `--json`. Unexpected exceptions count as
+  failed rather than being swallowed.
 - **Dependency majors are read from installed metadata.** Versions come from
   `node_modules/<pkg>/package.json` — the actual environment — and are labelled
-  "installed"; the manifest fallback is labelled "declared". Specs with no plain
+  "installed"; the manifest fallback is labelled "declared", and a block drawn
+  from both sources says so instead of claiming either. Specs with no plain
   numeric major (`workspace:*`, `npm:` aliases, dist-tags, Git URLs, `file:`
   paths) are dropped rather than rendered as garbage. A non-object manifest root
   or non-mapping `dependencies` no longer raises out of the helper and silently
@@ -46,7 +67,7 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ### Changed
 
-- Event shapes, field names and ordering are unchanged.
+- Event types, field names, ordering and emission sites are unchanged.
 
 ## 0.3.56 — 2026-08-19
 

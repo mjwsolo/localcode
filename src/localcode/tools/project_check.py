@@ -33,7 +33,9 @@ _TIMEOUT = 60.0
 _MAX_ERR_CHARS = 2500  # floor; scaled up to the real context window at call time
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 _TSCONFIG_MAX_BYTES = 512_000
-_MAX_TS_PROJECTS = 6  # referenced projects type-checked per run
+_MAX_TS_PROJECTS = 12   # projects type-checked per run
+_MAX_TS_NODES = 40      # tsconfig files visited while resolving the graph
+_MAX_TS_DEPTH = 8       # reference-graph depth walked
 
 
 @dataclass(frozen=True)
@@ -73,12 +75,30 @@ _STATUS_RANK = {"unavailable": 0, "clean": 1, "timed_out": 2, "failed": 3, "erro
 
 def _strip_jsonc(text: str) -> str:
     """Remove `//` and `/* */` comments and trailing commas, preserving string
-    literals. TypeScript has officially supported comments in `tsconfig.json`
-    since 1.8 and every scaffold ships them, so a strict `json.load()` fails on
-    the majority of real solution configs."""
+    literals exactly. TypeScript has officially supported comments in
+    `tsconfig.json` since 1.8 and every scaffold ships them, so a strict
+    `json.load()` fails on the majority of real solution configs.
+
+    Trailing commas are removed inside the SAME stateful scan, never by a regex
+    over the whole text: a comma-then-bracket regex is not string-aware and
+    silently rewrites a path literal such as `"./bad,}"` into
+    `"./bad}"`, which points reference resolution at a file that does not exist
+    and turns a real error into a false clean.
+    """
     out: list[str] = []
     i, n = 0, len(text)
     in_str = False
+
+    def _drop_pending_comma() -> None:
+        """About to emit `}` or `]` outside a string: remove a comma that is now
+        trailing. Only whitespace may sit between it and the bracket, and `out`
+        holds no comments at this point, so the lookback cannot cross a literal."""
+        j = len(out) - 1
+        while j >= 0 and out[j].isspace():
+            j -= 1
+        if j >= 0 and out[j] == ",":
+            del out[j]
+
     while i < n:
         c = text[i]
         if in_str:
@@ -106,11 +126,11 @@ def _strip_jsonc(text: str) -> str:
                 i += 1
             i += 2
             continue
+        if c in "}]":
+            _drop_pending_comma()
         out.append(c)
         i += 1
-    stripped = "".join(out)
-    # Trailing commas before } or ] — also legal in tsconfig, illegal in JSON.
-    return re.sub(r",(\s*[}\]])", r"\1", stripped)
+    return "".join(out)
 
 
 def _load_jsonc(path: str) -> tuple[dict | None, str]:
@@ -264,21 +284,24 @@ def _detect_commands(repo_root: str) -> list[tuple[str, list[str] | None, str]]:
                 # mutating the user's files, unattended. `-p … --noEmit` surfaces
                 # the same diagnostics and writes nothing at all.
                 targets, reason = _ts_check_targets(pj_dir)
+                # `composite: true` implies `incremental`, so even in --noEmit
+                # mode tsc insists on writing a .tsbuildinfo. It goes OUTSIDE the
+                # repo, and if no such directory can be verified we do NOT run —
+                # running without the redirect writes into the user's project.
+                scratch = _tsbuildinfo_dir(pj_dir) if targets else None
+                if targets and not scratch:
+                    targets, reason = [], (
+                        "no writable scratch directory outside the repository, so "
+                        "type-checking cannot be run without writing to your project")
+                for cfg in targets:
+                    argv = [tsc, "-p", cfg, "--noEmit", "--pretty", "false",
+                            "--tsBuildInfoFile",
+                            os.path.join(scratch, f"{cfg.replace(os.sep, '_')}.tsbuildinfo")]
+                    cmds.append((f"tsc -p {cfg} --noEmit", argv, pj_dir))
                 if reason:
-                    cmds.append((f"tsc (verification unavailable: {reason})", None, pj_dir))
-                else:
-                    # `composite: true` implies `incremental`, so even in
-                    # --noEmit mode tsc insists on writing a .tsbuildinfo. Point
-                    # it OUTSIDE the repo so the verification leaves the user's
-                    # working tree byte-for-byte unchanged.
-                    scratch = _tsbuildinfo_dir(pj_dir)
-                    for cfg in targets:
-                        argv = [tsc, "-p", cfg, "--noEmit", "--pretty", "false"]
-                        if scratch:
-                            stem = cfg.replace(os.sep, "_")
-                            argv += ["--tsBuildInfoFile",
-                                     os.path.join(scratch, f"{stem}.tsbuildinfo")]
-                        cmds.append((f"tsc -p {cfg} --noEmit", argv, pj_dir))
+                    # Emitted ALONGSIDE any commands above: partial coverage must
+                    # not read as clean, but real diagnostics still outrank it.
+                    cmds.append((f"tsc (verification incomplete: {reason})", None, pj_dir))
 
     # ── Python ── ruff for REAL errors only (E9 syntax + F pyflakes: undefined
     # names, bad imports) — not style noise. Falls back to compileall (syntax).
@@ -306,75 +329,146 @@ def _detect_commands(repo_root: str) -> list[tuple[str, list[str] | None, str]]:
 
 
 def _tsbuildinfo_dir(pj_dir: str) -> str | None:
-    """A scratch directory OUTSIDE the repo for tsc's incremental state.
+    """A VERIFIED-writable scratch directory OUTSIDE the repo for tsc's
+    incremental state, or None.
 
-    Stable per project (so the incremental cache is reused across runs) and
-    best-effort: if it can't be created we return None and simply accept tsc's
-    default location rather than failing the verification.
+    `composite: true` implies `incremental`, so tsc writes a `.tsbuildinfo` even
+    under `--noEmit`. None means the verification MUST NOT run: the previous
+    fallback (run without `--tsBuildInfoFile`) put that file back inside the
+    user's repository while still reporting clean, which defeats the read-only
+    guarantee this gate rests on.
     """
     key = hashlib.sha1(os.path.abspath(pj_dir).encode("utf-8", "replace")).hexdigest()[:16]
     path = os.path.join(tempfile.gettempdir(), f"localcode-tscheck-{key}")
     try:
         os.makedirs(path, exist_ok=True)
+        real, repo = os.path.realpath(path), os.path.realpath(pj_dir)
+        # Must genuinely be outside the repo — a temp dir symlinked into the
+        # project would reintroduce the write.
+        if real == repo or os.path.commonpath([real, repo]) == repo:
+            return None
+        probe = os.path.join(path, ".probe")
+        with open(probe, "w") as fh:
+            fh.write("")
+        os.remove(probe)
         return path
     except Exception:
         return None
 
 
 def _ts_check_targets(pj_dir: str) -> tuple[list[str], str]:
-    """Config files to type-check for a TS project, relative to `pj_dir`.
+    """Config files to type-check for a TS project, relative to `pj_dir`, plus a
+    reason string when coverage is INCOMPLETE.
 
-    A plain config checks itself. A SOLUTION config (`"references": [...]`)
-    expands to its referenced projects — recursively, bounded — because the
-    solution file itself contains no files to check. Returns `([], reason)` when
-    the configuration cannot be read or resolved; the caller must then report the
-    verification as unavailable rather than running a weaker command.
+    Both halves matter. `(targets, "")` is full coverage. A non-empty reason
+    means the graph could not be fully resolved or had to be truncated, and the
+    caller MUST report the run as unverified even when the targets it did check
+    came back green — silently doing less work is exactly how a false clean gets
+    through.
+
+    Specifics the previous version got wrong, each proven against real tsc:
+      * a config with BOTH `references` and its own `include`/`files` OWNS
+        source and must be checked itself, not treated as a pure solution file;
+      * an unresolvable reference is an error (`tsc -b` reports TS5083), never
+        something to skip because a sibling reference happened to resolve;
+      * truncation — of targets, of visited nodes, or of depth — is reported,
+        not swallowed. Depth and node count are bounded, not just the target
+        list.
     """
     root = os.path.join(pj_dir, "tsconfig.json")
     data, err = _load_jsonc(root)
     if data is None:
         return [], err
 
-    def _refs(cfg: dict) -> list[str]:
+    def _refs(cfg: dict, cfg_path: str) -> tuple[list[str], str]:
+        """Reference `path` values, or a reason when the list is malformed."""
         raw = cfg.get("references")
+        if raw is None:
+            return [], ""
         if not isinstance(raw, list):
-            return []
+            return [], f"{os.path.basename(cfg_path)} has a non-list `references`"
         out = []
         for entry in raw:
-            if isinstance(entry, dict) and isinstance(entry.get("path"), str):
-                out.append(entry["path"])
-        return out
+            if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
+                return [], f"{os.path.basename(cfg_path)} has an invalid reference entry"
+            out.append(entry["path"])
+        return out, ""
 
-    if not _refs(data):
-        return ["tsconfig.json"], ""
+    def _owns_source(cfg: dict) -> bool:
+        """True when the config contributes files of its own.
+
+        A solution file opts out explicitly with `"files": []` / `"include": []`.
+        With NEITHER key present TypeScript defaults to including everything, so
+        the config does own source and must be checked.
+        """
+        files, include = cfg.get("files"), cfg.get("include")
+        if isinstance(files, list) and files:
+            return True
+        if isinstance(include, list) and include:
+            return True
+        explicit_empty = (isinstance(files, list) and not files) or (
+            isinstance(include, list) and not include)
+        return not explicit_empty
 
     targets: list[str] = []
-    seen: set[str] = set()
-    queue: list[tuple[dict, str]] = [(data, root)]
-    while queue and len(targets) < _MAX_TS_PROJECTS:
-        cfg, cfg_path = queue.pop(0)
-        for ref in _refs(cfg):
+    visited: set[str] = {os.path.realpath(root)}
+    queue: list[tuple[dict, str, int]] = [(data, root, 0)]
+    truncated = ""
+
+    def _add_target(cfg_path: str) -> None:
+        nonlocal truncated
+        rel = os.path.relpath(cfg_path, pj_dir)
+        if rel in targets:
+            return
+        if len(targets) >= _MAX_TS_PROJECTS:
+            truncated = truncated or (
+                f"more than {_MAX_TS_PROJECTS} TypeScript projects — "
+                f"only the first {_MAX_TS_PROJECTS} were type-checked")
+            return
+        targets.append(rel)
+
+    while queue:
+        cfg, cfg_path, depth = queue.pop(0)
+        refs, ref_err = _refs(cfg, cfg_path)
+        if ref_err:
+            return [], ref_err
+        if _owns_source(cfg):
+            _add_target(cfg_path)
+        if not refs:
+            continue
+        if depth >= _MAX_TS_DEPTH:
+            truncated = truncated or (
+                f"reference graph deeper than {_MAX_TS_DEPTH} levels — "
+                f"the deepest projects were not type-checked")
+            continue
+        for ref in refs:
             # `path` may point at a config file or at a directory containing one.
             cand = os.path.normpath(os.path.join(os.path.dirname(cfg_path), ref))
             if os.path.isdir(cand):
                 cand = os.path.join(cand, "tsconfig.json")
-            if cand in seen or not os.path.isfile(cand):
+            if not os.path.isfile(cand):
+                # `tsc -b` fails with TS5083 here; skipping it would hide every
+                # error in the project that reference points at.
+                return [], f"reference not found: {os.path.relpath(cand, pj_dir)}"
+            real = os.path.realpath(cand)
+            if real in visited:
                 continue
-            seen.add(cand)
+            if len(visited) >= _MAX_TS_NODES:
+                truncated = truncated or (
+                    f"reference graph larger than {_MAX_TS_NODES} configs — "
+                    f"it was not fully resolved")
+                break
+            visited.add(real)
             sub, sub_err = _load_jsonc(cand)
             if sub is None:
                 return [], sub_err
-            if _refs(sub):
-                queue.append((sub, cand))
-                continue
-            rel = os.path.relpath(cand, pj_dir)
-            if rel not in targets:
-                targets.append(rel)
-                if len(targets) >= _MAX_TS_PROJECTS:
-                    break
+            queue.append((sub, cand, depth + 1))
+
     if not targets:
-        return [], "tsconfig.json references no resolvable project"
-    return targets, ""
+        # A truncation reason is more specific than "nothing owns source", and
+        # is what actually explains the missing coverage.
+        return [], truncated or "tsconfig.json resolves to no project that owns source files"
+    return targets, truncated
 
 
 def _nearest_with(root: str, filename: str) -> str | None:
