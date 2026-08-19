@@ -50,12 +50,13 @@ A turn is a sequence of tool calls, and localcode shows each one:
 
 By default localcode runs at the **auto_edit** autonomy level: file edits go
 through without asking, while a broad set of shell commands stops for
-confirmation. That set is wider than "dangerous" — it covers package installs
-(`pip install`, `npm install`, `brew install`), anything that runs code
-(`python`, `node`, `npm run`, `npm start`), git history operations
-(`git push`, `git reset --hard`), `sudo`, recursive deletes, and container /
-cluster commands, plus a few pipe-to-shell and force-push patterns. So the
-`bash` step that runs `python -m pytest` will ask; a plain `pytest` will not.
+confirmation. The match is a plain substring test against a fixed list, not a
+judgement about what a command does — examples of the literal strings on it
+include `pip install`, `npm install`, `brew install`, `python `, `node `,
+`npm run`, `npm start`, `git push`, `git reset --hard`, `sudo `, `rm -r`,
+`docker rm` and `kubectl delete`. So the `bash` step that runs
+`python -m pytest` will ask, because the string `python ` appears in it; a
+plain `pytest` will not.
 
 `background_process` is confirmed at this level too. `web_search`, `web_fetch`
 and MCP tools never prompt at any level. The exact lists are in
