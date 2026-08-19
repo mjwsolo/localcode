@@ -1,0 +1,30 @@
+---
+/**
+ * Starlight `SiteTitle` override — inline Finder Mark + lowercase wordmark.
+ */
+import FinderMark from './FinderMark.astro';
+
+const { siteTitleHref } = Astro.locals.starlightRoute;
+---
+
+<a href={siteTitleHref} class="lc-site-title">
+  <FinderMark size={24} />
+  <span>localcode</span>
+</a>
+
+<style>
+  .lc-site-title {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    color: var(--sl-color-white);
+    text-decoration: none;
+    font-family: var(--lc-font-display);
+    font-weight: 600;
+    font-size: 1.0625rem;
+    letter-spacing: -0.03em;
+  }
+  .lc-site-title:hover {
+    color: var(--sl-color-text-accent);
+  }
+</style>

@@ -1,0 +1,131 @@
+---
+/**
+ * Unified-memory model chooser.
+ *
+ * Every row below is produced by localcode's own recommender — the values
+ * come from `localcode.models_catalog.recommend(ram_gb)` and the model sizes
+ * from the same catalog. The rule shown ("weights must fit in ~55% of unified
+ * memory") is the rule that function implements.
+ *
+ * Reproduce with:
+ *   python -c "from localcode import models_catalog as m; \
+ *              print(m.recommend(16).name, m.recommend(16).size_gb)"
+ */
+const tiers = [
+  {
+    ram: 16,
+    label: '16 GB',
+    model: 'Gemma 4 12B',
+    quant: 'UD-Q4_K_XL',
+    weights: 7.37,
+    note: 'The 16 GB floor. Dense 12B; validated on an M4 MacBook.',
+  },
+  {
+    ram: 32,
+    label: '32 GB',
+    model: 'Qwen 3.6 35B-A3B',
+    quant: 'Q2',
+    weights: 10.7,
+    note: 'MoE — 3.0B active params per token, so decode stays laptop-fast.',
+  },
+  {
+    ram: 64,
+    label: '64 GB',
+    model: 'Gemma 4 26B-A4B',
+    quant: 'Q8',
+    weights: 28.0,
+    note: 'Near-lossless quant of the MoE, 3.8B active params.',
+  },
+  {
+    ram: 96,
+    label: '96 GB+',
+    model: 'Qwen 3.6 35B-A3B',
+    quant: 'UD-Q8_K_XL',
+    weights: 38.5,
+    note: 'Workstation pick. Native 262K context.',
+  },
+];
+---
+
+<div class="lc-mem">
+  <div class="lc-mem__tabs" role="tablist" aria-label="Unified memory">
+    {tiers.map((t, i) => (
+      <button
+        type="button"
+        role="tab"
+        class="lc-mem__tab"
+        id={`mem-tab-${t.ram}`}
+        aria-controls={`mem-panel-${t.ram}`}
+        aria-selected={i === 0 ? 'true' : 'false'}
+        tabindex={i === 0 ? 0 : -1}
+      >
+        {t.label}
+      </button>
+    ))}
+  </div>
+
+  {tiers.map((t, i) => {
+    const budget = t.ram * 0.55;
+    const pctWeights = Math.round((t.weights / t.ram) * 100);
+    const pctBudget = Math.round(55);
+    return (
+      <div
+        class="lc-mem__panel"
+        role="tabpanel"
+        id={`mem-panel-${t.ram}`}
+        aria-labelledby={`mem-tab-${t.ram}`}
+        hidden={i !== 0}
+      >
+        <p class="lc-mem__pick">
+          <span class="lc-mem__eyebrow">recommended</span>
+          <strong>{t.model}</strong>
+          <span class="lc-mem__quant">{t.quant}</span>
+        </p>
+
+        <div class="lc-mem__bar" aria-hidden="true">
+          <div class="lc-mem__budget" style={`width:${pctBudget}%`}></div>
+          <div class="lc-mem__weights" style={`width:${pctWeights}%`}></div>
+        </div>
+        <p class="lc-mem__legend">
+          <span class="k k--weights"></span> {t.weights} GB weights
+          <span class="k k--budget"></span> {budget.toFixed(1)} GB budget (55% of {t.ram} GB)
+        </p>
+        <p class="lc-mem__note">{t.note}</p>
+      </div>
+    );
+  })}
+
+  <p class="lc-mem__rule">
+    localcode has no fixed default model. On launch it reads your Mac's unified
+    memory and picks the most capable production model whose weights fit in
+    about 55% of it — the rest is left for the KV cache, activations and
+    macOS. You can always override the pick with <code>/model</code>.
+  </p>
+</div>
+
+<script>
+  for (const root of document.querySelectorAll<HTMLElement>('.lc-mem')) {
+    const tabs = [...root.querySelectorAll<HTMLButtonElement>('.lc-mem__tab')];
+    const panels = [...root.querySelectorAll<HTMLElement>('.lc-mem__panel')];
+    const select = (index: number) => {
+      tabs.forEach((tab, i) => {
+        tab.setAttribute('aria-selected', String(i === index));
+        tab.tabIndex = i === index ? 0 : -1;
+      });
+      panels.forEach((panel, i) => {
+        panel.hidden = i !== index;
+      });
+    };
+    tabs.forEach((tab, i) => {
+      tab.addEventListener('click', () => select(i));
+      tab.addEventListener('keydown', (event) => {
+        const delta = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
+        if (!delta) return;
+        event.preventDefault();
+        const next = (i + delta + tabs.length) % tabs.length;
+        select(next);
+        tabs[next].focus();
+      });
+    });
+  }
+</script>
