@@ -8,14 +8,18 @@ localcode run --goal "add a regression test for parse_config"
 ```
 
 `run` executes a single goal through the same agent loop the TUI drives, then
-exits. It is the entry point for scripting, CI and the benchmark harness.
+exits. It is the entry point for scripting, CI and evaluation.
 
 ## Approvals are forced to full-auto
 
-There is no human present to answer a prompt, so headless runs auto-approve
-tools. The safety layer still blocks the operations it always blocks — see
-[Permissions](/localcode/start-here/permissions). Run headless against a repo
-you are willing to have modified, ideally on a branch.
+There is no human present to answer a prompt, so headless runs confirm nothing:
+shell commands and file writes go through unprompted, and the network tools
+(`web_search`, `web_fetch`, MCP) never prompt at any level anyway. The
+autonomy-independent hard blocks still apply — see
+[Permissions](/localcode/start-here/permissions).
+
+Run headless against a repo you are willing to have modified, ideally on a
+branch, and on a network where unattended outbound requests are acceptable.
 
 ## Options you will actually use
 

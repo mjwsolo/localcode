@@ -11,8 +11,10 @@ localcode unstick
 ```
 
 Running bare `localcode` starts the TUI. That is the product: first-run setup,
-configuration, model management and benchmarking all live inside it. **There is
-no `localcode setup` subcommand.**
+configuration and model management all live inside it. **There is no `localcode
+setup` subcommand**, and no benchmark subcommand or screen — the speeds shown
+in the model picker are [calculated estimates](/localcode/models-and-performance#the-toks-numbers-in-the-model-picker),
+not measurements.
 
 ## Global options
 
@@ -26,9 +28,9 @@ no `localcode setup` subcommand.**
 
 ## `localcode run`
 
-Run a single coding goal headlessly and exit — for scripting, CI and the
-benchmark harness. Approvals are forced to full-auto, because there is no human
-to answer a prompt.
+Run a single coding goal headlessly and exit — for scripting, CI and
+evaluation. Approvals are forced to full-auto, because there is no human to
+answer a prompt.
 
 | Flag | Description |
 | --- | --- |

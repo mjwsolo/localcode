@@ -105,8 +105,16 @@ file is used as a distributed brand asset, convert the text to outlines.
 
 - **Repo-verified.** The model chooser numbers come from
   `localcode.models_catalog.recommend()`. Slash commands, CLI flags, config
-  keys, hook names, autonomy levels, the outbound-network inventory and the
-  verification gates were read out of `src/localcode/`.
+  keys, hook names, the outbound-network inventory and the verification gates
+  were read out of `src/localcode/`. The confirmation behaviour documented on
+  the Permissions page is `agent/helpers.py::_needs_confirmation`, which is the
+  live gate — not the `autonomy.py` policy table, whose `PermissionManager`
+  consumer the agent loop does not call.
+- **Goal-classifier scope is load-bearing.** The evidence guarantee only
+  applies to `build_app` and `edit_existing` goals. Both showcased prompts were
+  run through `infer_goal_state` to confirm they classify as `edit_existing`;
+  the earlier "make parse_duration accept …" wording classified as
+  `general_task` and would have misrepresented the flow.
 - **The JSONL event table is taken from the producer** — the
   `OutputManager._emit_event` call sites plus `headless_json.py`. It is
   deliberately *not* derived from `tests/protocol_fixtures/*.jsonl`, which
@@ -117,10 +125,16 @@ file is used as a distributed brand asset, convert the text to outlines.
   and `pytest -q` are real; every line of output text is written for the page.
   It contains **no durations, timings, token counts or throughput figures** —
   the check line reads `48 passed`, with no elapsed time.
-- **No performance claims** appear anywhere on the site. The one quantitative
-  figure that remains — TurboQuant's ~3.8× KV-cache compression versus `f16` —
-  is attributed in-page as the fork's own figure for the quantisation scheme,
-  not a measurement of any machine.
+- **No performance claims** appear anywhere on the site, and no benchmark
+  command or screen is implied — there isn't one. The model picker's tok/s
+  figures are documented as a calculated estimate (bytes-per-token over assumed
+  realised bandwidth, plus a compute floor), not a measurement. The one other
+  quantitative figure — TurboQuant's ~3.8× KV-cache compression versus `f16` —
+  is attributed in-page as the fork's own figure for the quantisation scheme.
+- **Claims are scoped to the default configuration.** `runtime.base_url` /
+  `LOCALCODE_BASE_URL` accepts any URL with no validation, so a custom
+  inference endpoint is documented as an outbound path that carries prompts and
+  code context. The hero says "in the default configuration" for this reason.
 
 ## Deployment-time requirements
 
