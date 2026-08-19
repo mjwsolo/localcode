@@ -3,6 +3,112 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.3.58 — 2026-08-19
+
+### Added
+
+- **`inspect_symbol` tool — read a library's REAL API instead of guessing it.**
+  Given a package name (and optional symbol), it resolves the installed types
+  (`node_modules/**/*.d.ts` for JS/TS, site-packages `.pyi`/source for Python)
+  and returns the actual signature — e.g. `inspect_symbol(module=fsrs,
+  symbol=repeat)` returns `repeat(card, now): Record<Rating, RecordLogItem>`, so
+  the model indexes the result by the rating instead of hallucinating
+  `repeat()[1]`. This is the direct fix for the API-guessing failure class
+  (observed live in an Anki build). It's the "LSP hover" capability exposed as an
+  on-demand TOOL, not a persistent language-server daemon — filesystem-only, no
+  code execution, cheap enough for a 16 GB Mac already running a large local
+  model. The DON'T GUESS prompt section now points the model at it before calling
+  an unfamiliar third-party API. (MCP client support already exists for users who
+  want a full language-server via `~/.localcode/mcp.json`.)
+
+## 0.3.57 — 2026-08-19
+
+### Security
+
+- **Prompt injection via a repository's `package.json` is closed.** The
+  dependency-versions line added in 0.3.55 interpolated dependency NAMES from
+  the repo verbatim into the SYSTEM prompt, so a cloned repository could ship a
+  key like `react\nIGNORE PREVIOUS INSTRUCTIONS…` and steer a tool-capable
+  agent. The manifest is now size-capped before parsing, every decoded shape is
+  type-checked, names must match the npm grammar, majors must be 1–4 digits, and
+  the per-entry and total rendered lengths are capped. Anything failing a check
+  is DROPPED — a rejected string is never interpolated in any form. The block is
+  rendered inside an explicitly labelled untrusted-data fence.
+- **Terminal newlines no longer slip past validation.** Python's `$` also
+  matches immediately BEFORE a final newline, so `^…$` accepted a dependency
+  named `some-name\n` and a version of `1\n.x` — from both the declared and the
+  installed source — putting real line breaks inside the system prompt. Every
+  validator now uses `\A…\Z` anchors with `fullmatch`, and the rendered block is
+  additionally checked for line breaks and fence characters before it is used.
+- **Unicode numeral homoglyphs no longer pass as version majors.** `\d` is
+  Unicode-aware on `str` patterns in Python 3, so a declared version of `١٩`
+  (Arabic-Indic) or an installed `１２` (fullwidth) validated and rendered as
+  `react@١٩` — defeating the homoglyph rejection the rest of the validator
+  implements. Character classes are now explicit ASCII ranges compiled with
+  `re.ASCII`, and the rendered block must be ASCII end to end.
+
+### Fixed
+
+- **The completion gate no longer creates or writes anything inside your
+  repository.** 0.3.56 ran
+  `tsc -b`, which is a build, not a typecheck: it emitted JS, declarations and
+  source maps into the working tree and always wrote `.tsbuildinfo`. Referenced
+  projects are now type-checked read-only with `tsc -p <ref> --noEmit`, with
+  tsc's incremental state redirected to a verified out-of-repo scratch
+  directory. Creation is anchored to an OPEN DIRECTORY HANDLE — the temp
+  directory is opened once, its containment proven by walking `..` with file
+  descriptors and comparing inodes, and the scratch directory created with
+  `os.mkdir(name, dir_fd=…)`, so neither a `TMPDIR` inside the project, a temp
+  directory symlinked into it, nor a symlink swapped in between the check and
+  the create can put anything in the repository. The path handed to tsc is the
+  kernel's own resolved path for the directory that was created, not the string
+  we started from. If no directory outside the repository can be verified, the check
+  REFUSES to run and reports unverified; the earlier fallback ran without the
+  redirect and put a `.tsbuildinfo` back inside the project while reporting
+  clean.
+- **The TUI shows the completion gate's verdict.** `response_done` rebuilt the
+  displayed answer from the streamed model text alone, and everything the loop
+  appended afterwards went through `_render_markdown` to a stdout the TUI worker
+  redirects to `/dev/null` — so a turn persisted as `incomplete`, with a real
+  "typecheck was not verified" reason, rendered in the TUI as "Done". The final
+  text `ask()` returns is now authoritative, and any part of it the user has not
+  already seen is appended to the chat log.
+- **TypeScript reference graphs are covered honestly.** A config carrying BOTH
+  `references` and its own `include`/`files` is now type-checked itself instead
+  of being treated as a pure solution file; an unresolvable reference is an
+  error rather than something to skip because a sibling resolved; and
+  truncation — of the project list, of visited configs, or of graph depth — is
+  reported as unverified. Silently checking less than the whole project can no
+  longer read as clean.
+- **A commented `tsconfig.json` no longer bypasses the gate.** TypeScript has
+  supported comments (and trailing commas) in `tsconfig.json` since 1.8, but the
+  detector used strict `json.load()`; on a commented solution config the parse
+  failed and the gate silently reverted to the inadequate `tsc --noEmit` false
+  clean. Configs are now parsed JSONC-tolerantly in a single string-aware scan —
+  the earlier trailing-comma regex was not string-aware and rewrote a path
+  literal like `"./bad,}"` into `"./bad}"`, losing that project's errors. A
+  parse FAILURE reports "verification unavailable" instead of downgrading.
+- **Timeouts and checker failures are no longer indistinguishable from clean.**
+  `run_project_check_result` returns a structured
+  `clean` / `errors` / `unavailable` / `timed_out` / `failed` outcome, and a
+  no-verdict result now persists for the whole turn: it forces bounded retries,
+  blocks the FINAL completion even when the verification registry was satisfied
+  by an earlier unrelated command, and its reason is carried in the result text
+  so it appears in the TUI and under `--json`. Unexpected exceptions count as
+  failed rather than being swallowed.
+- **Dependency majors are read from installed metadata.** Versions come from
+  `node_modules/<pkg>/package.json` — the actual environment — and are labelled
+  "installed"; the manifest fallback is labelled "declared", and a block drawn
+  from both sources says so instead of claiming either. Specs with no plain
+  numeric major (`workspace:*`, `npm:` aliases, dist-tags, Git URLs, `file:`
+  paths) are dropped rather than rendered as garbage. A non-object manifest root
+  or non-mapping `dependencies` no longer raises out of the helper and silently
+  drops the whole project-stack line.
+
+### Changed
+
+- Event types, field names, ordering and emission sites are unchanged.
+
 ## 0.3.56 — 2026-08-19
 
 ### Fixed
@@ -12,9 +118,10 @@ All notable changes to LocalCode will be documented here. The format follows
   which type-checks NOTHING on a modern scaffold whose root `tsconfig.json` is a
   solution file (`"references": [...]`, no `include`) — so a build with real
   `tsc` errors could complete as "verified." `project_check` now detects TS
-  project references and runs `tsc -b` (what `npm run build` runs), surfacing the
-  same errors so the completion gate feeds them back to fix. `tsc -b` still reads
-  only tsconfig JSON, preserving the unattended-verification RCE guard.
+  project references and type-checks the referenced projects, surfacing the same
+  errors so the completion gate feeds them back to fix. (This release used
+  `tsc -b`, which turned out to write build output into the user's repo; 0.3.57
+  replaced it with a read-only per-reference typecheck.)
 
 ### Changed
 
@@ -23,18 +130,21 @@ All notable changes to LocalCode will be documented here. The format follows
   The event log is local-only; documented that any future remote sink would be a
   new opt-in feature that must strip user content first, not a flag flip.
 
+## 0.3.55 — 2026-08-19
+
 ### Changed
 
-- **Inject installed dependency versions into the prompt (environment ground
-  truth — the Claude Code / Codex pattern).** The "Project stack" line already
-  named the stack from marker files; it now also lists the actual installed major
-  versions from `package.json` (e.g. `tailwindcss@4, @tailwindcss/vite@4, dexie@4,
-  react@19`). The system prompt tells the model to use the CLI/API for THOSE
-  versions, not from memory, and to do a step by hand (write the config file) when
-  a setup command fails with "unknown command / could not determine executable"
-  — a version mismatch, not a retry candidate. Directly targets the class of
-  failure where a model runs a deprecated command (e.g. `npx tailwindcss init`,
-  removed in Tailwind v4) because it can't see the installed version.
+- **Inject dependency versions into the prompt (environment ground truth).** The
+  "Project stack" line already named the stack from marker files; it now also
+  lists the major versions of the project's dependencies (e.g. `tailwindcss@4,
+  @tailwindcss/vite@4, dexie@4, react@19`). The system prompt tells the model to
+  use the CLI/API for THOSE versions, not from memory, and to do a step by hand
+  (write the config file) when a setup command fails with "unknown command /
+  could not determine executable" — a version mismatch, not a retry candidate.
+  Directly targets the class of failure where a model runs a deprecated command
+  (e.g. `npx tailwindcss init`, removed in Tailwind v4) because it can't see the
+  installed version. (0.3.57 hardened this against prompt injection and moved it
+  to installed metadata.)
 
 ## 0.3.54 — 2026-08-18
 
