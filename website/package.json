@@ -15,7 +15,8 @@
     "check": "astro check",
     "lint": "astro check",
     "social:export": "node scripts/export-social-preview.mjs",
-    "social:check": "node scripts/export-social-preview.mjs --check"
+    "social:check": "node scripts/export-social-preview.mjs --check",
+    "social:test": "node --test scripts/export-social-preview.test.mjs"
   },
   "dependencies": {
     "@astrojs/starlight": "^0.41.7",
