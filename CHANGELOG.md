@@ -3,6 +3,18 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.3.59 — 2026-08-19
+
+### Fixed
+
+- **Headless `run --json` now connects MCP servers.** `connect_all()` ran only
+  in the TUI, so `localcode run --json` (CI, eval harness, scripting) silently
+  got NO MCP tools even with `~/.localcode/mcp.json` configured — an
+  MCP/LSP server would never start. Headless now connects on start and tears
+  down on exit (best-effort: a failing server never breaks the run; no config is
+  a fast no-op). Verified: `tritlo/lsp-mcp` spawns and its tools reach the model
+  in a headless run.
+
 ## 0.3.58 — 2026-08-19
 
 ### Added
