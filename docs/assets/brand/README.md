@@ -14,6 +14,7 @@ for, so GitHub stores it without re-cropping.
 | Build record | `github-social-preview.manifest.json` — output hash + renderer |
 | Re-export | `cd website && npm run social:export` |
 | Verify | `cd website && npm run social:check` |
+| Test the verifier | `cd website && npm run social:test` |
 
 To preview before uploading, just open either file — `open
 docs/assets/brand/github-social-preview.png`. The SVG needs a browser (or the
@@ -46,20 +47,36 @@ not whatever Chrome the machine happens to have. Bumping playwright changes the
 renderer deliberately and visibly instead of silently.
 
 Every input is content-hashed into `github-social-preview.manifest.json`: the
-SVG, each font file, the playwright version, the Chromium revision, and the
-sha256 of the PNG itself. `npm run social:check` re-renders and compares, so a
-changed font package, an edited SVG, a bumped renderer or a corrupted PNG all
-fail loudly rather than passing on a dimension check.
+SVG, each font file, the playwright version, the Chromium revision, the platform
+and the sha256 of the PNG itself.
 
-**The limitation, stated plainly:** the output hash is reproducible for a given
-(inputs, renderer, **platform**) triple, not universally. Skia's text
-rasterisation and default hinting differ between macOS, Linux and Windows, so
-the same Chromium can emit slightly different bytes for identical glyph
-outlines. The manifest records the platform it was produced on
-(`darwin-arm64`), and on a different platform `social:check` reports that as a
-NOTE rather than as corruption. Byte-identical output across operating systems
-would need a containerised renderer, which is more machinery than one brand
-asset justifies.
+`npm run social:check` re-renders and compares, in this order:
+
+| # | Compared | Fails on drift? |
+| --- | --- | --- |
+| 1 | **Renderer identity** — playwright version **and** Chromium revision | **Always**, independently of everything below |
+| 2 | Input hashes — the SVG and each font file | **Always**, independently of the pixels |
+| 3 | The committed PNG against the sha256 the manifest claims | Always |
+| 4 | Pixels of a fresh render | Only as an independent finding when 1–3 are clean |
+
+Step 1 is deliberately *not* conditional on the pixels differing. A toolchain
+change that happens to produce identical bytes today is still unrecorded, and
+the next edit to the SVG would be rendered by something the manifest never saw.
+For the same reason a platform change never excuses renderer or input drift:
+1 and 2 are evaluated before the exception below can apply.
+
+**The one tolerated difference.** A pixel-hash mismatch is downgraded to a NOTE
+in exactly one situation: identical inputs, identical renderer identity, and a
+different platform. Skia's text rasterisation and default hinting differ between
+macOS, Linux and Windows, so the same Chromium can emit slightly different bytes
+for identical glyph outlines. So the output hash is reproducible for a given
+(inputs, renderer, **platform**) triple, not universally. The manifest records
+the platform it was produced on — currently `darwin-arm64`. Byte-identical
+output across operating systems would need a containerised renderer, which is
+more machinery than one brand asset justifies.
+
+That decision matrix is covered by `npm run social:test` (9 cases), so it cannot
+regress silently.
 
 ### What it is built from — and where the mark comes from
 
