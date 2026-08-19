@@ -347,7 +347,7 @@ code {
   --lc-text: var(--lc-bone);
   --lc-text-muted: var(--lc-muted-light);
   --lc-line: #232a2d;
-  --lc-accent: var(--lc-amber);
+  --lc-accent: var(--lc-accent-dark);
   --lc-page: var(--lc-ink);
   --lc-page-2: var(--lc-surface);
 }
@@ -428,7 +428,7 @@ code {
   color: var(--lc-bone);
 }
 .lc-term__body .sigil {
-  color: var(--lc-amber);
+  color: var(--lc-accent-dark);
 }
 .lc-term__body .tool {
   color: var(--lc-bone);
@@ -673,11 +673,14 @@ code {
   text-align: center;
   border: 1px solid currentColor;
 }
+/* Green is reserved for a check that passed, so it is NOT used here: "local"
+   is a category, not a pass. The network rows are the ones worth noticing, so
+   they take the accent and the local rows recede. */
 .lc-boundary__list .is-local .tag {
-  color: var(--lc-verify);
+  color: var(--lc-text-muted);
 }
 .lc-boundary__list .is-net .tag {
-  color: var(--lc-amber);
+  color: var(--lc-accent-dark);
 }
 
 /* Narrow screens: stack the label above the text so a long line with inline
