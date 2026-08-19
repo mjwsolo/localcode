@@ -1,12 +1,13 @@
 ---
 title: Network Boundary
-description: The outbound paths localcode is known to have, what triggers them, and what stays on your Mac by default.
+description: The outbound paths known in the current implementation, what triggers them, and what stays on your Mac by default.
 ---
 
 **In the default, supported configuration, inference runs on your Mac: no API
 key, no model provider, no remote fallback.** Several other things do reach the
 network, and one configuration change moves inference itself off the machine.
-This page names them rather than rounding down to "offline".
+This page names the ones known in the current implementation, rather than
+rounding down to "offline".
 
 ## Scope: the default configuration
 
@@ -45,13 +46,13 @@ This is a supported thing to do (it is how you drive a llama-server on another
 machine on your LAN), but it is outside the local-only claim. If local-only is
 the reason you are here, leave `base_url` alone and check it with `/status`.
 
-## Known outbound paths
+## Known outbound paths in the current implementation
 
 This inventory was compiled by reading the source, and it is the set the
-maintainers of this page know about. Treat it as thorough rather than proven
-complete: an optional dependency or a newly added tool can introduce a path
-that is not listed here yet. If local-only matters to you, verify at the
-network layer as well.
+maintainers of this page know about. It is **not proven complete**: an optional
+dependency, a newly added tool, or a library making its own request can
+introduce a path that is not listed here. If local-only matters to you, verify
+at the network layer as well.
 
 | # | What | Where it goes | When |
 | --- | --- | --- | --- |
@@ -66,7 +67,7 @@ network layer as well.
 | 9 | **`web_fetch` tool** | The URL named in the call | Whenever the model calls it — **never prompts** |
 | 10 | **Skill install from a URL** | That URL | Only when you install one that way |
 | 11 | **MCP servers** | Wherever you pointed them | Whenever the model calls one of their tools — **never prompts** |
-| 12 | **Shell commands** | Wherever the command goes | Whenever a `bash` call runs — see the approval note below |
+| 12 | **Shell commands** | Wherever the command goes | Whenever a `bash` or `background_process` call runs — see the approval note below |
 | 13 | **Custom inference endpoint** | Whatever `base_url` names | Every turn, if you changed it. Carries your prompts and code context |
 | 14 | **Semantic-index embedding model** | Hugging Face | The first time the code-search index is built, if `sentence-transformers` is installed. See below |
 
@@ -121,7 +122,8 @@ For shell commands, which is where confirmation does apply:
   `kubectl delete`. A bare `curl https://…` is on neither list and runs
   unprompted; `curl … | sh` is caught.
 - **`background_process`** is confirmed at every level except `full_auto`,
-  whatever the command.
+  whatever the command — unless its leading token was already approved for the
+  session, which is checked before the always-confirm rule and bypasses it.
 - **`full_auto`** — nothing is confirmed. The autonomy-independent hard blocks
   still apply.
 
@@ -145,8 +147,8 @@ your machine. That is a bigger trust decision than downloading a model file.
 ## Running with no network at all
 
 Once a model is downloaded, the agent loop, file tools, shell tools and
-inference all work without a connection. What breaks is exactly the table
-above. The connectivity probe simply fails, and the model is told the machine
+inference all work without a connection. What breaks is the set of paths listed
+above — as far as that list goes. The connectivity probe simply fails, and the model is told the machine
 is offline so it stops attempting downloads. See
 [Offline](/localcode/guides/offline).
 
