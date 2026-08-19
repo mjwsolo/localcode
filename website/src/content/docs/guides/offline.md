@@ -7,7 +7,7 @@ localcode is local-first, not offline-only. In the default configuration, once
 a model is on disk, the parts you use most need no connection — but several
 things still do, and pretending otherwise would be a lie.
 
-## Works with no network
+## Known to work with no network
 
 - Model inference — provided `runtime.base_url` still points at the local
   server. A custom endpoint on another host needs the network like anything
@@ -18,7 +18,7 @@ things still do, and pretending otherwise would be a lie.
 - Syntax checks and your repo's local test/lint commands
 - Session resume, `/undo`, the project event log
 
-## Needs a network
+## Known to need a network
 
 - **The first model download.** This is the one blocking step; do it before you
   go offline.
@@ -38,7 +38,10 @@ localcode also runs a small **connectivity probe** — a TCP connect to
 connection is opened and closed. Offline it simply fails, and the model is told
 the machine has no network so it stops attempting downloads.
 
-Inventory: [Network Boundary](/localcode/concepts/network-boundary).
+The known outbound paths in the current implementation are listed on
+[Network Boundary](/localcode/concepts/network-boundary). That list is not
+proven complete, so treat the two sections above as the shape of the offline
+story rather than an exhaustive guarantee.
 
 ## Preparing for an offline session
 
