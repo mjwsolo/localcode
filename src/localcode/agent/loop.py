@@ -576,6 +576,13 @@ def run_agent_loop(
     # holding until the project is clean or the bound is hit.
     _build_verify_nudges = 0
     _MAX_BUILD_VERIFY_RETRIES = 2
+    # The project checker ran but could NOT produce a verdict (timeout, failed to
+    # execute, incomplete TypeScript coverage). Turn-level, not round-level: it
+    # survives into the final completion decision, because a checker that never
+    # answered is not evidence of a working build and an earlier unrelated
+    # passing command in the verification registry must not stand in for it.
+    from .project_check_gate import ProjectCheckGate as _ProjectCheckGate
+    _project_check_gate = _ProjectCheckGate()
     # Reject → re-read → reject spin: ONE actionable redirect per turn
     # (recovery.detect_reject_reread_loop, recomputed from the transcript).
     _reject_reread_nudge_done = False
@@ -1676,11 +1683,17 @@ def run_agent_loop(
                 # imports) the per-write syntax check can't. See project_check.
                 _proj_errors = None
                 try:
-                    from ..tools.project_check import run_project_check
+                    from ..tools.project_check import run_project_check_result
                     out.print_info("Verifying — running the project's typecheck…")
-                    _proj_errors = run_project_check(str(app.repo_root), ctx_tokens=_ctx_tokens_turn)
-                except Exception:
+                    _check = run_project_check_result(
+                        str(app.repo_root), ctx_tokens=_ctx_tokens_turn)
+                    if _project_check_gate.observe(_check) == "red":
+                        _proj_errors = _check.detail
+                except Exception as _check_exc:
+                    # An unexpected failure is a FAILED verification, not a clean
+                    # one — swallowing it silently is the same false clean.
                     _proj_errors = None
+                    _project_check_gate.observe_exception(_check_exc)
                 try:
                     from ..events import emit as _emit_bg
                     _emit_bg("auto_nudge", signal="build_verify_gate",
@@ -1706,6 +1719,26 @@ def run_agent_loop(
                     _ephemeral_nudge_indices.append(len(messages) - 1)
                     _last_nudge_kind = "build_verify_errors"
                     continue  # don't accept completion — the gate is red
+                if _project_check_gate.blocks_completion():
+                    # Not red, but not green either. Ask the model to verify by
+                    # hand — EVERY time, up to its own bound, so a second and
+                    # third failure don't just fall through to "done".
+                    _self_verified = False
+                    out.print_info(
+                        f"Typecheck did not complete "
+                        f"({_project_check_gate.unverified}) — build stays unverified.")
+                    if _project_check_gate.consume_retry():
+                        messages.append({"role": "user", "content": (
+                            "SYSTEM: LocalCode could not verify this project — "
+                            f"{_project_check_gate.unverified}. Run the project's own "
+                            "build/typecheck yourself (npm run build / npx tsc "
+                            "--noEmit for TS; tests or an import smoke-check for "
+                            "Python), fix anything it reports, and say what it "
+                            "printed. Do not claim the build works until it passes."
+                        )})
+                        _ephemeral_nudge_indices.append(len(messages) - 1)
+                        _last_nudge_kind = "build_verify_unverified"
+                        continue  # don't accept completion — nothing is verified
                 if not _self_verified and _build_verify_nudges < 1:
                     # Gate is clean (checker passed OR none configured) AND the
                     # model never ran a build/test itself — advise ONCE to verify.
@@ -1751,6 +1784,11 @@ def run_agent_loop(
                     or not _hook_state.verification_registry.satisfied(
                         "relevant-verification", os.environ
                     )
+                    # A project typecheck that never returned a verdict blocks
+                    # completion on its own. Otherwise an earlier, unrelated
+                    # command sitting in the verification registry lets the turn
+                    # finish as "verified" while the real check keeps failing.
+                    or _project_check_gate.blocks_completion()
                 )
             )
             if _completion_blocked:
@@ -1759,6 +1797,10 @@ def run_agent_loop(
                     "a passing build, test, typecheck, or import check for the current "
                     "file hashes. The task remains incomplete rather than claiming success."
                 )
+                # Goes through the FINAL RESULT text, so the reason lands in the
+                # TUI and in `--json` — unlike print_info, which is invisible in
+                # the TUI and suppressed under --json.
+                content += _project_check_gate.result_note()
             if _goal_state.goal_type == "run_or_launch":
                 _task_port = int(getattr(_task_state, "active_port", 0) or 0)
                 content = ground_run_or_launch_text(content, _task_port)
