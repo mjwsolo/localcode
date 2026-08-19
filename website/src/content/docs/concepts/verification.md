@@ -64,16 +64,26 @@ shell/JS from the repository, and this check is invoked unattended with no
 approval — running them would hand a hostile repo code execution the moment the
 agent verified.
 
-To be precise about what `tsc --noEmit` does: it bypasses your package scripts
-and writes no build output (no JS, no `.d.ts`, no `.tsbuildinfo`), but it is
-still a full type-check. It reads `tsconfig.json`, every source file that
-config includes, everything those files import, the `.d.ts` declarations they
-pull in, and the `package.json` metadata needed to resolve modules. "Reads only
-config" would be wrong; "emits nothing" is the accurate part.
+To be precise about what `tsc --noEmit` does here:
 
-The other commands do not modify your source, but none of this is
-side-effect-free on disk: `python -m compileall` writes `__pycache__/`, and
-`cargo check` writes to `target/`.
+- **It bypasses your package scripts** — the binary is invoked directly.
+- **No build artifacts are written inside your repository.** No JS, no `.d.ts`,
+  no source maps, and no `.tsbuildinfo` in your project tree. `tsc -b` is
+  deliberately not used precisely because it emits.
+- **It is still a full type-check**, so it reads `tsconfig.json`, every source
+  file that config includes, everything those files import, the `.d.ts`
+  declarations they pull in, and the `package.json` metadata needed to resolve
+  modules. "Reads only config" would be wrong.
+- **A `.tsbuildinfo` *is* written — outside your repository.** A project with
+  `composite: true` implies `incremental`, and tsc insists on writing its
+  incremental state even under `--noEmit`. localcode redirects it with
+  `--tsBuildInfoFile` into a per-project scratch directory under the system
+  temp directory. If it cannot create and verify such a directory, it refuses
+  to run the check rather than let the file land in your project.
+
+The other commands are not side-effect-free on disk either: `python -m
+compileall` writes `__pycache__/` and `cargo check` writes to `target/`, both
+inside the project.
 
 While the check is red, the model **cannot** end the turn: the diagnostics are
 injected and another round is forced, up to a bounded retry count so an
