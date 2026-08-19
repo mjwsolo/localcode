@@ -49,11 +49,16 @@ A turn is a sequence of tool calls, and localcode shows each one:
 - `bash` — running your repo's checks
 
 By default localcode runs at the **auto_edit** autonomy level: file edits go
-through without asking, and so do ordinary shell commands — only
-risky-looking ones (piping a download into a shell, a force-push, `sudo rm`)
-stop for confirmation. If you want every command to ask, start with
-`LOCALCODE_AUTONOMY=suggest localcode`. Note that `web_search`, `web_fetch` and
-MCP tools never prompt at any level. See
+through without asking, while a broad set of shell commands stops for
+confirmation. That set is wider than "dangerous" — it covers package installs
+(`pip install`, `npm install`, `brew install`), anything that runs code
+(`python`, `node`, `npm run`, `npm start`), git history operations
+(`git push`, `git reset --hard`), `sudo`, recursive deletes, and container /
+cluster commands, plus a few pipe-to-shell and force-push patterns. So the
+`bash` step that runs `python -m pytest` will ask; a plain `pytest` will not.
+
+`background_process` is confirmed at this level too. `web_search`, `web_fetch`
+and MCP tools never prompt at any level. The exact lists are in
 [Permissions](/localcode/start-here/permissions).
 
 ## 4. Expect a failure, and expect a recovery

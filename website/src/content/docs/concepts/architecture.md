@@ -5,16 +5,27 @@ description: The pieces localcode is made of, from the TUI down to the inference
 
 ## The stack
 
+The default configuration, which is what the rest of this page describes:
+
 ```text
   Textual TUI  ──►  agent loop  ──►  tools (read/edit/bash/search/MCP)
                         │
                         ▼
-              llama-server on localhost:8081
+        runtime.base_url  (default http://localhost:8081)
+                        │
+                        ▼
+              llama-server started by localcode
               (llama.cpp fork + TurboQuant KV compression)
                         │
                         ▼
                   GGUF weights on disk
 ```
+
+The arrow marked `runtime.base_url` is a configuration value, not a fixed
+edge. Point it elsewhere — `LOCALCODE_BASE_URL`, or the key in
+`config.toml` — and the agent posts completions to that address instead, with
+no validation and no change anywhere in the UI. See
+[Network Boundary](/localcode/concepts/network-boundary#inference-endpoint-the-one-that-moves-the-boundary).
 
 - **TUI** — the product surface. Setup, mode choice, model picker and chat are
   all screens in one Textual app.
@@ -23,8 +34,11 @@ description: The pieces localcode is made of, from the TUI down to the inference
 - **Tools** — file reads and edits, glob/grep, shell, project checks, syntax
   checks, code navigation and symbol inspection, notebook edits, app launch,
   plus the two network tools and any MCP tools you have configured.
-- **Inference server** — a `llama-server` binary shipped inside the wheel,
-  bound to localhost. See [Network Boundary](/localcode/concepts/network-boundary).
+- **Inference server** — by default a `llama-server` binary shipped inside the
+  wheel, which localcode starts and addresses on `localhost:8081`. localcode
+  binds *its own* server there; it does not constrain `base_url` to loopback,
+  so the client half of this arrow goes wherever that setting points. See
+  [Network Boundary](/localcode/concepts/network-boundary).
 
 ## Built for small models specifically
 

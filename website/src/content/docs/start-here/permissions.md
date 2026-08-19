@@ -25,10 +25,12 @@ all MCP tools**. `suggest` mode is not a no-network mode. See
 | `auto_edit` *(interactive default)* | no prompt | confirmed if it matches the pattern lists | confirmed |
 | `full_auto` | no prompt | no prompt | no prompt |
 
-**`background_process` is always confirmed** outside `full_auto`, regardless of
-what the command is — it hands a raw string straight to `/bin/sh` with none of
-the substring shortcuts `bash` gets. The only escape is `full_auto` or having
-already session-approved it.
+**`background_process` is confirmed** outside `full_auto` regardless of what
+the command is — it hands a raw string straight to `/bin/sh` with none of the
+substring shortcuts `bash` gets. The one exception is the session-approval
+check, which runs *before* the always-confirm rule: if you have already
+approved that command's leading token this session, it goes through
+unprompted.
 
 At `auto_edit`, a `bash` command is confirmed when it matches either of two
 lists:
@@ -69,9 +71,26 @@ command approvals on and off from inside the TUI.
 ## 4. The safety layer — never overridable
 
 A hard block runs before every tool dispatch in **all** modes, including
-`full_auto` and headless. It covers operations with no legitimate agent use:
-catastrophic shell (`rm -rf /`, `mkfs`, `dd of=/dev/…`, fork bombs) and writes
-to credential material.
+`full_auto` and headless. It covers operations with no legitimate agent use.
+
+For shell, the patterns are deliberately tight and anchored to real device,
+root and home targets, so that grepping for the text of a dangerous command
+doesn't trip them. **Examples** (not the complete set):
+
+- `rm -rf` / `rm -fr` aimed at `/`, `~`, or `$HOME`
+- `mkfs`, `wipefs`
+- `dd … of=/dev/…`, and redirects into `/dev/sd*`, `/dev/nvme*`, `/dev/disk*`
+- `chmod -R 777 /`
+- redirects into `/etc/`
+- the classic `:(){ :|:& };:` fork bomb
+
+Note what is deliberately *absent*: SQL patterns like `DROP TABLE` are not
+hard-blocked here, because bash does not execute SQL and blocking them only
+broke grepping for the string. They still appear on the `auto_edit`
+confirmation list above. Likewise `curl … | sh`, force-pushes and `sudo rm` are
+confirmation-gated rather than blocked, so you can approve them.
+
+For writes, the block covers credential material.
 
 Blocked write targets are matched two ways — an exact **basename**
 (`id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`, `authorized_keys`,
@@ -84,7 +103,9 @@ single-component entries can ever match. Anything under `~/.config/gcloud`, for
 instance, is **not** covered by this list.
 
 These are refusals, not prompts. No autonomy level and no session approval
-turns them off. It is a footgun guard, not a security boundary.
+turns them off. It is a footgun guard, not a security boundary — the pattern
+matching is substring- and regex-based, so a determined caller can work around
+it.
 
 ## Hooks can veto too
 

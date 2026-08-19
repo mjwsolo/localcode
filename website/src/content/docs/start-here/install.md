@@ -50,8 +50,10 @@ localcode unstick            # recover a wedged model server
    [Choose a Model](/localcode/start-here/choose-a-model).
 2. It downloads that model's GGUF from Hugging Face. This is the one step
    that needs the network, and it is a one-time cost per model.
-3. It starts the bundled `llama-server` on `http://localhost:8081` and points
-   the agent at it.
+3. In the default configuration it starts the bundled `llama-server` on
+   `http://localhost:8081` and points the agent at it. If you have set
+   `runtime.base_url` or `LOCALCODE_BASE_URL` to something else, the agent
+   talks to that address instead.
 
 From then on, generation happens wherever `runtime.base_url` points — by
 default, that server on your Mac. Changing it (or `LOCALCODE_BASE_URL`) sends
