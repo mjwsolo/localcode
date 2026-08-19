@@ -62,12 +62,18 @@ It runs the **`tsc` binary directly** and deliberately does *not* run your
 `package.json` `typecheck` script, and does not run eslint. Both are arbitrary
 shell/JS from the repository, and this check is invoked unattended with no
 approval — running them would hand a hostile repo code execution the moment the
-agent verified. `tsc --noEmit` reads only `tsconfig.json`.
+agent verified.
 
-These commands do not modify your source, but they are not side-effect-free:
-`python -m compileall` writes `__pycache__/`, and `cargo check` writes to
-`target/`. TypeScript is checked with `--noEmit` specifically to avoid emitting
-JS, `.d.ts` and `.tsbuildinfo`.
+To be precise about what `tsc --noEmit` does: it bypasses your package scripts
+and writes no build output (no JS, no `.d.ts`, no `.tsbuildinfo`), but it is
+still a full type-check. It reads `tsconfig.json`, every source file that
+config includes, everything those files import, the `.d.ts` declarations they
+pull in, and the `package.json` metadata needed to resolve modules. "Reads only
+config" would be wrong; "emits nothing" is the accurate part.
+
+The other commands do not modify your source, but none of this is
+side-effect-free on disk: `python -m compileall` writes `__pycache__/`, and
+`cargo check` writes to `target/`.
 
 While the check is red, the model **cannot** end the turn: the diagnostics are
 injected and another round is forced, up to a bounded retry count so an

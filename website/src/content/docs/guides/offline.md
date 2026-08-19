@@ -3,13 +3,15 @@ title: Offline
 description: What works with no network, and what doesn't.
 ---
 
-localcode is local-first, not offline-only. Once a model is on disk, the parts
-you use most need no connection — but a few things still do, and pretending
-otherwise would be a lie.
+localcode is local-first, not offline-only. In the default configuration, once
+a model is on disk, the parts you use most need no connection — but several
+things still do, and pretending otherwise would be a lie.
 
 ## Works with no network
 
-- Model inference (the server is on `localhost`)
+- Model inference — provided `runtime.base_url` still points at the local
+  server. A custom endpoint on another host needs the network like anything
+  else.
 - Reading, editing and writing files
 - `grep`, `glob`, `list_files`, code navigation, symbol inspection
 - Shell commands that don't themselves reach out
@@ -27,11 +29,16 @@ otherwise would be a lie.
 - **Enabling voice** for the first time, which downloads speech models.
 - **Picking an experimental model** whose runner localcode has to clone and
   build from source.
+- **The first semantic-index build**, if you have `sentence-transformers`
+  installed — it downloads an embedding model in the background. Without that
+  package the index falls back to a local TF-IDF build and needs nothing.
 
 localcode also runs a small **connectivity probe** — a TCP connect to
-`1.1.1.1:443`, cached for 30 seconds, carrying no data. Offline it simply
-fails, and the model is told the machine has no network so it stops attempting
-downloads. Full inventory: [Network Boundary](/localcode/concepts/network-boundary).
+`1.1.1.1:443`, cached for 30 seconds. No application payload is sent; the
+connection is opened and closed. Offline it simply fails, and the model is told
+the machine has no network so it stops attempting downloads.
+
+Inventory: [Network Boundary](/localcode/concepts/network-boundary).
 
 ## Preparing for an offline session
 
