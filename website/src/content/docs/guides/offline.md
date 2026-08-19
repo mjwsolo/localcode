@@ -55,5 +55,6 @@ story rather than an exhaustive guarantee.
 Offline, expect `web_search` / `web_fetch` calls to come back as errors. The
 agent treats a failed tool result as context and continues.
 
-See [Network Boundary](/localcode/concepts/network-boundary) for the complete
-inventory.
+See [Network Boundary](/localcode/concepts/network-boundary) for the known
+outbound paths in the current implementation — a list that is not proven
+complete.
