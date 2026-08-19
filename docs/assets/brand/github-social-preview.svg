@@ -40,16 +40,35 @@
   <rect width="1280" height="640" fill="#0B0E11"/>
   <rect x="0" y="0" width="1280" height="4" fill="#5B86FF"/>
 
-  <!-- Lockup: Finder Mark + lowercase wordmark, the approved identity. -->
-  <g transform="translate(112 86) scale(4.5)">
-    <g fill="none" stroke="#F5F7F8" stroke-width="2.5">
-      <rect x="3" y="3" width="26" height="26"/>
-      <rect x="9.5" y="9.5" width="13" height="13"/>
+  <!--
+    Lockup: House Mark + lowercase wordmark.
+
+    The mark is the repository's own logo, redrawn. docs/assets/logo/*.png pairs
+    the wordmark with the house emoji, whose shape is supplied by the viewer's
+    OS; this keeps the parts that make it recognisable and drops the parts that
+    are platform-dependent. Editable original: house-mark.svg.
+
+    tx=107.25 is not arbitrary. The eave overhangs the wall, and its stroke is
+    mitred on a slope, so the leftmost painted pixel sits further left than the
+    path's own x. The offset was set from the rendered pixels, not from the
+    geometry, so the mark's true left edge lands on the same x=112 as the
+    tagline below it.
+  -->
+  <g transform="translate(107.25 86) scale(4.5)">
+    <g fill="none" stroke="#F5F7F8" stroke-width="2.5" stroke-linejoin="miter" stroke-linecap="butt">
+      <path d="M7 10.9 V4.5 H11 V7.6"/>
+      <path d="M2 15 L16 3.5 L30 15"/>
+      <path d="M5 12.5 V29 H27 V12.5"/>
+      <path d="M20 29 V19.5 H26 V29"/>
     </g>
-    <rect x="14.5" y="14.5" width="6" height="6" fill="#5B86FF"/>
+    <rect x="12.5" y="21.5" width="4.5" height="4.5" fill="#5B86FF"/>
+    <g fill="none" stroke="#F5F7F8" stroke-width="2">
+      <rect x="8" y="17" width="9" height="9"/>
+      <path d="M12.5 17 V26 M8 21.5 H17"/>
+    </g>
   </g>
 
-  <text x="296" y="183" fill="#F5F7F8"
+  <text x="292" y="183" fill="#F5F7F8"
         font-family="'Martian Mono', ui-monospace, SFMono-Regular, Menlo, monospace"
         font-size="72" font-weight="600" letter-spacing="-2.6">localcode</text>
 
