@@ -26,7 +26,7 @@ The model server and generation settings.
 | Key | Default | Notes |
 | --- | --- | --- |
 | `provider` | `llama_cpp` | Inference backend |
-| `base_url` | `http://localhost:8081` | Local server address |
+| `base_url` | `http://localhost:8081` | Where chat completions are posted. **Any URL is accepted — it is not validated or restricted to localhost.** Overridable with `LOCALCODE_BASE_URL` |
 | `model` | *(per-Mac recommendation)* | Model tag |
 | `mode` | `fast` | `fast` or reasoning-biased |
 | `internal_thinking_mode` | `off` | Hidden reasoning: `off` or `auto`. Off by default |
@@ -48,12 +48,23 @@ The model server and generation settings.
 | `jail_to_project` | `true` |
 | `auto_approve_agent` | `false` |
 
+:::caution[`base_url` moves the privacy boundary]
+Pointing `base_url` at a remote server sends every prompt localcode builds —
+your message, the file contents gathered as context, tool results and the
+model's replies — to that server. Nothing in the UI flags this; the only signal
+is the value you set. See
+[Network Boundary](/localcode/concepts/network-boundary#inference-endpoint-the-one-that-moves-the-boundary).
+:::
+
 ### `[search]`
 
-`provider` defaults to `duckduckgo`. Setting `google_api_key` + `google_cx`,
-`brave_api_key` or `serpapi_api_key` switches `web_search` to that provider —
-which changes who sees your queries. See
-[Network Boundary](/localcode/concepts/network-boundary).
+This section carries `provider` (default `duckduckgo`) plus `google_api_key`,
+`google_cx`, `brave_api_key` and `serpapi_api_key`.
+
+**None of them affect the `web_search` tool the model calls.** That tool always
+queries DuckDuckGo through the `ddgs` package; the alternative providers live
+in an older code path the agent does not use. Setting a key changes nothing
+about where a search goes.
 
 ### `[ui]` and `[logging]`
 
