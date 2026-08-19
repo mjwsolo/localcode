@@ -9,11 +9,24 @@ and which is a nudge, because they are not the same strength.
 
 ## What is enforced
 
-### 1. Code-changing turns cannot claim success without recorded evidence
+### 1. Build and edit turns cannot claim success without recorded evidence
 
-When the turn's goal is classified as a build or an edit **and** code files
-changed, the loop checks whether it observed a passing build / test / typecheck
-/ lint command during the turn. The evidence is keyed to the changed files'
+The scope is exact, and worth knowing before you rely on it. localcode
+classifies each request with a regex-based goal classifier
+(`infer_goal_state`). The evidence gate applies to exactly two of its outputs:
+
+- **`build_app`** — a build verb (build, create, make, scaffold, implement,
+  write, generate…) together with an app-ish noun (app, site, api, cli, tool,
+  library…).
+- **`edit_existing`** — one of `fix`, `change`, `edit`, `update`, `refactor`,
+  `rename`, `remove`, `add`.
+
+Anything else lands in `general_task`, `run_or_launch` or `question`, and is
+**not** covered. Phrasing matters more than it should: *"change parse_duration
+so it accepts 1h30m"* is gated; *"make parse_duration accept 1h30m"* is not.
+
+Within that scope, and only when code files changed, the loop checks whether it
+observed a passing build / test / typecheck / lint command during the turn. The evidence is keyed to the changed files'
 content hashes and to `PATH` / `NODE_ENV` / `PYTHONPATH`, so a command that
 passed *before* the last edit does not count.
 
@@ -34,22 +47,29 @@ server does not count.
 
 ### 2. A stop gate that re-runs the project's own typecheck
 
-For build-shaped goals that changed code, localcode runs the project's real
-checker itself when the model tries to finish, and feeds the errors back:
+For `build_app` goals that changed code, localcode runs a checker itself when
+the model tries to finish, and feeds the errors back:
 
 | Project | Command run |
 | --- | --- |
-| `package.json` with a `typecheck` script | that script |
-| TypeScript otherwise | `tsc -p <tsconfig> --noEmit` |
+| TypeScript (`tsconfig.json` + installed `tsc`, deps present) | `node_modules/.bin/tsc -p <tsconfig> --noEmit` |
 | Python with `ruff` installed | `ruff check --select E9,F` (syntax + undefined names) |
 | Python without `ruff` | `python -m compileall -q .` |
 | Go | `go build ./...` |
 | Rust | `cargo check` |
 
-Every one of these is read-only — verification never writes to your repository,
-which is why TypeScript is checked with `--noEmit` rather than a build.
+It runs the **`tsc` binary directly** and deliberately does *not* run your
+`package.json` `typecheck` script, and does not run eslint. Both are arbitrary
+shell/JS from the repository, and this check is invoked unattended with no
+approval — running them would hand a hostile repo code execution the moment the
+agent verified. `tsc --noEmit` reads only `tsconfig.json`.
 
-While that check is red, the model **cannot** end the turn: the diagnostics are
+These commands do not modify your source, but they are not side-effect-free:
+`python -m compileall` writes `__pycache__/`, and `cargo check` writes to
+`target/`. TypeScript is checked with `--noEmit` specifically to avoid emitting
+JS, `.d.ts` and `.tsbuildinfo`.
+
+While the check is red, the model **cannot** end the turn: the diagnostics are
 injected and another round is forced, up to a bounded retry count so an
 unfixable project can't spin forever. A check that times out or fails to run is
 recorded as *unverified*, never as clean — and running out of retries does not
@@ -63,24 +83,32 @@ Writes and edits are syntax-checked in-process with tree-sitter as they happen,
 so an obviously broken edit is caught in the same round rather than costing a
 shell run.
 
-### 4. Open todos block a bare "done"
+### 4. Open todos push back on a bare "done"
 
 If the model wrote a todo list during the turn and items are still open, a
-closing message alone is not accepted as completion.
+closing message is rejected and another round is forced, naming the next item.
+
+This one is bounded, not absolute: there is a cap on continuations, plus a
+diminishing-returns guard that gives up after three rounds in which the open
+count did not fall. A model that cannot advance its own plan is allowed to
+stop rather than being nagged forever — so open todos are not a permanent
+block.
 
 ## What is not enforced
 
 - **Your test suite.** localcode never runs `pytest` or `npm test` on its own
   initiative. The model decides to run tests; the enforcement above is about
   whether a passing run was *recorded*, not about causing one.
-- **Question-shaped and non-code turns.** The evidence gate is scoped to
-  build/edit goals that changed code files. A turn that answers a question or
-  edits prose ends when the model stops calling tools.
+- **Anything outside `build_app` / `edit_existing`.** A request the classifier
+  reads as `general_task`, `run_or_launch` or `question` carries no evidence
+  guarantee, even if it changed code. So does a build/edit turn that changed
+  no code files.
 - **Correctness.** A green checker means the project compiles and the commands
   the model chose passed. It is not a review.
 
-So: not every turn ends on passing evidence. Code-changing turns either carry
-that evidence or are reported as incomplete.
+So: not every turn ends on passing evidence. A turn localcode read as a build
+or an edit, in which code files changed, either carries that evidence or is
+reported as incomplete. Other turns end when the model stops calling tools.
 
 ## You still read the diff
 

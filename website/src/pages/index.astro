@@ -30,12 +30,11 @@ const proof = [
   },
   {
     title: 'Finishes with evidence',
-    body: `A code-changing turn either carries a build, typecheck or test that
-      passed against the current file contents, or localcode reports it
-      incomplete instead of claiming success. On build-shaped work it re-runs
-      the project's own typecheck itself and won't let the turn end while
-      that is red.`,
-    link: { label: 'What is actually enforced', href: href('concepts/verification') },
+    body: `When it reads your request as a build or an edit and code files
+      changed, localcode won't report success unless it saw a build, typecheck
+      or test pass against the current file contents — it says the task is
+      incomplete instead. Other turns don't carry that guarantee.`,
+    link: { label: 'Exactly what is enforced', href: href('concepts/verification') },
   },
   {
     title: 'Designed for local models',
@@ -102,7 +101,13 @@ const proof = [
           <a href={href('concepts/network-boundary')}>Network boundary</a>
           <a href="https://github.com/mjwsolo/localcode">GitHub</a>
         </nav>
-        <button type="button" class="lc-theme" id="lc-theme" aria-label="Toggle colour theme">
+        <button
+          type="button"
+          class="lc-theme"
+          id="lc-theme"
+          aria-pressed="false"
+          aria-label="Dark theme"
+        >
           <span class="lc-theme__dot" aria-hidden="true"></span>
           <span class="lc-theme__label">theme</span>
         </button>
@@ -121,9 +126,10 @@ const proof = [
             <p class="lc-sub">{description}</p>
             <p class="lc-privacy">
               <FinderMark size={18} class="lc-privacy__mark" />
-              Your code and prompts are never sent to a model provider. They
-              leave your Mac only when a network tool runs — web search, web
-              fetch, an MCP server, or a shell command.
+              In the default configuration inference runs on your Mac — no API
+              key, no model provider. Your prompts and code leave it only when a
+              network tool runs, or if you point localcode at a remote
+              inference endpoint yourself.
             </p>
 
             <CopyCommand command="pip install -U localcode" label="install" />
@@ -153,8 +159,8 @@ const proof = [
           <h2 class="lc-h2">One turn, start to green</h2>
           <p class="lc-lede">
             Read the file. Make the edit. Run the repo's own checks. When they
-            come back red, read the failure and fix it — then finish on a check
-            that passed, because a code change with no passing check is reported
+            come back red, read the failure and fix it. On a request localcode
+            reads as an edit, finishing without a passing check is reported as
             incomplete rather than done.
           </p>
           <TerminalDemo />
@@ -197,9 +203,9 @@ const proof = [
             <h2 class="lc-h2">Where the boundary is</h2>
             <p class="lc-lede">
               localcode is honest about this rather than claiming to be
-              "fully offline". Inference runs on your machine; twelve specific
-              paths can reach the network, and the boundary page names every
-              one of them — including who has to approve it.
+              "fully offline". In the default configuration inference is local;
+              the boundary page names every outbound path, including the ones
+              that never stop to ask you.
             </p>
             <a class="lc-btn lc-btn--primary" href={href('concepts/network-boundary')}>
               Read the network boundary
@@ -207,8 +213,10 @@ const proof = [
           </div>
           <ul class="lc-boundary__list">
             <li class="is-local">
-              <span class="tag">local</span>
-              <span class="txt">Model inference — a llama.cpp server on your Mac</span>
+              <span class="tag">default</span>
+              <span class="txt">
+                Inference — a llama.cpp server on <code>localhost:8081</code>
+              </span>
             </li>
             <li class="is-local">
               <span class="tag">local</span>
@@ -217,24 +225,24 @@ const proof = [
               </span>
             </li>
             <li class="is-net">
-              <span class="tag">network</span>
+              <span class="tag">config</span>
               <span class="txt">
-                Downloading a model from Hugging Face, and a connectivity probe
-                that sends no data
+                A custom <code>base_url</code> sends your prompts and code
+                context to that endpoint instead
               </span>
             </li>
             <li class="is-net">
               <span class="tag">network</span>
               <span class="txt">
-                The <code>web_search</code> and <code>web_fetch</code> tools, and any
-                MCP server you configure
+                Model downloads, and a connectivity probe that carries no
+                application payload
               </span>
             </li>
             <li class="is-net">
-              <span class="tag">network</span>
+              <span class="tag">no prompt</span>
               <span class="txt">
-                Shell commands — which run without a prompt under full-auto and
-                in headless runs
+                <code>web_search</code>, <code>web_fetch</code> and MCP tools —
+                these never ask for confirmation, at any autonomy level
               </span>
             </li>
           </ul>
@@ -248,7 +256,7 @@ const proof = [
           <h2 class="lc-h2">Make your first change</h2>
           <p class="lc-lede">
             Point localcode at a repo you already have, ask for one small edit,
-            and watch it verify its own work.
+            and see what it does when the checks come back red.
           </p>
           <CopyCommand command="pip install -U localcode" label="install" />
           <div class="lc-cta">
@@ -279,10 +287,20 @@ const proof = [
 
     <script>
       const button = document.getElementById('lc-theme');
+      // The inline head script resolves the theme before paint, so sync the
+      // control's state to it on load as well as on every toggle. aria-pressed
+      // reports "dark is on"; the label names the theme currently applied.
+      const syncThemeControl = (theme: string) => {
+        if (!button) return;
+        button.setAttribute('aria-pressed', String(theme === 'dark'));
+        button.setAttribute('aria-label', theme === 'dark' ? 'Dark theme' : 'Light theme');
+      };
+      syncThemeControl(document.documentElement.dataset.theme ?? 'dark');
       button?.addEventListener('click', () => {
         const root = document.documentElement;
         const next = root.dataset.theme === 'light' ? 'dark' : 'light';
         root.dataset.theme = next;
+        syncThemeControl(next);
         try {
           localStorage.setItem('starlight-theme', next);
         } catch {

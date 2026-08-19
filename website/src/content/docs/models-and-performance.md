@@ -32,15 +32,28 @@ Three things, in roughly this order:
    cache small enough that long contexts remain workable — see
    [Unified Memory](/localcode/concepts/unified-memory).
 
+## The tok/s numbers in the model picker
+
+The model picker shows an estimated decode speed next to each quantisation.
+That number is **calculated, not measured**. localcode does not run a benchmark
+on your machine — there is no benchmark command and no benchmark screen.
+
+The estimate is an analytic model: bytes read per token (the quant's size
+scaled by its active-parameter fraction, so MoE models count only their active
+experts) divided by an assumed fraction of your chip's rated memory bandwidth,
+plus a fixed per-token compute floor. It is calibrated against a small number
+of maintainer measurements on one machine.
+
+Treat it as a ranking aid — it is good at telling you that one quant will be
+slower than another on your hardware. Do not treat it as a prediction of the
+throughput you will see, which also depends on context length, thermal state
+and whatever else is running.
+
 ## Checking your own setup
 
 ```text
 /status     # server health, current model, perf configuration
 ```
-
-Benchmarking lives inside the TUI. Measuring on your own machine is the only
-number worth trusting: throughput depends on your chip tier, your memory
-bandwidth, your context length and what else is running.
 
 :::note[Preview stub]
 This page deliberately quotes no throughput figures. The maintainers' measured

@@ -7,6 +7,12 @@
  * because none of them would be measured. The tool names (`read_file`,
  * `edit_file`, `bash`) are real localcode tools and `pytest -q` is a real
  * command the model can run; the output text is written for this page.
+ *
+ * The showcased prompt starts with "change" deliberately: `infer_goal_state`
+ * classifies it as `edit_existing`, which is one of the two goal types the
+ * evidence gate covers. A phrasing like "make X accept Y" classifies as
+ * `general_task` and would NOT be gated — so it would misrepresent the flow
+ * this page is describing.
  */
 interface Row {
   cls: string;
@@ -21,7 +27,7 @@ const NEWLINE = String.fromCharCode(10);
 const BLANK: Row = { cls: 'l' };
 
 const rows: Row[] = [
-  { cls: 'l l--prompt', sigil: '>', text: 'make parse_duration accept "1h30m"' },
+  { cls: 'l l--prompt', sigil: '>', text: 'change parse_duration so it accepts "1h30m"' },
   BLANK,
   { cls: 'l l--ok', glyph: '\u2022', tool: 'read_file', arg: '(src/timeutil.py)' },
   { cls: 'l l--note', text: '  found parse_duration \u2014 handles "90m" and "2h", not compound units' },
@@ -36,7 +42,7 @@ const rows: Row[] = [
   { cls: 'l l--ok', glyph: '\u2022', tool: 'bash', arg: '(pytest -q)' },
   { cls: 'l l--verifytext', text: '  \u2713 48 passed' },
   BLANK,
-  { cls: 'l l--note', text: '  changed 1 file \u00b7 verified with the repo\u2019s own test command' },
+  { cls: 'l l--note', text: '  changed 1 file \u00b7 closed on a check that passed' },
 ];
 
 // The trailing newline is baked into each row here rather than emitted as a
