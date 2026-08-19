@@ -106,8 +106,13 @@ one accent hue.
 **GitHub repository social preview** lives outside this directory, at
 `docs/assets/brand/github-social-preview.{svg,png}`, because it is a repo-level
 asset uploaded through GitHub Settings rather than something the site serves.
-It reuses the same lockup and the same hue-225 ramp but is laid out for that
-slot, not cropped from this hero. See `docs/assets/brand/README.md`.
+It uses the same hue-225 ramp and is laid out for that slot rather than cropped
+from this hero, but it does **not** use the Finder Mark: it pairs the wordmark
+with a **House Mark**, the repository's existing emoji-house logo redrawn as
+flat geometry on the same grid and stroke weights. The two marks share a
+construction — a frame with an offset solid core — so they read as one family,
+but the project does currently carry two. See `docs/assets/brand/README.md`,
+"Open decision: two marks".
 
 Deliberately absent everywhere: gradients, glow, blur, glassmorphism, flow
 fields, particle or neural meshes, device mockups, and any generated or stock
