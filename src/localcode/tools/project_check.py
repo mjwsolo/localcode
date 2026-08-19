@@ -94,7 +94,7 @@ def _strip_jsonc(text: str) -> str:
         trailing. Only whitespace may sit between it and the bracket, and `out`
         holds no comments at this point, so the lookback cannot cross a literal."""
         j = len(out) - 1
-        while j >= 0 and out[j].isspace():
+        while j >= 0 and out[j] in " \t\r\n":
             j -= 1
         if j >= 0 and out[j] == ",":
             del out[j]
@@ -333,19 +333,32 @@ def _tsbuildinfo_dir(pj_dir: str) -> str | None:
     incremental state, or None.
 
     `composite: true` implies `incremental`, so tsc writes a `.tsbuildinfo` even
-    under `--noEmit`. None means the verification MUST NOT run: the previous
-    fallback (run without `--tsBuildInfoFile`) put that file back inside the
-    user's repository while still reporting clean, which defeats the read-only
-    guarantee this gate rests on.
+    under `--noEmit`. None means the verification MUST NOT run: running without
+    `--tsBuildInfoFile` puts that file back inside the user's repository while
+    still reporting clean.
+
+    Containment is checked BEFORE anything is created. Creating first and
+    validating after still mutated the repo — with `TMPDIR` pointing inside the
+    project, or a temp directory symlinked into it, `makedirs` had already made
+    the directory by the time the check rejected it. Nothing here touches the
+    filesystem until the destination is proven to be outside the repository.
     """
     key = hashlib.sha1(os.path.abspath(pj_dir).encode("utf-8", "replace")).hexdigest()[:16]
     path = os.path.join(tempfile.gettempdir(), f"localcode-tscheck-{key}")
     try:
-        os.makedirs(path, exist_ok=True)
+        # realpath resolves symlinks in the existing prefix even though `path`
+        # itself does not exist yet — which is what catches a symlinked TMPDIR.
         real, repo = os.path.realpath(path), os.path.realpath(pj_dir)
-        # Must genuinely be outside the repo — a temp dir symlinked into the
-        # project would reintroduce the write.
         if real == repo or os.path.commonpath([real, repo]) == repo:
+            return None
+    except Exception:
+        return None
+    try:
+        os.makedirs(path, exist_ok=True)
+        # Re-check after creation: the pre-check proved the destination, this
+        # proves nothing swapped underneath it in between.
+        real_after = os.path.realpath(path)
+        if real_after == repo or os.path.commonpath([real_after, repo]) == repo:
             return None
         probe = os.path.join(path, ".probe")
         with open(probe, "w") as fh:

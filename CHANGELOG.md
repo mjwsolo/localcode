@@ -22,17 +22,28 @@ All notable changes to LocalCode will be documented here. The format follows
   installed source — putting real line breaks inside the system prompt. Every
   validator now uses `\A…\Z` anchors with `fullmatch`, and the rendered block is
   additionally checked for line breaks and fence characters before it is used.
+- **Unicode numeral homoglyphs no longer pass as version majors.** `\d` is
+  Unicode-aware on `str` patterns in Python 3, so a declared version of `١٩`
+  (Arabic-Indic) or an installed `１２` (fullwidth) validated and rendered as
+  `react@١٩` — defeating the homoglyph rejection the rest of the validator
+  implements. Character classes are now explicit ASCII ranges compiled with
+  `re.ASCII`, and the rendered block must be ASCII end to end.
 
 ### Fixed
 
-- **The completion gate no longer writes to your repository.** 0.3.56 ran
+- **The completion gate no longer creates or writes anything inside your
+  repository.** 0.3.56 ran
   `tsc -b`, which is a build, not a typecheck: it emitted JS, declarations and
   source maps into the working tree and always wrote `.tsbuildinfo`. Referenced
   projects are now type-checked read-only with `tsc -p <ref> --noEmit`, with
   tsc's incremental state redirected to a verified out-of-repo scratch
-  directory. If no such directory can be created the check REFUSES to run and
-  reports unverified — the earlier fallback ran without the redirect and put a
-  `.tsbuildinfo` back inside the project while reporting clean.
+  directory whose containment is validated BEFORE anything is created — with
+  `TMPDIR` set inside the project, or a temp directory symlinked into it, the
+  scratch directory itself used to be created in the repo and only rejected
+  afterwards. If no directory outside the repository can be verified, the check
+  REFUSES to run and reports unverified; the earlier fallback ran without the
+  redirect and put a `.tsbuildinfo` back inside the project while reporting
+  clean.
 - **TypeScript reference graphs are covered honestly.** A config carrying BOTH
   `references` and its own `include`/`files` is now type-checked itself instead
   of being treated as a pure solution file; an unresolvable reference is an

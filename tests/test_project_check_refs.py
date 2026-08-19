@@ -391,3 +391,74 @@ def test_scratch_dir_inside_the_repo_is_refused(tmp_path: Path, monkeypatch):
     monkeypatch.setattr("localcode.tools.project_check.tempfile.gettempdir",
                         lambda: str(inside))
     assert _tsbuildinfo_dir(str(tmp_path)) is None
+
+
+# ── scratch dir: containment is checked BEFORE anything is created ──────────
+
+def _tree(root: Path) -> set:
+    return {p.relative_to(root) for p in root.rglob("*")}
+
+
+def test_tmpdir_inside_the_repo_creates_nothing(tmp_path: Path, monkeypatch):
+    """`makedirs` ran before validation, so a TMPDIR pointing into the project
+    got `tmp/localcode-tscheck-*` created inside the user's repo — then the run
+    was correctly refused, but the write had already happened."""
+    repo = tmp_path / "project"
+    (repo / "src").mkdir(parents=True)
+    _scaffold(repo, {"compilerOptions": {"composite": True}, "include": ["src"]})
+    inside = repo / "tmp"
+    inside.mkdir()
+    monkeypatch.setattr("localcode.tools.project_check.tempfile.gettempdir",
+                        lambda: str(inside))
+    before = _tree(repo)
+    outcome = run_project_check_result(str(repo))
+    assert outcome.status == "failed"
+    assert _tree(repo) == before, "verification mutated the repository"
+
+
+def test_symlinked_tmpdir_into_the_repo_creates_nothing(tmp_path: Path, monkeypatch):
+    repo = tmp_path / "project"
+    (repo / "src").mkdir(parents=True)
+    _scaffold(repo, {"compilerOptions": {"composite": True}, "include": ["src"]})
+    real_target = repo / "realtmp"
+    real_target.mkdir()
+    link = tmp_path / "tmplink"
+    link.symlink_to(real_target)
+    monkeypatch.setattr("localcode.tools.project_check.tempfile.gettempdir",
+                        lambda: str(link))
+    before = _tree(repo)
+    outcome = run_project_check_result(str(repo))
+    assert outcome.status == "failed"
+    assert _tree(repo) == before, "verification mutated the repository via a symlink"
+
+
+def test_tmpdir_equal_to_the_repo_creates_nothing(tmp_path: Path, monkeypatch):
+    repo = tmp_path / "project"
+    (repo / "src").mkdir(parents=True)
+    _scaffold(repo, {"compilerOptions": {"composite": True}, "include": ["src"]})
+    monkeypatch.setattr("localcode.tools.project_check.tempfile.gettempdir",
+                        lambda: str(repo))
+    before = _tree(repo)
+    assert _tsbuildinfo_dir(str(repo)) is None
+    assert run_project_check_result(str(repo)).status == "failed"
+    assert _tree(repo) == before
+
+
+def test_normal_tmpdir_still_yields_a_usable_scratch_dir(tmp_path: Path, monkeypatch):
+    repo = tmp_path / "project"
+    (repo / "src").mkdir(parents=True)
+    _scaffold(repo, {"include": ["src"]})
+    outside = tmp_path / "tmp"
+    outside.mkdir()
+    monkeypatch.setattr("localcode.tools.project_check.tempfile.gettempdir",
+                        lambda: str(outside))
+    scratch = _tsbuildinfo_dir(str(repo))
+    assert scratch is not None and Path(scratch).is_dir()
+    assert repo.resolve() not in Path(scratch).resolve().parents
+    assert run_project_check_result(str(repo)).status == "clean"
+
+
+def test_unicode_whitespace_cannot_drop_a_real_comma():
+    """The comma lookback is ASCII-whitespace only; a U+00A0 between comma and
+    bracket must not be treated as a trailing comma."""
+    assert "," in _strip_jsonc('{"a":[1,\u00a0]}')
