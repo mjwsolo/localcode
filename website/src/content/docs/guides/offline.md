@@ -24,6 +24,14 @@ otherwise would be a lie.
   call; cached results still show).
 - **`web_search` and `web_fetch`**, by definition.
 - **Remote MCP servers**, and any shell command that fetches something.
+- **Enabling voice** for the first time, which downloads speech models.
+- **Picking an experimental model** whose runner localcode has to clone and
+  build from source.
+
+localcode also runs a small **connectivity probe** — a TCP connect to
+`1.1.1.1:443`, cached for 30 seconds, carrying no data. Offline it simply
+fails, and the model is told the machine has no network so it stops attempting
+downloads. Full inventory: [Network Boundary](/localcode/concepts/network-boundary).
 
 ## Preparing for an offline session
 

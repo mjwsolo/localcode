@@ -25,12 +25,16 @@ is only treated as a command when the first token is a recognised command name
 | `/voice` | Toggle voice mode (push-to-talk dictation into the input box) |
 | `/audio` | Toggle audio output (replies read aloud via macOS `say`) |
 | `/vision` | Toggle vision mode (let the model see images) |
+| `/search` | Toggle the in-conversation search bar (same as `Ctrl+F`) |
 | `/undo` | Revert the last file change the agent made (`/undo all` for every change) |
 | `/clear` | Clear conversation history |
 | `/exit` | Exit localcode |
 
-Also accepted as aliases: `/quit`, `/image` (same as `/paste`), `/copy`, and
-`/search` (a no-op — `Ctrl+F` is the canonical search entry point).
+`/search` is recognised but is not listed in the `/` palette, because `Ctrl+F`
+is the canonical way in; typing it toggles the same search bar.
+
+Also accepted: `/quit` (same as `/exit`), `/image` (same as `/paste`), and
+`/copy`.
 
 `/thinking` has no effect on models with no hidden-reasoning channel; localcode
 says so rather than pretending the setting took.

@@ -237,17 +237,24 @@ code {
   text-transform: uppercase;
   color: var(--lc-text-muted);
 }
-.lc-copy__cmd {
+.lc-copy__field {
   flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  gap: 0.6ch;
+  align-items: baseline;
   overflow-x: auto;
+}
+.lc-copy__cmd {
   white-space: nowrap;
   font-family: var(--lc-font-code);
   font-size: 0.95rem;
   color: var(--lc-text);
 }
+/* Outside .lc-copy__cmd so the manual-copy fallback can select the command
+   without dragging the prompt sigil into the selection. */
 .lc-copy__sigil {
   color: var(--lc-accent);
-  margin-right: 0.6ch;
   user-select: none;
 }
 .lc-copy__btn {
@@ -265,6 +272,10 @@ code {
   background: var(--lc-verify);
   border-color: var(--lc-verify);
   color: var(--lc-ink);
+}
+.lc-copy__btn[data-state='manual'] {
+  background: transparent;
+  color: var(--lc-accent);
 }
 
 /* ── Buttons ─────────────────────────────────────────── */
