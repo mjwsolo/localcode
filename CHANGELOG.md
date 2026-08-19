@@ -37,13 +37,24 @@ All notable changes to LocalCode will be documented here. The format follows
   source maps into the working tree and always wrote `.tsbuildinfo`. Referenced
   projects are now type-checked read-only with `tsc -p <ref> --noEmit`, with
   tsc's incremental state redirected to a verified out-of-repo scratch
-  directory whose containment is validated BEFORE anything is created — with
-  `TMPDIR` set inside the project, or a temp directory symlinked into it, the
-  scratch directory itself used to be created in the repo and only rejected
-  afterwards. If no directory outside the repository can be verified, the check
+  directory. Creation is anchored to an OPEN DIRECTORY HANDLE — the temp
+  directory is opened once, its containment proven by walking `..` with file
+  descriptors and comparing inodes, and the scratch directory created with
+  `os.mkdir(name, dir_fd=…)`, so neither a `TMPDIR` inside the project, a temp
+  directory symlinked into it, nor a symlink swapped in between the check and
+  the create can put anything in the repository. The path handed to tsc is the
+  kernel's own resolved path for the directory that was created, not the string
+  we started from. If no directory outside the repository can be verified, the check
   REFUSES to run and reports unverified; the earlier fallback ran without the
   redirect and put a `.tsbuildinfo` back inside the project while reporting
   clean.
+- **The TUI shows the completion gate's verdict.** `response_done` rebuilt the
+  displayed answer from the streamed model text alone, and everything the loop
+  appended afterwards went through `_render_markdown` to a stdout the TUI worker
+  redirects to `/dev/null` — so a turn persisted as `incomplete`, with a real
+  "typecheck was not verified" reason, rendered in the TUI as "Done". The final
+  text `ask()` returns is now authoritative, and any part of it the user has not
+  already seen is appended to the chat log.
 - **TypeScript reference graphs are covered honestly.** A config carrying BOTH
   `references` and its own `include`/`files` is now type-checked itself instead
   of being treated as a pure solution file; an unresolvable reference is an
