@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="localcode Finder Mark">
+  <title>localcode Finder Mark</title>
+  <!--
+    Finder Mark — two concentric orthogonal square rings with a solid core
+    offset down/right by 1.5 units. Hand-authored on a 32-unit grid; every
+    edge lands on a 0.5 step so the 16px favicon render stays crisp.
+    Rings inherit currentColor; the core uses the amber/ember accent.
+  -->
+  <g fill="none" stroke="currentColor" stroke-width="2.5">
+    <rect x="3" y="3" width="26" height="26" />
+    <rect x="9.5" y="9.5" width="13" height="13" />
+  </g>
+  <rect x="14.5" y="14.5" width="6" height="6" fill="var(--lc-mark-core, #B24A0B)" />
+</svg>
