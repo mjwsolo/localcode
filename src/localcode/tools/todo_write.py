@@ -134,6 +134,38 @@ def execute(ctx: ToolContext, args: dict) -> str:
         )
     cleaned = _normalize(todos)
     session = getattr(ctx.app, "session", None)
+    prev = list(getattr(session, "todos", []) or []) if session is not None else []
+
+    # CHURN GUARD. A weak model re-emits an essentially-identical plan over and
+    # over instead of executing it — a real Anki run made 43 todo_write calls,
+    # ALL the same list, completed-count never moved (37% of every action wasted).
+    # If the new list matches the stored one (same content + status, nothing newly
+    # completed), don't accept it blandly: refuse the no-op and steer the model to
+    # take a real action on the in_progress item. Escalate on repeated churn.
+    def _sig(lst: list[dict]) -> list[tuple[str, str]]:
+        return [(t.get("content", ""), t.get("status", "")) for t in lst]
+
+    if cleaned and _sig(cleaned) == _sig(prev):
+        churn = int(getattr(session, "_todo_churn", 0)) + 1 if session is not None else 1
+        if session is not None:
+            session._todo_churn = churn
+        cur = (
+            next((t for t in cleaned if t["status"] == "in_progress"), None)
+            or next((t for t in cleaned if t["status"] == "pending"), None)
+        )
+        target = cur.get("content", "the current step") if cur else "the current step"
+        lead = (
+            f"You have now re-sent the SAME plan {churn} times without doing anything — "
+            f"this is a loop."
+            if churn >= 2
+            else "Your plan is UNCHANGED from your last todo_write — rewriting it wastes the round."
+        )
+        return (
+            f"{lead} STOP calling todo_write. Take a real write_file / edit_file / bash "
+            f"action on: {target}. Only call todo_write again to mark a step COMPLETED."
+        )
+    if session is not None:
+        session._todo_churn = 0
 
     # Auto-clear once everything is done — an all-completed list means the
     # job is finished, so persist it as empty rather than a wall of [x].
