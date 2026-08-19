@@ -32,6 +32,7 @@ from . import (
     edit_file,
     glob_tool,
     grep,
+    inspect_symbol,
     launch_app,
     list_files,
     multi_edit,
@@ -60,6 +61,7 @@ _TOOLS: dict[str, tuple[dict, Callable[[ToolContext, dict], str]]] = {
     "code_navigation": (code_navigation.SCHEMA, code_navigation.execute),
     "launch_app":     (launch_app.SCHEMA,     launch_app.execute),
     "grep":           (grep.SCHEMA,           grep.execute),
+    "inspect_symbol": (inspect_symbol.SCHEMA, inspect_symbol.execute),
     "glob":           (glob_tool.SCHEMA,      glob_tool.execute),
     "list_files":     (list_files.SCHEMA,     list_files.execute),
     "web_search":     (web_search.SCHEMA,     web_search.execute),
@@ -83,6 +85,7 @@ _PUBLIC_TOOL_NAMES = [
     "code_navigation",
     "launch_app",
     "grep",
+    "inspect_symbol",
     "glob",
     "list_files",
     "web_search",
@@ -133,6 +136,9 @@ def schemas_for_goal(
         # Search/discovery — without these the model resorts to bash+grep / curl
         # for everything and the user sees the "google scraped HTML" failure mode.
         "grep", "glob", "web_search", "web_fetch", "skill",
+        # Read a third-party API's REAL signature from installed types instead of
+        # guessing it (the fsrs.repeat()[1] failure class). LSP-hover, on demand.
+        "inspect_symbol",
         # Sub-agent — lets the model spawn focused sub-tasks (explore/plan/verify
         # /general-purpose) so it doesn't burn its own context on long searches.
         "agent",
@@ -162,6 +168,7 @@ _MODULES = {
     "bash": bash,
     "launch_app": launch_app,
     "grep": grep,
+    "inspect_symbol": inspect_symbol,
     "glob": glob_tool,
     "list_files": list_files,
     "web_search": web_search,
