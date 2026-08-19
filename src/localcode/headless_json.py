@@ -198,6 +198,16 @@ def run_headless_json(config, args) -> int:
     _sys.stdout = devnull
 
     try:
+        # Connect user-configured MCP servers (~/.localcode/mcp.json) so headless
+        # `run --json` gets the same MCP tools (incl. LSP) as the TUI. Best-effort:
+        # a server that fails to start must never break the run, and no mcp.json
+        # is a fast no-op. Without this, MCP tools were silently absent in
+        # headless mode (CI, eval, scripting) even when configured.
+        try:
+            from .mcp import connect_all as _mcp_connect_all
+            _mcp_connect_all()
+        except Exception:
+            pass
         result_text = app.ask(args.goal, stream=True)
     except TimeoutError:
         return _emit_result("timeout", 124, f"run exceeded {args.timeout}s")
@@ -206,6 +216,11 @@ def run_headless_json(config, args) -> int:
     except Exception as e:  # noqa: BLE001 — headless: surface any failure as exit 1
         return _emit_result("error", 1, f"{type(e).__name__}: {e}")
     finally:
+        try:
+            from .mcp import shutdown_all as _mcp_shutdown_all
+            _mcp_shutdown_all()
+        except Exception:
+            pass
         if args.timeout and args.timeout > 0:
             import signal
             signal.alarm(0)
