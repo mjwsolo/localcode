@@ -25,13 +25,17 @@ import os
 import re
 import hashlib
 import shutil
+import stat
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 
 _TIMEOUT = 60.0
 _MAX_ERR_CHARS = 2500  # floor; scaled up to the real context window at call time
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
+# O_DIRECTORY exists on POSIX; 0 is a harmless no-op elsewhere.
+_O_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
 _TSCONFIG_MAX_BYTES = 512_000
 _MAX_TS_PROJECTS = 12   # projects type-checked per run
 _MAX_TS_NODES = 40      # tsconfig files visited while resolving the graph
@@ -328,45 +332,140 @@ def _detect_commands(repo_root: str) -> list[tuple[str, list[str] | None, str]]:
     return cmds
 
 
+def _dir_is_inside(fd: int, repo_id: tuple[int, int]) -> bool:
+    """Is the directory held by `fd` inside the repository?
+
+    Walks `..` upward using directory FILE DESCRIPTORS and compares
+    `(st_dev, st_ino)` — never paths. An open fd names an inode, so nothing an
+    attacker renames or symlinks afterwards can change what it refers to, and
+    there is no string for a symlink to redirect.
+    """
+    cur = os.dup(fd)
+    try:
+        while True:
+            st = os.fstat(cur)
+            if (st.st_dev, st.st_ino) == repo_id:
+                return True
+            parent = os.open("..", os.O_RDONLY | _O_DIRECTORY, dir_fd=cur)
+            try:
+                pst = os.fstat(parent)
+                if (pst.st_dev, pst.st_ino) == (st.st_dev, st.st_ino):
+                    return False          # `..` of the root is the root
+            except Exception:
+                os.close(parent)
+                raise
+            os.close(cur)
+            cur = parent
+    finally:
+        try:
+            os.close(cur)
+        except Exception:
+            pass
+
+
+def _path_of_fd(fd: int) -> str:
+    """The kernel's own fully-resolved path for an open directory, or "".
+
+    Needed because the caller must hand tsc a PATH: composing one from the
+    original string would send tsc back through the very symlink the fd checks
+    bypassed. This asks the kernel where the fd actually points, so the result
+    contains no symlinked components at all.
+    """
+    try:
+        if sys.platform == "linux":
+            return os.readlink(f"/proc/self/fd/{fd}")
+        import fcntl
+        _F_GETPATH = 50  # macOS / BSD
+        buf = fcntl.fcntl(fd, _F_GETPATH, b"\0" * 1024)
+        return buf.split(b"\0", 1)[0].decode("utf-8", "replace")
+    except Exception:
+        return ""
+
+
 def _tsbuildinfo_dir(pj_dir: str) -> str | None:
-    """A VERIFIED-writable scratch directory OUTSIDE the repo for tsc's
-    incremental state, or None.
+    """A scratch directory OUTSIDE the repo for tsc's incremental state, or None.
 
     `composite: true` implies `incremental`, so tsc writes a `.tsbuildinfo` even
     under `--noEmit`. None means the verification MUST NOT run: running without
     `--tsBuildInfoFile` puts that file back inside the user's repository while
     still reporting clean.
 
-    Containment is checked BEFORE anything is created. Creating first and
-    validating after still mutated the repo — with `TMPDIR` pointing inside the
-    project, or a temp directory symlinked into it, `makedirs` had already made
-    the directory by the time the check rejected it. Nothing here touches the
-    filesystem until the destination is proven to be outside the repository.
+    Creation is anchored to an OPEN DIRECTORY HANDLE, not to a path. Validating a
+    path and then calling `os.makedirs` on it is a TOCTOU: swapping the validated
+    prefix to a symlink in the window between the two created the directory
+    inside the repository, and a post-creation check could only notice the damage
+    afterwards. Here the temp directory is opened once, its containment is proven
+    from that fd, and the child is created with `os.mkdir(name, dir_fd=fd)` — a
+    single component resolved against the pinned inode, which a later swap of the
+    path prefix cannot redirect. `mkdir` never follows a symlink for the final
+    component either, so the child cannot be aimed elsewhere.
+
+    The path handed back is the KERNEL's path for the created directory, not the
+    string we started from — otherwise tsc would be sent back through the same
+    symlink the fd work just bypassed. If that path cannot be obtained or no
+    longer resolves to the directory we created, this returns None and the check
+    refuses to run.
+
+    Residual, stated plainly: tsc is a subprocess and takes a path, so an
+    attacker who can replace a REAL directory component of the resolved temp
+    path with a symlink after this returns could still redirect tsc's own write.
+    Closing that entirely would need tsc to accept a file descriptor, which it
+    does not. What is guaranteed is that LocalCode creates nothing inside the
+    repository and never hands out a path containing an attacker-supplied
+    symlink.
     """
     key = hashlib.sha1(os.path.abspath(pj_dir).encode("utf-8", "replace")).hexdigest()[:16]
-    path = os.path.join(tempfile.gettempdir(), f"localcode-tscheck-{key}")
+    name = f"localcode-tscheck-{key}"
+    parent = tempfile.gettempdir()
+    fd = None
+    child_fd = None
     try:
-        # realpath resolves symlinks in the existing prefix even though `path`
-        # itself does not exist yet — which is what catches a symlinked TMPDIR.
-        real, repo = os.path.realpath(path), os.path.realpath(pj_dir)
-        if real == repo or os.path.commonpath([real, repo]) == repo:
+        repo_st = os.stat(pj_dir)
+        repo_id = (repo_st.st_dev, repo_st.st_ino)
+        # Opening resolves any symlink in `parent` ONCE; every check below is
+        # against the resulting inode, so a later swap has nothing to act on.
+        fd = os.open(parent, os.O_RDONLY | _O_DIRECTORY)
+        if _dir_is_inside(fd, repo_id):
             return None
+        try:
+            os.mkdir(name, dir_fd=fd)
+        except FileExistsError:
+            pass
+        # Reject a pre-existing symlink squatting on the name: `mkdir` would have
+        # raised EEXIST for it, and following it is how the write escapes.
+        st = os.stat(name, dir_fd=fd, follow_symlinks=False)
+        if not stat.S_ISDIR(st.st_mode):
+            return None
+        child_fd = os.open(name, os.O_RDONLY | _O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+        if _dir_is_inside(child_fd, repo_id):
+            return None
+        # Prove it is writable, again relative to the pinned handle.
+        probe = os.open(".probe", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600,
+                        dir_fd=child_fd)
+        os.close(probe)
+        os.unlink(".probe", dir_fd=child_fd)
+        resolved = _path_of_fd(child_fd)
+        if not resolved or not os.path.isabs(resolved):
+            return None
+        # The kernel path must still name the directory we just created, and
+        # must still sit outside the repository.
+        st_named = os.stat(resolved)
+        st_child = os.fstat(child_fd)
+        if (st_named.st_dev, st_named.st_ino) != (st_child.st_dev, st_child.st_ino):
+            return None
+        repo_real = os.path.realpath(pj_dir)
+        if resolved == repo_real or os.path.commonpath([resolved, repo_real]) == repo_real:
+            return None
+        return resolved
     except Exception:
         return None
-    try:
-        os.makedirs(path, exist_ok=True)
-        # Re-check after creation: the pre-check proved the destination, this
-        # proves nothing swapped underneath it in between.
-        real_after = os.path.realpath(path)
-        if real_after == repo or os.path.commonpath([real_after, repo]) == repo:
-            return None
-        probe = os.path.join(path, ".probe")
-        with open(probe, "w") as fh:
-            fh.write("")
-        os.remove(probe)
-        return path
-    except Exception:
-        return None
+    finally:
+        for handle in (child_fd, fd):
+            if handle is not None:
+                try:
+                    os.close(handle)
+                except Exception:
+                    pass
 
 
 def _ts_check_targets(pj_dir: str) -> tuple[list[str], str]:

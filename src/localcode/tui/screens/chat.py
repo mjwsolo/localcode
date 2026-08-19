@@ -35,6 +35,29 @@ from textual.widgets import Input, Static, TextArea
 from textual.worker import Worker, WorkerState
 
 
+
+def unstreamed_tail(supplied: str, streamed: str) -> str:
+    """The part of the turn's authoritative final text the user has NOT seen.
+
+    `ask()` returns everything the loop decided — including text appended after
+    the model stopped streaming: the completion gate's "task remains incomplete"
+    message, the project typecheck's unverified reason, the grounded file
+    summary. Those were written with `_render_markdown` to stdout, which the TUI
+    worker redirects to /dev/null, so the TUI showed only the streamed model
+    text — "Done" for a turn persisted as `incomplete`.
+
+    Returns "" when the final text is just what was streamed, the tail when it
+    extends it, and the whole thing when the loop REPLACED the model's answer
+    (which is what the completion gate does).
+    """
+    final, shown = (supplied or "").strip(), (streamed or "").strip()
+    if not final or final == shown:
+        return ""
+    if shown and final.startswith(shown):
+        return final[len(shown):].strip()
+    return final
+
+
 class _NoTintInput(Input):
     """Input that doesn't highlight on focus.
 
@@ -4214,9 +4237,26 @@ class ChatScreen(Screen):
             # turn-end. Mid-stream delta would drift from reality.
             self._thinking_phase = "generating"
         elif t == "response_done":
-            # Finalize streaming display — text was already shown line by line
-            full_text = "".join(self._stream_buf)
+            # Finalize streaming display — text was already shown line by line.
+            #
+            # The AUTHORITATIVE result is the `text` payload (what `ask()`
+            # returned), not `_stream_buf`. The buffer holds only what the model
+            # streamed, so anything the loop decided AFTER the stream — the
+            # completion gate's "task remains incomplete" text, the project
+            # typecheck's unverified reason, the grounded file summary — was
+            # written with `_render_markdown` to stdout, which this worker
+            # redirects to /dev/null. The user saw "Done" while the persisted
+            # turn status was `incomplete`. Prefer the supplied text whenever it
+            # differs; fall back to the buffer when nothing was supplied.
+            streamed = "".join(self._stream_buf)
+            supplied = str(p.get("text", "") or "")
+            full_text = supplied or streamed
             self._last_assistant_text = full_text
+            # `finish_stream` deliberately ignores its argument and records only
+            # what was STREAMED (recording the cumulative text would duplicate
+            # every earlier round), so the tail has to be appended as its own
+            # block — otherwise it is never displayed and never enters
+            # `_history`, and the next `_rerender` would drop it anyway.
             log.finish_stream(full_text)
             # Rewrite the just-streamed assistant text through the Markdown
             # renderer. `stream_token` writes raw characters (fast path,
@@ -4234,6 +4274,9 @@ class ChatScreen(Screen):
             # apply — and `finish_stream` already recorded this round
             # into `_history`, which `_rerender` replays.
             log._rerender()
+            _tail = unstreamed_tail(supplied, streamed)
+            if _tail:
+                log.append_assistant(_tail)
             self._response_shown = True
             self._stream_buf.clear()
             # Refresh the context counter on every round_end so the
