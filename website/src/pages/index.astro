@@ -1,0 +1,277 @@
+---
+import '@fontsource/inter/400.css';
+import '@fontsource/inter/500.css';
+import '@fontsource/inter/600.css';
+import '@fontsource/martian-mono/400.css';
+import '@fontsource/martian-mono/600.css';
+import '@fontsource/commit-mono/400.css';
+import '../styles/tokens.css';
+import '../styles/landing.css';
+
+import FinderMark from '../components/FinderMark.astro';
+import CopyCommand from '../components/CopyCommand.astro';
+import TerminalDemo from '../components/TerminalDemo.astro';
+import MemoryChooser from '../components/MemoryChooser.astro';
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const href = (path: string) => `${base}/${path.replace(/^\//, '')}`;
+
+const title = 'localcode — Your coding agent. On your Mac.';
+const description =
+  'An open-source coding agent that runs local models on Apple Silicon. No API key. No remote inference.';
+
+const proof = [
+  {
+    title: 'Knows what fits',
+    body: `No fixed default model. localcode reads your Mac's unified memory
+      and recommends the most capable model whose weights fit inside the
+      memory budget — from a 16 GB MacBook up to a 128 GB workstation.`,
+    link: { label: 'Choose a model', href: href('start-here/choose-a-model') },
+  },
+  {
+    title: 'Finishes with evidence',
+    body: `A turn ends when the work is demonstrably done, not when the model
+      sounds confident. localcode builds a verification plan from your repo —
+      ruff, pytest, npm test, cargo test — and runs it.`,
+    link: { label: 'How verification works', href: href('concepts/verification') },
+  },
+  {
+    title: 'Designed for local models',
+    body: `Small quantised models fail in specific ways. The agent loop has
+      recovery paths for those failures — malformed tool calls, truncated
+      arguments, repair and retry — instead of assuming a frontier model.`,
+    link: { label: 'Architecture', href: href('concepts/architecture') },
+  },
+];
+---
+
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <meta name="theme-color" content="#14110F" />
+    <link rel="icon" href={href('favicon.svg')} type="image/svg+xml" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content={href('social-preview.svg')} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <script is:inline>
+      // Match Starlight's theme storage so the landing page and the docs
+      // agree on light/dark across navigation.
+      (() => {
+        const stored = (() => {
+          try {
+            return localStorage.getItem('starlight-theme');
+          } catch {
+            return null;
+          }
+        })();
+        const theme =
+          stored === 'light' || stored === 'dark'
+            ? stored
+            : window.matchMedia('(prefers-color-scheme: light)').matches
+              ? 'light'
+              : 'dark';
+        document.documentElement.dataset.theme = theme;
+      })();
+    </script>
+  </head>
+
+  <body>
+    <a class="lc-skip" href="#main">Skip to content</a>
+
+    <header class="lc-nav">
+      <div class="lc-nav__inner">
+        <a class="lc-lockup" href={href('/')} aria-label="localcode home">
+          <FinderMark size={28} />
+          <span>localcode</span>
+        </a>
+        <nav class="lc-nav__links" aria-label="Primary">
+          <a href={href('start-here/install')}>Install</a>
+          <a href={href('start-here/first-change')}>First change</a>
+          <a href={href('concepts/network-boundary')}>Network boundary</a>
+          <a href="https://github.com/mjwsolo/localcode">GitHub</a>
+        </nav>
+        <button type="button" class="lc-theme" id="lc-theme" aria-label="Toggle colour theme">
+          <span class="lc-theme__dot" aria-hidden="true"></span>
+          <span class="lc-theme__label">theme</span>
+        </button>
+      </div>
+    </header>
+
+    <main id="main">
+      <!-- Hero -->
+      <section class="lc-hero">
+        <div class="lc-hero__inner">
+          <div class="lc-hero__copy">
+            <p class="lc-eyebrow">Apache-2.0 · Apple Silicon · alpha</p>
+            <h1 class="lc-h1">
+              Your coding agent.<br /><span class="lc-h1__accent">On your Mac.</span>
+            </h1>
+            <p class="lc-sub">{description}</p>
+            <p class="lc-privacy">
+              <FinderMark size={18} class="lc-privacy__mark" />
+              Your code and prompts stay on your Mac unless you explicitly use a
+              network tool.
+            </p>
+
+            <CopyCommand command="pip install -U localcode" label="install" />
+
+            <div class="lc-cta">
+              <a class="lc-btn lc-btn--primary" href={href('start-here/first-change')}>
+                Make your first change
+              </a>
+              <a class="lc-btn" href={href('start-here/install')}>Install guide</a>
+            </div>
+            <p class="lc-fine">
+              Requires an Apple Silicon Mac, 16 GB unified memory, Python 3.10+,
+              and disk for one model. The first launch downloads a model —
+              after that, inference is local.
+            </p>
+          </div>
+
+          <div class="lc-hero__mark" aria-hidden="true">
+            <FinderMark size={340} class="lc-hero__markshape" />
+          </div>
+        </div>
+      </section>
+
+      <!-- Terminal -->
+      <section class="lc-section lc-section--dark">
+        <div class="lc-section__inner">
+          <h2 class="lc-h2">One turn, start to green</h2>
+          <p class="lc-lede">
+            Read the file. Make the edit. Run the repo's own checks. When they
+            fail, read the failure and fix it — then prove it passed.
+          </p>
+          <TerminalDemo />
+        </div>
+      </section>
+
+      <!-- Proof points -->
+      <section class="lc-section">
+        <div class="lc-section__inner">
+          <h2 class="lc-h2">Built for the constraint, not around it</h2>
+          <div class="lc-grid">
+            {proof.map((card, i) => (
+              <article class="lc-card">
+                <span class="lc-card__num">{String(i + 1).padStart(2, '0')}</span>
+                <h3 class="lc-card__title">{card.title}</h3>
+                <p class="lc-card__body">{card.body}</p>
+                <a class="lc-card__link" href={card.link.href}>{card.link.label} →</a>
+              </article>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <!-- Memory chooser -->
+      <section class="lc-section lc-section--alt">
+        <div class="lc-section__inner">
+          <h2 class="lc-h2">Your Mac picks the model</h2>
+          <p class="lc-lede">
+            Unified memory is the budget. Pick your Mac and see what localcode
+            recommends.
+          </p>
+          <MemoryChooser />
+        </div>
+      </section>
+
+      <!-- Network boundary -->
+      <section class="lc-section lc-section--dark">
+        <div class="lc-section__inner lc-boundary">
+          <div>
+            <h2 class="lc-h2">Where the boundary is</h2>
+            <p class="lc-lede">
+              localcode is honest about this rather than claiming to be
+              "fully offline". Inference runs on your machine; a few specific
+              actions reach the network, and you can see all of them.
+            </p>
+            <a class="lc-btn lc-btn--primary" href={href('concepts/network-boundary')}>
+              Read the network boundary
+            </a>
+          </div>
+          <ul class="lc-boundary__list">
+            <li class="is-local">
+              <span class="tag">local</span>
+              <span class="txt">Model inference — a llama.cpp server on your Mac</span>
+            </li>
+            <li class="is-local">
+              <span class="tag">local</span>
+              <span class="txt">
+                Your files, prompts, edits, and the event log in <code>.localcode/</code>
+              </span>
+            </li>
+            <li class="is-net">
+              <span class="tag">network</span>
+              <span class="txt">Downloading a model from Hugging Face (first run)</span>
+            </li>
+            <li class="is-net">
+              <span class="tag">network</span>
+              <span class="txt">
+                The <code>web_search</code> and <code>web_fetch</code> tools
+              </span>
+            </li>
+            <li class="is-net">
+              <span class="tag">network</span>
+              <span class="txt">Any MCP server you configure, and any command you approve</span>
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- Closing CTA -->
+      <section class="lc-final">
+        <div class="lc-section__inner">
+          <FinderMark size={44} />
+          <h2 class="lc-h2">Make your first change</h2>
+          <p class="lc-lede">
+            Point localcode at a repo you already have, ask for one small edit,
+            and watch it verify its own work.
+          </p>
+          <CopyCommand command="pip install -U localcode" label="install" />
+          <div class="lc-cta">
+            <a class="lc-btn lc-btn--primary" href={href('start-here/first-change')}>
+              Make your first change
+            </a>
+            <a class="lc-btn" href={href('start-here/choose-a-model')}>Choose a model</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="lc-foot">
+      <div class="lc-section__inner">
+        <a class="lc-lockup lc-lockup--sm" href={href('/')}>
+          <FinderMark size={20} />
+          <span>localcode</span>
+        </a>
+        <p>
+          Apache-2.0 · <a href="https://github.com/mjwsolo/localcode">github.com/mjwsolo/localcode</a>
+        </p>
+        <p class="lc-fine">
+          Alpha software, under active development. This site is a docs
+          preview — some pages are marked as stubs.
+        </p>
+      </div>
+    </footer>
+
+    <script>
+      const button = document.getElementById('lc-theme');
+      button?.addEventListener('click', () => {
+        const root = document.documentElement;
+        const next = root.dataset.theme === 'light' ? 'dark' : 'light';
+        root.dataset.theme = next;
+        try {
+          localStorage.setItem('starlight-theme', next);
+        } catch {
+          /* storage blocked — the toggle still works for this page view */
+        }
+      });
+    </script>
+  </body>
+</html>
