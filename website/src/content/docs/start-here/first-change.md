@@ -51,11 +51,19 @@ prompted. See [Permissions](/localcode/start-here/permissions).
 ## 4. Expect a failure, and expect a recovery
 
 A first attempt that fails a check is normal and is the interesting part. When
-`pytest -q` (or `npm test`, or `cargo test -q`) comes back red, localcode reads
-the failure and edits again rather than declaring success.
+the test command comes back red, the failure output goes back into the turn and
+the model edits again rather than declaring success.
 
-The turn ends on evidence — a passing check — not on the model sounding
-finished. See [Verification](/localcode/concepts/verification).
+Be clear about who does what here. The model chooses to run your tests;
+localcode does not run them for you. What localcode enforces is the *claim*: on
+a turn that changed code, if it never observed a build, typecheck, test or lint
+command that passed against the current file contents, it will not report
+success — it closes the turn saying the task remains incomplete instead. On
+build-shaped goals it additionally re-runs the project's own typecheck itself
+and refuses to end the turn while that is red.
+
+See [Verification](/localcode/concepts/verification) for exactly where the hard
+gate sits.
 
 ## 5. Review the diff
 

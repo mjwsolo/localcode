@@ -27,6 +27,15 @@ Verbose technical detail for the most recent error in a project is written to
 :::note[Preview stub]
 This preview site links to the generated table rather than duplicating it. A
 future pass should import `docs/ERRORS.md` into this site at build time so the
-codes are searchable here, and correct the two remediation strings in the
-registry that still reference a `localcode setup` command that does not exist.
+codes are searchable here.
+:::
+
+:::caution[The checked-in table is stale]
+`src/localcode/errors.py` is correct: it contains **no** reference to a
+`localcode setup` command. The committed `docs/ERRORS.md`, however, was
+generated from an older registry and still tells users to "Run `localcode
+setup`" under `E1001`, `E1002` and `E1003`. Regenerating the file resolves it —
+nothing in the registry needs editing. That regeneration is outside this
+preview's scope, which is why the link above can disagree with the current
+remediation text.
 :::

@@ -105,14 +105,36 @@ file is used as a distributed brand asset, convert the text to outlines.
 
 - **Repo-verified.** The model chooser numbers come from
   `localcode.models_catalog.recommend()`. Slash commands, CLI flags, config
-  keys, hook names, verification commands, autonomy levels and the JSONL event
-  shape were all read out of `src/localcode/`. The JSONL examples are the
-  checked-in fixtures in `tests/protocol_fixtures/`.
-- **Illustrative.** The terminal transcript on the landing page is a **design
-  preview**, labelled as such on the page itself. No repository contains a
-  recorded transcript of that flow. It shows no timings, token counts, or
-  throughput figures, because none of them would be real.
-- **No throughput claims** appear anywhere on the site.
+  keys, hook names, autonomy levels, the outbound-network inventory and the
+  verification gates were read out of `src/localcode/`.
+- **The JSONL event table is taken from the producer** — the
+  `OutputManager._emit_event` call sites plus `headless_json.py`. It is
+  deliberately *not* derived from `tests/protocol_fixtures/*.jsonl`, which
+  exercise a consumer and describe a different, hypothetical vocabulary.
+- **Illustrative.** The terminal transcript on the landing page
+  (`src/components/TerminalDemo.astro`) is a **design preview**, labelled as
+  such on the page. No repository artifact records that flow. The tool names
+  and `pytest -q` are real; every line of output text is written for the page.
+  It contains **no durations, timings, token counts or throughput figures** —
+  the check line reads `48 passed`, with no elapsed time.
+- **No performance claims** appear anywhere on the site. The one quantitative
+  figure that remains — TurboQuant's ~3.8× KV-cache compression versus `f16` —
+  is attributed in-page as the fork's own figure for the quantisation scheme,
+  not a measurement of any machine.
+
+## Deployment-time requirements
+
+Two things are deliberately left unset because this preview has no deployment
+origin yet. Both need doing before the site is published:
+
+1. **`og:image`.** No Open Graph image tag is emitted. OG requires an absolute
+   URL, and the only candidate origin
+   (`https://mjwsolo.github.io/localcode/`) currently serves the MkDocs site and
+   has no `social-preview.svg`. `public/social-preview.svg` is built and ready —
+   add the tag in `astro.config.mjs` once the real origin is known.
+2. **`site` / `base` in `astro.config.mjs`** are set for a GitHub Pages
+   project-site layout (`https://mjwsolo.github.io` + `/localcode`). The
+   sitemap is generated from them, so confirm they match the real deployment.
 
 ## Preview stubs
 
@@ -124,6 +146,13 @@ These pages carry an explicit "Preview stub" callout:
   importing it.
 - `models-and-performance` — no throughput numbers until there is a
   methodology and broader hardware coverage.
+
+## 404 page
+
+The site uses Starlight's built-in 404 route. A `src/content/docs/404.md` entry
+also resolves through the catch-all `[...slug]` route, which makes the
+production build emit a route-conflict warning — so there deliberately isn't
+one. If a custom 404 becomes worth the warning, that is where it goes.
 
 Fully written: Install, First Change, Choose a Model, Permissions, Network
 Boundary, Verification, Unified Memory, Offline, Headless, Skills & Hooks,
@@ -138,7 +167,9 @@ the GitHub Pages workflow repointed. Nothing here decides that.
 
 ## One correction worth making in the product
 
-`docs/ERRORS.md` — generated from `src/localcode/errors.py` — tells users to
-"Run `localcode setup`" in the remediation text for `E1001`, `E1002` and
-`E1003`. There is no `setup` subcommand. This preview does not repeat that
-instruction anywhere; fixing the registry strings is a separate change.
+The committed `docs/ERRORS.md` tells users to "Run `localcode setup`" under
+`E1001`, `E1002` and `E1003`. There is no `setup` subcommand — but the registry
+it is generated from, `src/localcode/errors.py`, is already correct and contains
+no such reference. The generated file is simply stale. Re-running
+`python -m localcode.errors --emit-docs > docs/ERRORS.md` fixes it; no source
+change is needed. Out of scope here, and noted on the Error Codes page.

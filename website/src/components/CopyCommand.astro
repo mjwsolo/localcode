@@ -12,7 +12,10 @@ const { command, label = 'Install' } = Astro.props;
 
 <div class="lc-copy" data-command={command}>
   <span class="lc-copy__label">{label}</span>
-  <code class="lc-copy__cmd"><span class="lc-copy__sigil">$</span>{command}</code>
+  <span class="lc-copy__field">
+    <span class="lc-copy__sigil" aria-hidden="true">$</span>
+    <code class="lc-copy__cmd">{command}</code>
+  </span>
   <button type="button" class="lc-copy__btn" aria-label={`Copy: ${command}`}>Copy</button>
 </div>
 
@@ -21,18 +24,35 @@ const { command, label = 'Install' } = Astro.props;
     const btn = root.querySelector<HTMLButtonElement>('.lc-copy__btn');
     const command = root.dataset.command ?? '';
     if (!btn || !command) continue;
+    const code = root.querySelector<HTMLElement>('.lc-copy__cmd');
+
+    // Fallback when the Clipboard API is unavailable or blocked (insecure
+    // origin, denied permission): select the command so ⌘C actually works,
+    // instead of telling the reader to press ⌘C over nothing.
+    const selectCommand = () => {
+      if (!code) return false;
+      const range = document.createRange();
+      range.selectNodeContents(code);
+      const selection = window.getSelection();
+      if (!selection) return false;
+      selection.removeAllRanges();
+      selection.addRange(range);
+      return true;
+    };
+
     btn.addEventListener('click', async () => {
       try {
         await navigator.clipboard.writeText(command);
         btn.textContent = 'Copied';
         btn.dataset.state = 'copied';
       } catch {
-        btn.textContent = 'Press ⌘C';
+        btn.textContent = selectCommand() ? 'Selected — press ⌘C' : 'Copy failed';
+        btn.dataset.state = 'manual';
       }
       setTimeout(() => {
         btn.textContent = 'Copy';
         delete btn.dataset.state;
-      }, 1600);
+      }, 2400);
     });
   }
 </script>

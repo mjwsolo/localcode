@@ -44,11 +44,13 @@ export default defineConfig({
         './src/styles/tokens.css',
         './src/styles/docs.css',
       ],
+      // NOTE: no `og:image` is emitted. Open Graph requires an ABSOLUTE URL,
+      // and this preview is not deployed anywhere yet — pointing it at
+      // https://mjwsolo.github.io/localcode/ would name an origin that
+      // currently serves the MkDocs site and has no social-preview.svg.
+      // `public/social-preview.svg` is built and ready; wire the tag up at
+      // deploy time. See website/README.md → "Deployment-time requirements".
       head: [
-        {
-          tag: 'meta',
-          attrs: { property: 'og:image', content: 'https://mjwsolo.github.io/localcode/social-preview.svg' },
-        },
         {
           tag: 'meta',
           attrs: { name: 'theme-color', content: '#14110F' },
