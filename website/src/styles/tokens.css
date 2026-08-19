@@ -1,11 +1,19 @@
 /*
   localcode design tokens.
 
-  Palette is fixed by the approved brand direction. Two accents exist because
-  the same hue cannot carry contrast on both grounds:
-    --lc-amber  is for DARK backgrounds only
-    --lc-ember  is for LIGHT backgrounds only
-  Use --lc-accent (resolved per theme below) rather than picking one by hand.
+  THE PALETTE CONTRACT
+  The brand accent is a single hue: 225. Two tokens exist for it only because
+  one lightness cannot carry contrast on both grounds:
+    --lc-accent-dark   #5b86ff  DARK grounds only  (the on-dark lift, hue 225)
+    --lc-accent-light  #2457e6  LIGHT grounds only (brand blue, hue 225)
+  Use --lc-accent, which resolves to the right one per theme, rather than
+  picking either by hand.
+
+  Green is NOT an accent. --lc-verify means one thing -- a check that passed --
+  and must never be used for emphasis, links, buttons or brand furniture.
+  --lc-fault is its opposite and is equally reserved.
+
+  Neutrals sit on hue ~210 so they read as the same family as the accent.
 */
 :root {
   --lc-ink: #0b0e11;
@@ -13,8 +21,12 @@
   --lc-surface: #171c21;
   --lc-muted-dark: #5a6672;
   --lc-muted-light: #8c98a3;
-  --lc-amber: #47e6a1;
-  --lc-ember: #2457e6;
+
+  /* Brand accent, hue 225. */
+  --lc-accent-dark: #5b86ff;
+  --lc-accent-light: #2457e6;
+
+  /* State only. Never brand. */
   --lc-verify: #3fcf8e;
   --lc-fault: #ff5a5f;
 
@@ -36,8 +48,8 @@
   --lc-text: var(--lc-ink);
   --lc-text-muted: var(--lc-muted-dark);
   --lc-line: #cdd3da;
-  --lc-accent: var(--lc-ember);
-  --lc-mark-core: var(--lc-ember);
+  --lc-accent: var(--lc-accent-light);
+  --lc-mark-core: var(--lc-accent-light);
 }
 
 /* Dark ground: bone text on ink, amber accent. */
@@ -47,8 +59,8 @@
   --lc-text: var(--lc-bone);
   --lc-text-muted: var(--lc-muted-light);
   --lc-line: #232a2d;
-  --lc-accent: var(--lc-amber);
-  --lc-mark-core: var(--lc-amber);
+  --lc-accent: var(--lc-accent-dark);
+  --lc-mark-core: var(--lc-accent-dark);
 }
 
 /* The terminal treatment is always a dark ground, so it always uses amber. */
@@ -58,6 +70,6 @@
   --lc-text: var(--lc-bone);
   --lc-text-muted: var(--lc-muted-light);
   --lc-line: #232a2d;
-  --lc-accent: var(--lc-amber);
-  --lc-mark-core: var(--lc-amber);
+  --lc-accent: var(--lc-accent-dark);
+  --lc-mark-core: var(--lc-accent-dark);
 }
