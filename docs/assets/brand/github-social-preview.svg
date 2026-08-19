@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640"
+     role="img" aria-labelledby="lc-social-title lc-social-desc">
+  <title id="lc-social-title">localcode — Your coding agent. On your Mac.</title>
+  <desc id="lc-social-desc">The localcode Finder Mark and lowercase wordmark on a dark
+    ground, with the tagline "Your coding agent. On your Mac.", the line "Local models on
+    Apple Silicon. No API key. Local inference by default.", and a footer reading
+    "Apache-2.0 · Apple Silicon · pip install -U localcode".</desc>
+
+  <!--
+    GitHub repository social preview — 1280x640, the exact size GitHub asks for
+    under Settings > General > Social preview. Purpose-built for that slot, not
+    a crop of the docs hero.
+
+    LAYOUT / CROP SAFETY
+    GitHub renders this at 2:1 on the repo page but consumers (Twitter/X, Slack,
+    Discord, link unfurlers) crop toward wider ratios and shrink it hard in
+    feeds. So:
+      - all content sits inside a 112px horizontal / 64px vertical safe inset
+        (~8.75% / 10%), leaving every edge expendable;
+      - the content block spans y 86..563, optically centred on the 320 midline,
+        so a top/bottom crop to 1.91:1 takes only empty ground;
+      - nothing smaller than 24px is used, which is ~6px at a 320px-wide
+        thumbnail — the wordmark and tagline stay the readable layer and the
+        footer degrades to texture rather than to noise.
+
+    COLOUR — the approved cool ramp, hue 225.
+      #0B0E11 ink ground · #F5F7F8 bone · #8C98A3 muted · #232A2D hairline
+      #5B86FF accent: the on-dark lift of brand #2457E6, same hue 225, raised
+      luminance so it holds against ink. Measured 5.80:1 on #0B0E11.
+
+    Deliberately absent: gradients, glow, blur, vortex/flow-field art, generated
+    or stock illustration, device mockups, and small print.
+
+    SOURCE OF TRUTH. This file is the editable original; the text is live <text>
+    so the tagline can be changed without a vector editor. The upload artifact is
+    the PNG exported beside it, so live text is correct here rather than a defect.
+    Re-export with: python3 scripts/export_social_preview.py
+  -->
+
+  <rect width="1280" height="640" fill="#0B0E11"/>
+  <rect x="0" y="0" width="1280" height="4" fill="#5B86FF"/>
+
+  <!-- Lockup: Finder Mark + lowercase wordmark, the approved identity. -->
+  <g transform="translate(112 86) scale(4.5)">
+    <g fill="none" stroke="#F5F7F8" stroke-width="2.5">
+      <rect x="3" y="3" width="26" height="26"/>
+      <rect x="9.5" y="9.5" width="13" height="13"/>
+    </g>
+    <rect x="14.5" y="14.5" width="6" height="6" fill="#5B86FF"/>
+  </g>
+
+  <text x="296" y="183" fill="#F5F7F8"
+        font-family="'Martian Mono', ui-monospace, SFMono-Regular, Menlo, monospace"
+        font-size="72" font-weight="600" letter-spacing="-2.6">localcode</text>
+
+  <!-- Tagline. -->
+  <text x="112" y="334" fill="#F5F7F8"
+        font-family="'Martian Mono', ui-monospace, SFMono-Regular, Menlo, monospace"
+        font-size="68" font-weight="600" letter-spacing="-2.2">Your coding agent.</text>
+  <text x="112" y="412" fill="#5B86FF"
+        font-family="'Martian Mono', ui-monospace, SFMono-Regular, Menlo, monospace"
+        font-size="68" font-weight="600" letter-spacing="-2.2">On your Mac.</text>
+
+  <text x="112" y="472" fill="#8C98A3"
+        font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+        font-size="27">Local models on Apple Silicon. No API key. Local inference by default.</text>
+
+  <!-- Footer strip. -->
+  <rect x="112" y="510" width="1056" height="1" fill="#232A2D"/>
+  <text x="112" y="556" fill="#8C98A3"
+        font-family="'Commit Mono', ui-monospace, SFMono-Regular, Menlo, monospace"
+        font-size="25">Apache-2.0 · Apple Silicon · <tspan fill="#F5F7F8">pip install -U localcode</tspan></text>
+</svg>
