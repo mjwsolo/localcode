@@ -14,13 +14,24 @@
  * visibly. Every input is content-hashed into the manifest: the SVG, each font
  * file, the playwright version, and the Chromium revision.
  *
- * The output hash is therefore stable for a given (inputs, renderer, platform)
- * triple. It is NOT claimed to be stable across operating systems: Skia's text
- * rasterisation and default font hinting differ between macOS, Linux and
- * Windows, so the same Chromium can emit a few different bytes for identical
- * glyph outlines. The manifest records the platform it was produced on, and
- * `--check` says so plainly rather than pretending a cross-platform mismatch is
- * a corruption.
+ * WHAT --check ENFORCES, IN ORDER
+ *   1. Renderer identity -- playwright version AND chromium revision -- is
+ *      compared first, on its own, and ANY drift fails. This is deliberately
+ *      not conditional on the pixels differing: a toolchain change that happens
+ *      to produce identical bytes today is still unrecorded, and the next edit
+ *      to the SVG would be rendered by something the manifest never saw.
+ *   2. Input hashes (SVG, each font) -- also independent of pixel equality.
+ *   3. The committed PNG matches the sha256 the manifest claims.
+ *   4. Pixels of a fresh render. Reported as an independent finding only when
+ *      1-3 are all clean, since otherwise they already name the cause.
+ *
+ * THE ONE TOLERATED DIFFERENCE
+ * A pixel-hash mismatch is downgraded to a NOTE in exactly one situation:
+ * identical inputs, identical renderer identity, and a different platform.
+ * Skia's text rasterisation and default font hinting differ between macOS,
+ * Linux and Windows, so the same Chromium can emit a few different bytes for
+ * identical glyph outlines. A platform change never excuses renderer or input
+ * drift -- those are checked before the exception can apply, and still fail.
  *
  *   cd website
  *   npm run social:export   # render + write the PNG and its manifest
@@ -32,12 +43,90 @@ import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
 
 // This script lives in website/scripts/ rather than the repo's own scripts/
 // because `playwright` resolves out of website/node_modules -- the only
 // lockfile-managed dependency tree in the repo. It writes to docs/assets/brand/
 // at the repo root, which is where the GitHub-facing brand assets live.
+/**
+ * Decide whether a re-render agrees with a recorded manifest. Pure: no I/O, no
+ * globals, so the matrix below can be tested without launching a browser.
+ *
+ * Order matters and is load-bearing. Renderer identity and inputs are compared
+ * independently of pixel equality, and BEFORE the cross-platform exception can
+ * apply, so neither a lucky byte-match nor a simultaneous OS change can hide a
+ * toolchain change.
+ *
+ * @param {{renderer: object, inputs: object}} current  freshly measured
+ * @param {{renderer: object, inputs: object, sha256: string}} want  the manifest
+ * @param {string} onDiskHash  sha256 of the committed PNG
+ * @param {string} freshHash   sha256 of the render just produced
+ * @returns {{problems: string[], notes: string[]}}
+ */
+export function evaluate(current, want, onDiskHash, freshHash) {
+  const problems = [];
+  const notes = [];
+
+  // (a) Renderer identity. Both fields count: a playwright bump can change
+  // rendering behaviour even when the Chromium revision is unchanged.
+  const RENDERER_FIELDS = [
+    ['playwright', 'playwright version'],
+    ['chromiumRevision', 'chromium revision'],
+  ];
+  const rendererDrift = RENDERER_FIELDS.filter(
+    ([key]) => current.renderer[key] !== want.renderer?.[key],
+  );
+  for (const [key, label] of rendererDrift) {
+    problems.push(
+      `renderer changed -- ${label}: ${want.renderer?.[key] ?? '(not recorded)'} -> ` +
+      `${current.renderer[key]}\n      re-export and review the rendered diff before committing`,
+    );
+  }
+
+  // (b) Inputs, also independent of pixel equality.
+  const inputsDrift = JSON.stringify(current.inputs) !== JSON.stringify(want.inputs);
+  if (inputsDrift) problems.push('inputs changed (SVG or fonts) -- re-export');
+
+  // (c) The committed PNG is the artifact people upload; it must match what the
+  // manifest claims, whatever this machine happens to re-render.
+  if (onDiskHash !== want.sha256) {
+    problems.push(
+      `PNG on disk does not match the manifest\n      disk ${onDiskHash}\n      want ${want.sha256}`,
+    );
+  }
+
+  const platformDrift = current.renderer.platform !== want.renderer?.platform;
+
+  // (d) Pixels. Only an independent finding when nothing above explains it.
+  if (freshHash !== want.sha256) {
+    if (rendererDrift.length || inputsDrift) {
+      // Already reported with the actual cause; don't restate it as a mystery.
+    } else if (platformDrift) {
+      // THE ONLY TOLERATED PIXEL DIFFERENCE: identical inputs, identical
+      // renderer identity, different OS.
+      notes.push(
+        `re-render differs, and this is ${current.renderer.platform} while the manifest\n` +
+        `        was produced on ${want.renderer?.platform}. Inputs and renderer identity are\n` +
+        `        unchanged, so this is platform-dependent text rasterisation, not corruption.`,
+      );
+    } else {
+      problems.push(
+        'same inputs, same renderer, same platform, DIFFERENT pixels\n' +
+        `      got  ${freshHash}\n      want ${want.sha256}`,
+      );
+    }
+  } else if (platformDrift) {
+    notes.push(
+      `manifest was produced on ${want.renderer?.platform}, this is ` +
+      `${current.renderer.platform} -- pixels match anyway.`,
+    );
+  }
+
+  return { problems, notes };
+}
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..', '..');
 const SVG = join(REPO, 'docs/assets/brand/github-social-preview.svg');
@@ -61,6 +150,12 @@ const die = (msg) => {
   console.error(`\n  ${msg}\n`);
   process.exit(1);
 };
+
+const isMain =
+  process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (!isMain) {
+  // Imported for `evaluate` alone -- do not render anything.
+} else {
 
 const check = process.argv.includes('--check');
 
@@ -140,37 +235,9 @@ if (check) {
   const want = JSON.parse(readFileSync(MANIFEST, 'utf8'));
   const onDisk = sha256(readFileSync(PNG));
 
-  const problems = [];
-  if (onDisk !== want.sha256) {
-    problems.push(`PNG on disk does not match the manifest\n      disk ${onDisk}\n      want ${want.sha256}`);
-  }
-  if (JSON.stringify(manifest.inputs) !== JSON.stringify(want.inputs)) {
-    problems.push('inputs changed (SVG or fonts) -- re-export');
-  }
-  // If the inputs already changed, a pixel difference is the expected
-  // consequence, not a second independent finding -- don't report it twice.
-  if (outHash !== want.sha256 && problems.length === 0) {
-    const samePlatform = manifest.renderer.platform === want.renderer.platform;
-    const sameRenderer =
-      manifest.renderer.chromiumRevision === want.renderer.chromiumRevision;
-    if (!samePlatform) {
-      console.log(
-        `  NOTE  re-render differs, and this is ${manifest.renderer.platform} while the\n` +
-        `        manifest was produced on ${want.renderer.platform}. Text rasterisation is\n` +
-        `        platform-dependent, so this is expected, not corruption.`,
-      );
-    } else if (!sameRenderer) {
-      problems.push(
-        `renderer changed: chromium-${want.renderer.chromiumRevision} -> ` +
-        `chromium-${manifest.renderer.chromiumRevision} -- re-export and review the diff`,
-      );
-    } else {
-      problems.push(
-        `same inputs, same renderer, same platform, DIFFERENT pixels\n` +
-        `      got  ${outHash}\n      want ${want.sha256}`,
-      );
-    }
-  }
+  const { problems, notes } = evaluate(manifest, want, onDisk, outHash);
+
+  for (const n of notes) console.log(`  NOTE  ${n}`);
   if (problems.length) die('FAILED\n  - ' + problems.join('\n  - '));
   console.log(
     `  OK  ${gotW}x${gotH}  ${png.length.toLocaleString()} bytes  sha256 ${outHash.slice(0, 16)}…\n` +
@@ -185,3 +252,5 @@ if (check) {
     `  chromium-${chromiumRevision} via playwright ${playwrightVersion} on ${manifest.renderer.platform}`,
   );
 }
+
+} // end CLI body

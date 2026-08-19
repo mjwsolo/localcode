@@ -12,6 +12,11 @@
     device mockups, and any generated or stock imagery. Every mark here is
     hand-placed on a 24-unit grid.
 
+    COLOUR RULE. #5b86ff is the accent (hue 225) and carries the prompt sigil.
+    Green is state-only: #3fcf8e marks a tool call that succeeded and the
+    passing test line, #ff5a5f marks the failing one. A prompt is not a pass,
+    so it is never green. This mirrors landing.css exactly.
+
     NOTE: the wordmark and transcript are live <text>. Convert to outlines
     before using this file as a distributed asset — see website/README.md,
     "Outlined SVG text".
@@ -68,7 +73,7 @@
           font-size="13" letter-spacing="1.4">DESIGN PREVIEW</text>
 
     <g font-family="'Commit Mono', ui-monospace, SFMono-Regular, Menlo, monospace" font-size="20">
-      <text x="30" y="104"><tspan fill="#47e6a1">&gt;</tspan><tspan fill="#f5f7f8"> change parse_duration so it accepts "1h30m"</tspan></text>
+      <text x="30" y="104"><tspan fill="#5b86ff">&gt;</tspan><tspan fill="#f5f7f8"> change parse_duration so it accepts "1h30m"</tspan></text>
 
       <text x="30" y="160"><tspan fill="#3fcf8e">•</tspan><tspan fill="#f5f7f8"> read_file</tspan><tspan fill="#8c98a3">(src/timeutil.py)</tspan></text>
       <text x="54" y="196" fill="#7b8792">handles "90m" and "2h", not compound units</text>
