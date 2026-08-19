@@ -19,17 +19,34 @@ all MCP tools**. `suggest` mode is not a no-network mode. See
 
 ## 2. Autonomy levels
 
-| Level | File writes | Shell commands |
-| --- | --- | --- |
-| `suggest` | confirmed | every command confirmed |
-| `auto_edit` *(interactive default)* | no prompt | only risky-looking commands confirmed |
-| `full_auto` | no prompt | no prompt |
+| Level | File writes | `bash` | `background_process` |
+| --- | --- | --- | --- |
+| `suggest` | confirmed | every command confirmed | confirmed |
+| `auto_edit` *(interactive default)* | no prompt | confirmed if it matches the pattern lists | confirmed |
+| `full_auto` | no prompt | no prompt | no prompt |
 
-At `auto_edit`, "risky-looking" means a match against a small pattern list —
-piping a `curl`/`wget` download into a shell, `git push --force`, `sudo rm`,
-`git reset --hard origin` — or the destructive-pattern list. An ordinary
-`curl`, `pip install` or `npm install` runs **without** asking. If you want
-every command to stop, use `suggest`.
+**`background_process` is always confirmed** outside `full_auto`, regardless of
+what the command is — it hands a raw string straight to `/bin/sh` with none of
+the substring shortcuts `bash` gets. The only escape is `full_auto` or having
+already session-approved it.
+
+At `auto_edit`, a `bash` command is confirmed when it matches either of two
+lists:
+
+- **Risky shell patterns** — piping a `curl`/`wget` download into a shell,
+  `git push --force`, `sudo rm`, `git reset --hard origin`.
+- **The destructive substring list**, which is broad and does most of the work:
+  `rm -rf`, `rm -r`, `rmdir`, `git push`, `git reset --hard`, `sudo `,
+  `pip install`, `npm install`, `brew install`, `docker rm`, `kubectl delete`,
+  `DROP TABLE`, `DELETE FROM`, `python `, `python3 `, `node `, `npm run`,
+  `npm start`.
+
+So `pip install`, `npm install` and `npm run` **do** prompt at `auto_edit`.
+Matching is plain substring, so it fires inside a longer command line too.
+
+What does *not* prompt at this level is anything on neither list — `ls`,
+`cat`, `grep`, `pytest`, `cargo test`, or a bare `curl https://…` (only
+`curl … | sh` is caught). If you want every command to stop, use `suggest`.
 
 Writes into the agent's per-session notebook scratch directory are never
 prompted, at any level.
@@ -54,12 +71,20 @@ command approvals on and off from inside the TUI.
 A hard block runs before every tool dispatch in **all** modes, including
 `full_auto` and headless. It covers operations with no legitimate agent use:
 catastrophic shell (`rm -rf /`, `mkfs`, `dd of=/dev/…`, fork bombs) and writes
-to credential material — SSH private keys, `authorized_keys`, `.netrc`,
-`.npmrc`, `.pypirc`, `credentials.json`, `shadow`/`passwd`/`sudoers`, and
-anything under `.ssh`, `.aws`, `.gnupg` or `.config/gcloud`.
+to credential material.
+
+Blocked write targets are matched two ways — an exact **basename**
+(`id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`, `authorized_keys`,
+`known_hosts`, `.netrc`, `.npmrc`, `.pypirc`, `credentials`,
+`credentials.json`, `shadow`, `passwd`, `sudoers`) or an exact **path
+segment**: `.ssh`, `.aws`, `.gnupg`.
+
+Note that segment matching compares one path component at a time, so only
+single-component entries can ever match. Anything under `~/.config/gcloud`, for
+instance, is **not** covered by this list.
 
 These are refusals, not prompts. No autonomy level and no session approval
-turns them off.
+turns them off. It is a footgun guard, not a security boundary.
 
 ## Hooks can veto too
 
