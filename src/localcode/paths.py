@@ -118,8 +118,10 @@ def events_log_path(cwd: Optional[Path] = None) -> Path:
 
     Per-project (lives at `<project_root>/.localcode/events.jsonl`)
     so each project gets its own audit trail. Append-only; never
-    truncated. Designed to be tail-able with `jq` for live debugging
-    and uploadable to a remote sink later (Phase 2)."""
+    truncated. Local-only: nothing is uploaded anywhere. Designed to be
+    tail-able with `jq` for live debugging. Any future remote sink would
+    be a new opt-in feature that must strip user content first, not a
+    flag flip."""
     return project_state_dir(cwd) / "events.jsonl"
 
 
