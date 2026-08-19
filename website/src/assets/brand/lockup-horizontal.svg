@@ -10,7 +10,7 @@
     <rect x="3" y="3" width="26" height="26" />
     <rect x="9.5" y="9.5" width="13" height="13" />
   </g>
-  <rect x="14.5" y="14.5" width="6" height="6" fill="var(--lc-mark-core, #B24A0B)" />
+  <rect x="14.5" y="14.5" width="6" height="6" fill="var(--lc-mark-core, #2457E6)" />
   <text x="44" y="22" fill="currentColor"
         font-family="'Martian Mono', 'Commit Mono', ui-monospace, SFMono-Regular, Menlo, monospace"
         font-size="17" font-weight="600" letter-spacing="-0.4">localcode</text>
