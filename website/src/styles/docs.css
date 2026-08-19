@@ -13,7 +13,10 @@
   --sl-color-accent-low: #4a2e07;
   --sl-color-accent: #b8790f;
   --sl-color-accent-high: var(--lc-amber);
+  /* Starlight's scale runs white -> gray-1..7 -> black as "brightest text" to
+     "page ground". In dark mode that reads literally. */
   --sl-color-white: var(--lc-bone);
+  --sl-color-text-invert: var(--lc-ink);
   --sl-color-gray-1: #eae5dd;
   --sl-color-gray-2: #cec7bd;
   --sl-color-gray-3: var(--lc-muted-light);
@@ -33,7 +36,11 @@
   --sl-color-accent-low: #f3e2d2;
   --sl-color-accent: var(--lc-ember);
   --sl-color-accent-high: #7c330a;
-  --sl-color-white: #ffffff;
+  /* In LIGHT mode Starlight INVERTS the scale: --sl-color-white is the
+     strongest *foreground* (headings, site title) and --sl-color-black is the
+     page ground. Mapping white -> #fff here put white headings on bone. */
+  --sl-color-white: var(--lc-ink);
+  --sl-color-text-invert: var(--lc-bone);
   --sl-color-gray-1: #221e1a;
   --sl-color-gray-2: #3d3831;
   --sl-color-gray-3: var(--lc-muted-dark);

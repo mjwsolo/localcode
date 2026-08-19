@@ -67,4 +67,9 @@ which changes who sees your queries. See
 | `mcp.json` | MCP server definitions (key: `mcpServers`) |
 | `hooks.toml` | Global lifecycle hooks |
 | `skills/` | Global skills + `registry.json` |
-| `telemetry/turns.jsonl` | Local-only turn traces |
+
+UI turn traces are **not** written to `~/.localcode/telemetry/turns.jsonl` any
+more; that file was consolidated into the per-project
+`<project>/.localcode/events.jsonl` as `ui_turn_end` records. Set
+`LOCALCODE_TELEMETRY=0` to stop emitting them. Either way the data stays on your
+machine.
