@@ -13,7 +13,9 @@
     "build": "astro build",
     "preview": "astro preview",
     "check": "astro check",
-    "lint": "astro check"
+    "lint": "astro check",
+    "social:export": "node scripts/export-social-preview.mjs",
+    "social:check": "node scripts/export-social-preview.mjs --check"
   },
   "dependencies": {
     "@astrojs/starlight": "^0.41.7",
@@ -25,6 +27,7 @@
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.4",
+    "playwright": "^1.62.1",
     "typescript": "^5.9.2"
   }
 }

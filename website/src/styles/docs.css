@@ -10,9 +10,9 @@
 }
 
 :root[data-theme='dark'] {
-  --sl-color-accent-low: #0d3d2a;
-  --sl-color-accent: #1f9c68;
-  --sl-color-accent-high: var(--lc-amber);
+  --sl-color-accent-low: #132a5c;
+  --sl-color-accent: #3763d8;
+  --sl-color-accent-high: var(--lc-accent-dark);
   /* Starlight's scale runs white -> gray-1..7 -> black as "brightest text" to
      "page ground". In dark mode that reads literally. */
   --sl-color-white: var(--lc-bone);
@@ -29,12 +29,12 @@
   --sl-color-bg-sidebar: var(--lc-ink);
   --sl-color-bg-inline-code: #1e252b;
   --sl-color-hairline-light: #232a2d;
-  --sl-color-text-accent: var(--lc-amber);
+  --sl-color-text-accent: var(--lc-accent-dark);
 }
 
 :root[data-theme='light'] {
   --sl-color-accent-low: #dbe4fd;
-  --sl-color-accent: var(--lc-ember);
+  --sl-color-accent: var(--lc-accent-light);
   --sl-color-accent-high: #15308c;
   /* In LIGHT mode Starlight INVERTS the scale: --sl-color-white is the
      strongest *foreground* (headings, site title) and --sl-color-black is the
@@ -54,7 +54,7 @@
   --sl-color-bg-sidebar: var(--lc-bone);
   --sl-color-bg-inline-code: #e2e8ee;
   --sl-color-hairline-light: #cdd3da;
-  --sl-color-text-accent: var(--lc-ember);
+  --sl-color-text-accent: var(--lc-accent-light);
 }
 
 /* Display face for headings — geometric, lowercase-friendly. */

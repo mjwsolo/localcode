@@ -56,8 +56,9 @@ website/
 
 **Tokens** (`src/styles/tokens.css`) — the palette is fixed:
 
-The palette is a **cool ramp built on hue 225**. Neutrals sit on hue ~210 so
-they read as the same family; the accent is the only saturated hue.
+**The brand accent is one hue: 225.** Neutrals sit on hue ~210 so they read as
+the same family. Two accent tokens exist only because one lightness cannot carry
+contrast on both grounds.
 
 | Token | Value | Use |
 | --- | --- | --- |
@@ -66,24 +67,26 @@ they read as the same family; the accent is the only saturated hue.
 | `--lc-surface` | `#171C21` | Raised dark surface |
 | `--lc-muted-dark` | `#5A6672` | Muted text on light |
 | `--lc-muted-light` | `#8C98A3` | Muted text on dark |
-| `--lc-amber` | `#47E6A1` | Accent — **dark backgrounds only** |
-| `--lc-ember` | `#2457E6` | Accent — **light backgrounds only**, hue 225 |
-| `--lc-verify` | `#3FCF8E` | Pass / verified |
-| `--lc-fault` | `#FF5A5F` | Fail |
+| `--lc-accent-dark` | `#5B86FF` | Accent — **dark grounds only**, hue 225 |
+| `--lc-accent-light` | `#2457E6` | Accent — **light grounds only**, hue 225 |
+| `--lc-verify` | `#3FCF8E` | **State only** — a check that passed |
+| `--lc-fault` | `#FF5A5F` | **State only** — a check that failed |
 
 Use `--lc-accent`, which resolves to the correct one for the active theme,
-rather than picking one by hand.
+rather than picking either by hand.
 
-Two names are now historical: `--lc-amber` and `--lc-ember` are the dark-ground
-and light-ground accents, not the warm hues they were originally named for. The
-names are kept so the ~40 call sites across the landing page, the docs theme and
-the brand SVGs stay in sync; renaming them is a mechanical follow-up, not a
-design decision.
+**Green is not an accent.** `--lc-verify` means exactly one thing — a check that
+passed — and must never be used for emphasis, links, buttons or brand furniture.
+`--lc-fault` is its opposite and is equally reserved. Its only uses are the
+transcript's pass/fail lines and the copy button's "copied" confirmation; the
+network-boundary list deliberately does *not* colour its "local" chip green,
+because being local is a category, not a pass.
 
-`#5B86FF` appears in the standalone brand SVGs (favicon, social preview,
-banner). It is the on-dark lift of `#2457E6` — same hue 225, raised luminance so
-the mark's core holds against ink at 16px. Those files cannot read CSS custom
-properties, which is why the value is written out.
+`#5B86FF` is `--lc-accent-dark` written out. It appears literally in the
+standalone brand SVGs (favicon, social preview, GitHub card, banner) because
+those files are rendered outside the page and cannot read CSS custom
+properties. It is the on-dark lift of `#2457E6`: same hue 225, raised luminance
+so it holds against ink — 5.80:1, and 5.12:1 on `--lc-surface`.
 
 **Finder Mark** — two concentric orthogonal square rings with a solid core
 offset down and right, hand-authored on a 32-unit grid with every edge on a
@@ -113,6 +116,9 @@ flat geometry on the same grid and stroke weights. The two marks share a
 construction — a frame with an offset solid core — so they read as one family,
 but the project does currently carry two. See `docs/assets/brand/README.md`,
 "Open decision: two marks".
+
+It is exported from this package — `npm run social:export` / `npm run
+social:check` — because `playwright` and the webfonts live in this lockfile.
 
 Deliberately absent everywhere: gradients, glow, blur, glassmorphism, flow
 fields, particle or neural meshes, device mockups, and any generated or stock

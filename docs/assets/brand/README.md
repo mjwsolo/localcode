@@ -8,10 +8,12 @@ for, so GitHub stores it without re-cropping.
 
 | | |
 | --- | --- |
-| Upload artifact | `github-social-preview.png` — 1280×640, 59 KB, PNG |
+| Upload artifact | `github-social-preview.png` — 1280×640, 59,985 bytes, PNG |
 | Editable source | `github-social-preview.svg` — 1280×640, ~4.8 KB, live `<text>` |
 | Mark source | `house-mark.svg` — 32×32, themeable |
-| Re-export | `python3 scripts/export_social_preview.py` |
+| Build record | `github-social-preview.manifest.json` — output hash + renderer |
+| Re-export | `cd website && npm run social:export` |
+| Verify | `cd website && npm run social:check` |
 
 To preview before uploading, just open either file — `open
 docs/assets/brand/github-social-preview.png`. The SVG needs a browser (or the
@@ -19,18 +21,45 @@ docs site) for the webfonts to resolve; the PNG has them baked in.
 
 ### Editing it
 
-Change the text in the SVG, then re-run the exporter:
+Change the text in the SVG, then re-export:
 
 ```sh
-python3 scripts/export_social_preview.py
+cd website
+npm run social:export     # rewrites the PNG and the manifest
+npm run social:check      # verifies; writes nothing; non-zero on mismatch
 ```
 
-The exporter renders through headless Chrome with Martian Mono, Inter and
-Commit Mono loaded from `website/node_modules/@fontsource`, so **`npm ci` must
-have run in `website/` first**. Anything else (rsvg-convert, cairosvg, Preview)
-will silently substitute a system font, because those faces are not installed
-system-wide. The script refuses to write the PNG unless the render came out at
-exactly 1280×640.
+Both need `npm ci` to have run in `website/`, plus `npx playwright install
+chromium` once.
+
+The exporter loads Martian Mono, Inter and Commit Mono from
+`website/node_modules/@fontsource` and renders through a browser. Do not
+substitute rsvg-convert, cairosvg or Preview: the card's text is live `<text>`
+in faces that are not installed system-wide, so those tools quietly swap in a
+system font and produce something that looks close enough to ship and is wrong.
+
+#### What is actually pinned, and what is not
+
+The renderer is the Chromium build pinned by the `playwright` version in
+`website/package-lock.json` — currently **playwright 1.62.1 → chromium-1234** —
+not whatever Chrome the machine happens to have. Bumping playwright changes the
+renderer deliberately and visibly instead of silently.
+
+Every input is content-hashed into `github-social-preview.manifest.json`: the
+SVG, each font file, the playwright version, the Chromium revision, and the
+sha256 of the PNG itself. `npm run social:check` re-renders and compares, so a
+changed font package, an edited SVG, a bumped renderer or a corrupted PNG all
+fail loudly rather than passing on a dimension check.
+
+**The limitation, stated plainly:** the output hash is reproducible for a given
+(inputs, renderer, **platform**) triple, not universally. Skia's text
+rasterisation and default hinting differ between macOS, Linux and Windows, so
+the same Chromium can emit slightly different bytes for identical glyph
+outlines. The manifest records the platform it was produced on
+(`darwin-arm64`), and on a different platform `social:check` reports that as a
+NOTE rather than as corruption. Byte-identical output across operating systems
+would need a containerised renderer, which is more machinery than one brand
+asset justifies.
 
 ### What it is built from — and where the mark comes from
 
