@@ -103,6 +103,12 @@ social use, built from the same two parts: mark + wordmark on the left, a flat
 version of the transcript panel on the right. Flat fills, orthogonal geometry,
 one accent hue.
 
+**GitHub repository social preview** lives outside this directory, at
+`docs/assets/brand/github-social-preview.{svg,png}`, because it is a repo-level
+asset uploaded through GitHub Settings rather than something the site serves.
+It reuses the same lockup and the same hue-225 ramp but is laid out for that
+slot, not cropped from this hero. See `docs/assets/brand/README.md`.
+
 Deliberately absent everywhere: gradients, glow, blur, glassmorphism, flow
 fields, particle or neural meshes, device mockups, and any generated or stock
 imagery.
