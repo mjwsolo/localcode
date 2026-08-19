@@ -200,3 +200,55 @@ def test_no_line_break_survives_into_the_prompt(tmp_path: Path):
     fence = line.split("<untrusted-data", 1)[1]
     payload = fence.split("majors, not from memory): ", 1)[1].split("\n", 1)[0]
     assert payload == "react@19"
+
+
+# ── Unicode numeral homoglyphs (`\\d` is Unicode-aware in Python 3) ───────────
+
+UNICODE_MAJORS = [
+    ("arabic-indic", "\u0661\u0669"),      # ١٩
+    ("fullwidth", "\uff11\uff12"),         # １２
+    ("devanagari", "\u0967\u0969"),        # १३
+    ("bengali", "\u09e7\u09ec"),           # ১৬
+    ("nko", "\u07c1\u07c9"),               # ߁߉
+    ("mathematical-bold", "\U0001d7ff"),    # 𝟿
+]
+
+
+@pytest.mark.parametrize("family,digits", UNICODE_MAJORS)
+def test_declared_major_rejects_unicode_numerals(family: str, digits: str):
+    assert _declared_major(f"{digits}.0.0") == ""
+    assert _declared_major(digits) == ""
+
+
+@pytest.mark.parametrize("family,digits", UNICODE_MAJORS)
+def test_installed_major_rejects_unicode_numerals(tmp_path: Path, family: str, digits: str):
+    repo = _repo(tmp_path, {"dependencies": {"react": "workspace:*"}},
+                 installed={"react": f"{digits}.3.0"})
+    assert _installed_major(repo, "react") == ""
+
+
+@pytest.mark.parametrize("family,digits", UNICODE_MAJORS)
+def test_unicode_majors_never_render(tmp_path: Path, family: str, digits: str):
+    repo = _repo(tmp_path, {"dependencies": {"react": f"{digits}.0.0", "dexie": "^4.0.1"}},
+                 installed={"vue": f"{digits}.0.0"})
+    versions, _ = _key_dep_versions(repo)
+    assert versions == "dexie@4"
+    assert not any(c in versions for c in digits)
+
+
+def test_the_whole_block_is_ascii(tmp_path: Path):
+    """Whole-block invariant: npm names and SemVer majors are ASCII by
+    definition, so anything else in the rendered text is a validator escape."""
+    repo = _repo(tmp_path, {"dependencies": {
+        "react": "\u0661\u0669.0.0", "vue": "\uff11\uff12.0.0", "dexie": "^4.0.1"}})
+    versions, _ = _key_dep_versions(repo)
+    assert versions.isascii() and versions == "dexie@4"
+
+
+def test_validators_are_compiled_ascii():
+    """Guards against a future edit reintroducing `\\d`/`\\w`."""
+    import re as _re
+    from localcode.agent.prompts import _MAJOR_RE, _NPM_NAME_RE
+    assert _MAJOR_RE.flags & _re.ASCII and _NPM_NAME_RE.flags & _re.ASCII
+    for rx in (_MAJOR_RE, _NPM_NAME_RE):
+        assert "\\d" not in rx.pattern and "\\w" not in rx.pattern

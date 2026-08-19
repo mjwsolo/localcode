@@ -186,7 +186,7 @@ def project_stack_line(repo_root: Path) -> str:
         versions, source_kind = "", ""
     # Belt and braces: whatever the validators believe, nothing containing a
     # line break or a fence character is ever rendered into the system prompt.
-    if any(c in versions for c in "\n\r<>"):
+    if any(c in versions for c in "\n\r<>") or not versions.isascii():
         versions = ""
     if versions:
         # Environment ground truth: naming the ACTUAL major versions stops the
@@ -229,10 +229,18 @@ _DEP_BLOCK_MAX = 400         # chars of rendered "name@major, …" text
 # also matches immediately BEFORE a trailing newline, so `^...$` accepted
 # `some-name\n` and `1\n` — putting a real newline inside the system prompt.
 # Every validator in this path uses `\A…\Z` + `fullmatch` for that reason.
+#
+# CHARACTER CLASSES: spelled out as ASCII ranges, never `\d`/`\w`/`\s`, and
+# compiled with `re.ASCII`. On `str` patterns those shorthands are UNICODE-aware,
+# so `\d{1,4}` happily accepted `١٩` (Arabic-Indic), `１２` (fullwidth) and every
+# other numeral family — homoglyph majors sailing past a validator whose entire
+# job is to reject homoglyphs. Both flags are belt and braces: the explicit
+# ranges are what actually enforce it.
 _NPM_NAME_RE = re.compile(
-    r"\A(?:@[a-z0-9][a-z0-9._-]{0,63}/)?[a-z0-9][a-z0-9._-]{0,63}\Z"
+    r"\A(?:@[a-z0-9][a-z0-9._-]{0,63}/)?[a-z0-9][a-z0-9._-]{0,63}\Z",
+    re.ASCII,
 )
-_MAJOR_RE = re.compile(r"\A\d{1,4}\Z")
+_MAJOR_RE = re.compile(r"\A[0-9]{1,4}\Z", re.ASCII)
 
 
 def _installed_major(repo_root: Path, name: str) -> str:
