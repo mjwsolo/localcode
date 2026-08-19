@@ -26,14 +26,19 @@ straight into the chat screen.
 Small and concrete beats broad and vague — especially with a local model.
 
 ```text
-> in src/timeutil.py, make parse_duration accept compound units like "1h30m"
+> in src/timeutil.py, change parse_duration to accept compound units like "1h30m"
 ```
+
+Start with a verb localcode's goal classifier recognises as an edit — `fix`,
+`change`, `edit`, `update`, `refactor`, `rename`, `remove`, `add`. That is what
+puts the turn inside the evidence gate described below; *"make parse_duration
+accept 1h30m"* classifies as a general task and is not gated.
 
 Good first asks:
 
 - "add a `--json` flag to the `report` command"
-- "this function returns `None` on empty input — raise `ValueError` instead"
-- "write a test for the branch in `parse_config` that handles a missing key"
+- "change `parse_config` to raise `ValueError` on empty input instead of returning `None`"
+- "add a test for the missing-key branch in `parse_config`"
 
 ## 3. Watch the loop
 
@@ -43,10 +48,13 @@ A turn is a sequence of tool calls, and localcode shows each one:
 - `edit_file` / `multi_edit` / `write_file` — the actual change
 - `bash` — running your repo's checks
 
-By default localcode runs at the **auto_edit** autonomy level: reads and file
-edits are auto-approved, while shell commands and installs stop and ask you
-first. So the `bash` step that runs your tests is the point where you'll be
-prompted. See [Permissions](/localcode/start-here/permissions).
+By default localcode runs at the **auto_edit** autonomy level: file edits go
+through without asking, and so do ordinary shell commands — only
+risky-looking ones (piping a download into a shell, a force-push, `sudo rm`)
+stop for confirmation. If you want every command to ask, start with
+`LOCALCODE_AUTONOMY=suggest localcode`. Note that `web_search`, `web_fetch` and
+MCP tools never prompt at any level. See
+[Permissions](/localcode/start-here/permissions).
 
 ## 4. Expect a failure, and expect a recovery
 
@@ -55,15 +63,16 @@ the test command comes back red, the failure output goes back into the turn and
 the model edits again rather than declaring success.
 
 Be clear about who does what here. The model chooses to run your tests;
-localcode does not run them for you. What localcode enforces is the *claim*: on
-a turn that changed code, if it never observed a build, typecheck, test or lint
-command that passed against the current file contents, it will not report
+localcode does not run them for you. What localcode enforces is the *claim*,
+and only for requests it classified as a build or an edit: if such a turn
+changed code files and localcode never observed a build, typecheck, test or
+lint command that passed against the current file contents, it will not report
 success — it closes the turn saying the task remains incomplete instead. On
-build-shaped goals it additionally re-runs the project's own typecheck itself
-and refuses to end the turn while that is red.
+build-shaped goals it additionally runs a typecheck itself and refuses to end
+the turn while that is red.
 
-See [Verification](/localcode/concepts/verification) for exactly where the hard
-gate sits.
+A request that classified as a general task carries no such guarantee. See
+[Verification](/localcode/concepts/verification) for the exact scope.
 
 ## 5. Review the diff
 

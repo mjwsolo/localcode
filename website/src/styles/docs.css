@@ -58,18 +58,22 @@
 }
 
 /* Display face for headings — geometric, lowercase-friendly. */
-.sl-markdown-content h1,
-.sl-markdown-content h2,
-.sl-markdown-content h3,
-.content-panel h1,
-site-title {
+.sl-markdown-content :is(h1, h2, h3),
+.content-panel h1 {
   font-family: var(--lc-font-display);
   letter-spacing: -0.02em;
 }
 
-.sl-markdown-content h2 {
-  border-top: 1px solid var(--sl-color-hairline-light);
-  padding-top: 1.25rem;
+/* Section rule above each h2. Drawn as a block ::before rather than a
+   border-top: Starlight wraps heading content in an inline anchor, and a
+   border on the h2 itself painted a second line straight through wrapped
+   heading text at narrow widths. */
+.sl-markdown-content h2::before {
+  content: '';
+  display: block;
+  height: 1px;
+  margin-bottom: 1.25rem;
+  background: var(--sl-color-hairline-light);
 }
 
 /* Callout used on preview-stub pages. */
