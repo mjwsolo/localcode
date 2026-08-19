@@ -339,6 +339,23 @@ def dispatch_result(name: str, ctx: ToolContext, args: dict) -> ToolResult:
     raw_result = executor(ctx, args)
     result = raw_result if isinstance(raw_result, ToolResult) else _normalize_result(clean, args, str(raw_result))
 
+    # Auto-surface typecheck diagnostics after a successful CODE edit — the weak
+    # model rarely runs them itself, so we feed them back in-context. Debounced +
+    # new-errors-only (see diagnostics_after_edit), so it can't dominate the edit
+    # path or nag with the same wall of errors.
+    if clean in ("edit_file", "write_file", "multi_edit", "append_file") and result.ok:
+        _path = str((args or {}).get("path") or (args or {}).get("file_path") or "")
+        if _path.rsplit(".", 1)[-1].lower() in (
+            "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "go", "rs", "vue", "svelte"
+        ):
+            try:
+                from .project_check import diagnostics_after_edit
+                _diag = diagnostics_after_edit(str(ctx.repo))
+                if _diag:
+                    result = ToolResult(text=result.text + _diag, ok=result.ok, facts=result.facts)
+            except Exception:
+                pass
+
     return result
 
 
