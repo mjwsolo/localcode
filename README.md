@@ -84,20 +84,20 @@ We want powerful, personal AI to be available to everyone, on any device and in 
 
 When it starts, localcode recommends the best model for **your Mac's RAM**. There is no fixed default. You can choose any model below, or select a different quant in the model picker.
 
-| Model | Size (quant) | Active params | Min RAM | Architecture |
-| --- | ---: | --- | ---: | --- |
-| Gemma 4 12B | 7.4 GB (Q4) | 12B (dense) | 16 GB | gemma4-iswa |
-| Gemma 4 26B-A4B | 11.2 GB (Q3) | 3.8B (8/128 experts) | 24 GB | gemma4-iswa |
-| Qwen 3.6 35B-A3B | 10.7 GB (Q2) | 3.0B (8+1/256) | 24 GB | qwen35moe |
-| Qwen 3.8 27B | 17.9 GB (Q4) | 27B (dense) | 32 GB | qwen35 |
-| Muse Glimmer 30B † | 15.9 GB (Q4) | 30B (dense, multimodal) | 32 GB | muse_glimmer |
-| DiffusionGemma 26B-A4B † | 15.7 GB (Q4) | 4B (diffusion MoE) | 32 GB | diffusion_gemma |
-| North-Mini-Code 30B-A3B † | 17.9 GB (Q4) | 3B (30B MoE) | 36 GB | cohere2_moe |
-| Gemma 4 12B (full) | 23.8 GB (BF16) | 12B (dense) | 48 GB | gemma4-iswa |
-| Gemma 4 26B-A4B | 28 GB (Q8) | 3.8B (8/128 experts) | 64 GB | gemma4-iswa |
-| Qwen 3.6 35B-A3B | 38.5 GB (Q8) | 3.0B (8+1/256) | 96 GB | qwen35moe |
+| Model | Size (quant) | Active params | Min RAM |
+| --- | ---: | --- | ---: |
+| Gemma 4 12B | 7.4 GB (Q4) | 12B (dense) | 16 GB |
+| Gemma 4 26B-A4B | 11.2 GB (Q3) | 3.8B (8/128 experts) | 24 GB |
+| Qwen 3.6 35B-A3B | 10.7 GB (Q2) | 3.0B (8+1/256) | 24 GB |
+| Qwen 3.8 27B | 17.9 GB (Q4) | 27B (dense) | 32 GB |
+| Muse Glimmer 30B † | 15.9 GB (Q4) | 30B (dense, multimodal) | 32 GB |
+| DiffusionGemma 26B-A4B † | 15.7 GB (Q4) | 4B (diffusion MoE) | 32 GB |
+| North-Mini-Code 30B-A3B † | 17.9 GB (Q4) | 3B (30B MoE) | 36 GB |
+| Gemma 4 12B (full) | 23.8 GB (BF16) | 12B (dense) | 48 GB |
+| Gemma 4 26B-A4B | 28 GB (Q8) | 3.8B (8/128 experts) | 64 GB |
+| Qwen 3.6 35B-A3B | 38.5 GB (Q8) | 3.0B (8+1/256) | 96 GB |
 
-*Min RAM* is the cutoff for automatic recommendations. Model weights must use no more than about 55% of unified memory. This leaves room for the KV cache and OS. You can still choose a larger model yourself. **†** means experimental. You can select these models, but localcode will **not** recommend them automatically. DiffusionGemma needs a separate runner. `cohere2_moe` has not been validated on this stack. The TurboQuant server does not include Muse Glimmer's `muse_glimmer` architecture, so localcode builds a separate stock llama-server (llama.cpp PR #26841) the first time you use it. It serves the model without TurboQuant KV compression.
+*Min RAM* is the cutoff for automatic recommendations. Model weights must use no more than about 55% of unified memory. This leaves room for the KV cache and OS. You can still choose a larger model yourself. **†** means experimental. You can select these models, but localcode will **not** recommend them automatically. DiffusionGemma needs a separate runner. North-Mini-Code has not been validated on this stack. The TurboQuant server does not include Muse Glimmer's architecture, so localcode builds a separate stock llama-server (llama.cpp PR #26841) the first time you use it. It serves the model without TurboQuant KV compression.
 
 ## How localcode works
 
