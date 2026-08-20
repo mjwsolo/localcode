@@ -2,7 +2,7 @@
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/mjwsolo/localcode/main/docs/assets/logo/dark.png">
     <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/mjwsolo/localcode/main/docs/assets/logo/light.png">
-    <img alt="localcode" src="https://raw.githubusercontent.com/mjwsolo/localcode/main/docs/assets/logo/light.png" width="480">
+    <img alt="localcode" src="https://raw.githubusercontent.com/mjwsolo/localcode/main/docs/assets/logo/light.png" width="360">
   </picture>
 </p>
 
@@ -18,7 +18,6 @@
   llama.cpp + GGUF. No cloud inference, API keys, or account.
 </p>
 
-> ⚠️ **Alpha software.** localcode is still being developed. Expect rough edges, bugs, and breaking changes between versions. Issues and feedback are welcome.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/mjwsolo/localcode/main/docs/assets/demo/first-change.gif" alt="A real localcode turn: two reads, one edit, then pytest reporting 5 passed" width="900">
