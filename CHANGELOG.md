@@ -3,6 +3,21 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.3.60 — 2026-08-19
+
+### Fixed (both grounded in the Anki-run logs)
+
+- **`todo_write` churn guard.** A real run made 43 `todo_write` calls that were
+  ALL the same list — completed-count never moved (37% of every action wasted on
+  re-planning). Re-sending a semantically unchanged plan (same items + statuses,
+  nothing newly completed) is now refused with a steer to take a real
+  write/edit/bash action on the in_progress item, and escalates on repeated churn.
+- **Auto-surfaced typecheck diagnostics after a code edit.** In the LSP test run
+  the model used the diagnostic tools ZERO times, so LocalCode now runs the
+  project typecheck FOR it right after a code edit and appends the errors to the
+  tool result — debounced (>=30s apart) and new-errors-only so it never dominates
+  the edit path or nags. Reuses the read-only `project_check`; the completion gate
+  remains the hard barrier, this is early in-context feedback.
 ## 0.3.59 — 2026-08-19
 
 ### Fixed
