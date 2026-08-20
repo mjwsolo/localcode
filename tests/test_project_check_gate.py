@@ -27,10 +27,16 @@ def test_clean_does_not_block():
     assert not gate.blocks_completion() and gate.result_note() == ""
 
 
-def test_errors_are_red_not_unverified():
+def test_errors_are_red_and_block_until_fixed():
+    """RED is routed differently from UNVERIFIED — the loop feeds the
+    diagnostics back rather than asking the model to go verify by hand — but it
+    is still not a working build. This used to assert the opposite, on the
+    reasoning that "the red path retries"; the retries are bounded, and once
+    they ran out nothing remembered the red at all."""
     gate = ProjectCheckGate()
     assert gate.observe(ERRORS) == RED
-    assert not gate.blocks_completion()  # handled by the red path, which retries
+    assert gate.blocks_completion()
+    assert "TS2322" in gate.result_note()
 
 
 def test_timeout_blocks_completion():
@@ -82,11 +88,33 @@ def test_a_later_clean_run_clears_an_earlier_failure():
 
 
 def test_a_later_red_run_clears_the_no_verdict_state():
-    """Red means the checker worked; the red path owns the round from there."""
+    """Red means the checker worked, so the no-verdict reason is gone and the
+    result note reports the diagnostics instead — but completion stays blocked,
+    because a checker that works and reports errors is the clearest possible
+    evidence the build is broken."""
     gate = ProjectCheckGate()
     gate.observe(FAILED)
     assert gate.observe(ERRORS) == RED
-    assert not gate.blocks_completion()
+    assert gate.unverified == ""
+    assert "exited 2" not in gate.result_note()
+    assert gate.blocks_completion()
+
+
+def test_a_later_clean_run_clears_an_earlier_red():
+    gate = ProjectCheckGate()
+    gate.observe(ERRORS)
+    assert gate.blocks_completion()
+    gate.observe(CLEAN)
+    assert not gate.blocks_completion() and gate.result_note() == ""
+
+
+def test_an_unavailable_checker_does_not_clear_an_earlier_red():
+    """Deleting node_modules mid-turn must not launder a red build into a
+    clean one. `unavailable` ranks below every real verdict."""
+    gate = ProjectCheckGate()
+    gate.observe(ERRORS)
+    gate.observe(UNAVAILABLE)
+    assert gate.blocks_completion()
 
 
 def test_result_note_is_appended_not_substituted():

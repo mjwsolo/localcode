@@ -1,0 +1,72 @@
+---
+/**
+ * House Mark — a severe pentagonal enclosure containing a terminal prompt.
+ *
+ * The idea is containment, not domesticity: the house is the boundary the
+ * process does not cross, and what runs inside it is a shell. Everything that
+ * would make it read as a real-estate or smart-home glyph is deliberately
+ * absent — no door, no window, no chimney, no eave overhang, and a shallow
+ * 33.7° pitch (a "home" icon is 45°). The footprint is wider than tall for the
+ * same reason: home glyphs are square or tall.
+ *
+ * The block cursor is the same offset solid core the previous Finder Mark had,
+ * so this is an evolution of the existing geometry rather than a reset.
+ *
+ * Hand-authored on a 32-unit grid; every edge lands on a 0.5 step.
+ *
+ * Below 20px the caret is dropped and the block grows — three legible features
+ * instead of nine. That compact master is what the favicon uses.
+ *
+ * Identical geometry lives in src/assets/brand/house-mark.svg.
+ */
+interface Props {
+  size?: number;
+  class?: string;
+  /** 'auto' switches to the simplified glyph at <= 20px. */
+  variant?: 'auto' | 'full' | 'compact';
+}
+const { size = 32, class: className, variant = 'auto' } = Astro.props;
+
+const compact = variant === 'compact' || (variant === 'auto' && size <= 20);
+---
+
+<svg
+  class={className}
+  width={size}
+  height={size}
+  viewBox="0 0 32 32"
+  fill="none"
+  stroke="currentColor"
+  stroke-width={compact ? 3 : 2.5}
+  stroke-linecap="square"
+  stroke-linejoin="miter"
+  aria-hidden="true"
+  focusable="false"
+>
+  {compact ? (
+    <>
+      <path d="M3 28V13L16 4L29 13V28Z" />
+      <rect
+        x="12"
+        y="17.5"
+        width="8"
+        height="6"
+        fill="var(--lc-mark-core, currentColor)"
+        stroke="none"
+      />
+    </>
+  ) : (
+    <>
+      <path d="M4 27V13L16 5L28 13V27Z" />
+      <path d="M11 17.5L13.5 20L11 22.5" />
+      <rect
+        x="17"
+        y="17.5"
+        width="5"
+        height="5"
+        fill="var(--lc-mark-core, currentColor)"
+        stroke="none"
+      />
+    </>
+  )}
+</svg>

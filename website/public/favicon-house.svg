@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="localcode">
+  <title>localcode</title>
+  <!-- Compact master (caret dropped, block enlarged) on a fixed dark tile.
+       Fixed colours, not currentColor: browser chrome will not inherit, and a
+       transparent outline cannot adapt to both light and dark tab strips. -->
+  <rect width="32" height="32" rx="6" fill="#0F1113"/>
+  <g fill="none" stroke="#F2F4F5" stroke-width="3" stroke-linecap="square" stroke-linejoin="miter">
+    <path d="M4.5 27V13.5L16 6L27.5 13.5V27Z"/>
+  </g>
+  <rect x="13" y="18.5" width="6.5" height="5" fill="#8AB4FF"/>
+</svg>

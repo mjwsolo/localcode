@@ -85,3 +85,92 @@
   font-size: 0.9rem;
   color: var(--sl-color-gray-3);
 }
+
+/* ── Demo recordings ─────────────────────────────────────────────
+   The Textual frames are 898px wide natively. Never upscale them:
+   stretched terminal type is the fastest way to make a real capture
+   look fake. */
+.sl-markdown-content img[src*='/demo/'] {
+  display: block;
+  width: 100%;
+  max-width: 760px;
+  height: auto;
+  border: 1px solid var(--lc-line, #2a2f34);
+  border-radius: var(--lc-radius, 6px);
+}
+
+/* ── Header parity with the landing page ───────────────────────────
+   Starlight renders its own social-icons block before the ThemeSelect
+   slot, at 16px and with no divider. The override in ThemeSelect.astro
+   draws the GitHub glyph itself, in the landing page's order and size,
+   so hide the built-in one rather than have two. */
+
+
+/* Starlight sets --sl-icon-size on header icons and pads the right group on a
+   different scale to the landing nav. Pin both so the two headers measure the
+   same. */
+.right-group .lc-docs-tools svg {
+  --sl-icon-size: 1em;
+}
+
+/* ── Shared nav inside Starlight's shell ──────────────────────────
+   The Header override renders <header class="lc-nav"> INSIDE Starlight's own
+   <header class="header">, which carries its own height, padding, border and
+   background. Left alone, the docs get two stacked chromes and a nav that
+   ignores the landing page's max-width. Neutralise the outer one and let ours
+   be the header. */
+.page > .header {
+  height: auto !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  backdrop-filter: none !important;
+  inset-inline: 0 !important;
+}
+.page > .header > .lc-nav {
+  width: 100%;
+}
+/* Starlight offsets the sidebar and content by --sl-nav-height; match it to
+   the shared nav's real height so nothing sits under the bar. */
+:root {
+  --sl-nav-height: 60px;
+}
+
+/* ── Docs shell width ────────────────────────────────────────────────────
+   Starlight's sidebar and TOC are position:fixed to the VIEWPORT, so capping
+   .page only moved the content column and left the sidebar pinned at x=0 —
+   which is what made the docs look misaligned against the inset nav.
+   Instead: let the shell run full width (the normal docs layout) and let the
+   nav run to the same edges on docs pages only, so the lockup sits above the
+   sidebar and the tools sit above the TOC. Prose stays at a readable measure. */
+:root {
+  --sl-content-width: 42rem;
+}
+
+
+
+.main-frame .content-panel .sl-container {
+  margin-inline: auto;
+}
+
+/* ── Align the docs shell to the nav column ───────────────────────────────
+   Starlight's sidebar and TOC are fixed to the viewport, so they ignore any
+   wrapper max-width. Pin them to the same gutter the nav uses instead, so the
+   sidebar's left edge and the TOC's right edge line up with the nav. */
+@media (min-width: 72rem) {
+  :root {
+    --lc-gutter: max(1.5rem, calc((100vw - var(--lc-maxw, 1120px)) / 2));
+    --sl-sidebar-width: 15rem;
+    --sl-content-width: 38rem;
+    --sl-sidebar-pad-x: 0rem;
+  }
+
+  .sidebar-pane {
+    inset-inline-start: calc(var(--lc-gutter) + 24px);
+  }
+
+  .main-frame {
+    padding-inline-start: calc(var(--lc-gutter) + 24px + var(--sl-sidebar-width));
+    padding-inline-end: calc(var(--lc-gutter) + 24px);
+  }
+}
