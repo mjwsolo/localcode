@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 502 170" width="502" height="170">
-  <rect width="502" height="170" fill="#0F1113"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 502 190" width="502" height="190">
+  <rect width="502" height="190" fill="#0F1113"/>
   <g transform="translate(64 46) scale(2.6)">
     <g fill="none" stroke="#F2F4F5" stroke-width="2.5" stroke-linecap="square" stroke-linejoin="miter">
       <path d="M4 27V13L16 5L28 13V27Z"/>
@@ -7,6 +7,8 @@
     </g>
     <rect x="17" y="17.5" width="5" height="5" fill="#8AB4FF"/>
   </g>
-  <text x="176" y="106" fill="#F2F4F5" font-family="Instrument Sans"
+  <!-- Baseline 109, not 106: optically centres the wordmark's ink against the
+       mark's. Verified by measuring both clusters in the rendered PNG. -->
+  <text x="176" y="109" fill="#F2F4F5" font-family="Instrument Sans"
         font-size="62" font-weight="600" letter-spacing="-1.6">localcode</text>
 </svg>
