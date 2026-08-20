@@ -601,3 +601,40 @@ def _has_ext(root: str, ext: str) -> bool:
         if any(f.endswith(ext) for f in files):
             return True
     return False
+
+
+# ── Auto-surfaced diagnostics after an edit ──────────────────────────────────
+# A weak local model almost never runs the typecheck itself (a real Anki run
+# used the LSP/diagnostics tools ZERO times), so we surface diagnostics FOR it,
+# in-context, right after a code edit — but debounced so the typecheck never
+# dominates the edit path, and only when the error set CHANGED so we don't repeat
+# the same wall every edit. The completion gate remains the hard barrier; this is
+# early feedback that lets the model fix errors as it goes instead of at the end.
+_INCR_MIN_INTERVAL = 30.0
+_incr_state: dict = {"ts": 0.0, "sig": None}
+
+
+def diagnostics_after_edit(repo_root: str, ctx_tokens: int = 0) -> str | None:
+    """Debounced post-edit typecheck. Returns NEW diagnostics to append to the
+    edit tool's result, or None (clean / too soon / unchanged / no checker)."""
+    import time as _time
+    now = _time.monotonic()
+    if now - _incr_state["ts"] < _INCR_MIN_INTERVAL:
+        return None
+    _incr_state["ts"] = now
+    try:
+        outcome = run_project_check_result(repo_root, ctx_tokens)
+    except Exception:
+        return None
+    if not outcome.is_red:
+        _incr_state["sig"] = None
+        return None
+    import hashlib as _hashlib
+    sig = _hashlib.md5(outcome.detail.encode(errors="replace")).hexdigest()
+    if sig == _incr_state["sig"]:
+        return None  # same errors already surfaced — don't nag
+    _incr_state["sig"] = sig
+    return (
+        "\n\n--- Typecheck after your edit reported errors — fix these NOW "
+        "(don't wait until the end) ---\n" + outcome.detail
+    )
