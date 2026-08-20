@@ -80,19 +80,6 @@ We want powerful, personal AI to be available to everyone, on any device and in 
 - **Python 3.10+**
 - **~12 GB free disk** (10 GB model + server)
 
-### Tested hardware
-
-localcode is still early software. We expect to support more hardware later. For now, the maintainers have tested only the configurations listed below.
-
-| Mac | Memory | Status | Notes |
-| --- | ---: | --- | --- |
-| M5 Apple Silicon | up to 128 GB | Tested | Primary development machine (M5 Max) |
-| M4 MacBook | 16 GB | Tested | Validated at the 16 GB floor |
-| M1/M2/M3 Apple Silicon | 16 GB+ | Not yet tested | Expected to work, but needs validation |
-| M4 Apple Silicon | 24 GB+ | Not yet tested | Expected to support larger contexts, but needs validation |
-
-> Linux installs and runs in CI for development. However, Apple Silicon is the supported target because the Metal-accelerated inference path works only on Mac.
-
 ## Models
 
 When it starts, localcode recommends the best model for **your Mac's RAM**. There is no fixed default. You can choose any model below, or select a different quant in the model picker.
