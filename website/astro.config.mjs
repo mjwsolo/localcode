@@ -17,31 +17,35 @@ export default defineConfig({
       description:
         'An open-source coding agent that runs local models on Apple Silicon. No API key, and no remote inference unless you point it at one.',
       components: {
-        // Inline SVG lockup so the Finder Mark inherits the theme colour.
+        // Inline SVG lockup so the House Mark inherits the theme colour.
         // (Starlight's built-in `logo` renders an <img>, where currentColor
         // and CSS custom properties inside the SVG cannot resolve.)
         SiteTitle: './src/components/SiteTitle.astro',
+        // The docs render the landing page's nav bar itself, so there is
+        // one header component rather than two that drift apart.
+        Header: './src/components/Header.astro',
+        // Dark is the default; Starlight's built-in provider follows the OS.
+        ThemeProvider: './src/components/ThemeProvider.astro',
+        // Renders nothing: SiteNav owns the toggle, and Starlight's built-in
+        // script would otherwise re-apply 'auto' after first paint.
+        ThemeSelect: './src/components/ThemeSelect.astro',
       },
-      favicon: '/favicon.svg',
+      favicon: '/favicon-house.svg',
       titleDelimiter: '·',
-      social: [
-        {
-          icon: 'github',
-          label: 'GitHub',
-          href: 'https://github.com/mjwsolo/localcode',
-        },
-      ],
+      // No `social` block: SiteNav draws the GitHub glyph itself, at the
+      // landing page's size and order. Configuring it here would render a
+      // second, smaller one that then has to be hidden in CSS.
       editLink: {
         baseUrl: 'https://github.com/mjwsolo/localcode/edit/main/website/',
       },
       customCss: [
-        '@fontsource/inter/400.css',
-        '@fontsource/inter/500.css',
-        '@fontsource/inter/600.css',
-        '@fontsource/martian-mono/400.css',
-        '@fontsource/martian-mono/600.css',
-        '@fontsource/commit-mono/400.css',
+        // Must match the landing page's imports in src/pages/index.astro,
+        // or the docs silently fall back to -apple-system.
+        '@fontsource-variable/instrument-sans',
+        '@fontsource/geist-mono/400.css',
+        '@fontsource/geist-mono/500.css',
         './src/styles/tokens.css',
+        './src/styles/nav.css',
         './src/styles/docs.css',
       ],
       // NOTE: no `og:image` is emitted. Open Graph requires an ABSOLUTE URL,
@@ -61,7 +65,7 @@ export default defineConfig({
           label: 'Start Here',
           items: [
             { label: 'Install', slug: 'start-here/install' },
-            { label: 'First Change', slug: 'start-here/first-change' },
+            { label: 'Getting Started', slug: 'start-here/first-change' },
             { label: 'Choose a Model', slug: 'start-here/choose-a-model' },
             { label: 'Permissions', slug: 'start-here/permissions' },
           ],
@@ -70,10 +74,8 @@ export default defineConfig({
           label: 'Guides',
           items: [
             { label: 'Offline', slug: 'guides/offline' },
-            { label: 'Headless', slug: 'guides/headless' },
             { label: 'MCP', slug: 'guides/mcp' },
             { label: 'Skills & Hooks', slug: 'guides/skills-and-hooks' },
-            { label: 'Undo', slug: 'guides/undo' },
           ],
         },
         {
@@ -81,7 +83,6 @@ export default defineConfig({
           items: [
             { label: 'Architecture', slug: 'concepts/architecture' },
             { label: 'Unified Memory', slug: 'concepts/unified-memory' },
-            { label: 'Verification', slug: 'concepts/verification' },
             { label: 'Network Boundary', slug: 'concepts/network-boundary' },
           ],
         },

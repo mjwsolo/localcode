@@ -8,13 +8,11 @@ description: Requirements, installation, and what happens on first launch.
 | | |
 | --- | --- |
 | Machine | Mac with Apple Silicon |
-| Unified memory | 16 GB minimum |
+| Unified memory | At least 16 GB |
 | Python | 3.10 or newer |
-| Disk | Room for one model — the smallest recommended GGUF is about 7.4 GB |
+| Disk | Space for one model — the smallest recommended GGUF is about 7.4 GB |
 
-Apple Silicon is the supported target: the Metal-accelerated inference path is
-Mac-only. localcode installs and runs on Linux in CI for development, but that
-path is not the product.
+Apple Silicon is the supported platform. Metal-accelerated inference works only on Mac. localcode also installs and runs on Linux in CI for development, but Linux is not the product platform.
 
 ## Install
 
@@ -22,9 +20,7 @@ path is not the product.
 pip install -U localcode
 ```
 
-`uv pip install -U localcode` works too. The wheel ships a prebuilt
-`llama-server` binary (a llama.cpp fork with TurboQuant KV-cache
-compression), so there is no compiler step for the default path.
+You can also use `uv pip install -U localcode`. The wheel includes a prebuilt `llama-server` binary. This is a llama.cpp fork with TurboQuant KV-cache compression. The default installation does not need a compiler.
 
 ## Run
 
@@ -33,11 +29,9 @@ cd your-project
 localcode
 ```
 
-That is the whole command. The bare `localcode` invocation is the product —
-first-run setup, model choice, configuration and model management all live
-inside the TUI. There is no `localcode setup` subcommand.
+That is the complete command. The plain `localcode` command is the product. First-run setup, model selection, configuration, and model management are all in the TUI. There is no `localcode setup` subcommand.
 
-The only other entry points are:
+There are only two other entry points:
 
 ```sh
 localcode run --goal "..."   # headless, one goal, then exit
@@ -46,48 +40,34 @@ localcode unstick            # recover a wedged model server
 
 ## What happens on first launch
 
-1. localcode reads your Mac's unified memory and recommends a model — see
-   [Choose a Model](/localcode/start-here/choose-a-model).
-2. It downloads that model's GGUF from Hugging Face. This is the one step
-   that needs the network, and it is a one-time cost per model.
-3. In the default configuration it starts the bundled `llama-server` on
-   `http://localhost:8081` and points the agent at it. If you have set
-   `runtime.base_url` or `LOCALCODE_BASE_URL` to something else, the agent
-   talks to that address instead.
+1. localcode checks your Mac's unified memory and recommends a model. See [Choose a Model](/localcode/start-here/choose-a-model).
+2. It downloads the model's GGUF from Hugging Face. This is the only step that needs the network. You only need to do it once for each model.
+3. By default, it starts the included `llama-server` at `http://localhost:8081` and connects the agent to it. If you set `runtime.base_url` or `LOCALCODE_BASE_URL` to another address, the agent connects to that address instead.
 
-From then on, generation happens wherever `runtime.base_url` points — by
-default, that server on your Mac. Changing it (or `LOCALCODE_BASE_URL`) sends
-your prompts and code context to whatever you name instead; the value is not
-validated. See [Network Boundary](/localcode/concepts/network-boundary) for
-what does and does not leave the machine.
+After that, generation happens wherever `runtime.base_url` points. By default, this is the server on your Mac. If you change it or `LOCALCODE_BASE_URL`, your prompts and code context go to the address you set. The value is not checked. See [Network Boundary](/localcode/concepts/network-boundary) to learn what stays on your machine and what leaves it.
 
 ## Where localcode keeps things
 
 | Path | What |
 | --- | --- |
-| `~/.localcode/config.toml` | Global configuration |
-| `~/.localcode/mcp.json` | MCP server definitions |
+| `~/.localcode/config.toml` | Global settings |
+| `~/.localcode/mcp.json` | MCP server settings |
 | `~/.localcode/skills/` | Global skills |
-| `<project>/.localcode/` | Per-project state, including `events.jsonl` |
-| `<project>/.localcode/config.toml` | Per-project config, layered over global |
+| `<project>/.localcode/` | Project state, including `events.jsonl` |
+| `<project>/.localcode/config.toml` | Project settings applied over global settings |
 
-Everything under `<project>/.localcode/` is safe to add to `.gitignore`.
+You can safely add everything under `<project>/.localcode/` to `.gitignore`.
 
 ## If something goes wrong
 
-- Every user-facing error has a stable `Eccc` code — see
-  [Error Codes](/localcode/reference/error-codes).
-- If the model server wedges (a stuck `llama-server` from a previous session),
-  run `localcode unstick`. It runs `memory_pressure` and `purge` and needs
-  admin rights.
-- Verbose detail for the most recent error in a project is written to
-  `<project>/.localcode/last_error.log`.
+- Every error shown to users has a stable `Eccc` code. See [Error Codes](/localcode/reference/error-codes).
+- If the model server gets stuck because a `llama-server` from an earlier session is still running, use `localcode unstick`. It runs `memory_pressure` and `purge` and needs admin rights.
+- Detailed information about the latest project error is saved in `<project>/.localcode/last_error.log`.
 
 :::caution[Alpha software]
-localcode is under active development. Expect rough edges and breaking changes
-between versions.
+localcode is still being actively developed. Expect some problems and breaking changes between versions.
 :::
 
 ## Next
 
-[Make your first change →](/localcode/start-here/first-change)
+[Get started →](/localcode/start-here/first-change)

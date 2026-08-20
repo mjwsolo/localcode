@@ -1,0 +1,10 @@
+---
+/**
+ * Starlight `ThemeSelect` override: renders nothing.
+ *
+ * The shared nav (SiteNav.astro) owns the theme toggle. Leaving Starlight's
+ * built-in in place also loaded its client script, which re-applies the "auto"
+ * setting after first paint — so a Mac set to Light flipped the docs to light
+ * even though dark is the default.
+ */
+---

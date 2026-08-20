@@ -1,30 +1,53 @@
-name: Deploy docs to GitHub Pages
+name: Deploy site to GitHub Pages
+
+# The published site at https://mjwsolo.github.io/localcode/ is the Astro +
+# Starlight project in website/. It replaced the MkDocs build in 0.3.x; the
+# landing page and the docs are one deployment.
 
 on:
   push:
     branches: [main]
     paths:
-      - "docs/**"
-      - "mkdocs.yml"
+      - "website/**"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: website
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
         with:
-          fetch-depth: 0  # mkdocs git-revision-date-plugin needs full history
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: website/package-lock.json
 
-      - uses: actions/setup-python@v5
+      - run: npm ci
+
+      - run: npm run build
+
+      # Pages serves the branch with Jekyll unless told otherwise, and Jekyll
+      # drops directories beginning with an underscore — which would remove
+      # Astro's entire _astro/ bundle.
+      - run: touch dist/.nojekyll
+
+      - name: Publish to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          python-version: "3.13"
-
-      - run: pip install mkdocs mkdocs-material
-
-      - name: Build & push to gh-pages
-        run: mkdocs gh-deploy --force --clean
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: website/dist
+          publish_branch: gh-pages
+          force_orphan: true
+          commit_message: "docs: deploy ${{ github.sha }}"

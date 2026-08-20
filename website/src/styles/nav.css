@@ -1,0 +1,161 @@
+/* Shared site navigation — used by the landing page and, via the
+   Starlight Header override, by every docs page. */
+
+.lc-nav {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--lc-page);
+  border-bottom: 1px solid var(--lc-line);
+}
+
+.lc-nav__inner {
+  /* Sized in px, not rem: Starlight sets a different root font-size to the
+     landing page, so rem values here made the bar 8px taller and the links a
+     half-step bigger on the docs — the nav visibly jumped between them. */
+  max-width: var(--lc-maxw);
+  margin: 0 auto;
+  height: 60px;
+  box-sizing: border-box;
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+.lc-lockup {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: var(--lc-text);
+  text-decoration: none;
+  font-family: var(--lc-font-display);
+  font-weight: 600;
+  font-size: 17px;
+  line-height: 1;
+  letter-spacing: -0.04em;
+}
+.lc-lockup--sm {
+  font-size: 0.9rem;
+}
+
+.lc-nav__links {
+  margin-left: auto;
+  display: flex;
+  gap: 22px;
+  font-size: 14px;
+  line-height: 1;
+}
+.lc-nav__links a {
+  color: var(--lc-text-muted);
+  text-decoration: none;
+}
+.lc-nav__links a:hover {
+  color: var(--lc-accent);
+}
+
+.lc-nav__tools {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.lc-ghlink {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  color: var(--lc-text-muted);
+}
+.lc-ghlink:hover {
+  color: var(--lc-accent);
+}
+
+.lc-nav__divider {
+  width: 1px;
+  height: 22px;
+  background: var(--lc-line);
+}
+
+.lc-theme {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: 999px;
+  color: var(--lc-text-muted);
+  cursor: pointer;
+}
+.lc-theme:hover {
+  color: var(--lc-accent);
+}
+.lc-theme:focus-visible {
+  outline: 2px solid var(--lc-accent);
+  outline-offset: 2px;
+}
+.lc-theme__icon {
+  display: grid;
+  place-items: center;
+}
+.lc-theme__icon .is-light {
+  display: none;
+}
+:root[data-theme='light'] .lc-theme__icon .is-dark {
+  display: none;
+}
+:root[data-theme='light'] .lc-theme__icon .is-light {
+  display: block;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 860px) {
+  .lc-nav__links {
+    display: none;
+  }
+  .lc-nav__tools {
+    margin-left: auto;
+  }
+}
+
+
+/* ── Docs-only adjustments ───────────────────────────────────────
+   The nav is shared with the landing page; these only apply where
+   Starlight renders it. */
+.lc-nav__search {
+  flex: 1 1 auto;
+  max-width: 22rem;
+  margin-left: 1rem;
+}
+.lc-nav__search :global(button) {
+  width: 100%;
+}
+.lc-mobile-menu {
+  display: contents;
+}
+
+@media (max-width: 860px) {
+  .lc-nav__links {
+    display: none;
+  }
+  .lc-nav__tools {
+    margin-left: auto;
+  }
+  .lc-nav__search {
+    max-width: none;
+  }
+}

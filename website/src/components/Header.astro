@@ -1,0 +1,22 @@
+---
+/**
+ * Starlight `Header` override — replaces Starlight's own header with the
+ * landing page's nav, so both surfaces render the SAME component rather than
+ * two implementations that have to be kept in sync by hand.
+ *
+ * Starlight's search UI is passed through into the nav's middle slot, and the
+ * mobile sidebar toggle is kept: without it there is no way to reach the
+ * sidebar on a phone.
+ */
+import Search from '@astrojs/starlight/components/Search.astro';
+import MobileMenuToggle from '@astrojs/starlight/components/MobileMenuToggle.astro';
+import SiteNav from './SiteNav.astro';
+---
+
+<SiteNav search linkLabel="Home" linkHref="/">
+  <Search slot="search" />
+</SiteNav>
+
+<div class="lc-mobile-menu md:sl-hidden">
+  <MobileMenuToggle />
+</div>

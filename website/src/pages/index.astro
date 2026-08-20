@@ -1,47 +1,60 @@
 ---
-import '@fontsource/inter/400.css';
-import '@fontsource/inter/500.css';
-import '@fontsource/inter/600.css';
-import '@fontsource/martian-mono/400.css';
-import '@fontsource/martian-mono/600.css';
-import '@fontsource/commit-mono/400.css';
+import '@fontsource-variable/instrument-sans';
+import '@fontsource/geist-mono/400.css';
+import '@fontsource/geist-mono/500.css';
 import '../styles/tokens.css';
+// Shared with the docs via astro.config.mjs → customCss. Must be imported
+// here too: the landing page is not a Starlight route, so it does not pick up
+// that list.
+import '../styles/nav.css';
 import '../styles/landing.css';
 
-import FinderMark from '../components/FinderMark.astro';
+import HouseMark from '../components/HouseMark.astro';
+import SiteNav from '../components/SiteNav.astro';
 import CopyCommand from '../components/CopyCommand.astro';
-import TerminalDemo from '../components/TerminalDemo.astro';
+import RealDemo from '../components/RealDemo.astro';
 import MemoryChooser from '../components/MemoryChooser.astro';
 
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 const href = (path: string) => `${base}/${path.replace(/^\//, '')}`;
 
-const title = 'localcode — Your coding agent. On your Mac.';
+const title = 'localcode — Agentic coding. Local models. On your Mac.';
 const description =
-  'An open-source coding agent that runs local models on Apple Silicon. No API key, and no remote inference unless you point it at one.';
+  'An open-source coding agent that runs local models on Apple Silicon. No API key. No costs.';
+
+/** Hero badges. Rendered as real elements, not shields.io images: they stay
+ *  crisp on retina, need no third-party request, and follow the theme. */
+const badges = [
+  { k: 'pypi', v: 'v0.3.59', href: 'https://pypi.org/project/localcode/' },
+  { k: 'license', v: 'Apache 2.0', href: 'https://github.com/mjwsolo/localcode/blob/main/LICENSE' },
+  { k: 'python', v: '3.10+' },
+  { k: 'platform', v: 'Apple Silicon' },
+];
 
 const proof = [
   {
-    title: 'Knows what fits',
-    body: `No fixed default model. localcode reads your Mac's unified memory
-      and recommends the most capable model whose weights fit inside the
-      memory budget — from a 16 GB MacBook up to a 128 GB workstation.`,
-    link: { label: 'Choose a model', href: href('start-here/choose-a-model') },
+    title: 'A list of local models',
+    body: `Choose from Qwen, Gemma, Cohere, and Meta families. The list includes
+      dense and MoE models from 12B to 35B, with several quants for each.
+      localcode checks your Mac's unified memory. It shows every model that fits
+      and picks the most capable one. Switch at any time with /model.`,
+    link: { label: 'See what your Mac runs', href: href('start-here/choose-a-model') },
   },
   {
-    title: 'Finishes with evidence',
-    body: `When it reads your request as a build or an edit and code files
-      changed, localcode won't report success unless it saw a build, typecheck
-      or test pass against the current file contents — it says the task is
-      incomplete instead. Other turns don't carry that guarantee.`,
-    link: { label: 'Exactly what is enforced', href: href('concepts/verification') },
+    title: 'The server sets itself up',
+    body: `You do not need Ollama, LM Studio, or a daemon to manage. localcode
+      downloads the weights and starts llama-server on 127.0.0.1. It sets the
+      context and KV cache sizes for your machine. It shuts down the server when
+      you finish. You do not need to configure anything.`,
+    link: { label: 'How it runs', href: href('concepts/architecture') },
   },
   {
-    title: 'Designed for local models',
-    body: `Small quantised models fail in specific ways. The agent loop has
-      recovery paths for those failures — malformed tool calls, truncated
-      arguments, repair and retry — instead of assuming a frontier model.`,
-    link: { label: 'Architecture', href: href('concepts/architecture') },
+    title: 'A system designed for local models',
+    body: `Small quantised models fail in predictable ways. The agent loop can
+      recover from malformed tool calls and truncated arguments. It can repair
+      errors and try again. Inference never leaves your Mac. There is no API key,
+      account, or bill.`,
+    link: { label: 'What touches the network', href: href('concepts/network-boundary') },
   },
 ];
 ---
@@ -53,17 +66,18 @@ const proof = [
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title}</title>
     <meta name="description" content={description} />
-    <meta name="theme-color" content="#0B0E11" />
-    <link rel="icon" href={href('favicon.svg')} type="image/svg+xml" />
+    <meta name="theme-color" content="#0F1113" />
+    <link rel="icon" href={href('favicon-house.svg')} type="image/svg+xml" />
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
     <meta property="og:type" content="website" />
-    {/*
-      og:image is intentionally omitted until this site has a real deployment
-      origin — Open Graph needs an absolute URL, and a root-relative one is
-      silently ignored by every scraper. public/social-preview.svg is ready;
-      see website/README.md → "Deployment-time requirements".
-    */}
+    {/* Open Graph needs an absolute URL — Astro.site is the deployed origin. */}
+    <meta property="og:url" content={new URL(Astro.url.pathname, Astro.site).href} />
+    <meta property="og:image" content={new URL(`${base}/social-preview.svg`, Astro.site).href} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={new URL(`${base}/social-preview.svg`, Astro.site).href} />
     <script is:inline>
       // Match Starlight's theme storage so the landing page and the docs
       // agree on light/dark across navigation.
@@ -75,13 +89,11 @@ const proof = [
             return null;
           }
         })();
-        const theme =
-          stored === 'light' || stored === 'dark'
-            ? stored
-            : window.matchMedia('(prefers-color-scheme: light)').matches
-              ? 'light'
-              : 'dark';
+        // Dark is the default. Only an explicit choice makes it light — the
+        // OS preference does not decide, because the brand is dark.
+        const theme = stored === 'light' ? 'light' : 'dark';
         document.documentElement.dataset.theme = theme;
+        document.documentElement.style.colorScheme = theme;
       })();
     </script>
   </head>
@@ -89,68 +101,46 @@ const proof = [
   <body>
     <a class="lc-skip" href="#main">Skip to content</a>
 
-    <header class="lc-nav">
-      <div class="lc-nav__inner">
-        <a class="lc-lockup" href={href('/')} aria-label="localcode home">
-          <FinderMark size={28} />
-          <span>localcode</span>
-        </a>
-        <nav class="lc-nav__links" aria-label="Primary">
-          <a href={href('start-here/install')}>Install</a>
-          <a href={href('start-here/first-change')}>First change</a>
-          <a href={href('concepts/network-boundary')}>Network boundary</a>
-          <a href="https://github.com/mjwsolo/localcode">GitHub</a>
-        </nav>
-        <button
-          type="button"
-          class="lc-theme"
-          id="lc-theme"
-          aria-pressed="false"
-          aria-label="Dark theme"
-        >
-          <span class="lc-theme__dot" aria-hidden="true"></span>
-          <span class="lc-theme__label">theme</span>
-        </button>
-      </div>
-    </header>
+    <SiteNav />
 
     <main id="main">
       <!-- Hero -->
       <section class="lc-hero">
         <div class="lc-hero__inner">
           <div class="lc-hero__copy">
-            <p class="lc-eyebrow">Apache-2.0 · Apple Silicon · alpha</p>
             <h1 class="lc-h1">
-              Your coding agent.<br /><span class="lc-h1__accent">On your Mac.</span>
+              Agentic coding. Local models.<br /><span class="lc-h1__accent"
+                >On your Mac.</span
+              >
             </h1>
             <p class="lc-sub">{description}</p>
-            <p class="lc-privacy">
-              <FinderMark size={18} class="lc-privacy__mark" />
-              In the default configuration inference runs on your Mac — no API
-              key, no model provider. Your prompts and code leave it only when a
-              network tool runs, or if you point localcode at a remote
-              inference endpoint yourself.
-            </p>
 
+            <ul class="lc-badges">
+              {badges.map((b) => {
+                const inner = (
+                  <>
+                    <span class="lc-badge__k">{b.k}</span>
+                    <span class="lc-badge__v">{b.v}</span>
+                  </>
+                );
+                return (
+                  <li class="lc-badge">
+                    {b.href ? <a href={b.href}>{inner}</a> : inner}
+                  </li>
+                );
+              })}
+            </ul>
             <CopyCommand command="pip install -U localcode" label="install" />
 
-            <div class="lc-cta">
-              <a class="lc-btn lc-btn--primary" href={href('start-here/first-change')}>
-                Make your first change
-              </a>
-              <a class="lc-btn" href={href('start-here/install')}>Install guide</a>
-            </div>
             <p class="lc-fine">
-              Requires an Apple Silicon Mac, 16 GB unified memory, Python 3.10+,
-              and disk for one model. The first launch downloads a model; after
-              that, inference runs against whatever <code>base_url</code> points
-              at, which by default is a server on your own machine.
+              You need an Apple Silicon Mac, 16 GB of unified memory, Python 3.10+,
+              and enough disk space for one model.
             </p>
           </div>
 
           <div class="lc-hero__proof">
-            <p class="lc-hero__overline">One turn, start to green</p>
-            <TerminalDemo />
+            <RealDemo />
+            <p class="lc-hero__overline">Pick a model. Start coding.</p>
           </div>
         </div>
       </section>
@@ -158,12 +148,12 @@ const proof = [
       <!-- Proof points -->
       <section class="lc-section">
         <div class="lc-section__inner">
-          <h2 class="lc-h2">Built for the constraint, not around it</h2>
+          <h2 class="lc-h2">Pick a model. Everything else happens automatically.</h2>
           <p class="lc-lede">
-            Read the file. Make the edit. Run the repo's own checks. When they
-            come back red, read the failure and fix it. On a request localcode
-            reads as an edit, finishing without a passing check is reported as
-            incomplete rather than done.
+            localcode combines the model server and coding agent in one command.
+            It checks what your Mac can run. It starts the server for you. Then it
+            uses a loop designed for local weights to read and edit files and run
+            your repo's own checks.
           </p>
           <div class="lc-grid">
             {proof.map((card, i) => (
@@ -178,13 +168,65 @@ const proof = [
         </div>
       </section>
 
+      <!-- Three steps -->
+      <section class="lc-section">
+        <div class="lc-section__inner">
+          <h2 class="lc-h2">Three steps</h2>
+          <p class="lc-lede">
+            Install localcode. Open a repo. Pick a model. Ask it to do one
+            thing. Every frame below comes from the running app.
+          </p>
+
+          <ol class="lc-steps">
+            <li class="lc-step">
+              <h3 class="lc-step__h"><span>1</span> Install and open your repo</h3>
+              <pre class="lc-step__pre"><code>pip install -U localcode
+cd ~/work/some-project
+localcode</code></pre>
+            </li>
+
+            <li class="lc-step">
+              <h3 class="lc-step__h"><span>2</span> Choose a model</h3>
+              <p class="lc-step__p">
+                The star shows the largest model your Mac can run comfortably.
+              </p>
+              <img
+                class="lc-step__img"
+                src={`${base}/demo/step-2-choose-model.gif?v=a0c3cc9d`}
+                alt="The localcode model picker: arrowing through seven models and selecting one"
+                width="866" height="491" loading="lazy" decoding="async"
+              />
+            </li>
+
+            <li class="lc-step">
+              <h3 class="lc-step__h"><span>3</span> Start building</h3>
+              <p class="lc-step__p">
+                Name the file. Then name the check that proves the change worked.
+              </p>
+              <img
+                class="lc-step__img"
+                src={`${base}/demo/step-3-ask.gif?v=0523fe0c`}
+                alt="Typing a goal into the localcode chat screen and pressing enter"
+                width="866" height="491" loading="lazy" decoding="async"
+              />
+            </li>
+
+          </ol>
+
+          <a class="lc-btn lc-btn--primary" href={href('start-here/first-change')}>
+            Read more
+          </a>
+        </div>
+      </section>
+
       <!-- Memory chooser -->
       <section class="lc-section lc-section--alt">
         <div class="lc-section__inner">
-          <h2 class="lc-h2">Your Mac picks the model</h2>
+          <h2 class="lc-h2">Every model your Mac can run</h2>
           <p class="lc-lede">
-            Unified memory is the budget. Pick your Mac and see what localcode
-            recommends.
+            Unified memory sets the limit. Pick your Mac to see the full list of
+            models that fit. localcode automatically picks the most capable one.
+            You can switch to any other model on the list.
           </p>
           <MemoryChooser />
         </div>
@@ -247,16 +289,16 @@ const proof = [
       <!-- Closing CTA -->
       <section class="lc-final">
         <div class="lc-section__inner">
-          <FinderMark size={44} />
-          <h2 class="lc-h2">Make your first change</h2>
+          <HouseMark size={44} />
+          <h2 class="lc-h2">Start building</h2>
           <p class="lc-lede">
-            Point localcode at a repo you already have, ask for one small edit,
-            and see what it does when the checks come back red.
+            Point localcode at a repo you already have. Ask for one small edit.
+            Then see how it responds when the checks come back red.
           </p>
           <CopyCommand command="pip install -U localcode" label="install" />
           <div class="lc-cta">
             <a class="lc-btn lc-btn--primary" href={href('start-here/first-change')}>
-              Make your first change
+              Start building
             </a>
             <a class="lc-btn" href={href('start-here/choose-a-model')}>Choose a model</a>
           </div>
@@ -267,39 +309,43 @@ const proof = [
     <footer class="lc-foot">
       <div class="lc-section__inner">
         <a class="lc-lockup lc-lockup--sm" href={href('/')}>
-          <FinderMark size={20} />
+          <HouseMark size={20} />
           <span>localcode</span>
         </a>
         <p>
           Apache-2.0 · <a href="https://github.com/mjwsolo/localcode">github.com/mjwsolo/localcode</a>
         </p>
         <p class="lc-fine">
-          Alpha software, under active development. This site is a docs
-          preview — some pages are marked as stubs.
+          Alpha software, under active development.
         </p>
       </div>
     </footer>
 
     <script>
-      const button = document.getElementById('lc-theme');
-      // The inline head script resolves the theme before paint, so sync the
-      // control's state to it on load as well as on every toggle. aria-pressed
-      // reports "dark is on"; the label names the theme currently applied.
-      const syncThemeControl = (theme: string) => {
-        if (!button) return;
-        button.setAttribute('aria-pressed', String(theme === 'dark'));
-        button.setAttribute('aria-label', theme === 'dark' ? 'Dark theme' : 'Light theme');
+      // Icon-only theme toggle. Writes the same `starlight-theme` key Starlight
+      // uses, so a choice made here survives the jump into the docs.
+      const toggle = document.getElementById('lc-theme');
+
+      const apply = (theme: string) => {
+        document.documentElement.dataset.theme = theme;
+        toggle?.setAttribute('aria-label', theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
       };
-      syncThemeControl(document.documentElement.dataset.theme ?? 'dark');
-      button?.addEventListener('click', () => {
-        const root = document.documentElement;
-        const next = root.dataset.theme === 'light' ? 'dark' : 'light';
-        root.dataset.theme = next;
-        syncThemeControl(next);
+
+      let stored: string | null = null;
+      try {
+        stored = localStorage.getItem('starlight-theme');
+      } catch {
+        /* storage blocked — fall back to the default below */
+      }
+      apply(stored === 'light' ? 'light' : 'dark');
+
+      toggle?.addEventListener('click', () => {
+        const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+        apply(next);
         try {
           localStorage.setItem('starlight-theme', next);
         } catch {
-          /* storage blocked — the toggle still works for this page view */
+          /* storage blocked — the choice still holds for this page view */
         }
       });
     </script>
