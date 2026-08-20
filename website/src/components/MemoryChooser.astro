@@ -2,49 +2,24 @@
 /**
  * Unified-memory model chooser.
  *
- * Every row below is produced by localcode's own recommender — the values
- * come from `localcode.models_catalog.recommend(ram_gb)` and the model sizes
- * from the same catalog. The rule shown ("weights must fit in ~55% of unified
- * memory") is the rule that function implements.
+ * Nothing here is hand-written: src/data/models.json is generated from
+ * localcode's own catalogue by scripts/gen-models.py. For each memory tier it
+ * lists EVERY model in the catalogue whose weights fit the budget that
+ * `localcode.models_catalog.recommend()` uses (55% of unified memory), and
+ * marks the one that function actually returns.
  *
- * Reproduce with:
- *   python -c "from localcode import models_catalog as m; \
- *              print(m.recommend(16).name, m.recommend(16).size_gb)"
+ * Regenerate after a catalogue change:
+ *   ~/.local/share/uv/tools/localcode/bin/python website/scripts/gen-models.py
  */
-const tiers = [
-  {
-    ram: 16,
-    label: '16 GB',
-    model: 'Gemma 4 12B',
-    quant: 'UD-Q4_K_XL',
-    weights: 7.37,
-    note: 'The 16 GB floor. Dense 12B; validated on an M4 MacBook.',
-  },
-  {
-    ram: 32,
-    label: '32 GB',
-    model: 'Qwen 3.6 35B-A3B',
-    quant: 'Q2',
-    weights: 10.7,
-    note: 'MoE — 3.0B of 35B parameters active per token, so far fewer bytes are read per token than a dense model this size.',
-  },
-  {
-    ram: 64,
-    label: '64 GB',
-    model: 'Gemma 4 26B-A4B',
-    quant: 'Q8',
-    weights: 28.0,
-    note: 'Near-lossless quant of the MoE, 3.8B active params.',
-  },
-  {
-    ram: 96,
-    label: '96 GB+',
-    model: 'Qwen 3.6 35B-A3B',
-    quant: 'UD-Q8_K_XL',
-    weights: 38.5,
-    note: 'Workstation pick. Native 262K context.',
-  },
-];
+import tiers from '../data/models.json';
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+
+/** Model-family marks, self-hosted in public/logos (no third-party CDN call).
+ *  The `logo` key on each row is emitted by scripts/gen-models.py from the
+ *  catalogue's own family field, so a new Gemma or Qwen variant picks up the
+ *  right mark with no edit here. */
+const logoSrc = (logo: string | null) => (logo ? `${base}/logos/${logo}.svg` : null);
 ---
 
 <div class="lc-mem">
@@ -64,42 +39,66 @@ const tiers = [
     ))}
   </div>
 
-  {tiers.map((t, i) => {
-    const budget = t.ram * 0.55;
-    const pctWeights = Math.round((t.weights / t.ram) * 100);
-    const pctBudget = Math.round(55);
-    return (
-      <div
-        class="lc-mem__panel"
-        role="tabpanel"
-        id={`mem-panel-${t.ram}`}
-        aria-labelledby={`mem-tab-${t.ram}`}
-        hidden={i !== 0}
-      >
-        <p class="lc-mem__pick">
-          <span class="lc-mem__eyebrow">recommended</span>
-          <strong>{t.model}</strong>
-          <span class="lc-mem__quant">{t.quant}</span>
-        </p>
+  {tiers.map((t, i) => (
+    <div
+      class="lc-mem__panel"
+      role="tabpanel"
+      id={`mem-panel-${t.ram}`}
+      aria-labelledby={`mem-tab-${t.ram}`}
+      hidden={i !== 0}
+    >
+      <p class="lc-mem__count">
+        <strong>{t.models.length}</strong>
+        {t.models.length === 1 ? ' model fits' : ' models fit'} in {t.budget} GB
+        <span class="lc-mem__count-sub">— 55% of {t.ram} GB, the rest left for KV cache, activations and macOS</span>
+      </p>
 
-        <div class="lc-mem__bar" aria-hidden="true">
-          <div class="lc-mem__budget" style={`width:${pctBudget}%`}></div>
-          <div class="lc-mem__weights" style={`width:${pctWeights}%`}></div>
-        </div>
-        <p class="lc-mem__legend">
-          <span class="k k--weights"></span> {t.weights} GB weights
-          <span class="k k--budget"></span> {budget.toFixed(1)} GB budget (55% of {t.ram} GB)
-        </p>
-        <p class="lc-mem__note">{t.note}</p>
+      <div class="lc-mem__head" aria-hidden="true">
+        <span></span>
+        <span>Model</span>
+        <span>Parameters</span>
+        <span>Active</span>
+        <span>Type</span>
+        <span>Quant</span>
+        <span class="lc-mdl__size">Weights</span>
       </div>
-    );
-  })}
+
+      <ul class="lc-mem__list">
+        {t.models.map((mdl) => {
+          const src = logoSrc(mdl.logo);
+          const isRec = mdl.file === t.recommended;
+          return (
+            <li class={`lc-mdl${isRec ? ' is-rec' : ''}`}>
+              <span class="lc-mdl__mark" aria-hidden="true">
+                {src ? <img src={src} alt="" width="16" height="16" loading="lazy" /> : <span>{mdl.maker.slice(0, 1)}</span>}
+              </span>
+
+              <span class="lc-mdl__id">
+                <span class="lc-mdl__name">
+                  {mdl.base}
+                  {isRec && <span class="lc-mdl__rec">recommended</span>}
+                </span>
+                {mdl.detail && <span class="lc-mdl__detail">{mdl.detail}</span>}
+              </span>
+
+              <span class="lc-mdl__cell"><span class="lc-mdl__k">Parameters</span>{mdl.total ?? '—'}</span>
+              <span class="lc-mdl__cell"><span class="lc-mdl__k">Active</span>{mdl.active ?? '—'}</span>
+              <span class="lc-mdl__cell"><span class="lc-mdl__k">Type</span>{mdl.kind}</span>
+              <span class="lc-mdl__cell"><span class="lc-mdl__k">Quant</span>{mdl.quant ?? '—'}</span>
+
+              <span class="lc-mdl__size"><span class="lc-mdl__k">Weights</span>{mdl.size} GB</span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  ))}
 
   <p class="lc-mem__rule">
     localcode has no fixed default model. On launch it reads your Mac's unified
     memory and picks the most capable production model whose weights fit in
-    about 55% of it — the rest is left for the KV cache, activations and
-    macOS. You can always override the pick with <code>/model</code>.
+    about 55% of it. Everything else listed above still fits and can be chosen
+    from the model picker, or with <code>/model</code>.
   </p>
 </div>
 

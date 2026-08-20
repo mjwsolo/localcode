@@ -56,84 +56,6 @@ code {
 
 /* ── Nav ─────────────────────────────────────────────── */
 
-.lc-nav {
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  background: var(--lc-page);
-  border-bottom: 1px solid var(--lc-line);
-}
-
-.lc-nav__inner {
-  max-width: var(--lc-maxw);
-  margin: 0 auto;
-  padding: 0.85rem 1.5rem;
-  display: flex;
-  align-items: center;
-  gap: 1.5rem;
-}
-
-.lc-lockup {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.6rem;
-  color: var(--lc-text);
-  text-decoration: none;
-  font-family: var(--lc-font-display);
-  font-weight: 600;
-  font-size: 1.05rem;
-  letter-spacing: -0.04em;
-}
-.lc-lockup--sm {
-  font-size: 0.9rem;
-}
-
-.lc-nav__links {
-  margin-left: auto;
-  display: flex;
-  gap: 1.4rem;
-  font-size: 0.9rem;
-}
-.lc-nav__links a {
-  color: var(--lc-text-muted);
-  text-decoration: none;
-}
-.lc-nav__links a:hover {
-  color: var(--lc-accent);
-}
-
-.lc-theme {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-  background: none;
-  border: 1px solid var(--lc-line);
-  border-radius: var(--lc-radius);
-  color: var(--lc-text-muted);
-  font: inherit;
-  font-size: 0.78rem;
-  padding: 0.35rem 0.6rem;
-  cursor: pointer;
-}
-.lc-theme:hover {
-  border-color: var(--lc-accent);
-  color: var(--lc-accent);
-}
-.lc-theme__dot {
-  width: 9px;
-  height: 9px;
-  background: var(--lc-accent);
-}
-
-@media (max-width: 860px) {
-  .lc-nav__links {
-    display: none;
-  }
-  .lc-theme {
-    margin-left: auto;
-  }
-}
-
 /* ── Hero ────────────────────────────────────────────── */
 
 .lc-hero {
@@ -141,14 +63,21 @@ code {
   overflow: hidden;
 }
 
+/* Stacked, not side-by-side. The recording is 866x491 with a lot of quiet
+   space in it; in a half-width column it never lines up with the type, and
+   the mismatch reads as an accident. Full width below the copy gives it its
+   own beat and lets it sit at native size. */
 .lc-hero__inner {
   max-width: var(--lc-maxw);
   margin: 0 auto;
-  padding: 4.5rem 1.5rem 4rem;
+  padding: 5rem 1.5rem 4rem;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.02fr);
-  gap: 3rem;
-  align-items: center;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 3.5rem;
+}
+
+.lc-hero__copy {
+  max-width: 46rem;
 }
 
 /* The hero's second column is the product itself — a real transcript panel,
@@ -157,10 +86,18 @@ code {
    searchable and legible at any zoom. */
 .lc-hero__proof {
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.lc-hero__proof .lc-demo {
+  width: 100%;
+  max-width: 866px;
 }
 
 .lc-hero__overline {
-  margin: 0 0 0.85rem;
+  margin: 0.9rem 0 0;
+  text-align: center;
   font-family: var(--lc-font-code);
   font-size: 0.72rem;
   letter-spacing: 0.14em;
@@ -176,7 +113,6 @@ code {
 
 @media (max-width: 1040px) {
   .lc-hero__inner {
-    grid-template-columns: minmax(0, 1fr);
     gap: 2.5rem;
     padding-top: 3.5rem;
   }
@@ -207,7 +143,9 @@ code {
 }
 
 .lc-sub {
-  margin: 1.5rem 0 0;
+  /* The install command follows directly now that the privacy paragraph is
+     gone — give the sub-line room so the two do not crowd. */
+  margin: 1.5rem 0 1.5rem;
   max-width: 46ch;
   font-size: clamp(1.05rem, 2.2vw, 1.25rem);
   color: var(--lc-text);
@@ -237,16 +175,16 @@ code {
 .lc-copy {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  max-width: 34rem;
-  padding: 0.55rem 0.6rem 0.55rem 0.9rem;
+  gap: 0.6rem;
+  max-width: 26rem;
+  padding: 0.3rem 0.35rem 0.3rem 0.7rem;
   background: var(--lc-page-2);
   border: 1px solid var(--lc-line);
   border-radius: var(--lc-radius);
 }
 .lc-copy__label {
   font-family: var(--lc-font-code);
-  font-size: 0.7rem;
+  font-size: 0.62rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--lc-text-muted);
@@ -262,7 +200,7 @@ code {
 .lc-copy__cmd {
   white-space: nowrap;
   font-family: var(--lc-font-code);
-  font-size: 0.95rem;
+  font-size: 0.82rem;
   color: var(--lc-text);
 }
 /* Outside .lc-copy__cmd so the manual-copy fallback can select the command
@@ -273,14 +211,39 @@ code {
 }
 .lc-copy__btn {
   flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
   font: inherit;
-  font-size: 0.8rem;
-  padding: 0.35rem 0.75rem;
   color: var(--lc-page);
   background: var(--lc-accent);
   border: 1px solid var(--lc-accent);
-  border-radius: 2px;
+  border-radius: 3px;
   cursor: pointer;
+}
+/* Icon-only: the label is kept in the DOM for screen readers and for the
+   clipboard-blocked fallback message, but never drawn. */
+.lc-copy__btn-text {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.lc-copy__i {
+  display: block;
+}
+.lc-copy__i--done {
+  display: none;
+}
+.lc-copy__btn[data-state='copied'] .lc-copy__i--copy {
+  display: none;
+}
+.lc-copy__btn[data-state='copied'] .lc-copy__i--done {
+  display: block;
 }
 .lc-copy__btn[data-state='copied'] {
   background: var(--lc-verify);
@@ -617,6 +580,156 @@ code {
   color: var(--lc-text-muted);
 }
 
+.lc-mem__count {
+  margin: 0 0 1.15rem;
+  font-family: var(--lc-font-code);
+  font-size: 0.82rem;
+  color: var(--lc-text-muted);
+}
+.lc-mem__count strong {
+  color: var(--lc-text);
+}
+.lc-mem__count-sub {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 0.76rem;
+  opacity: 0.85;
+}
+
+.lc-mem__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.lc-mem__head,
+.lc-mdl {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1.4fr) 90px 90px 116px 92px 84px;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.lc-mem__head {
+  padding: 0 0 0.55rem;
+  border-bottom: 1px solid var(--lc-line);
+  font-family: var(--lc-font-code);
+  font-size: 0.66rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--lc-text-muted);
+}
+
+.lc-mdl {
+  padding: 0.72rem 0;
+  border-top: 1px solid var(--lc-line);
+}
+.lc-mdl:first-child {
+  border-top: 0;
+}
+
+.lc-mdl__mark {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--lc-line);
+  border-radius: 4px;
+  background: var(--lc-page-2);
+  overflow: hidden;
+}
+.lc-mdl__mark img {
+  width: 14px;
+  height: 14px;
+  display: block;
+}
+.lc-mdl__mark span {
+  font-family: var(--lc-font-code);
+  font-size: 0.7rem;
+}
+
+.lc-mdl__id {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+.lc-mdl__name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.95rem;
+}
+.lc-mdl__detail {
+  font-family: var(--lc-font-code);
+  font-size: 0.7rem;
+  color: var(--lc-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lc-mdl__rec {
+  font-family: var(--lc-font-code);
+  font-size: 0.62rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  color: var(--lc-page);
+  background: var(--lc-accent);
+}
+
+.lc-mdl__cell,
+.lc-mdl__size {
+  font-family: var(--lc-font-code);
+  font-size: 0.8rem;
+  color: var(--lc-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lc-mdl.is-rec .lc-mdl__cell,
+.lc-mdl.is-rec .lc-mdl__size {
+  color: var(--lc-text);
+}
+.lc-mdl__size {
+  text-align: right;
+}
+
+/* Column labels repeat inside each cell on narrow screens only. */
+.lc-mdl__k {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .lc-mem__head {
+    display: none;
+  }
+  .lc-mdl {
+    grid-template-columns: 22px minmax(0, 1fr);
+    row-gap: 0.45rem;
+  }
+  .lc-mdl__cell,
+  .lc-mdl__size {
+    grid-column: 2;
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    text-align: left;
+  }
+  .lc-mdl__k {
+    display: inline;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    font-size: 0.66rem;
+    opacity: 0.75;
+  }
+}
+
 .lc-mem__rule {
   margin: 0;
   padding: 1.1rem 1.5rem;
@@ -730,4 +843,101 @@ code {
 }
 .lc-foot p {
   margin: 0;
+}
+
+/* --- Four steps --------------------------------------------------------- */
+.lc-steps {
+  list-style: none;
+  margin: 2.5rem 0 2rem;
+  padding: 0;
+  display: grid;
+  gap: 3rem;
+}
+
+.lc-step__h {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  margin: 0 0 0.5rem;
+  font-size: 1.125rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+.lc-step__h span {
+  font-family: var(--lc-font-code);
+  font-size: 0.8125rem;
+  color: var(--lc-accent);
+}
+
+.lc-step__p {
+  margin: 0 0 1rem;
+  color: var(--lc-text-muted);
+  max-width: 54ch;
+}
+
+.lc-step__pre {
+  margin: 0;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--lc-line);
+  border-radius: calc(var(--lc-radius) * 2);
+  background: var(--lc-page-2);
+  font-family: var(--lc-font-code);
+  font-size: 0.8125rem;
+  line-height: 1.9;
+  overflow-x: auto;
+}
+
+.lc-step__img {
+  display: block;
+  /* Native frame is 898px wide — never upscale it, that is what made the
+     terminal type look stretched. */
+  width: 100%;
+  max-width: 760px;
+  height: auto;
+  border: 1px solid var(--lc-line);
+  border-radius: calc(var(--lc-radius) * 2);
+  background: var(--lc-page-2);
+}
+
+/* ── Hero badges ──────────────────────────────────────────────────
+   Shields-style key/value pills, drawn locally so they stay crisp and
+   theme-aware instead of loading four raster images. */
+
+.lc-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  list-style: none;
+  margin: 0 0 2.25rem;
+  padding: 0;
+}
+
+.lc-badge {
+  display: flex;
+  font-family: var(--lc-font-code);
+  font-size: 0.7rem;
+  line-height: 1;
+  border: 1px solid var(--lc-line);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.lc-badge a {
+  display: flex;
+  text-decoration: none;
+  color: inherit;
+}
+.lc-badge__k {
+  padding: 0.36rem 0.5rem;
+  background: var(--lc-page-2);
+  color: var(--lc-text-muted);
+}
+.lc-badge__v {
+  padding: 0.36rem 0.5rem;
+  background: color-mix(in srgb, var(--lc-accent) 16%, transparent);
+  color: var(--lc-accent);
+  border-left: 1px solid var(--lc-line);
+}
+.lc-badge:hover .lc-badge__v {
+  background: color-mix(in srgb, var(--lc-accent) 26%, transparent);
 }

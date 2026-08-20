@@ -16,7 +16,22 @@ const { command, label = 'Install' } = Astro.props;
     <span class="lc-copy__sigil" aria-hidden="true">$</span>
     <code class="lc-copy__cmd">{command}</code>
   </span>
-  <button type="button" class="lc-copy__btn" aria-label={`Copy: ${command}`}>Copy</button>
+  <button type="button" class="lc-copy__btn" aria-label={`Copy: ${command}`} title="Copy">
+    {/* Two glyphs, one shown at a time via [data-state] — no text swap, so the
+        button never changes width mid-interaction. */}
+    <svg class="lc-copy__i lc-copy__i--copy" viewBox="0 0 24 24" width="15" height="15"
+         fill="none" stroke="currentColor" stroke-width="1.8"
+         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <rect x="9" y="9" width="11" height="11" rx="2" />
+      <path d="M5 15V6a2 2 0 0 1 2-2h9" />
+    </svg>
+    <svg class="lc-copy__i lc-copy__i--done" viewBox="0 0 24 24" width="15" height="15"
+         fill="none" stroke="currentColor" stroke-width="2"
+         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="m5 12.5 4.5 4.5L19 7" />
+    </svg>
+    <span class="lc-copy__btn-text">Copy</span>
+  </button>
 </div>
 
 <script>
@@ -40,17 +55,23 @@ const { command, label = 'Install' } = Astro.props;
       return true;
     };
 
+    const text = btn.querySelector<HTMLElement>('.lc-copy__btn-text');
+    const say = (label: string) => {
+      if (text) text.textContent = label;
+      btn.title = label;
+    };
+
     btn.addEventListener('click', async () => {
       try {
         await navigator.clipboard.writeText(command);
-        btn.textContent = 'Copied';
+        say('Copied');
         btn.dataset.state = 'copied';
       } catch {
-        btn.textContent = selectCommand() ? 'Selected — press ⌘C' : 'Copy failed';
+        say(selectCommand() ? 'Press ⌘C' : 'Copy failed');
         btn.dataset.state = 'manual';
       }
       setTimeout(() => {
-        btn.textContent = 'Copy';
+        say('Copy');
         delete btn.dataset.state;
       }, 2400);
     });

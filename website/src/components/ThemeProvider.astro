@@ -1,0 +1,35 @@
+---
+/**
+ * Starlight `ThemeProvider` override.
+ *
+ * Starlight's built-in version falls back to `prefers-color-scheme`, so on a
+ * Mac set to Light the docs loaded light even though localcode's identity is
+ * dark. This version defaults to DARK and only goes light when the reader has
+ * explicitly chosen it — same `starlight-theme` key the shared nav toggle
+ * writes, so the choice still carries between the landing page and the docs.
+ *
+ * It runs inline in <head>, before first paint, so there is no flash.
+ */
+---
+
+<script is:inline>
+  window.StarlightThemeProvider = (() => {
+    let stored = null;
+    try {
+      stored = localStorage.getItem('starlight-theme');
+    } catch {
+      /* storage blocked — fall through to the dark default */
+    }
+    const theme = stored === 'light' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+    return {
+      updatePickers(value = theme) {
+        document.querySelectorAll('starlight-theme-select').forEach((picker) => {
+          const select = picker.querySelector('select');
+          if (select) select.value = value;
+        });
+      },
+    };
+  })();
+</script>

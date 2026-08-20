@@ -28,6 +28,7 @@ class ProjectCheckGate:
     def __init__(self, max_retries: int = 2) -> None:
         self.max_retries = max_retries
         self.unverified = ""
+        self.red = ""
         self.retries = 0
 
     def observe(self, outcome: CheckOutcome) -> str:
@@ -35,11 +36,26 @@ class ProjectCheckGate:
         if outcome.is_red:
             # Red is a verdict: the checker worked. Clear any earlier no-verdict.
             self.unverified = ""
+            # ...but REMEMBER it. The loop feeds the diagnostics back and asks
+            # for a fix, and that nudge is bounded so an unfixable project can't
+            # spin. Running out of nudges is not the project turning green: it
+            # used to drop the red on the floor and let the turn complete as
+            # verified with a broken build. Same rule the no-verdict path
+            # already states, applied to the verdict we actually have.
+            self.red = outcome.detail or outcome.label or "the project typecheck reported errors"
             return RED
         if outcome.status in ("timed_out", "failed"):
             self.unverified = outcome.detail or outcome.status
             return UNVERIFIED
-        self.unverified = ""
+        # Only a checker that actually ran to GREEN clears an earlier verdict.
+        # `unavailable` reaches here too, and must NOT: "no checker available"
+        # is the absence of evidence, so treating it as clearing would let a
+        # project that went red in round 2 launder itself clean in round 3 the
+        # moment the checker stopped being detectable (node_modules removed
+        # mid-turn, a tsconfig edited into an unparseable state).
+        if outcome.is_verified:
+            self.unverified = ""
+            self.red = ""
         return OK
 
     def observe_exception(self, exc: BaseException) -> str:
@@ -58,14 +74,18 @@ class ProjectCheckGate:
         return True
 
     def blocks_completion(self) -> bool:
-        """A check that never returned a verdict is not evidence of a working
-        build, whatever else the verification registry happens to hold."""
-        return bool(self.unverified)
+        """A check that never returned a verdict — or that returned errors
+        nobody fixed — is not evidence of a working build, whatever else the
+        verification registry happens to hold."""
+        return bool(self.unverified or self.red)
 
     def result_note(self) -> str:
         """Text for the FINAL RESULT, so the reason reaches the TUI and `--json`
         (unlike print_info, which is invisible in the TUI and suppressed under
         --json)."""
-        if not self.unverified:
-            return ""
-        return f"\n\nProject typecheck was not verified: {self.unverified}"
+        if self.unverified:
+            return f"\n\nProject typecheck was not verified: {self.unverified}"
+        if self.red:
+            return ("\n\nThe project typecheck is still reporting errors:\n"
+                    f"{self.red}")
+        return ""

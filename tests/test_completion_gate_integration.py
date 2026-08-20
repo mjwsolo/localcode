@@ -248,3 +248,132 @@ def test_tui_still_shows_a_plain_model_answer(tmp_path):
     (repo / "main.py").write_text("print('hi')\n")
     log_text = _tui_drive(tmp_path, repo, [say("Hello from the model.")], "hi there")
     assert "Hello from the model." in log_text
+
+
+# ── a checker that stays RED ────────────────────────────────────────────────
+#
+# Regression for the Anki-clone run that finished with three real tsc errors
+# and a `// placeholder` module at the centre of the app. RED is a verdict, so
+# it cleared the gate's no-verdict state — but nothing else remembered it. Once
+# the bounded nudges ran out, the tier-2 block stopped running altogether and
+# the turn completed as "verified" with the project still broken. The
+# no-verdict path already states the rule ("running out of retries does NOT
+# make the project verified"); RED simply never implemented it.
+
+
+@pytest.fixture
+def red_checker_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "project"
+    repo.mkdir()
+    # Nonzero WITH diagnostics: the checker worked and the project is broken.
+    _ts_project(repo, (
+        "#!/bin/sh\n"
+        "echo \"src/pages/Study.tsx(3,10): error TS2305: Module '../lib/fsrs' \"\n"
+        "exit 2\n"
+    ))
+    return repo
+
+
+def test_a_persistently_red_check_does_not_complete_successfully(tmp_path, red_checker_repo):
+    trace, app = _drive(tmp_path, red_checker_repo)
+    assert trace.error is None
+    status, code, _reason, text = _headless(app, trace)
+    assert status == "incomplete" and code == 1, (
+        f"a project with real typecheck errors completed as {status!r}")
+    assert "not verified" in text or "remains incomplete" in text
+
+
+def test_a_red_check_is_re_run_after_the_nudges_are_exhausted(
+        tmp_path, red_checker_repo, monkeypatch):
+    """The bound limits how many times the model is NUDGED, not whether the
+    project is checked. If checking stops, a stale red would either be
+    forgotten (the bug) or block a build the model just fixed."""
+    import localcode.tools.project_check as pc
+
+    calls = []
+    real = pc.run_project_check_result
+
+    def _spy(*a, **kw):
+        out = real(*a, **kw)
+        calls.append(out.status)
+        return out
+
+    monkeypatch.setattr(pc, "run_project_check_result", _spy)
+    _trace, _app = _drive(tmp_path, red_checker_repo)
+    assert len(calls) >= 3, f"checker ran only {len(calls)} time(s): {calls}"
+    assert set(calls) == {"errors"}
+
+
+def test_the_red_diagnostics_reach_the_final_text(tmp_path, red_checker_repo):
+    _trace, app = _drive(tmp_path, red_checker_repo)
+    _status, _code, _reason, text = _headless(app, _trace)
+    assert "typecheck" in text.lower()
+
+
+def test_a_red_checker_blocks_even_when_the_model_verified(tmp_path, red_checker_repo):
+    """The 360 case exactly: the model ran its own build (satisfying the
+    verification registry) while the project typecheck stayed RED. RED cleared
+    the gate's no-verdict state and nothing else remembered it, so once the
+    nudges ran out the turn completed as verified with the build still broken."""
+    trace, app = _drive_with_verification(tmp_path, red_checker_repo)
+    status, code, _reason, text = _headless(app, trace)
+    assert (status, code) == ("incomplete", 1), (
+        f"a red typecheck completed as {status!r} because the model self-verified")
+    assert "typecheck" in text.lower()
+
+
+# ── a hollow module under a GREEN checker ───────────────────────────────────
+
+
+def test_a_placeholder_module_blocks_even_with_a_green_checker(tmp_path):
+    """The other half of the Anki failure. A typecheck can be perfectly green
+    over a module that was imported and left empty, so the red gate alone would
+    let this through — the app builds and the feature does not exist."""
+    repo = tmp_path / "project"
+    repo.mkdir()
+    _ts_project(repo, "#!/bin/sh\nexit 0\n")
+    script = [
+        tool_round(("write_file", {
+            "path": "src/lib/fsrs.ts",
+            "content": "// placeholder\n",
+        })),
+        tool_round(("write_file", {
+            "path": "src/app.ts",
+            "content": "import { schedule } from './lib/fsrs';\nexport const a = schedule;\n",
+        })),
+        say("Done — spaced repetition is implemented."),
+    ]
+    app = build_test_app(tmp_path, script=script, cwd=repo)
+    trace = run_one_turn(app, EventRecorder(), BUILD_PROMPT)
+    assert trace.error is None
+    status, code, _reason, text = _headless(app, trace)
+    assert (status, code) == ("incomplete", 1), (
+        f"a hollow imported module completed as {status!r}: {text!r}")
+    # Assert the HOLLOW gate's own words. Matching a bare "fsrs" passes on the
+    # grounded file summary, which is how a dead-code version of this gate first
+    # went green here.
+    assert "imported but contain no code" in text
+    assert "src/lib/fsrs.ts" in text
+
+
+def test_a_real_module_under_a_green_checker_completes(tmp_path):
+    """The false-positive guard at loop level: the same shape, implemented."""
+    repo = tmp_path / "project"
+    repo.mkdir()
+    _ts_project(repo, "#!/bin/sh\nexit 0\n")
+    script = [
+        tool_round(("write_file", {
+            "path": "src/lib/fsrs.ts",
+            "content": "export const schedule = (n: number) => n * 2;\n",
+        })),
+        tool_round(("write_file", {
+            "path": "src/app.ts",
+            "content": "import { schedule } from './lib/fsrs';\nexport const a = schedule(1);\n",
+        })),
+        tool_round(("bash", {"command": "./node_modules/.bin/tsc --noEmit"})),
+        say("Done — the app is built and type-checks."),
+    ]
+    app = build_test_app(tmp_path, script=script, cwd=repo)
+    trace = run_one_turn(app, EventRecorder(), BUILD_PROMPT)
+    status, code, _reason, text = _headless(app, trace)
+    assert (status, code) == ("ok", 0), f"a real implementation came back {status}: {text!r}"

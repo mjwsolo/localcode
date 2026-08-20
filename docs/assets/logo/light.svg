@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 180" width="720" height="180">
+  <rect width="720" height="180" fill="#FFFFFF"/>
+  <g transform="translate(64 54) scale(2.6)">
+    <g fill="none" stroke="#141719" stroke-width="2.5" stroke-linecap="square" stroke-linejoin="miter">
+      <path d="M4 27V13L16 5L28 13V27Z"/>
+      <path d="M11 17.5L13.5 20L11 22.5"/>
+    </g>
+    <rect x="17" y="17.5" width="5" height="5" fill="#1B5DBF"/>
+  </g>
+  <text x="176" y="106" fill="#141719" font-family="Instrument Sans"
+        font-size="62" font-weight="600" letter-spacing="-1.6">localcode</text>
+</svg>

@@ -5,11 +5,9 @@ description: Reusable prompt templates, and shell commands that run at lifecycle
 
 ## Skills
 
-A skill is a Markdown file — a reusable prompt template the model can pull in.
-Frontmatter is optional; a file with none is treated as the whole body.
+A skill is a Markdown file. It is a reusable prompt template that the model can use. Frontmatter is optional. If a file has no frontmatter, its full body is used.
 
-localcode looks for skills in several places, so skills you already wrote for
-another agent are picked up:
+localcode finds skills in several places. This means it can use skills you wrote for another agent:
 
 ```text
 ~/.localcode/skills/
@@ -19,19 +17,17 @@ another agent are picked up:
 <repo>/.opencode/skills/    ~/.config/opencode/skills/
 ```
 
-Inside the TUI:
+In the TUI:
 
 ```text
 /skills     # list loaded skills and where each came from
 ```
 
-Skills can also be installed from a URL, which is a network fetch — see
-[Network Boundary](/localcode/concepts/network-boundary).
+You can also install skills from a URL. This fetches data from the network. See [Network Boundary](/localcode/concepts/network-boundary).
 
 ## Hooks
 
-Hooks are shell commands that run at lifecycle events. They are defined in
-`.localcode/hooks.toml` (project) or `~/.localcode/hooks.toml` (global):
+Hooks are shell commands that run during lifecycle events. Define them in `.localcode/hooks.toml` for a project or `~/.localcode/hooks.toml` globally:
 
 ```toml
 [hooks]
@@ -41,28 +37,23 @@ pre_tool_use = "if [ \"$TOOL_NAME\" = 'bash' ]; then echo \"bash: $TOOL_ARGS\" >
 post_tool_use = ""
 ```
 
-| Hook | When | Can block? |
+| Hook | When it runs | Can it block? |
 | --- | --- | --- |
-| `session_start` | Once, at startup | no |
+| `session_start` | Once at startup | no |
 | `user_prompt_submit` | When you submit a prompt | yes |
 | `pre_tool_use` | Before each tool call | yes — exit non-zero |
 | `post_tool_use` | After each tool call | no |
 
-Available environment variables: `$LOCALCODE_SESSION_ID`,
-`$LOCALCODE_REPO_ROOT`, `$LOCALCODE_MODEL`; `$PROMPT`; `$TOOL_NAME`,
-`$TOOL_ARGS`; and `$TOOL_RESULT`, `$TOOL_ERROR` for `post_tool_use`.
+These environment variables are available: `$LOCALCODE_SESSION_ID`, `$LOCALCODE_REPO_ROOT`, `$LOCALCODE_MODEL`, `$PROMPT`, `$TOOL_NAME`, `$TOOL_ARGS`, and `$TOOL_RESULT`, `$TOOL_ERROR` for `post_tool_use`.
 
-A tool call blocked by a hook surfaces as error code `E2111`.
+If a hook blocks a tool call, you will see error code `E2111`.
 
-### Project hooks must be trusted first
+### Trust Project Hooks First
 
-A repo's `.localcode/hooks.toml` runs shell commands on your machine, so
-localcode does **not** load it just because you opened the directory. Review it
-and trust it explicitly:
+A repo's `.localcode/hooks.toml` runs shell commands on your machine. Because of this, localcode does **not** load it when you only open the directory. Review and trust it first:
 
 ```text
 /hooks      # show this repo's hooks.toml and trust it
 ```
 
-Treat trusting a hooks file the same way you'd treat running a script from that
-repository — because that is what it is.
+Trusting a hooks file is the same as running a script from that repository. Treat it with the same care.

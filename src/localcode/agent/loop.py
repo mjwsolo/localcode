@@ -583,6 +583,8 @@ def run_agent_loop(
     # passing command in the verification registry must not stand in for it.
     from .project_check_gate import ProjectCheckGate as _ProjectCheckGate
     _project_check_gate = _ProjectCheckGate()
+    from .hollow_module import HollowModuleGate as _HollowModuleGate
+    _hollow_gate = _HollowModuleGate()
     # Reject → re-read → reject spin: ONE actionable redirect per turn
     # (recovery.detect_reject_reread_loop, recomputed from the transcript).
     _reject_reread_nudge_done = False
@@ -1658,17 +1660,21 @@ def run_agent_loop(
             # keeps holding until the project is clean or _MAX_BUILD_VERIFY_RETRIES
             # is hit (a genuinely unfixable project can't spin forever).
             #
-            # NOTE: gated on build_app, which `infer_goal_state` (now generalist)
-            # never sets — so this stop-gate is currently DORMANT. That's
-            # intentional for 0.3.20: making it general ("any code-changing turn
-            # + a checker") fires a full project typecheck on every one-line edit,
-            # which is too aggressive and slow. A proper general trigger (fire on
-            # a multi-file / new-file BUILD completion, not a small edit) is a
-            # follow-up. Left dormant rather than shipped half-tuned.
+            # NOTE: gated on build_app. `infer_goal_state` DOES set that for a
+            # build-shaped request (see the classifier note in agent/goal.py), so
+            # this is live — it is deliberately NOT general, because firing a
+            # full project typecheck on every one-line edit is too slow. A
+            # narrower general trigger (a multi-file / new-file build completion,
+            # not a small edit) is still the follow-up.
+            #
+            # `_MAX_BUILD_VERIFY_RETRIES` bounds how many times the model is
+            # NUDGED, and must not bound whether the project is CHECKED. Gating
+            # the check itself meant that after the last nudge the typecheck
+            # simply stopped running, so a project that was still red went into
+            # the completion decision with no verdict attached to it at all.
             if (
                 not _blocking_question
                 and _goal_state.goal_type == "build_app"
-                and _build_verify_nudges < _MAX_BUILD_VERIFY_RETRIES
                 and _is_enabled(Feature.AUTO_NUDGE_RECOVERY)
                 and _changed_code_files(changed_files)
             ):
@@ -1702,7 +1708,7 @@ def run_agent_loop(
                              self_verified=bool(_self_verified))
                 except Exception:
                     pass
-                if _proj_errors:
+                if _proj_errors and _build_verify_nudges < _MAX_BUILD_VERIFY_RETRIES:
                     # STOP: cannot finish while the gate is red. Errors are fresh
                     # actionable feedback (they change as the model fixes them),
                     # so this is NOT routed through the "not twice in a row" nag
@@ -1719,6 +1725,17 @@ def run_agent_loop(
                     _ephemeral_nudge_indices.append(len(messages) - 1)
                     _last_nudge_kind = "build_verify_errors"
                     continue  # don't accept completion — the gate is red
+                if _proj_errors:
+                    # Out of nudges and STILL red. Stop asking the model to fix it
+                    # (that's what the bound is for) but do not let the turn call
+                    # itself done: the gate remembers the red, so the completion
+                    # decision below reports the build as unfinished rather than
+                    # verified. Falling through here silently is what let a build
+                    # with three real tsc errors complete as "verified".
+                    _self_verified = False
+                    out.print_info(
+                        "Typecheck still reporting errors after "
+                        f"{_build_verify_nudges} attempts — build stays unverified.")
                 if _project_check_gate.blocks_completion():
                     # Not red, but not green either. Ask the model to verify by
                     # hand — EVERY time, up to its own bound, so a second and
@@ -1739,6 +1756,41 @@ def run_agent_loop(
                         _ephemeral_nudge_indices.append(len(messages) - 1)
                         _last_nudge_kind = "build_verify_unverified"
                         continue  # don't accept completion — nothing is verified
+                # A typecheck can be green over a module that was imported and
+                # left empty — TypeScript is happy with `import './fsrs'` when
+                # fsrs.ts has no exports at all, and Python always is. This is
+                # the "// placeholder at the centre of the app" failure, so it
+                # gets the same treatment as red: feed it back, bounded, and
+                # don't let the turn call itself done while it stands.
+                _hollow: list[str] = []
+                try:
+                    from .hollow_module import hollow_imported_modules
+                    # `changed_files` itself — `_changed_code_files` is a bool
+                    # predicate, not a filter, and passing it here silently made
+                    # this whole gate dead code.
+                    _hollow = hollow_imported_modules(
+                        str(app.repo_root), changed_files)
+                except Exception:
+                    _hollow = []   # never invent a defect out of a scan failure
+                if _hollow:
+                    _self_verified = False
+                    _hollow_gate.mark(_hollow)
+                    out.print_info(
+                        f"Imported but empty: {', '.join(_hollow)} — not complete.")
+                    if _hollow_gate.consume_retry():
+                        messages.append({"role": "user", "content": (
+                            "SYSTEM: these modules are imported by other files but "
+                            "contain no code at all — they were left as placeholders:"
+                            "\n\n" + "\n".join(f"  - {h}" for h in _hollow) +
+                            "\n\nImplement each one for real, or delete it and remove "
+                            "the imports. Do not describe the feature as working while "
+                            "its module is empty."
+                        )})
+                        _ephemeral_nudge_indices.append(len(messages) - 1)
+                        _last_nudge_kind = "hollow_module"
+                        continue  # don't accept completion — the app is hollow
+                else:
+                    _hollow_gate.clear()
                 if not _self_verified and _build_verify_nudges < 1:
                     # Gate is clean (checker passed OR none configured) AND the
                     # model never ran a build/test itself — advise ONCE to verify.
@@ -1789,6 +1841,7 @@ def run_agent_loop(
                     # command sitting in the verification registry lets the turn
                     # finish as "verified" while the real check keeps failing.
                     or _project_check_gate.blocks_completion()
+                    or _hollow_gate.blocks_completion()
                 )
             )
             if _completion_blocked:
@@ -1801,6 +1854,7 @@ def run_agent_loop(
                 # TUI and in `--json` — unlike print_info, which is invisible in
                 # the TUI and suppressed under --json.
                 content += _project_check_gate.result_note()
+                content += _hollow_gate.result_note()
             if _goal_state.goal_type == "run_or_launch":
                 _task_port = int(getattr(_task_state, "active_port", 0) or 0)
                 content = ground_run_or_launch_text(content, _task_port)
