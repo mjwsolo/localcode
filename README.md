@@ -26,13 +26,31 @@
 
 localcode serves **one GGUF model at a time** through a bundled `llama-server` on `127.0.0.1`. Its agent loop reads and edits files, runs your tests, and tells you what it verified.
 
-Results measured on this machine with Qwen3.6-35B-A3B (IQ2_M) and a 131072-token context:
+localcode reads your Mac's unified memory at startup and picks the most
+capable model whose weights fit inside about 55% of it, leaving room for the
+KV cache and macOS. There is no fixed default.
+
+| Unified memory | Auto-selected model | Weights | Models that fit |
+| --- | --- | ---: | ---: |
+| 16 GB | Gemma 4 12B (Q4) | 7.37 GB | 1 |
+| 24 GB | Qwen 3.6 35B-A3B (Q2) | 10.7 GB | 3 |
+| 32 GB | Qwen 3.6 35B-A3B (Q2) | 10.7 GB | 5 |
+| 48 GB | Qwen 3.6 35B-A3B (Q2) | 10.7 GB | 8 |
+| 64 GB | Gemma 4 26B-A4B (Q8) | 28 GB | 9 |
+| 96 GB+ | Qwen 3.6 35B-A3B (Q8) | 38.5 GB | 10 |
+
+Throughput depends on the model, the quant and the machine, so the only
+numbers published here are ones actually measured. On the development
+machine — **MacBook Pro, M5 Max, 128 GB, macOS 26.5** — running
+Qwen3.6-35B-A3B (IQ2_M) at a 131072-token context:
 
 | | |
 |---|---|
 | Generation | ~89 tokens/sec |
 | Prompt eval | ~1174 tokens/sec |
-| A 4-tool-call task, warm | 12-15 s end to end |
+| A 4-tool-call task, warm | 12–15 s end to end |
+
+Numbers for other Macs have not been measured yet, so none are published.
 
 Inference is local by default. There is no analytics endpoint, usage reporting, or version check. Some features *do* use the network: model downloads, the `web_search` / `web_fetch` tools, MCP servers, and `runtime.base_url` if you point it away from localhost. [Network Boundary](https://mjwsolo.github.io/localcode/concepts/network-boundary/) lists all of them instead of simply calling localcode "offline."
 
