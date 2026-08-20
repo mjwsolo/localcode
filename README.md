@@ -18,12 +18,9 @@
   llama.cpp + GGUF. No cloud inference, API keys, or account.
 </p>
 
-
 <p align="center">
   <img src="https://raw.githubusercontent.com/mjwsolo/localcode/main/docs/assets/demo/first-change.gif" alt="A real localcode turn: two reads, one edit, then pytest reporting 5 passed" width="900">
 </p>
-
-<p align="center"><sub>A real turn recorded from the TUI. Four tool calls from start to green.</sub></p>
 
 ## What actually runs, and where
 
