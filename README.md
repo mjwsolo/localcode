@@ -52,7 +52,7 @@ Qwen3.6-35B-A3B (IQ2_M) at a 131072-token context:
 
 Numbers for other Macs have not been measured yet, so none are published.
 
-Inference is local by default. There is no analytics endpoint, usage reporting, or version check. Some features *do* use the network: model downloads, the `web_search` / `web_fetch` tools, MCP servers, and `runtime.base_url` if you point it away from localhost. [Network Boundary](https://mjwsolo.github.io/localcode/concepts/network-boundary/) lists all of them instead of simply calling localcode "offline."
+Inference is local by default. Some features *do* use the network: model downloads, the `web_search` / `web_fetch` tools, and MCP servers.
 
 ## Install
 
