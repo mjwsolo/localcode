@@ -2,13 +2,13 @@
 /**
  * Starlight `SiteTitle` override — inline Finder Mark + lowercase wordmark.
  */
-import FinderMark from './FinderMark.astro';
+import HouseMark from './HouseMark.astro';
 
 const { siteTitleHref } = Astro.locals.starlightRoute;
 ---
 
 <a href={siteTitleHref} class="lc-site-title">
-  <FinderMark size={24} />
+  <HouseMark size={24} />
   <span>localcode</span>
 </a>
 

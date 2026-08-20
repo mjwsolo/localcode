@@ -3,13 +3,11 @@ title: MCP
 description: Connect Model Context Protocol servers to localcode.
 ---
 
-localcode is an MCP client. Servers you configure expose their tools to the
-agent alongside the built-in ones.
+localcode is an MCP client. The servers you configure give the agent access to their tools alongside the built-in tools.
 
 ## Configure
 
-Servers live in `~/.localcode/mcp.json` under the `mcpServers` key — the same
-shape other MCP clients use:
+Add servers to the `mcpServers` key in `~/.localcode/mcp.json`. This uses the same format as other MCP clients:
 
 ```json
 {
@@ -22,9 +20,9 @@ shape other MCP clients use:
 }
 ```
 
-If you set `LOCALCODE_HOME`, the file is read from there instead.
+If you set `LOCALCODE_HOME`, localcode reads the file from that location instead.
 
-stdio, HTTP and SSE transports are supported, via the official MCP SDK.
+The official MCP SDK supports stdio, HTTP, and SSE connections.
 
 ## Manage from the TUI
 
@@ -32,19 +30,8 @@ stdio, HTTP and SSE transports are supported, via the official MCP SDK.
 /mcp        # list configured servers, or reload them after editing mcp.json
 ```
 
-Servers are also connected for headless `localcode run --json`, not just the
-TUI.
+Servers also connect when you use headless `localcode run --json`. They are not limited to the TUI.
 
 ## Trust
 
-An MCP server is an arbitrary program, and a remote one sees whatever arguments
-the model passes to its tools. Configuring a server is a decision to trust it —
-it sits outside the local-only boundary described in
-[Network Boundary](/localcode/concepts/network-boundary).
-
-:::note[Preview stub]
-A worked end-to-end recipe is not on this preview site yet. The repository has
-a tested walkthrough in
-[`docs/mcp-lsp.md`](https://github.com/mjwsolo/localcode/blob/main/docs/mcp-lsp.md),
-which should be migrated here.
-:::
+An MCP server can run any program. A remote server can see all arguments that the model sends to its tools. Only configure a server if you trust it. The server is outside the local-only boundary explained in [Network Boundary](/localcode/concepts/network-boundary).

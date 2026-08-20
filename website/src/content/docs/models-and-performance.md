@@ -5,59 +5,30 @@ description: The model catalogue, and how to think about speed on your Mac.
 
 ## The catalogue
 
-localcode ships a curated catalogue rather than a model zoo. Every entry
-records its quantisation, download size, active parameter count, architecture,
-and the memory threshold at which it becomes auto-recommendable.
+localcode provides a curated catalogue, not a model zoo. Each entry lists its quantisation, download size, active parameter count, architecture, and the memory needed for automatic recommendation.
 
-Production-ready picks by memory size are in
-[Choose a Model](/localcode/start-here/choose-a-model). The complete table,
-including the experimental entries, is in the
-[repository README](https://github.com/mjwsolo/localcode#models).
+See production-ready choices by memory size in [Choose a Model](/localcode/start-here/choose-a-model). See the full table, including experimental entries, in the [repository README](https://github.com/mjwsolo/localcode#models).
 
-Experimental models are pickable but never auto-recommended: their
-architectures need a runner other than the bundled server, which localcode
-builds on first use. Treat them as experiments.
+You can select experimental models, but localcode never recommends them automatically. Their architectures need a runner other than the bundled server. localcode builds this runner the first time you use it. Treat these models as experiments.
 
-## What actually determines speed
+## What determines speed
 
-Three things, in roughly this order:
+Three things matter, roughly in this order:
 
-1. **Active parameters per token.** Decode on Apple Silicon is
-   memory-bandwidth-bound. A Mixture-of-Experts model activates only a few
-   billion parameters per token, so it reads far fewer bytes per token than a
-   dense model of the same total size.
-2. **Memory bandwidth.** This varies across chip tiers far more than core
-   count does, and it is the number that moves decode speed.
-3. **KV cache size.** TurboQuant compression (`q8_0`-K + `turbo4`-V) keeps the
-   cache small enough that long contexts remain workable — see
-   [Unified Memory](/localcode/concepts/unified-memory).
+1. **Active parameters per token.** On Apple Silicon, memory bandwidth limits decoding speed. A Mixture-of-Experts model uses only a few billion parameters per token. It reads far fewer bytes per token than a dense model with the same total size.
+2. **Memory bandwidth.** This varies much more between chip tiers than the number of cores. It directly affects decoding speed.
+3. **KV cache size.** TurboQuant compression (`q8_0`-K + `turbo4`-V) keeps the cache small enough for long contexts to remain practical. See [Unified Memory](/localcode/concepts/unified-memory).
 
 ## The tok/s numbers in the model picker
 
-The model picker shows an estimated decode speed next to each quantisation.
-That number is **calculated, not measured**. localcode does not run a benchmark
-on your machine — there is no benchmark command and no benchmark screen.
+The model picker shows an estimated decoding speed next to each quantisation. This number is **calculated, not measured**. localcode does not run a benchmark on your machine. There is no benchmark command or benchmark screen.
 
-The estimate is an analytic model: bytes read per token (the quant's size
-scaled by its active-parameter fraction, so MoE models count only their active
-experts) divided by an assumed fraction of your chip's rated memory bandwidth,
-plus a fixed per-token compute floor. It is calibrated against a small number
-of maintainer measurements on one machine.
+The estimate uses an analytic model. It divides the bytes read per token by an assumed share of your chip's rated memory bandwidth. It then adds a fixed compute time for each token. The bytes per token come from the quant's size and its active-parameter fraction. This means MoE models count only their active experts. The model is calibrated using a small number of maintainer measurements from one machine.
 
-Treat it as a ranking aid — it is good at telling you that one quant will be
-slower than another on your hardware. Do not treat it as a prediction of the
-throughput you will see, which also depends on context length, thermal state
-and whatever else is running.
+Use the estimate to compare options. It can show that one quant will be slower than another on your hardware. Do not treat it as a prediction of your actual throughput. Real speed also depends on context length, thermal state, and other running tasks.
 
-## Checking your own setup
+## Checking your setup
 
 ```text
 /status     # server health, current model, perf configuration
 ```
-
-:::note[Preview stub]
-This page deliberately quotes no throughput figures. The maintainers' measured
-numbers exist but have only been validated on a narrow set of hardware, so
-publishing them here as though they generalise would be misleading. A future
-pass should add a proper methodology section and per-chip results.
-:::

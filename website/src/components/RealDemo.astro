@@ -1,0 +1,57 @@
+---
+/**
+ * A REAL recorded localcode turn — not a design preview.
+ *
+ * Frames are exported straight from the running Textual TUI via
+ * App.save_screenshot() while the agent works against a local
+ * llama-server, then assembled with ffmpeg. The repository's tests
+ * genuinely pass at the end of the take; nothing here is authored.
+ *
+ * Regenerate: bakeoff/film.py  (see website/scripts)
+ */
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const src = `${base}/demo/first-change.gif?v=f0f2758d`;
+const still = `${base}/demo/first-change-final.png?v=3744a23d`;
+---
+
+<figure class="lc-demo">
+  <div class="lc-demo__frame">
+    <img
+      src={src}
+      alt="A real localcode turn: it reads the stub and the tests, edits the file, runs pytest -q, and reports 5 passed"
+      width="866"
+      height="491"
+      loading="lazy"
+      decoding="async"
+      style={`background-image:url(${still});background-size:cover`}
+    />
+  </div>
+</figure>
+
+<style>
+  .lc-demo {
+    margin: 0;
+  }
+
+  .lc-demo__frame {
+    border: 1px solid var(--lc-line, #2a2f34);
+    border-radius: calc(var(--lc-radius, 4px) * 2);
+    overflow: hidden;
+    background: var(--lc-page-2, #171a1d);
+    line-height: 0;
+  }
+
+  .lc-demo__frame img {
+    width: 100%;
+    height: auto;
+    display: block;
+  }
+
+  /* caption removed — the frame speaks for itself */
+
+  @media (prefers-reduced-motion: reduce) {
+    .lc-demo__frame img {
+      content: none;
+    }
+  }
+</style>

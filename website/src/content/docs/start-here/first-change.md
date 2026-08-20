@@ -1,119 +1,84 @@
 ---
-title: First Change
-description: Make one small, verified edit in a repo you already have.
+title: Getting Started
+description: Install localcode, open a repo, pick a model, make one change.
 ---
 
-The fastest way to understand localcode is to give it one small change in a
-repo you already know, and watch it prove the change works.
+Four steps. Each step is a real app recording.
 
-## 1. Open a repo you know
+## 1. Install
+
+```sh
+pip install -U localcode
+```
+
+Requires macOS on Apple Silicon and Python 3.10+.
+
+## 2. Open your repo
 
 ```sh
 cd ~/work/some-project
 localcode
 ```
 
-Pick a project with a test command that already passes. localcode uses your
-repo's own checks as its evidence, so a repo that is already green makes the
-loop easy to read.
+Choose a project whose tests already pass. localcode uses your repo's own checks as proof.
 
-On first launch you'll step through setup, a mode choice (**Fast** or
-**Reasoning**), and the model picker. After that, `localcode` drops you
-straight into the chat screen.
+## 3. Choose a model
 
-## 2. Ask for one specific thing
+The model picker opens on your first launch. Use the arrow keys to choose a model. Then press Enter. The star shows the recommended model for your Mac.
 
-Small and concrete beats broad and vague — especially with a local model.
+![The localcode model picker: seven models, moving down the list and choosing one](/localcode/demo/step-2-choose-model.gif?v=a0c3cc9d)
+
+Learn more in [Choose a Model](/localcode/start-here/choose-a-model).
+
+## 4. Start building
+
+Enter your request in the chat screen. Include the file name and the check to run.
+
+![Entering a goal in the localcode chat screen and pressing Enter](/localcode/demo/step-3-ask.gif?v=0523fe0c)
 
 ```text
-> in src/timeutil.py, change parse_duration to accept compound units like "1h30m"
+> Implement the retry decorator in retry.py so every test in test_retry.py
+  passes. Do not modify test_retry.py. Then run: pytest -q
 ```
 
-Start with a verb localcode's goal classifier recognises as an edit — `fix`,
-`change`, `edit`, `update`, `refactor`, `rename`, `remove`, `add`. That is what
-puts the turn inside the evidence gate described below; *"make parse_duration
-accept 1h30m"* classifies as a general task and is not gated.
+## 5. Watch it verify
 
-Good first asks:
+The model reads the stub and tests. It writes the code, runs `pytest -q`, and reports what it checked.
 
-- "add a `--json` flag to the `report` command"
-- "change `parse_config` to raise `ValueError` on empty input instead of returning `None`"
-- "add a test for the missing-key branch in `parse_config`"
+![localcode reading files, editing them, and then showing 5 passed in pytest](/localcode/demo/step-4-verify.gif?v=92c546ff)
 
-## 3. Watch the loop
+<small>Qwen3.6-35B-A3B (IQ2_M) runs locally on `127.0.0.1:8081`. It uses four tool
+calls, takes 11.5&nbsp;s, and uses 276 tokens. The repository's tests fail before the turn and
+pass after it. The frames come directly from the running app.</small>
 
-A turn is a sequence of tool calls, and localcode shows each one:
-
-- `read_file` / `grep` / `list_files` — building context before touching anything
-- `edit_file` / `multi_edit` / `write_file` — the actual change
-- `bash` — running your repo's checks
-
-By default localcode runs at the **auto_edit** autonomy level: file edits go
-through without asking, while a broad set of shell commands stops for
-confirmation. The match is a plain substring test against a fixed list, not a
-judgement about what a command does — examples of the literal strings on it
-include `pip install`, `npm install`, `brew install`, `python `, `node `,
-`npm run`, `npm start`, `git push`, `git reset --hard`, `sudo `, `rm -r`,
-`docker rm` and `kubectl delete`. So the `bash` step that runs
-`python -m pytest` will ask, because the string `python ` appears in it; a
-plain `pytest` will not.
-
-`background_process` is confirmed at this level too. `web_search`, `web_fetch`
-and MCP tools never prompt at any level. The exact lists are in
-[Permissions](/localcode/start-here/permissions).
-
-## 4. Expect a failure, and expect a recovery
-
-A first attempt that fails a check is normal and is the interesting part. When
-the test command comes back red, the failure output goes back into the turn and
-the model edits again rather than declaring success.
-
-Be clear about who does what here. The model chooses to run your tests;
-localcode does not run them for you. What localcode enforces is the *claim*,
-and only for requests it classified as a build or an edit: if such a turn
-changed code files and localcode never observed a build, typecheck, test or
-lint command that passed against the current file contents, it will not report
-success — it closes the turn saying the task remains incomplete instead. On
-build-shaped goals it additionally runs a typecheck itself and refuses to end
-the turn while that is red.
-
-A request that classified as a general task carries no such guarantee. See
-[Verification](/localcode/concepts/verification) for the exact scope.
-
-## 5. Review the diff
-
-localcode is not a replacement for reading your own diff:
+Then check the diff yourself:
 
 ```sh
 git diff
 ```
 
-If you don't want the change, `/undo` reverts the last file change the agent
-made, and `/undo all` reverts every change from the session. See
-[Undo](/localcode/guides/undo).
+`/undo` reverses the last change. `/undo all` reverses the whole session.
 
-## 6. Useful commands while you work
+## Commands you'll use
 
 | Command | What it does |
 | --- | --- |
-| `/status` | Server health, current model, perf configuration |
-| `/model` | List models or switch (`/model qwen`) |
-| `/permissions` | Toggle command approvals on and off |
-| `/undo` | Revert the last file change (`/undo all` for every change) |
-| `/clear` | Clear conversation history |
-| `/exit` | Quit |
+| `/status` | Shows server health, the current model, and performance settings |
+| `/model` | Lists models or switches models (`/model qwen`) |
+| `/permissions` | Turns command approvals on or off |
+| `/undo` | Reverses the last file change (`/undo all` reverses every change) |
+| `/clear` | Clears the conversation history |
+| `/exit` | Quits |
 
-The full list is in [Slash Commands](/localcode/reference/slash-commands).
+See the full list: [Slash Commands](/localcode/reference/slash-commands).
 
-## When you're done
+## Two things to know
 
-localcode prints a session ID on exit. To pick the conversation back up:
+**Approvals.** By default, localcode uses **auto_edit**. It allows file edits. It asks for confirmation before running commands on a fixed list. This list includes `pip install`, `npm install`, `python `, `git push`, `rm -r`, and `sudo `. It uses a simple substring match. So `python -m pytest` needs approval, but plain `pytest` does not. See [Permissions](/localcode/start-here/permissions).
 
-```sh
-localcode --resume last
-```
+**The evidence gate.** If an edit turn changes code, localcode must see a successful build, typecheck, test, or lint check for the current files. Otherwise, it will not report success. It ends the turn by saying the task is incomplete. A fixed list of verbs marks a turn as an edit: `fix`, `change`, `edit`, `update`, `refactor`, `rename`, `remove`, and `add`. Requests without these verbs run as general tasks without this gate.
 
 ## Next
 
-- [Choose a Model](/localcode/start-here/choose-a-model) — get the best model your Mac can hold.
-- [Network Boundary](/localcode/concepts/network-boundary) — what leaves the machine, and when.
+- [Choose a Model](/localcode/start-here/choose-a-model) — find the best model that fits on your Mac.
+- [Network Boundary](/localcode/concepts/network-boundary) — learn what leaves your machine and when.

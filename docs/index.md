@@ -7,15 +7,15 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/pypi/v/localcode?style=flat-square&color=7c4dff" alt="PyPI">
-  <img src="https://img.shields.io/badge/license-Apache_2.0-4caf50?style=flat-square" alt="License">
-  <img src="https://img.shields.io/badge/python-3.10+-3776ab?style=flat-square" alt="Python">
-  <img src="https://img.shields.io/badge/platform-Apple%20Silicon-999999?style=flat-square" alt="Platform">
+  <img src="https://img.shields.io/pypi/v/localcode?style=flat-square&labelColor=171A1D&color=8AB4FF" alt="PyPI">
+  <img src="https://img.shields.io/badge/license-Apache_2.0-8AB4FF?style=flat-square&labelColor=171A1D" alt="License">
+  <img src="https://img.shields.io/badge/python-3.10+-8AB4FF?style=flat-square&labelColor=171A1D" alt="Python">
+  <img src="https://img.shields.io/badge/platform-Apple%20Silicon-8AB4FF?style=flat-square&labelColor=171A1D" alt="Platform">
 </p>
 
 <p align="center">
-  <strong>High-performance AI coding on consumer hardware.</strong><br>
-  No cloud, no API keys, no data leaving your machine.
+  <strong>A coding agent that runs one local model, well, on your Mac.</strong><br>
+  llama.cpp + GGUF. No cloud inference, no API keys, no account.
 </p>
 
 > ⚠️ **Alpha software.** Active development; expect rough edges, breaking changes between versions, and bugs. Issues and feedback welcome.
@@ -23,7 +23,7 @@
 ## Install
 
 ```bash
-pip install localcode
+pip install -U localcode
 ```
 
 ## Run
