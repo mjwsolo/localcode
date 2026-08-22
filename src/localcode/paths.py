@@ -41,6 +41,7 @@ Falls back to the cwd itself if nothing is found, so launching from `/tmp` or
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -72,15 +73,71 @@ def find_project_root(start: Optional[Path] = None) -> Path:
     return p
 
 
+def chmod_quiet(path: Path | str, mode: int) -> None:
+    """Best-effort `chmod`. Permission hardening is a nice-to-have on
+    POSIX and a no-op on Windows / exotic filesystems, so a failure here
+    must never take the process down. Only OS-level errors are absorbed —
+    a programming error (bad type) still raises."""
+    try:
+        os.chmod(path, mode)
+    except (OSError, NotImplementedError):
+        pass
+
+
+def write_private(path: Path | str, text: str, encoding: str = "utf-8") -> None:
+    """Write `text` to `path` with 0600 permissions, atomically w.r.t. mode.
+
+    Uses `os.open(..., 0o600)` so the file is never momentarily
+    world-readable between `write_text()` and a follow-up `chmod` — the
+    window a `Path.write_text()` + `chmod` pair leaves open. An existing
+    file keeps its inode (O_TRUNC), so its mode is re-applied explicitly.
+
+    Used for anything containing user prompts, model output, or API keys.
+    """
+    path = Path(path)
+    data = text.encode(encoding, "replace")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, data)
+    finally:
+        os.close(fd)
+    # O_CREAT's mode only applies to a *newly created* file; a pre-existing
+    # 0644 file keeps its old mode, so tighten it unconditionally.
+    chmod_quiet(path, 0o600)
+
+
 def project_state_dir(cwd: Optional[Path] = None) -> Path:
     """Return (and create) `<project_root>/.localcode/`.
 
     Idempotent — creating an existing directory is a no-op. The
     directory is materialised on first access so callers can
     immediately write into it without checking existence.
+
+    The directory holds `events.jsonl` (full prompts, full model
+    responses, tool-call slices), session state and error logs — all of
+    it inside the USER'S OWN REPO. Two hardening steps happen on
+    creation:
+
+      * a `.gitignore` containing `*` is dropped in, so a stray
+        `git add -A` can never stage a multi-megabyte transcript of the
+        user's prompts into a repo they're about to push;
+      * the directory is chmod 0700, so other accounts on a shared
+        machine can't read it.
+
+    Both are guarded by an existence check because this function is on
+    hot paths — the steady-state cost is one extra `stat`.
     """
     d = find_project_root(cwd) / ".localcode"
+    existed = d.is_dir()
     d.mkdir(parents=True, exist_ok=True)
+    if not existed:
+        chmod_quiet(d, 0o700)
+    gitignore = d / ".gitignore"
+    if not gitignore.exists():
+        try:
+            gitignore.write_text("# Created by localcode. Local state only, never commit.\n*\n")
+        except OSError:
+            pass
     return d
 
 
@@ -91,7 +148,10 @@ def global_state_dir() -> Path:
     server marker, user-global config, model cache). Anything that
     belongs to a specific project should NOT live here.
     """
+    existed = GLOBAL_STATE_DIR.is_dir()
     GLOBAL_STATE_DIR.mkdir(parents=True, exist_ok=True)
+    if not existed:
+        chmod_quiet(GLOBAL_STATE_DIR, 0o700)
     return GLOBAL_STATE_DIR
 
 
