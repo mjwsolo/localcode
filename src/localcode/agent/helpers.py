@@ -472,6 +472,65 @@ def _needs_confirmation(name: str, args: dict, app: "LocalCodeApp | None" = None
         return True
     return any(p in cmd for p in DESTRUCTIVE_PATTERNS)
 
+def _request_approval_verdict(app: "LocalCodeApp | None", out: "OutputManager | None",
+                              tool_name: str, cmd: str) -> str:
+    """Ask the user to approve one tool call. Returns "once" / "always" / "deny".
+
+    Single implementation shared by the main loop and by the sub-agent tool
+    (`tools/agent.py`), so a sub-agent can never dispatch a tool the parent
+    would have prompted for. Prefers the TUI approval callback; falls back to
+    the CLI three-option terminal prompt; denies if neither is usable.
+    """
+    callback = getattr(out, "_approval_callback", None) if out is not None else None
+    if callback is not None:
+        raw = callback(tool_name, cmd)
+        # Callback may be a bool (legacy) or the new verdict string.
+        if isinstance(raw, bool):
+            return "once" if raw else "deny"
+        return str(raw)
+
+    # CLI mode: terminal-based approval with 3 options.
+    import tty
+    import termios
+    if out is not None:
+        try:
+            out._stop_indicator()
+        except Exception:
+            pass
+    rule = app._composer_rule() if hasattr(app, "_composer_rule") else "  " + ("─" * 60)
+    first_tok = _first_token(cmd) or tool_name
+    sys.stdout.write("\n\033[33m  Allow this command?\033[0m\n")
+    sys.stdout.write(f"\033[2m  {cmd[:80]}\033[0m\n")
+    sys.stdout.write("  \033[1m1\033[0m  allow once\n")
+    sys.stdout.write(f"  \033[1m2\033[0m  always allow `{first_tok}` (this session)\n")
+    sys.stdout.write("  \033[1m3\033[0m  deny\n")
+    sys.stdout.write("\033[s")
+    sys.stdout.write(f"\033[2m{rule}\033[0m\n")
+    sys.stdout.write("  › ")
+    sys.stdout.write(f"\n\033[2m{rule}\033[0m")
+    sys.stdout.write("\033[1A\r    ")
+    sys.stdout.flush()
+    try:
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            ch = sys.stdin.read(1)
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    except Exception:
+        try:
+            ch = input().strip()
+        except EOFError:
+            ch = "3"
+    sys.stdout.write("\033[u\033[J")
+    if ch in ("1", "y"):
+        return "once"
+    if ch == "2":
+        return "always"
+    return "deny"
+
+
 def _render_markdown(text: str, console: Console | None = None) -> None:
     """Render text as markdown, or plain text for narrow terminals."""
     text = text.strip()
