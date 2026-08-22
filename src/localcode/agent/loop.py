@@ -47,7 +47,7 @@ from .constants import (
     MAX_AGGREGATE_PER_TURN,
     CROSS_ROUND_REPEAT_LIMIT,
 )
-from .goal import GoalState, infer_goal_state
+from .goal import GoalState, infer_goal_state, is_trivial_turn
 from .context import (
     _msg_bytes,
     _prepare_model_messages,
@@ -966,6 +966,17 @@ def run_agent_loop(
                 user_text,
                 task_stage=round_task_stage,
             )
+            # Don't hand `todo_write` to a greeting. The prompt's carve-out is
+            # phrased in task sizes and never says "this turn isn't a task", so
+            # a small model opens a plan for "hi" - and once one exists, the
+            # open-todo gate below refuses to let the turn end. Withholding the
+            # tool is a mechanism rather than more persuasion. Still offered
+            # when todos already exist, so a follow-up "ok" can close them out.
+            if is_trivial_turn(user_text) and not (getattr(app.session, "todos", None) or []):
+                round_tool_schemas = [
+                    _s for _s in round_tool_schemas
+                    if ((_s.get("function") or {}).get("name")) != "todo_write"
+                ]
             try:
                 app._tool_content_max_chars = None
             except Exception:
