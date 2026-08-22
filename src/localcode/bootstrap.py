@@ -1050,7 +1050,53 @@ def _ensure_cmake() -> bool:
 
 _DIFFUSION_LLAMA_REPO = "https://github.com/ggml-org/llama.cpp"
 _DIFFUSION_PR_REF = "refs/pull/24423/head"  # diffusion_gemma arch + entropy-bounded denoising
+# SECURITY: pin the exact commit. refs/pull/N/head is owned by the PR author
+# and can be force-pushed (or vanish when the branch is deleted) — we compile
+# it and run the result as the inference server, so it must be the code we
+# reviewed. Head of PR #24423 ("DiffusionGemma", open, danielhanchen/llama.cpp
+# branch diffusion-visual-updates) as of 2026-08-22. Bump deliberately.
+_DIFFUSION_PR_SHA = "daca8075d871483545dd85d58ce11970b304b541"
 _DIFFUSION_BIN_NAME = "llama-diffusion-cli"
+
+
+def _checkout_pinned_commit(
+    run: Callable[[list[str], Path | None, int], tuple[bool, str]],
+    src: Path,
+    sha: str,
+    fallback_ref: str | None,
+    label: str,
+) -> tuple[bool, str]:
+    """Fetch and hard-check-out one exact commit, then verify HEAD.
+
+    Every caller compiles the result and chmods it 0755 as an inference
+    server, so a moving ref (refs/pull/N/head, master) is not good enough:
+    it can be force-pushed or deleted out from under the user. We fetch the
+    pinned SHA directly when the server allows it, fall back to the
+    human-readable ref when it does not, and refuse to build unless HEAD is
+    exactly the pinned commit.
+    """
+    ok, err = run(["git", "fetch", "--depth", "1", "origin", sha], src, 600)
+    if not ok:
+        if not fallback_ref:
+            return False, f"git fetch of pinned {label} commit {sha} failed:\n{err}"
+        ok, err2 = run(["git", "fetch", "--depth", "1", "origin", fallback_ref], src, 600)
+        if not ok:
+            return False, f"git fetch of {fallback_ref} failed:\n{err2}"
+    ok, err = run(["git", "checkout", "--force", sha], src, 120)
+    if not ok:
+        return False, f"git checkout of pinned {label} commit {sha} failed:\n{err}"
+    try:
+        r = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(src),
+                           capture_output=True, text=True, timeout=60, check=False)
+    except subprocess.TimeoutExpired:
+        return False, f"git rev-parse HEAD timed out verifying the pinned {label} commit."
+    head = (r.stdout or "").strip()
+    if r.returncode != 0 or head != sha:
+        return False, (
+            f"refusing to build {label}: checkout is {head or 'unknown'}, "
+            f"expected pinned {sha}."
+        )
+    return True, ""
 
 
 def diffusion_cli_path(config=None) -> Path | None:
@@ -1108,13 +1154,11 @@ def ensure_diffusion_cli(
             if not ok:
                 return False, f"git clone failed:\n{err}"
         _say("Checking out diffusion support (PR #24423)...")
-        ok, err = _run(["git", "fetch", "--depth", "1", "origin", _DIFFUSION_PR_REF],
-                       cwd=src, timeout=600)
+        ok, err = _checkout_pinned_commit(
+            lambda cmd, cwd, timeout: _run(cmd, cwd=cwd, timeout=timeout),
+            src, _DIFFUSION_PR_SHA, _DIFFUSION_PR_REF, "the diffusion runner")
         if not ok:
-            return False, f"git fetch of {_DIFFUSION_PR_REF} failed:\n{err}"
-        ok, err = _run(["git", "checkout", "--force", "FETCH_HEAD"], cwd=src, timeout=120)
-        if not ok:
-            return False, f"git checkout failed:\n{err}"
+            return False, err
 
         _say("Building llama-diffusion-cli (one-time, ~3-6 min)...")
         ok, err = _run(["cmake", "-B", "build", "-DCMAKE_BUILD_TYPE=Release",
@@ -1150,6 +1194,12 @@ def ensure_diffusion_cli(
 # binary with the arch compiled in, launched with stock (non-TurboQuant)
 # flags (see runtime.llama_server_command).
 _COHERE_PR_REF = "refs/pull/24260/head"  # adds the cohere2moe architecture
+# NOTE: PR #24260 ("Add arch support for cohere2-MoE") is MERGED as of
+# 2026-08-22, so we target its merge commit on ggml-org/llama.cpp master
+# rather than the author's fork branch (michaelw9999/llama.cpp cohere2-moe,
+# head d9320477de5549e53a9452296f468d32a1d81d26), which can be force-pushed
+# or deleted now that it has landed. Pinned 2026-08-22 — bump deliberately.
+_COHERE_PIN_SHA = "4988f6e866057afd130c1515ecef0c9bab9a15f8"
 _COHERE_BIN_NAME = "llama-server-cohere"
 
 
@@ -1207,13 +1257,14 @@ def ensure_cohere_server(
             if not ok:
                 return False, f"git clone failed:\n{err}"
         _say("Checking out cohere2moe support (PR #24260)...")
-        ok, err = _run(["git", "fetch", "--depth", "1", "origin", _COHERE_PR_REF],
-                       cwd=src, timeout=600)
+        # Merged PR: the pin is a master commit, so it is fetchable by SHA and
+        # there is no PR-branch fallback worth trying (_COHERE_PR_REF points at
+        # the pre-merge head, a different commit).
+        ok, err = _checkout_pinned_commit(
+            lambda cmd, cwd, timeout: _run(cmd, cwd=cwd, timeout=timeout),
+            src, _COHERE_PIN_SHA, None, "the cohere2moe server")
         if not ok:
-            return False, f"git fetch of {_COHERE_PR_REF} failed:\n{err}"
-        ok, err = _run(["git", "checkout", "--force", "FETCH_HEAD"], cwd=src, timeout=120)
-        if not ok:
-            return False, f"git checkout failed:\n{err}"
+            return False, err
 
         _say("Building llama-server with cohere2moe (one-time, ~5-12 min)...")
         ok, err = _run(["cmake", "-B", "build", "-DCMAKE_BUILD_TYPE=Release",
@@ -1248,6 +1299,12 @@ def ensure_cohere_server(
 # is an ordinary autoregressive multimodal model, served over the normal HTTP
 # path with stock (non-TurboQuant) flags; it just needs a binary with the arch
 # compiled in. Master is well past b10353, so the arch is present.
+#
+# SECURITY: master moves every day, so building "whatever landed today" means
+# every user compiles and runs unreviewed code. We pin one master commit
+# instead: ggml-org/llama.cpp master tip as of 2026-08-22 (well past b10353 /
+# PR #26841, so it carries the muse_glimmer arch). Bump deliberately.
+_MUSE_PIN_SHA = "b21e4de74567f5eef213765c9476a843c2e43f0d"
 _MUSE_BIN_NAME = "llama-server-muse"
 
 
@@ -1300,11 +1357,18 @@ def ensure_muse_server(
         if not (src / "CMakeLists.txt").is_file():
             _say("Fetching llama.cpp (Muse Glimmer support, one-time)...")
             shutil.rmtree(src, ignore_errors=True)
-            # master is past b10353 (PR #26841), so it has the muse_glimmer arch.
             ok, err = _run(["git", "clone", "--depth", "1", _DIFFUSION_LLAMA_REPO, str(src)],
                            cwd=None, timeout=600)
             if not ok:
                 return False, f"git clone failed:\n{err}"
+        # The clone above lands on whatever master is today (and a cached
+        # source tree could be any vintage), so pin to the reviewed commit.
+        _say("Checking out muse_glimmer support (pinned llama.cpp master)...")
+        ok, err = _checkout_pinned_commit(
+            lambda cmd, cwd, timeout: _run(cmd, cwd=cwd, timeout=timeout),
+            src, _MUSE_PIN_SHA, None, "the Muse Glimmer server")
+        if not ok:
+            return False, err
 
         _say("Building llama-server with muse_glimmer (one-time, ~5-12 min)...")
         ok, err = _run(["cmake", "-B", "build", "-DCMAKE_BUILD_TYPE=Release",

@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .config import ensure_home_dirs
+from .paths import chmod_quiet
 
 
 DB_NAME = "history.db"
@@ -108,6 +109,10 @@ class HistoryDB:
             # busy_timeout also covers a second localcode instance sharing the
             # same ~/.localcode/history.db. Callers must hold `self._lock`.
             self._conn.execute("PRAGMA busy_timeout=5000")
+            # The DB holds every prompt and response verbatim. SQLite creates
+            # it 0644 (umask-dependent); tighten to owner-only. Best-effort:
+            # a chmod failure (Windows, exotic FS) must not break history.
+            chmod_quiet(self.db_path, 0o600)
         return self._conn
 
     def _ensure_schema(self) -> None:
