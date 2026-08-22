@@ -54,8 +54,11 @@ class ToolContext:
         is NOT under repo_root but its leading components are a near-match
         of repo_root's (difflib ratio ≥ 0.8 per component), remap that
         prefix onto the real repo_root. Anything else passes through
-        untouched — LocalCode intentionally has full filesystem access, so
-        this heals corruption without adding containment.
+        untouched — reads intentionally have full filesystem access.
+
+        NOTE: this method does NOT contain the path. Write tools must call
+        `resolve_write_path()` instead, which applies the same healing and
+        then refuses anything that lands outside the project root.
         """
         p = self.repo / raw
         try:
@@ -82,6 +85,55 @@ class ToolContext:
             return healed
         except Exception:
             return p
+
+    def resolve_write_path(self, raw: str) -> Path:
+        """Resolve a WRITE target: heal first, then enforce containment.
+
+        Healing runs exactly as it does for reads (small quants mangle long
+        absolute paths, and a mangled path that near-matches repo_root is
+        remapped onto it). Containment is applied to the healed result, so
+        the heal feature keeps working while `/Users/victim/.zshrc`,
+        `../../../etc/hosts`, and a repo-internal symlink pointing outside
+        all raise `PathContainmentError`.
+
+        Escape hatches, in order:
+          * the agent's notebook scratch dir (sanctioned, may live outside
+            the project root), and
+          * paths the USER has explicitly approved this session, recorded on
+            `app._approved_write_paths` — approval is a human decision, so an
+            approved path is never re-blocked here.
+        """
+        from ..paths import PathContainmentError, contain_write_path
+
+        healed = self.resolve_path(raw)
+
+        approved = getattr(self.app, "_approved_write_paths", None)
+        if approved:
+            try:
+                if str(Path(healed).resolve()) in {str(Path(a).resolve()) for a in approved}:
+                    return Path(healed).resolve()
+            except Exception:
+                pass
+
+        try:
+            return contain_write_path(healed, self.repo)
+        except PathContainmentError:
+            # Outside the project — the notebook scratch dir is the one
+            # sanctioned exception. Checked lazily so the common (contained)
+            # case never touches the notebook module.
+            try:
+                from ..notebook import is_within_notebook
+                if is_within_notebook(Path(healed)):
+                    return Path(healed).resolve()
+            except Exception:
+                pass
+            try:
+                from ..events import emit as _emit
+                _emit("write_containment_block", raw=str(raw)[:200],
+                      resolved=str(healed)[:200])
+            except Exception:
+                pass
+            raise
 
 
 @dataclass
