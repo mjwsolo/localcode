@@ -1162,13 +1162,26 @@ def ensure_diffusion_cli(
         if on_progress:
             on_progress(msg)
 
-    if not shutil.which("git"):
-        return False, "git is required to build the diffusion runner (xcode-select --install)."
-    if not _ensure_cmake():
-        return False, "cmake is required to build the diffusion runner (brew install cmake)."
-
+    # Download-first: a verified prebuilt runner needs no toolchain at all.
     data_dir = Path.home() / ".local" / "share" / "localcode"
     data_dir.mkdir(parents=True, exist_ok=True)
+    ok, res = _prebuilt_or_note(
+        _DIFFUSION_BIN_NAME, data_dir / _DIFFUSION_BIN_NAME,
+        "diffusion runner", on_progress)
+    if ok:
+        return True, res
+
+    if not shutil.which("git"):
+        return False, (
+            "No prebuilt diffusion runner for this platform, and building it "
+            "needs git. Install the Xcode command line tools: "
+            "xcode-select --install"
+        )
+    if not _ensure_cmake():
+        return False, (
+            "No prebuilt diffusion runner for this platform, and building it "
+            "needs cmake. Install it with: brew install cmake"
+        )
     src = data_dir / "llama.cpp-diffusion"
 
     def _run(cmd: list[str], cwd: Path | None, timeout: int) -> tuple[bool, str]:
@@ -1196,6 +1209,13 @@ def ensure_diffusion_cli(
 
         _say("Building llama-diffusion-cli (one-time, ~3-6 min)...")
         ok, err = _run(["cmake", "-B", "build", "-DCMAKE_BUILD_TYPE=Release",
+                        # Static, exactly like the bundled llama-server. Without
+                        # BUILD_SHARED_LIBS=OFF cmake emits a ~50 KB stub linked
+                        # against @rpath dylibs inside this build tree, so the
+                        # cached binary silently breaks the moment the sources
+                        # are cleaned - and it can never be shipped prebuilt.
+                        "-DBUILD_SHARED_LIBS=OFF",
+                        "-DGGML_METAL=ON", "-DGGML_METAL_EMBED_LIBRARY=ON",
                         "-DLLAMA_CURL=OFF"], cwd=src, timeout=600)
         if not ok:
             return False, f"cmake configure failed:\n{err}"
@@ -1302,6 +1322,13 @@ def ensure_cohere_server(
 
         _say("Building llama-server with cohere2moe (one-time, ~5-12 min)...")
         ok, err = _run(["cmake", "-B", "build", "-DCMAKE_BUILD_TYPE=Release",
+                        # Static, exactly like the bundled llama-server. Without
+                        # BUILD_SHARED_LIBS=OFF cmake emits a ~50 KB stub linked
+                        # against @rpath dylibs inside this build tree, so the
+                        # cached binary silently breaks the moment the sources
+                        # are cleaned - and it can never be shipped prebuilt.
+                        "-DBUILD_SHARED_LIBS=OFF",
+                        "-DGGML_METAL=ON", "-DGGML_METAL_EMBED_LIBRARY=ON",
                         "-DLLAMA_CURL=OFF"], cwd=src, timeout=600)
         if not ok:
             return False, f"cmake configure failed:\n{err}"
@@ -1370,13 +1397,26 @@ def ensure_muse_server(
         if on_progress:
             on_progress(msg)
 
-    if not shutil.which("git"):
-        return False, "git is required to build the Muse Glimmer server (xcode-select --install)."
-    if not _ensure_cmake():
-        return False, "cmake is required to build the Muse Glimmer server (brew install cmake)."
-
+    # Download-first: a verified prebuilt runner needs no toolchain at all.
     data_dir = Path.home() / ".local" / "share" / "localcode"
     data_dir.mkdir(parents=True, exist_ok=True)
+    ok, res = _prebuilt_or_note(
+        _MUSE_BIN_NAME, data_dir / _MUSE_BIN_NAME,
+        "Muse Glimmer server", on_progress)
+    if ok:
+        return True, res
+
+    if not shutil.which("git"):
+        return False, (
+            "No prebuilt Muse Glimmer server for this platform, and building "
+            "it needs git. Install the Xcode command line tools: "
+            "xcode-select --install"
+        )
+    if not _ensure_cmake():
+        return False, (
+            "No prebuilt Muse Glimmer server for this platform, and building "
+            "it needs cmake. Install it with: brew install cmake"
+        )
     src = data_dir / "llama.cpp-muse"
 
     def _run(cmd: list[str], cwd: Path | None, timeout: int) -> tuple[bool, str]:
@@ -1406,7 +1446,10 @@ def ensure_muse_server(
 
         _say("Building llama-server with muse_glimmer (one-time, ~5-12 min)...")
         ok, err = _run(["cmake", "-B", "build", "-DCMAKE_BUILD_TYPE=Release",
-                        "-DGGML_METAL=ON", "-DLLAMA_CURL=OFF"], cwd=src, timeout=600)
+                        # Static: see the note on the server runners above.
+                        "-DBUILD_SHARED_LIBS=OFF",
+                        "-DGGML_METAL=ON", "-DGGML_METAL_EMBED_LIBRARY=ON",
+                        "-DLLAMA_CURL=OFF"], cwd=src, timeout=600)
         if not ok:
             return False, f"cmake configure failed:\n{err}"
         ok, err = _run(["cmake", "--build", "build", "-j", "--config", "Release",
@@ -1426,6 +1469,172 @@ def ensure_muse_server(
         return False, f"build step timed out: {' '.join(map(str, e.cmd))}"
     except Exception as e:
         return False, f"Muse Glimmer server build failed: {e}"
+
+
+# ── Prebuilt dedicated runners (download-first) ──────────────────────
+#
+# Three model architectures cannot be loaded by the bundled TurboQuant
+# llama-server (diffusion_gemma, cohere2moe, muse_glimmer), so each one
+# needs its own binary. Compiling those on the user's machine needs Xcode
+# CLT + cmake and takes minutes — unacceptable for a tool whose promise is
+# "pick a model, it runs". So every ensure_*() below is download-FIRST:
+#
+#   1. cached binary            -> use it
+#   2. prebuilt release binary  -> download, verify sha256, chmod +x
+#   3. source build             -> the escape hatch, and only then
+#
+# .github/workflows/runners.yml produces the release artifacts.
+#
+# `_prebuilt_or_note` below is the one shared entry point: each ensure_*()
+# calls it right after its cached-binary check and before any toolchain
+# check, so a machine with no compiler can still get a runner.
+
+_RUNNER_RELEASE_TAG = "runners-v1"
+_RUNNER_RELEASE_URL = (
+    "https://github.com/mjwsolo/localcode/releases/download/{tag}/{asset}"
+)
+
+# PLACEHOLDER PINS — filled in when the first runner release is cut.
+#
+# A `None` pin means "there is no trustworthy checksum for this asset yet",
+# and it MUST mean "skip the download and build from source". It must never
+# mean "download it unverified": an unverified executable is the one thing
+# this path is not allowed to produce. Populate from the SHA256SUMS file
+# emitted by the runners workflow.
+_RUNNER_PREBUILT_SHA256: dict[str, dict[str, str | None]] = {
+    _DIFFUSION_BIN_NAME: {"macos-arm64": None},
+    _COHERE_BIN_NAME: {"macos-arm64": None},
+    _MUSE_BIN_NAME: {"macos-arm64": None},
+}
+
+
+def _runner_platform_tag() -> str | None:
+    """Release-asset platform suffix for this machine, or None."""
+    system = platform.system().lower()
+    machine = platform.machine().lower()
+    if system == "darwin" and machine == "arm64":
+        return "macos-arm64"
+    if system == "linux" and machine in ("x86_64", "amd64"):
+        return "linux-x86_64"
+    return None
+
+
+def _sha256_of(path: Path) -> str:
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def download_prebuilt_runner(
+    bin_name: str,
+    dest: Path,
+    on_progress: Callable[[str], None] | None = None,
+) -> tuple[bool, str]:
+    """Download a prebuilt dedicated runner and verify it before use.
+
+    Returns (ok, dest_or_reason). On failure the caller falls back to the
+    source build — EXCEPT that no failure mode here ever leaves an
+    unverified executable behind:
+
+      * no pinned sha256 for this asset  -> refuse to download at all
+      * sha256 mismatch                  -> delete the file, refuse
+      * TLS verification failure         -> refuse (see below)
+
+    This mirrors `download_turboquant_binary` deliberately: same certifi
+    TLS context, same hard refusal on SSLCertVerificationError. We are
+    fetching something we will chmod 0755 and execute, so a connection we
+    cannot authenticate is not a connection we use.
+    """
+    import ssl
+    import urllib.request
+
+    plat = _runner_platform_tag()
+    if plat is None:
+        return False, (
+            f"No prebuilt {bin_name} for "
+            f"{platform.system().lower()}-{platform.machine().lower()}."
+        )
+
+    expected = (_RUNNER_PREBUILT_SHA256.get(bin_name) or {}).get(plat)
+    if not expected:
+        # No pin => no verifiable download. Build from source instead.
+        return False, f"No pinned checksum for {bin_name} ({plat}) yet."
+
+    asset = f"{bin_name}-{plat}"
+    url = _RUNNER_RELEASE_URL.format(tag=_RUNNER_RELEASE_TAG, asset=asset)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.name + ".download")
+
+    if on_progress:
+        on_progress(f"Downloading prebuilt {bin_name} ({plat})...")
+    try:
+        try:
+            import certifi
+            ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+        except ImportError:
+            ssl_ctx = ssl.create_default_context()
+        opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ssl_ctx))
+        urllib.request.install_opener(opener)
+        urllib.request.urlretrieve(url, str(tmp))
+    except ssl.SSLCertVerificationError:
+        # SECURITY: never fetch an EXECUTABLE over an unverified connection.
+        tmp.unlink(missing_ok=True)
+        return False, (
+            "TLS certificate verification failed while downloading "
+            f"{bin_name}. Update your certificates (`pip install -U certifi`). "
+            "LocalCode will not download an executable over an unverified "
+            "connection."
+        )
+    except Exception as e:
+        tmp.unlink(missing_ok=True)
+        return False, f"Download of {asset} failed: {e}"
+
+    try:
+        actual = _sha256_of(tmp)
+    except OSError as e:
+        tmp.unlink(missing_ok=True)
+        return False, f"Could not read the downloaded {asset}: {e}"
+
+    if actual != expected:
+        tmp.unlink(missing_ok=True)
+        return False, (
+            f"Checksum mismatch for {asset}: expected {expected}, got "
+            f"{actual}. The file was deleted and will NOT be run."
+        )
+
+    tmp.replace(dest)
+    dest.chmod(0o755)
+    if on_progress:
+        on_progress(f"Verified prebuilt {bin_name}.")
+    return True, str(dest)
+
+
+def _prebuilt_or_note(
+    bin_name: str,
+    dest: Path,
+    label: str,
+    on_progress: Callable[[str], None] | None,
+) -> tuple[bool, str]:
+    """Try the prebuilt runner; on failure, announce the source-build fallback.
+
+    Returns (ok, path) when the download succeeded. When it did not, returns
+    (False, "") after telling the user WHY they are about to wait on a
+    compiler — a multi-minute cmake run that starts with no explanation is
+    indistinguishable from a hang.
+    """
+    ok, res = download_prebuilt_runner(bin_name, dest, on_progress=on_progress)
+    if ok:
+        return True, res
+    if on_progress:
+        on_progress(
+            f"No prebuilt {label} available ({res}) — "
+            "building from source instead (one-time, several minutes; "
+            "needs Xcode command line tools and cmake)."
+        )
+    return False, ""
 
 
 def build_turboquant(on_progress: Callable[[str], None] | None = None) -> tuple[bool, str]:
