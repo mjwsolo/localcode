@@ -51,6 +51,10 @@
 #include "llamafile/sgemm.h"
 #endif
 
+#ifdef GGML_USE_CPU_RISCV64_SPACEMIT
+#    include "spacemit/ime.h"
+#endif
+
 // Note: once we move threading into a separate C++ file
 // will use std::hardware_destructive_interference_size instead of hardcoding it here
 // and we'll use C++ attribute syntax.
@@ -78,6 +82,9 @@ float ggml_table_f32_f16[1 << 16];
 
 // precomputed f32 table for e8m0 half (1 KB) (simd-mappings.h)
 float ggml_table_f32_e8m0_half[1 << 8];
+
+// precomputed f32 table for ue4m3 (1 KB) (simd-mappings.h)
+float ggml_table_f32_ue4m3[1 << 8];
 
 #if defined(__ARM_ARCH)
 struct ggml_arm_arch_features_type {
@@ -233,6 +240,18 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .from_float               = (ggml_from_float_t) ggml_cpu_fp32_to_fp16,
         .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_f16,
         .vec_dot_type             = GGML_TYPE_F16,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_Q1_0] = {
+        .from_float               = quantize_row_q1_0,
+        .vec_dot                  = ggml_vec_dot_q1_0_q8_0,
+        .vec_dot_type             = GGML_TYPE_Q8_0,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_Q2_0] = {
+        .from_float               = quantize_row_q2_0,
+        .vec_dot                  = ggml_vec_dot_q2_0_q8_0,
+        .vec_dot_type             = GGML_TYPE_Q8_0,
         .nrows                    = 1,
     },
     [GGML_TYPE_Q4_0] = {
@@ -1287,6 +1306,12 @@ void ggml_compute_forward_mul_mat(
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
 
+    const int32_t hint = ggml_get_op_params_i32(dst, 1);
+    if (hint == GGML_HINT_SRC0_IS_HADAMARD && !params->use_ref) {
+        ggml_compute_forward_fwht(params, dst);
+        return;
+    }
+
     GGML_TENSOR_BINARY_OP_LOCALS
 
     const int ith = params->ith;
@@ -1944,6 +1969,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_im2col_3d(params, tensor);
             } break;
+        case GGML_OP_COL2IM_1D:
+            {
+                ggml_compute_forward_col2im_1d(params, tensor);
+            } break;
         case GGML_OP_CONV_2D:
             {
                 ggml_compute_forward_conv_2d(params, tensor);
@@ -2078,6 +2107,22 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
         case GGML_OP_GATED_DELTA_NET:
             {
                 ggml_compute_forward_gated_delta_net(params, tensor);
+            } break;
+        case GGML_OP_LIGHTNING_INDEXER:
+            {
+                ggml_compute_forward_lightning_indexer(params, tensor);
+            } break;
+        case GGML_OP_DSV4_HC_COMB:
+            {
+                ggml_compute_forward_dsv4_hc_comb(params, tensor);
+            } break;
+        case GGML_OP_DSV4_HC_PRE:
+            {
+                ggml_compute_forward_dsv4_hc_pre(params, tensor);
+            } break;
+        case GGML_OP_DSV4_HC_POST:
+            {
+                ggml_compute_forward_dsv4_hc_post(params, tensor);
             } break;
         case GGML_OP_TURBO_WHT:
             {
@@ -2263,6 +2308,9 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_COUNT_EQUAL:
         case GGML_OP_SOLVE_TRI:
         case GGML_OP_GATED_DELTA_NET:
+        case GGML_OP_DSV4_HC_COMB:
+        case GGML_OP_DSV4_HC_PRE:
+        case GGML_OP_DSV4_HC_POST:
         case GGML_OP_TURBO_WHT:
             {
                 n_tasks = n_threads;
@@ -2380,6 +2428,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_CONV_2D:
         case GGML_OP_CONV_3D:
         case GGML_OP_CONV_2D_DW:
+        case GGML_OP_COL2IM_1D:
         case GGML_OP_CONV_TRANSPOSE_1D:
         case GGML_OP_CONV_TRANSPOSE_2D:
             {
@@ -2403,6 +2452,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_FLASH_ATTN_BACK:
         case GGML_OP_SSM_CONV:
         case GGML_OP_SSM_SCAN:
+        case GGML_OP_LIGHTNING_INDEXER:
             {
                 n_tasks = n_threads;
             } break;
@@ -2611,7 +2661,7 @@ static bool ggml_thread_apply_priority(int32_t prio) {
     return true;
 }
 
-#elif defined(__gnu_linux__)
+#elif defined(__linux__)
 // TODO: this may not work on BSD, to be verified
 
 static bool ggml_thread_apply_affinity(const bool * mask) {
@@ -2798,6 +2848,11 @@ struct ggml_cplan ggml_graph_plan(
     n_threads = 1;
 #endif
 
+#if defined(__wasi__)
+    // WASI doesn't support parallelism yet
+    n_threads = 1;
+#endif
+
     size_t work_size = 0;
 
     struct ggml_cplan cplan;
@@ -2877,7 +2932,14 @@ struct ggml_cplan ggml_graph_plan(
                     } break;
                 case GGML_OP_OUT_PROD:
                     {
-                        if (ggml_is_quantized(node->src[0]->type)) {
+                        if (ggml_is_quantized(node->src[0]->type) ||
+                            node->src[0]->type == GGML_TYPE_F16) {
+                            cur = ggml_type_size(GGML_TYPE_F32) * node->src[0]->ne[0] * n_tasks;
+                        }
+                    } break;
+                case GGML_OP_SET_ROWS:
+                    {
+                        if (node->src[0]->type == GGML_TYPE_F16 && node->type != GGML_TYPE_F16) {
                             cur = ggml_type_size(GGML_TYPE_F32) * node->src[0]->ne[0] * n_tasks;
                         }
                     } break;
@@ -2980,7 +3042,9 @@ struct ggml_cplan ggml_graph_plan(
                 case GGML_OP_GATED_DELTA_NET:
                     {
                         const int64_t S_v = node->src[2]->ne[0];
-                        cur = S_v * sizeof(float) * n_tasks;
+                        const int64_t K   = ggml_get_op_params_i32(node, 0);
+                        const int64_t per_thread = S_v + (K > 1 ? S_v * S_v : 0);
+                        cur = per_thread * sizeof(float) * n_tasks;
                     } break;
                 case GGML_OP_TURBO_WHT:
                     {
@@ -2990,6 +3054,12 @@ struct ggml_cplan ggml_graph_plan(
                     {
                         GGML_ABORT("fatal error");
                     }
+                case GGML_OP_LIGHTNING_INDEXER:
+                    {
+                        // temp buffer for dequantizing lightning indexer keys
+                        const int64_t ne10 = node->src[1]->ne[0];
+                        cur += sizeof(float)*ne10*n_tasks;
+                    } break;
                 default:
                     break;
             }
@@ -3010,6 +3080,45 @@ struct ggml_cplan ggml_graph_plan(
     return cplan;
 }
 
+
+// Try to fuse the current node with subsequent nodes for better performance.
+// Returns the number of nodes skipped by fusion (>=1), or 0 if no fusion was applied.
+static bool ggml_cpu_disable_fusion = false;  // initialized once in ggml_cpu_init(), read-only afterwards
+
+static int ggml_cpu_try_fuse_ops(
+        const struct ggml_cgraph * cgraph,
+        const int node_n,
+        const struct ggml_compute_params * params,
+        const struct ggml_cplan * cplan) {
+
+    if (ggml_cpu_disable_fusion || cplan->use_ref) {
+        return 0;
+    }
+
+    struct ggml_tensor * node = cgraph->nodes[node_n];
+
+    if (node->op == GGML_OP_RMS_NORM) {
+        // RMS_NORM + MUL fusion
+        const enum ggml_op fuse_ops[] = { GGML_OP_RMS_NORM, GGML_OP_MUL };
+        if (ggml_can_fuse(cgraph, node_n, fuse_ops, 2)) {
+            struct ggml_tensor * mul_node = cgraph->nodes[node_n + 1];
+            const struct ggml_tensor * mul_w = (mul_node->src[0] == node)
+                ? mul_node->src[1] : mul_node->src[0];
+            if (node->src[0]->type  == GGML_TYPE_F32 &&
+                mul_node->type      == GGML_TYPE_F32 &&
+                mul_w->type         == GGML_TYPE_F32 &&
+                mul_w->ne[0]        == node->ne[0]   &&
+                mul_w->nb[0]        == sizeof(float)) {
+
+                ggml_compute_forward_rms_norm_mul_fused(params, node, mul_node);
+                return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+
 static thread_ret_t ggml_graph_compute_thread(void * data) {
     struct ggml_compute_state * state = (struct ggml_compute_state *) data;
     struct ggml_threadpool    * tp    = state->threadpool;
@@ -3017,7 +3126,11 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
     const struct ggml_cgraph * cgraph = tp->cgraph;
     const struct ggml_cplan  * cplan  = tp->cplan;
 
+#ifdef GGML_USE_CPU_RISCV64_SPACEMIT
+    ggml_backend_cpu_riscv64_spacemit_set_numa_thread_affinity(state->ith);
+#else
     set_numa_thread_affinity(state->ith);
+#endif
 
     struct ggml_compute_params params = {
         /*.ith        =*/ state->ith,
@@ -3046,7 +3159,14 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
             continue;
         }
 
-        ggml_compute_forward(&params, node);
+        // TODO: move fused-op detection into ggml_graph_plan so fusion decisions are made once at planning time
+        // Try fused ops, fall back to normal compute
+        const int n_fused = ggml_cpu_try_fuse_ops(cgraph, node_n, &params, cplan);
+        if (n_fused > 0) {
+            node_n += n_fused;
+        } else {
+            ggml_compute_forward(&params, node);
+        }
 
         if (state->ith == 0 && cplan->abort_callback &&
                 cplan->abort_callback(cplan->abort_callback_data)) {
@@ -3066,6 +3186,10 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
 #endif
 
     ggml_barrier(state->threadpool);
+
+#ifdef GGML_USE_CPU_RISCV64_SPACEMIT
+    ggml_backend_cpu_riscv64_spacemit_clear_numa_thread_affinity_threaded(state->ith);
+#endif
 
     return 0;
 }
@@ -3858,6 +3982,14 @@ int ggml_cpu_has_sme(void) {
 #endif
 }
 
+int ggml_cpu_has_sme2(void) {
+#if defined(__ARM_ARCH) && defined(__ARM_FEATURE_SME2)
+    return 1;
+#else
+    return 0;
+#endif
+}
+
 void ggml_cpu_init(void) {
     // needed to initialize ggml_time
     {
@@ -3891,6 +4023,11 @@ void ggml_cpu_init(void) {
                 ggml_table_f32_e8m0_half[i] = GGML_E8M0_TO_FP32_HALF(i);
             }
 
+            // initialize UE4M3 table (256 entries)
+            for (int i = 0; i < (1 << 8); ++i) {
+                ggml_table_f32_ue4m3[i] = ggml_ue4m3_to_fp32(i);
+            }
+
             const uint64_t t_end = ggml_time_us(); UNUSED(t_end);
 
             GGML_PRINT_DEBUG("%s: GELU, Quick GELU, SILU and EXP tables initialized in %f ms\n", __func__, (t_end - t_start)/1000.0);
@@ -3920,6 +4057,11 @@ void ggml_cpu_init(void) {
 #if defined(__riscv)
         ggml_init_riscv_arch_features();
 #endif
+
+        {
+            const char * env = getenv("GGML_CPU_DISABLE_FUSION");
+            ggml_cpu_disable_fusion = (env != NULL && atoi(env) == 1);
+        }
 
         is_first_call = false;
     }
