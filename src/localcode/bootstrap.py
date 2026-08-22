@@ -256,12 +256,17 @@ def download_turboquant_binary(on_progress: Callable[[str], None] | None = None)
         # accept any cert.
         return False, (
             "Download failed: TLS certificate verification failed. Update your "
-            "certificates (`pip install -U certifi`), or build llama-cpp-"
-            "turboquant from source. LocalCode will not download an executable "
+            "certificates (`pip install -U certifi`), or build the bundled "
+            "llama-cpp-turboquant/ tree in this repo from source. LocalCode will "
+            "not download an executable "
             "over an unverified connection."
         )
     except Exception as e:
-        return False, f"Download failed: {e}\nBuild from source instead: clone llama-cpp-turboquant and run cmake."
+        return False, (
+            f"Download failed: {e}\n"
+            "Build from source instead: run cmake in the bundled "
+            "llama-cpp-turboquant/ tree in this repo (no external clone needed)."
+        )
 
 
 def _is_complete_download(p: Path, catalog_entry) -> bool:
