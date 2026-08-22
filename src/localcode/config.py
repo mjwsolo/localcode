@@ -4,6 +4,8 @@ import os
 import threading
 from dataclasses import dataclass
 from pathlib import Path
+
+from .paths import chmod_quiet, write_private
 try:
     import tomllib
 except ModuleNotFoundError:  # Python < 3.11
@@ -196,9 +198,22 @@ def get_home_dir() -> Path:
 
 
 def ensure_home_dirs() -> Path:
+    """Create `~/.localcode/` and its children, owner-only (0700).
+
+    This tree holds `config.toml` (google / brave / serpapi API keys),
+    `history.db` (every prompt and response), saved sessions and the
+    lexical index. None of it should be readable by other accounts on
+    the machine, so both the root and each child are created 0700 and
+    the root's mode is re-asserted on every call (cheap, and it repairs
+    a directory created 0755 by an older version).
+    """
     home = get_home_dir()
+    home.mkdir(parents=True, exist_ok=True)
+    chmod_quiet(home, 0o700)
     for child in ("logs", "sessions", "jobs", "skills", "plugins"):
-        (home / child).mkdir(parents=True, exist_ok=True)
+        d = home / child
+        d.mkdir(parents=True, exist_ok=True)
+        chmod_quiet(d, 0o700)
     return home
 
 
@@ -210,7 +225,9 @@ def init_config_file() -> Path:
     path = get_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists():
-        path.write_text(DEFAULT_CONFIG)
+        write_private(path, DEFAULT_CONFIG)
+    else:
+        chmod_quiet(path, 0o600)
     return path
 
 
@@ -292,8 +309,12 @@ def save_config(config: AppConfig) -> Path:
     # final rename.
     with _SAVE_LOCK:
         tmp = path.with_name(f".{path.name}.tmp{os.getpid()}")
-        tmp.write_text(content)
+        # config.toml carries google / brave / serpapi API keys. Write the
+        # temp file 0600 BEFORE the rename so the final file is never
+        # world-readable, not even for the instant between rename and chmod.
+        write_private(tmp, content)
         os.replace(tmp, path)
+        chmod_quiet(path, 0o600)
     return path
 
 
@@ -302,6 +323,9 @@ def load_config() -> AppConfig:
     path = get_config_path()
     if not path.exists():
         init_config_file()
+    # Repair an install from before config.toml was written 0600: this file
+    # holds google / brave / serpapi API keys and was created world-readable.
+    chmod_quiet(path, 0o600)
     data = tomllib.loads(path.read_text())
     runtime_data = data.get("runtime", {})
     search_data = data.get("search", {})
