@@ -290,8 +290,37 @@ def _is_complete_download(p: Path, catalog_entry) -> bool:
     # rejected complete files (a real 11.29e9-byte model "failed" an
     # expected-12.0e9 check), so the server never started.
     expected = int(catalog_entry.size_gb * 1000 ** 3)
-    # Allow 3% tolerance for rounding in the catalog's GB figure.
+    # Allow 3% tolerance for rounding in the catalog's GB figure. This question
+    # is only "did the download finish", NOT "is this the current upstream
+    # file" - see is_stale_download() for that. Keeping them separate matters:
+    # upstream re-publishes under the same filename, and on this machine five
+    # models differ from upstream by 128-1,984 bytes while four of the five
+    # work perfectly. Treating those as incomplete would silently re-download
+    # 77 GB of working models.
     return size >= int(expected * 0.97)
+
+
+def is_stale_download(p: Path, catalog_entry) -> bool:
+    """True when the file on disk is complete but is NOT the current upstream file.
+
+    Upstream re-publishes GGUFs under the same filename. gemma-4-26B-A4B
+    UD-Q8_K_XL was re-published with a 1,984-byte difference; the stale copy
+    stayed on disk and emitted `<unused17>` garbage instead of text, and the
+    3% completeness tolerance could never see an 1,984-byte delta in a 27 GB
+    file. An exact size comparison catches it for free.
+
+    This is advisory. It deliberately does NOT trigger a re-download: most
+    stale files work fine, and silently pulling tens of GB would be worse than
+    the problem. Callers should surface it so the user can decide - and it is
+    the first thing to check when a model produces garbage.
+    """
+    expected_bytes = getattr(catalog_entry, "size_bytes", None) if catalog_entry else None
+    if not expected_bytes:
+        return False
+    try:
+        return p.stat().st_size != expected_bytes
+    except OSError:
+        return False
 
 
 def _verify_download_integrity(choice, path: Path) -> tuple[bool, str]:

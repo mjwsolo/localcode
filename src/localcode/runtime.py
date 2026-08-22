@@ -1341,9 +1341,18 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
             pass
         self._client = None
         cmd = self.llama_server_command(str(model))
+        # restart() now also VERIFIES (via /props) that the live server really
+        # loaded `model`; it returns False on a mismatch. See
+        # ServerManager._verify_loaded_model — 2026-08-22 the app happily talked
+        # to another session's Qwen server after a switch to Muse Glimmer.
         ok = mgr.restart(cmd, str(model))
         # Propagate the (possibly fallback) port back to our config and
         # endpoint URL so downstream HTTP requests hit the live server.
+        # This is also the fix for the port half of the wrong-model bug: if
+        # start() bound 8082 because a foreign server squats 8081, leaving
+        # base_url on 8081 means every request goes to THAT server. We adopt
+        # the actual port rather than failing, because port fallback exists
+        # precisely so localcode still runs when a port is squatted.
         try:
             actual_port = mgr.port
             new_base = f"http://localhost:{actual_port}"

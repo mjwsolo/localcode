@@ -1259,52 +1259,51 @@ class ChatLog(RichLog):
             self.scroll_offset.y >= self.max_scroll_y - 2
         )
 
-        expected_tail = self._stream_start_idx + self._stream_lines_written
-        is_at_tail = expected_tail == len(self.lines)
-        if is_at_tail and self._stream_lines_written > 0:
-            # Pop our entire block. Safe because the at-tail check
-            # guarantees nothing else lives in this index range.
-            for _ in range(self._stream_lines_written):
-                self.lines.pop()
-            self._line_counter = max(0, self._line_counter - self._stream_lines_written)
-            self._line_cache.clear()
-            self._stream_lines_written = 0
-        elif not is_at_tail:
-            # Lost the tail — reset to the new bottom of the log. The
-            # earlier block stays where it was (with its now-stale
-            # render); _rerender on the next layout event will replace
-            # it from `_history` cleanly.
-            self._stream_start_idx = len(self.lines)
-            self._stream_lines_written = 0
-
-        # Render the whole accumulated stream via the unified helper.
-        # Identical output to end-of-turn `_render_assistant`, so when
-        # streaming ends and history-replay runs, nothing visually moves.
-        # Append-only. Everything up to the last safe block boundary has
-        # already been rendered and written by an earlier flush, so re-render
-        # only what came after it. Without this every flush re-parses the whole
-        # message through commonmark - 31 ms at 10 KB, 127 ms at 40 KB - which
-        # is what forced the old frame-rate ladder down to 4 fps on long
-        # answers. Each piece is rendered exactly once, ever.
+        # Decide how much of our existing block to drop before re-rendering.
+        #
+        # Everything up to the last safe markdown block boundary was already
+        # rendered by an earlier flush and cannot change, so only the volatile
+        # tail after it is popped and redrawn. Re-rendering the whole message
+        # every frame cost 388 ms at 18 KB, which is what forced the old
+        # adaptive frame-rate ladder down to 4 fps on long answers.
         full = self._stream_full
         prev_stable = getattr(self, "_stream_stable_len", 0)
         stable_rows = getattr(self, "_stream_stable_rows", 0)
-        new_stable = self._stable_split(full)
-        if new_stable < prev_stable:
-            new_stable = prev_stable
+        new_stable = max(self._stable_split(full), prev_stable)
 
-        if stable_rows and self._stream_lines_written >= stable_rows:
-            # Committed prefix stays on screen; drop only the volatile tail.
-            drop = self._stream_lines_written - stable_rows
-            for _ in range(drop):
-                self.lines.pop()
-            self._line_counter = max(0, self._line_counter - drop)
-            self._line_cache.clear()
-            self._stream_lines_written = stable_rows
-        else:
-            prev_stable = 0
+        expected_tail = self._stream_start_idx + self._stream_lines_written
+        is_at_tail = expected_tail == len(self.lines)
+
+        if not is_at_tail:
+            # Lost the tail: a tool widget or a rerender wrote after our last
+            # flush. Abandon the old block (a later _rerender repaints it from
+            # history) and start a fresh one here, which also invalidates the
+            # frozen prefix - its rows are no longer ours to keep.
+            self._stream_start_idx = len(self.lines)
+            self._stream_lines_written = 0
+            prev_stable = new_stable = 0
             self._stream_stable_len = 0
             self._stream_stable_rows = stable_rows = 0
+        else:
+            # Keep the frozen prefix rows; drop only what comes after them.
+            keep = stable_rows if stable_rows <= self._stream_lines_written else 0
+            if not keep:
+                # No usable frozen prefix yet (first flush, or the row count
+                # drifted). Reset only what we have STORED - deliberately not
+                # `new_stable`, which is this flush's freshly computed boundary.
+                # Clobbering it made `new_stable > prev_stable` false forever,
+                # so nothing was ever frozen and every frame re-rendered the
+                # whole message: 381 ms at 18 KB.
+                prev_stable = 0
+                self._stream_stable_len = 0
+                self._stream_stable_rows = stable_rows = 0
+            drop = self._stream_lines_written - keep
+            for _ in range(drop):
+                self.lines.pop()
+            if drop:
+                self._line_counter = max(0, self._line_counter - drop)
+                self._line_cache.clear()
+            self._stream_lines_written = keep
 
         pieces = []
         if new_stable > prev_stable:
