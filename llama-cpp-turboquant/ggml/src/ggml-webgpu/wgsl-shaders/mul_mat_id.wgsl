@@ -1,8 +1,6 @@
 enable f16;
 
-#define DECLARE_BYTE_LOADERS_SRC0
 #include "common_decls.tmpl"
-
 #include "mul_mat_decls.tmpl"
 
 #ifdef VEC

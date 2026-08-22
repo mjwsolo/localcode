@@ -1,12 +1,10 @@
 #pragma once
 
 #include "llama.h"
-#include "llama-ext.h"
 #include "llama-cparams.h"
 #include "llama-graph.h"
 #include "llama-adapter.h"
 #include "llama-impl.h"
-#include "llama-expert-prefetch.h"
 
 #include "ggml-cpp.h"
 #include "ggml-opt.h"
@@ -23,6 +21,17 @@ class llama_io_write_i;
 // "memory" as in abstract memory for the context
 struct llama_memory_i;
 struct llama_memory_context_i;
+
+// "memory" as in physical memory for a buffer type, in bytes
+struct llama_memory_breakdown_data {
+    size_t model   = 0; // memory allocated for the model
+    size_t context = 0; // memory allocated for the context
+    size_t compute = 0; // memory allocated for temporary compute buffers
+
+    size_t total() const {
+        return model + context + compute;
+    }
+};
 
 struct llama_context {
     // init scheduler and compute buffers, reserve worst-case graphs
@@ -163,7 +172,7 @@ struct llama_context {
     llama_perf_context_data perf_get_data() const;
     void perf_reset();
 
-    llama_memory_breakdown memory_breakdown() const;
+    std::map<ggml_backend_buffer_type_t, llama_memory_breakdown_data> memory_breakdown() const;
 
     //
     // training
@@ -347,10 +356,4 @@ private:
     mutable int32_t n_eval   = 0; // number of eval calls
 
     mutable int32_t n_reused = 0; // number of times the previous graph was reused
-
-public:
-    // Expert-aware madvise prefetch for MoE models
-    llama_expert_prefetch expert_prefetch;
-private:
-    mutable int32_t n_decode_tokens = 0; // sequential token counter for prefetch logging
 };
