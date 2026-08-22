@@ -36,6 +36,7 @@ static std::string llama_model_ftype_name(llama_ftype ftype) {
         case LLAMA_FTYPE_ALL_F32:         return "all F32";
         case LLAMA_FTYPE_MOSTLY_F16:      return "F16";
         case LLAMA_FTYPE_MOSTLY_BF16:     return "BF16";
+        case LLAMA_FTYPE_MOSTLY_Q1_0:     return "Q1_0";
         case LLAMA_FTYPE_MOSTLY_Q4_0:     return "Q4_0";
         case LLAMA_FTYPE_MOSTLY_Q4_1:     return "Q4_1";
         case LLAMA_FTYPE_MOSTLY_Q5_0:     return "Q5_0";
@@ -376,8 +377,9 @@ namespace GGUFMeta {
             }
         } else {
             if (arr_info.gt == GGUF_TYPE_BOOL) {
-                std::transform((const bool *)arr_info.data, (const bool *)arr_info.data + arr_info.length, result.begin(), [](bool x) {
-                    return static_cast<T>(x);
+                const int8_t * values = (const int8_t *) arr_info.data;
+                std::transform(values, values + arr_info.length, result.begin(), [](int8_t x) {
+                    return static_cast<T>(x != 0);
                 });
             } else {
                 std::copy((const T*)arr_info.data, (const T *)arr_info.data + arr_info.length, result.begin());
@@ -761,6 +763,7 @@ llama_model_loader::llama_model_loader(
             case GGML_TYPE_IQ4_XS:  ftype = LLAMA_FTYPE_MOSTLY_IQ4_XS;  break;
             case GGML_TYPE_IQ3_S:   ftype = LLAMA_FTYPE_MOSTLY_IQ3_S;   break;
             case GGML_TYPE_NVFP4:   ftype = LLAMA_FTYPE_MOSTLY_NVFP4;   break;
+            case GGML_TYPE_Q1_0:    ftype = LLAMA_FTYPE_MOSTLY_Q1_0;    break;
             default:
                 {
                     LLAMA_LOG_WARN("%s: unknown type %s\n", __func__, ggml_type_name(type_max));
@@ -1374,6 +1377,43 @@ void llama_model_loader::get_mapping_range(size_t * first, size_t * last, void *
     }
 }
 
+void llama_model_loader::get_mapping_ranges(
+        std::vector<std::pair<size_t, size_t>> * ranges,
+        void ** addr, int idx, ggml_context * ctx,
+        size_t gap_threshold) const {
+    GGML_ASSERT(!mappings.empty());
+    const auto & mapping = mappings.at(idx);
+
+    *addr = mapping->addr();
+    ranges->clear();
+
+    std::vector<std::pair<size_t, size_t>> spans;
+    for (ggml_tensor * tensor = ggml_get_first_tensor(ctx); tensor; tensor = ggml_get_next_tensor(ctx, tensor)) {
+        const auto * weight = get_weight(ggml_get_name(tensor));
+        if (!weight || weight->idx != idx) {
+            continue;
+        }
+        spans.emplace_back(weight->offs, weight->offs + ggml_nbytes(tensor));
+    }
+    if (spans.empty()) {
+        return;
+    }
+    std::sort(spans.begin(), spans.end());
+
+    size_t cur_first = spans[0].first;
+    size_t cur_last  = spans[0].second;
+    for (size_t i = 1; i < spans.size(); ++i) {
+        if (spans[i].first <= cur_last + gap_threshold) {
+            cur_last = std::max(cur_last, spans[i].second);
+        } else {
+            ranges->emplace_back(cur_first, cur_last);
+            cur_first = spans[i].first;
+            cur_last  = spans[i].second;
+        }
+    }
+    ranges->emplace_back(cur_first, cur_last);
+}
+
 void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
     const auto & w = require_weight(ggml_get_name(cur));
 
@@ -1437,7 +1477,11 @@ bool llama_model_loader::load_all_data(
         }
         // When not using mmaped io use async uploads from pinned memory to GPU memory.
         // First determine if the backend supports the necessary features for async uploads.
-        auto * buf = bufs.count(0) ? bufs.at(0) : nullptr;
+        // The first registered buffer for file 0 is representative — async capability is a
+        // property of the backend/device, not of any one sub-buffer.
+        auto it_buf = bufs.find(0);
+        ggml_backend_buffer_t buf = (it_buf != bufs.end() && !it_buf->second.empty())
+            ? it_buf->second.front() : nullptr;
         if (!buf) {
             LLAMA_LOG_DEBUG("%s: no buffer found for async uploads\n", func);
             return nullptr;
@@ -1508,7 +1552,7 @@ bool llama_model_loader::load_all_data(
     if (upload_backend) {
         LLAMA_LOG_DEBUG("%s: using async uploads for device %s, buffer type %s, backend %s\n", __func__,
             ggml_backend_dev_name(ggml_backend_get_device(upload_backend)),
-            ggml_backend_buft_name(ggml_backend_buffer_get_type(bufs.at(0))),
+            ggml_backend_buft_name(ggml_backend_buffer_get_type(bufs.at(0).front())),
             ggml_backend_name(upload_backend));
     }
 
@@ -1529,11 +1573,28 @@ bool llama_model_loader::load_all_data(
 
         if (use_mmap) {
             const auto & mapping = mappings.at(weight->idx);
-            ggml_backend_buffer_t buf_mmap = nullptr;
-            if (bufs.count(weight->idx)) {
-                buf_mmap = bufs.at(weight->idx);
-            }
             uint8_t * data = (uint8_t *) mapping->addr() + weight->offs;
+
+            // Find the sub-buffer whose host-ptr range contains this tensor's data.
+            // With multi-region mapping, a single file idx may map to several disjoint
+            // buffers (one per contiguous run of offloaded tensors); each tensor must
+            // be allocated into the specific buffer that actually covers its bytes.
+            ggml_backend_buffer_t buf_mmap = nullptr;
+            auto it_bufs = bufs.find(weight->idx);
+            if (it_bufs != bufs.end()) {
+                for (ggml_backend_buffer_t sub : it_bufs->second) {
+                    void * base = ggml_backend_buffer_get_base(sub);
+                    if (base == nullptr) {
+                        continue;
+                    }
+                    uint8_t * b = (uint8_t *) base;
+                    size_t bsize = ggml_backend_buffer_get_size(sub);
+                    if (data >= b && data + n_size <= b + bsize) {
+                        buf_mmap = sub;
+                        break;
+                    }
+                }
+            }
 
             if (check_tensors) {
                 validation_result.emplace_back(std::async(std::launch::async, [cur, data, n_size] {

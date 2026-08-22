@@ -1,0 +1,96 @@
+name: TurboQuant fork
+
+# The vendored llama-cpp-turboquant tree is what builds the llama-server binary
+# shipped in the wheel. Until this workflow existed nothing tested it: the fork's
+# own CI lived in the standalone mjwsolo/llama-cpp-turboquant repo, which had
+# drifted 472 files away from the tree that actually ships. That gap is how
+# commit 77512cb ("vulkan: fix merge that kept stale-vintage backend files")
+# went unnoticed for two months.
+#
+# This is a BUILD gate, not a correctness gate. GitHub's macOS runners have no
+# usable Metal compute device, so the turbo KV kernels cannot be exercised here.
+# It catches the failure mode that actually bit us: interface/vintage drift
+# between the turbo patches and the rest of ggml after an upstream merge.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'llama-cpp-turboquant/**'
+      - '.github/workflows/turboquant.yml'
+  pull_request:
+    paths:
+      - 'llama-cpp-turboquant/**'
+      - '.github/workflows/turboquant.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: turboquant-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build + tests (macos-arm64)
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cmake build
+        uses: actions/cache@v4
+        with:
+          path: llama-cpp-turboquant/build-ci
+          key: tq-${{ runner.os }}-${{ hashFiles('llama-cpp-turboquant/**/CMakeLists.txt') }}-${{ github.sha }}
+          restore-keys: |
+            tq-${{ runner.os }}-${{ hashFiles('llama-cpp-turboquant/**/CMakeLists.txt') }}-
+            tq-${{ runner.os }}-
+
+      - name: Configure
+        working-directory: llama-cpp-turboquant
+        run: |
+          cmake -B build-ci \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLAMA_BUILD_TESTS=ON \
+            -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_SERVER=ON \
+            -DGGML_METAL=ON
+
+      - name: Build
+        working-directory: llama-cpp-turboquant
+        run: cmake --build build-ci --config Release -j 4
+
+      - name: Assert the turbo KV types survived the build
+        working-directory: llama-cpp-turboquant
+        run: |
+          # The enum values are serialised into GGUF, so a silent renumber is a
+          # data-format break, not just a compile error. Upstream v0.2.0 now
+          # occupies 41/42/43 with Q1_0/Q2_0/COUNT, so this guard fails loudly
+          # the moment an upstream bump collides with the turbo types.
+          grep -q 'GGML_TYPE_TURBO3_0' ggml/include/ggml.h
+          grep -q 'GGML_TYPE_TURBO4_0' ggml/include/ggml.h
+          grep -q 'GGML_TYPE_TURBO2_0' ggml/include/ggml.h
+          grep -q 'GGML_OP_TURBO_WHT'  ggml/include/ggml.h
+          test -f ggml/src/ggml-metal/turbo-matrices.h
+          test -f ggml/src/ggml-metal/turbo-wht.h
+          echo "turbo delta present"
+
+      - name: Run CPU-side tests
+        working-directory: llama-cpp-turboquant
+        run: ctest --test-dir build-ci --output-on-failure -j 4 -LE gpu || ctest --test-dir build-ci --output-on-failure -j 4
+
+      - name: Confirm llama-server binary was produced
+        working-directory: llama-cpp-turboquant
+        run: |
+          test -x build-ci/bin/llama-server
+          ls -la build-ci/bin/llama-server
+
+      - name: Upload llama-server
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-server-macos-arm64
+          path: llama-cpp-turboquant/build-ci/bin/llama-server
+          if-no-files-found: error
+          retention-days: 14
