@@ -174,6 +174,28 @@ _APP_NOUN = (
 )
 
 
+_TRIVIAL_TURN_RE = re.compile(
+    r"^(hi|hey|hello|yo|sup|thanks|thank you|thx|ta|ok|okay|k|cool|nice|great|"
+    r"good (morning|afternoon|evening|night)|how are you|what'?s up|"
+    r"morning|evening)[\s!.?,]*$",
+    re.IGNORECASE,
+)
+
+
+def is_trivial_turn(user_text: str) -> bool:
+    """True for a greeting or acknowledgement - conversation, not a task.
+
+    The system prompt tells the model to plan multi-step work with todo_write,
+    and its carve-out is written in units of task size ("skip the plan for
+    straightforward one/two-step tasks"). Nothing there covers a turn that is
+    not a task at all, so a small quant reading a header that shouts FINISH THE
+    WHOLE TASK will happily open a todo list for "hi". Callers use this to stop
+    offering the tool at all on such turns - a model cannot call what it was
+    never given.
+    """
+    return bool(_TRIVIAL_TURN_RE.match((user_text or "").strip()))
+
+
 def infer_goal_state(user_text: str) -> GoalState:
     text = (user_text or "").strip()
     lower = text.lower()
