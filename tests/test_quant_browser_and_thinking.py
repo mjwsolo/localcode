@@ -124,12 +124,26 @@ def test_thinking_stream_commits_lines_and_streams_partial_words():
     assert ("think_line", "First reasoning line") in log._history
 
 
+def test_thinking_partial_renders_without_punctuation():
+    """A tail that does not end on punctuation must still appear.
+
+    This used to assert the opposite - that such a tail stayed buffered - which
+    encoded the bug: the flush gate required the chunk to END on a word
+    boundary, but SentencePiece/BPE emit LEADING-space tokens, so the last
+    character is nearly always a letter. In practice thinking only repainted on
+    ". , ; : ! ?", i.e. a whole clause at a time, and with no timer fallback the
+    tail stayed invisible until the next punctuation arrived.
+    """
+    log = _FakeLog()
+    _bind_stream_methods(log)
+    log.stream_thinking("partial tail with no newline")
+    assert "partial tail with no newline" in " ".join(log.written)
+
+
 def test_thinking_stream_end_flushes_partial():
     log = _FakeLog()
     _bind_stream_methods(log)
-    # Ends on 'e' (no word boundary) → stays buffered, not yet rendered.
     log.stream_thinking("partial tail with no newline")
-    assert "partial tail" not in " ".join(log.written)  # buffered, not flushed
     log.end_thinking_stream()
     assert "partial tail with no newline" in " ".join(log.written)
     assert ("think_line", "partial tail with no newline") in log._history
