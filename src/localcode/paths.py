@@ -170,3 +170,74 @@ def stuck_server_marker_path() -> Path:
     """D-state marker for a server that won't die. Global because the
     stuck process is a system-level concern, not a project concern."""
     return global_state_dir() / "stuck-server.txt"
+
+
+# ── Write containment ────────────────────────────────────────────────
+#
+# Every file-writing tool funnels its `path` argument through
+# `contain_write_path()`. Before this existed, `ToolContext.resolve_path`
+# computed `repo / raw` and returned it untouched — and because
+# `Path.__truediv__` DISCARDS the left operand when the right one is
+# absolute, `raw="/Users/victim/.zshrc"` produced exactly that path. A
+# `../../..` prefix escaped just as easily, and a symlink committed inside
+# the repo pointing outside was a third route (pathlib writes follow
+# symlinks). Reads are deliberately NOT contained — the agent is expected to
+# read anywhere on the machine — but writes now stay inside the project.
+
+
+class PathContainmentError(ValueError):
+    """A write was aimed outside the project root (or an allowed extra root)."""
+
+    def __init__(self, raw: str, resolved: Path, root: Path):
+        self.raw = raw
+        self.resolved = resolved
+        self.root = root
+        super().__init__(
+            f"path escapes the project root: {raw!r} resolves to {resolved} "
+            f"which is outside {root}. Write only inside the project."
+        )
+
+
+def is_within(path: Path, root: Path) -> bool:
+    """True if `path`, fully resolved, lives at or under `root`.
+
+    Symlink-aware in both directions: `.resolve()` follows every component
+    (including the final one), so a symlink inside the repo whose target
+    escapes resolves to the escaping target and returns False. Resolving
+    `root` too keeps `/tmp` → `/private/tmp` style prefixes from producing
+    false negatives on macOS.
+    """
+    try:
+        return Path(path).resolve().is_relative_to(Path(root).resolve())
+    except (OSError, ValueError):
+        return False
+
+
+def contain_write_path(
+    candidate: Path | str,
+    root: Path | str,
+    extra_roots: "tuple[Path, ...] | list[Path] | None" = None,
+) -> Path:
+    """Return the resolved write target, or raise `PathContainmentError`.
+
+    `candidate` is the already-healed absolute path (see
+    `ToolContext.resolve_path`); `root` is the project root. `extra_roots`
+    are additional sanctioned trees (the agent's notebook scratch dir) that
+    may legitimately sit outside the project.
+    """
+    cand = Path(candidate)
+    try:
+        resolved = cand.resolve()
+    except (OSError, ValueError):
+        resolved = cand
+    roots = [Path(root)]
+    for extra in (extra_roots or ()):
+        roots.append(Path(extra))
+    for r in roots:
+        if is_within(resolved, r):
+            return resolved
+    try:
+        root_resolved = Path(root).resolve()
+    except (OSError, ValueError):
+        root_resolved = Path(root)
+    raise PathContainmentError(str(candidate), resolved, root_resolved)

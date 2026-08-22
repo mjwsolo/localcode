@@ -116,7 +116,7 @@ def _detect_stub_code(content: str, path: str) -> str | None:
 def execute(ctx: ToolContext, args: dict) -> str:
     if "path" not in args:
         return "Error: 'path' argument is required for write_file."
-    path = ctx.resolve_path(args["path"])
+    path = ctx.resolve_write_path(args["path"])
     # Guard: path must not already be a directory. Without this, the
     # model sometimes invokes write_file to "create a folder", which
     # then crashes with [Errno 21] Is a directory. Redirect it to the
