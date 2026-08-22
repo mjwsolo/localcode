@@ -235,12 +235,6 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .vec_dot_type             = GGML_TYPE_F16,
         .nrows                    = 1,
     },
-    [GGML_TYPE_Q1_0] = {
-        .from_float               = quantize_row_q1_0,
-        .vec_dot                  = ggml_vec_dot_q1_0_q8_0,
-        .vec_dot_type             = GGML_TYPE_Q8_0,
-        .nrows                    = 1,
-    },
     [GGML_TYPE_Q4_0] = {
         .from_float               = quantize_row_q4_0,
         .vec_dot                  = ggml_vec_dot_q4_0_q8_0,
@@ -2089,73 +2083,6 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_turbo_wht(params, tensor);
             } break;
-        case GGML_OP_MOE_ROUTER_FUSED:
-            {
-                // CPU fallback for fused MoE router
-                // softmax + top-k + get_rows + normalize
-                if (params->ith != 0) break;
-
-                const struct ggml_tensor * src0 = tensor->src[0];
-                struct ggml_tensor * weights_out = tensor->src[1];
-                const int n_expert_used = tensor->op_params[0];
-                const int n_expert      = (int)src0->ne[0];
-                const int n_tokens      = (int)src0->ne[1];
-
-                for (int t = 0; t < n_tokens; t++) {
-                    const float * logits_ptr = (const float *)((const char *)src0->data + t * src0->nb[1]);
-                    int32_t * idx_ptr = (int32_t *)((char *)tensor->data + t * tensor->nb[1]);
-                    float * wgt_ptr = (float *)((char *)weights_out->data + t * weights_out->nb[1]);
-
-                    // softmax
-                    float probs[4096]; // max experts
-                    float max_val = -INFINITY;
-                    for (int i = 0; i < n_expert; i++) {
-                        if (logits_ptr[i] > max_val) max_val = logits_ptr[i];
-                    }
-                    float sum = 0.0f;
-                    for (int i = 0; i < n_expert; i++) {
-                        probs[i] = expf(logits_ptr[i] - max_val);
-                        sum += probs[i];
-                    }
-                    for (int i = 0; i < n_expert; i++) {
-                        probs[i] /= sum;
-                    }
-
-                    // top-k: find top n_expert_used by value (descending)
-                    int indices[256]; // max expert_used
-                    for (int k = 0; k < n_expert_used; k++) {
-                        float best = -INFINITY;
-                        int best_idx = 0;
-                        for (int i = 0; i < n_expert; i++) {
-                            bool used = false;
-                            for (int j = 0; j < k; j++) {
-                                if (indices[j] == i) { used = true; break; }
-                            }
-                            if (!used && probs[i] > best) {
-                                best = probs[i];
-                                best_idx = i;
-                            }
-                        }
-                        indices[k] = best_idx;
-                    }
-
-                    // extract weights, normalize, and write outputs
-                    float wsum = 0.0f;
-                    for (int k = 0; k < n_expert_used; k++) {
-                        wgt_ptr[k] = probs[indices[k]];
-                        wsum += wgt_ptr[k];
-                    }
-                    if (wsum < 6.103515625e-5f) wsum = 6.103515625e-5f;
-                    for (int k = 0; k < n_expert_used; k++) {
-                        wgt_ptr[k] /= wsum;
-                    }
-
-                    // store expert indices
-                    for (int k = 0; k < n_expert_used; k++) {
-                        idx_ptr[k] = indices[k];
-                    }
-                }
-            } break;
         case GGML_OP_MAP_CUSTOM1:
             {
                 ggml_compute_forward_map_custom1(params, tensor);
@@ -2339,10 +2266,6 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_TURBO_WHT:
             {
                 n_tasks = n_threads;
-            } break;
-        case GGML_OP_MOE_ROUTER_FUSED:
-            {
-                n_tasks = 1;
             } break;
         case GGML_OP_REPEAT:
         case GGML_OP_REPEAT_BACK:

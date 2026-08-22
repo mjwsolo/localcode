@@ -225,7 +225,7 @@ foreach(FILE_PATH ${EXTRA_LICENSES})
 endforeach()
 
 if (LLAMA_BUILD_COMMON)
-    license_generate(llama-common)
+    license_generate(common)
 endif()
 
 #
@@ -248,10 +248,6 @@ set_target_properties(llama
         PUBLIC_HEADER "${LLAMA_PUBLIC_HEADERS}")
 
 install(TARGETS llama LIBRARY PUBLIC_HEADER)
-
-if (LLAMA_BUILD_COMMON)
-    install(TARGETS llama-common LIBRARY)
-endif()
 
 configure_package_config_file(
         ${CMAKE_CURRENT_SOURCE_DIR}/cmake/llama-config.cmake.in

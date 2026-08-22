@@ -370,10 +370,6 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
             {
                 n_fuse = ggml_metal_op_turbo_wht(ctx, idx);
             } break;
-        case GGML_OP_MOE_ROUTER_FUSED:
-            {
-                n_fuse = ggml_metal_op_moe_router_fused(ctx, idx);
-            } break;
         case GGML_OP_SOLVE_TRI:
             {
                 n_fuse = ggml_metal_op_solve_tri(ctx, idx);
@@ -446,10 +442,6 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
         case GGML_OP_PAD_REFLECT_1D:
             {
                 n_fuse = ggml_metal_op_pad_reflect_1d(ctx, idx);
-            } break;
-        case GGML_OP_ROLL:
-            {
-                n_fuse = ggml_metal_op_roll(ctx, idx);
             } break;
         case GGML_OP_ARANGE:
             {
@@ -826,13 +818,6 @@ int ggml_metal_op_unary(ggml_metal_op_t ctx, int idx) {
     if (op->op == GGML_OP_CLAMP) {
         args.min = ggml_get_op_params_f32(op, 0);
         args.max = ggml_get_op_params_f32(op, 1);
-    }
-
-    if (op->op == GGML_OP_UNARY && ggml_get_unary_op(op) == GGML_UNARY_OP_XIELU) {
-        args.slope = ggml_get_op_params_f32(op, 1); // alpha_n
-        args.scale = ggml_get_op_params_f32(op, 2); // alpha_p
-        args.bias  = ggml_get_op_params_f32(op, 3); // beta
-        args.val   = ggml_get_op_params_f32(op, 4); // eps
     }
 
     auto pipeline = ggml_metal_library_get_pipeline_unary(lib, op);
@@ -1726,41 +1711,6 @@ int ggml_metal_op_turbo_wht(ggml_metal_op_t ctx, int idx) {
     return 1;
 }
 
-int ggml_metal_op_moe_router_fused(ggml_metal_op_t ctx, int idx) {
-    ggml_tensor * op = ctx->node(idx);
-
-    ggml_metal_library_t lib = ctx->lib;
-    ggml_metal_encoder_t enc = ctx->enc;
-
-    const int n_expert_used = op->op_params[0];
-    const int n_expert      = (int)op->src[0]->ne[0];
-    const int n_tokens      = (int)op->src[0]->ne[1];
-
-    auto pipeline = ggml_metal_library_get_pipeline(lib, "kernel_moe_router_fused");
-    if (!pipeline.pipeline) {
-        pipeline = ggml_metal_library_compile_pipeline(lib, "kernel_moe_router_fused", "kernel_moe_router_fused", nullptr);
-    }
-    GGML_ASSERT(pipeline.pipeline);
-
-    ggml_metal_kargs_moe_router_fused args = {
-        /*.n_expert      =*/ (int32_t) n_expert,
-        /*.n_expert_used =*/ (int32_t) n_expert_used,
-        /*.n_tokens      =*/ (int32_t) n_tokens,
-    };
-
-    int ida = 0;
-    ggml_metal_encoder_set_pipeline(enc, pipeline);
-    ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), ida++);
-    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), ida++); // logits
-    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), ida++); // weights_out
-    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         ida++); // indices_out (dst)
-
-    // One threadgroup per token, 32 threads (1 simdgroup) for SIMD reductions
-    ggml_metal_encoder_dispatch_threadgroups(enc, n_tokens, 1, 1, 32, 1, 1);
-
-    return 1;
-}
-
 int ggml_metal_op_solve_tri(ggml_metal_op_t ctx, int idx) {
     ggml_tensor * op = ctx->node(idx);
 
@@ -2156,8 +2106,6 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
 
     // first try to use small-batch mat-mv kernels
     // these should be efficient for BS [2, ~8]
-    if (op->src[0]->type == GGML_TYPE_Q6_K && ne11 >= 2) {
-    }
     if (op->src[1]->type == GGML_TYPE_F32 && (ne00%128 == 0) &&
         (
          (
@@ -2165,7 +2113,6 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
            op->src[0]->type == GGML_TYPE_F32  || // TODO: helper function
            op->src[0]->type == GGML_TYPE_F16  ||
            op->src[0]->type == GGML_TYPE_BF16 ||
-           op->src[0]->type == GGML_TYPE_Q1_0 ||
            op->src[0]->type == GGML_TYPE_Q4_0 ||
            op->src[0]->type == GGML_TYPE_Q4_1 ||
            op->src[0]->type == GGML_TYPE_Q5_0 ||
@@ -2173,7 +2120,6 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
            op->src[0]->type == GGML_TYPE_Q8_0 ||
            op->src[0]->type == GGML_TYPE_MXFP4 ||
            op->src[0]->type == GGML_TYPE_IQ4_NL ||
-           op->src[0]->type == GGML_TYPE_Q6_K ||
            false) && (ne11 >= 2 && ne11 <= 8)
          ) ||
          (
@@ -2658,30 +2604,6 @@ int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
         ggml_metal_encoder_set_buffer(enc, bid_src1, 2);
         ggml_metal_encoder_set_buffer(enc, bid_dst,  3);
         ggml_metal_encoder_set_buffer(enc, bid_src2, 4);
-
-        // BATCH-AWARE MoE: use batch kernel for IQ3_S when batch > 1
-        // Reads expert weights ONCE per slot, computes dot products for all tokens sharing that expert.
-        // Dispatches ne20*ne21 threadgroups (same as default) but each threadgroup handles its
-        // (token, slot) pair AND any later tokens sharing the same expert for that slot.
-        // Duplicate work is skipped by checking if a prior token already handled this expert.
-        if (ne21 > 1 && op->src[0]->type == GGML_TYPE_IQ3_S) {
-            auto batch_pipeline = ggml_metal_library_compile_pipeline(lib, "kernel_mul_mv_id_iq3s_batch", "kernel_mul_mv_id_iq3s_batch", nullptr);
-            if (batch_pipeline.pipeline) {
-                ggml_metal_encoder_set_pipeline(enc, batch_pipeline);
-                ggml_metal_encoder_set_bytes(enc, &args, sizeof(args), 0);
-                ggml_metal_encoder_set_buffer(enc, bid_src0, 1);
-                ggml_metal_encoder_set_buffer(enc, bid_src1, 2);
-                ggml_metal_encoder_set_buffer(enc, bid_dst,  3);
-                ggml_metal_encoder_set_buffer(enc, bid_src2, 4);
-                // IQ3_S needs shared memory for iq3s_grid lookup table (256*2 * sizeof(uint32_t))
-                ggml_metal_encoder_set_threadgroup_memory_size(enc, 512 * sizeof(uint32_t), 0);
-                // Dispatch nei0*nei1 threadgroups (same as default); first token per expert
-                // handles all tokens sharing that expert, later duplicates early-exit
-                const int64_t ne123_batch = ne20*ne21;
-                ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + nr0*nsg - 1)/(nr0*nsg), 1, ne123_batch, 32, nsg, 1);
-                return 1;
-            }
-        }
 
         const int64_t _ne1 = 1;
         const int64_t ne123 = ne20*ne21;
@@ -4215,59 +4137,6 @@ int ggml_metal_op_upscale(ggml_metal_op_t ctx, int idx) {
     auto pipeline = ggml_metal_library_get_pipeline_upscale(lib, op);
 
     const int nth = std::min(ggml_metal_pipeline_max_theads_per_threadgroup(pipeline), ne0);
-
-    ggml_metal_encoder_set_pipeline(enc, pipeline);
-    ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
-    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
-    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         2);
-
-    ggml_metal_encoder_dispatch_threadgroups(enc, ne1, ne2, ne3, nth, 1, 1);
-
-    return 1;
-}
-
-int ggml_metal_op_roll(ggml_metal_op_t ctx, int idx) {
-    ggml_tensor * op = ctx->node(idx);
-
-    ggml_metal_library_t lib = ctx->lib;
-    ggml_metal_encoder_t enc = ctx->enc;
-
-    GGML_TENSOR_LOCALS( int32_t, ne0, op->src[0], ne);
-    GGML_TENSOR_LOCALS(uint64_t, nb0, op->src[0], nb);
-    GGML_TENSOR_LOCALS( int32_t, ne,  op,         ne);
-    GGML_TENSOR_LOCALS(uint64_t, nb,  op,         nb);
-
-    const int32_t s0 = ggml_get_op_params_i32(op, 0);
-    const int32_t s1 = ggml_get_op_params_i32(op, 1);
-    const int32_t s2 = ggml_get_op_params_i32(op, 2);
-    const int32_t s3 = ggml_get_op_params_i32(op, 3);
-
-    ggml_metal_kargs_roll args = {
-        /*.ne00 =*/ ne00,
-        /*.ne01 =*/ ne01,
-        /*.ne02 =*/ ne02,
-        /*.ne03 =*/ ne03,
-        /*.nb00 =*/ nb00,
-        /*.nb01 =*/ nb01,
-        /*.nb02 =*/ nb02,
-        /*.nb03 =*/ nb03,
-        /*.ne0  =*/ ne0,
-        /*.ne1  =*/ ne1,
-        /*.ne2  =*/ ne2,
-        /*.ne3  =*/ ne3,
-        /*.nb0  =*/ nb0,
-        /*.nb1  =*/ nb1,
-        /*.nb2  =*/ nb2,
-        /*.nb3  =*/ nb3,
-        /*.s0   =*/ s0,
-        /*.s1   =*/ s1,
-        /*.s2   =*/ s2,
-        /*.s3   =*/ s3
-    };
-
-    auto pipeline = ggml_metal_library_get_pipeline_roll(lib, op);
-
-    const int nth = std::min(1024, ne0);
 
     ggml_metal_encoder_set_pipeline(enc, pipeline);
     ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
