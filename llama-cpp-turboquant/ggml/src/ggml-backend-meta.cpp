@@ -150,6 +150,22 @@ static ggml_backend_buffer_type_t ggml_backend_meta_device_get_host_buffer_type(
 
 static bool ggml_backend_meta_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
     GGML_ASSERT(ggml_backend_dev_is_meta(dev));
+
+    // Ops added by the TurboQuant fork that this backend's split-state model does
+    // not describe. supports_op delegates to the wrapped devices, so Metal
+    // answering "yes" for these used to let ggml_backend_meta_get_split_state
+    // fall through to its default GGML_ABORT and take the process down - that is
+    // the test-llama-archs "Subprocess aborted" on MOE_ROUTER_FUSED. Report them
+    // unsupported so the meta device is skipped for these graphs instead.
+    // Remove an entry here once a real case is added to get_split_state.
+    switch (op->op) {
+        case GGML_OP_TURBO_WHT:
+        case GGML_OP_MOE_ROUTER_FUSED:
+            return false;
+        default:
+            break;
+    }
+
     const ggml_backend_meta_device_context * meta_dev_ctx = (const ggml_backend_meta_device_context *) dev->context;
     return std::all_of(meta_dev_ctx->simple_devs.begin(), meta_dev_ctx->simple_devs.end(),
         [op](ggml_backend_dev_t simple_dev) { return ggml_backend_dev_supports_op(simple_dev, op); });

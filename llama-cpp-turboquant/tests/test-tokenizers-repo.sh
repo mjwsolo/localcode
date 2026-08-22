@@ -32,12 +32,15 @@ else
     fi
 fi
 
-shopt -s globstar
-for gguf in $folder/**/*.gguf; do
-    if [ -f $gguf.inp ] && [ -f $gguf.out ]; then
-        $toktest $gguf
+# `shopt -s globstar` needs bash 4+, but macOS still ships bash 3.2 as
+# /bin/bash, where it fails with "invalid shell option name" and the loop then
+# matches nothing. Use find(1) instead - same recursive walk, no bash 4
+# dependency, and it handles paths with spaces.
+find "$folder" -type f -name '*.gguf' -print0 | while IFS= read -r -d '' gguf; do
+    if [ -f "$gguf.inp" ] && [ -f "$gguf.out" ]; then
+        "$toktest" "$gguf"
     else
-        printf "Found \"$gguf\" without matching inp/out files, ignoring...\n"
+        printf 'Found "%s" without matching inp/out files, ignoring...\n' "$gguf"
     fi
 done
 

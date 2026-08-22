@@ -93,3 +93,6 @@ SESSION_HANDOFF.md
 
 # Internal planning/strategy docs — never publish
 docs/plans/
+
+# Test fixtures cloned by tests/test-tokenizers-repo.sh (git-lfs backed)
+llama-cpp-turboquant/models/ggml-vocabs/
