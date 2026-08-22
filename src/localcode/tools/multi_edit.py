@@ -54,7 +54,7 @@ class _PreparedEdit:
 def execute(ctx: ToolContext, args: dict) -> str:
     if "path" not in args or "edits" not in args:
         return "Error: 'path' and 'edits' (list of {old_string, new_string}) required."
-    path = ctx.resolve_path(args["path"])
+    path = ctx.resolve_write_path(args["path"])
     if not path.exists():
         return f"File not found: {args['path']}"
     edits = args["edits"]

@@ -78,15 +78,70 @@ _BLOCKED_WRITE_BASENAMES = frozenset({
     ".netrc", ".npmrc", ".pypirc",
     "credentials", "credentials.json",
     "shadow", "passwd", "sudoers",
+    # Shell startup files. Writing any of these is persistent code execution
+    # on the user's next shell — there is no legitimate agent reason to do it,
+    # and `~/.zshrc` was not covered by anything before.
+    ".zshrc", ".zshenv", ".zprofile", ".zlogin", ".zlogout",
+    ".bashrc", ".bash_profile", ".bash_login", ".bash_logout",
+    ".profile", ".kshrc", ".cshrc", ".tcshrc", ".inputrc",
+    # LocalCode's own machine-wide config. `mcp.json` is the worst case: the
+    # agent writes an MCP server `command`, which is then SPAWNED on the next
+    # launch — persistent RCE from a single silent file write.
+    "mcp.json",
 })
-_BLOCKED_WRITE_SEGMENTS = frozenset({".ssh", ".aws", ".gnupg", ".config/gcloud"})
+_BLOCKED_WRITE_SEGMENTS = frozenset({
+    ".ssh", ".aws", ".gnupg", ".config/gcloud",
+    # macOS persistence: a plist dropped here is launched by launchd.
+    "launchagents", "launchdaemons",
+    # systemd user units are the Linux equivalent.
+    "systemd",
+})
+
+# Home-relative directories whose contents are off-limits regardless of the
+# file's own name: ~/.localcode holds config.toml + mcp.json (both executed on
+# next launch). Subtrees that are legitimate agent workspace are re-allowed.
+_BLOCKED_HOME_DIRS = ("~/.localcode",)
+_BLOCKED_HOME_DIR_EXEMPT_SUBDIRS = ("plans", "notebook", "sessions", "test-results")
+
+
+def _is_git_hook_path(parts: tuple[str, ...]) -> bool:
+    """True for `<anything>/.git/hooks/<file>`.
+
+    Adjacency is required: a project directory literally named `hooks/` (very
+    common — webhook handlers, git-hook SOURCE templates) is not blocked, only
+    the live `.git/hooks/` directory git actually executes.
+    """
+    lowered = [part.lower() for part in parts]
+    for i in range(len(lowered) - 1):
+        if lowered[i] == ".git" and lowered[i + 1] == "hooks":
+            return True
+    return False
+
+
+def _is_blocked_home_config_path(p: Path) -> bool:
+    """True for writes into ~/.localcode outside its workspace subdirs."""
+    for raw_dir in _BLOCKED_HOME_DIRS:
+        base = Path(raw_dir).expanduser()
+        try:
+            rel = p.resolve().relative_to(base.resolve())
+        except (ValueError, OSError):
+            try:
+                rel = p.relative_to(base)
+            except ValueError:
+                continue
+        if rel.parts and rel.parts[0] in _BLOCKED_HOME_DIR_EXEMPT_SUBDIRS:
+            continue
+        return True
+    return False
 
 
 def _is_blocked_write_path(raw_path: str) -> bool:
-    """True if writing this path targets credential/key material.
+    """True if writing this path targets credential/key material, a shell
+    startup file, an OS persistence hook, or LocalCode's own machine config.
 
-    Precise matching only: exact basename or an exact path segment. A file
-    named `tokenizer.py` or `password_reset.py` in the project is NOT blocked.
+    Precise matching only: exact basename, exact path segment, or an exact
+    directory relationship. A file named `tokenizer.py` or `password_reset.py`
+    in the project is NOT blocked, nor is a project's own `hooks/` directory.
     """
     if not raw_path:
         return False
@@ -99,6 +154,10 @@ def _is_blocked_write_path(raw_path: str) -> bool:
         return True
     lowered_parts = {part.lower() for part in p.parts}
     if lowered_parts & _BLOCKED_WRITE_SEGMENTS:
+        return True
+    if _is_git_hook_path(p.parts):
+        return True
+    if _is_blocked_home_config_path(p):
         return True
     return False
 
@@ -147,6 +206,9 @@ def _safety_hard_block(name: str, args: dict) -> str | None:
       - catastrophic shell (rm -rf /, mkfs, dd of=/dev/…, > /dev/sd*, fork
         bomb, chmod -R 777 /, > /etc/) — see _HARD_BLOCK_SHELL_RE
       - writes to SSH/AWS/GPG key material or credential files
+      - writes to shell startup files (~/.zshrc &c), OS persistence hooks
+        (LaunchAgents, systemd units, .git/hooks), and ~/.localcode config
+        (mcp.json defines commands that get SPAWNED on next launch)
     Everything else — including curl|sh and force-push — falls through to the
     normal confirmation flow, which can approve it.
     """
@@ -167,7 +229,107 @@ def _safety_hard_block(name: str, args: dict) -> str | None:
             except Exception:
                 pass
             if _is_blocked_write_path(raw_path):
-                return f"blocked: refusing to write credential/key file ({Path(raw_path).name})"
+                return (
+                    "blocked: refusing to write credential/key material, a shell "
+                    "startup file, an OS persistence hook, or LocalCode's own "
+                    f"machine config ({Path(raw_path).name})"
+                )
+    return None
+
+
+# ── Plan-mode enforcement ──────────────────────────────────────────────
+#
+# plans.py PROMISES the user that plan mode allows exactly one write (the
+# plan file) and forbids edits and destructive bash; features.py documents
+# PLAN_MODE as a read-only overlay. Until this layer existed the flag was
+# advisory: `app.plan_mode` was set by the enter tool and read by nothing
+# else, so a model in plan mode could rewrite the repo unchallenged.
+#
+# Shell is not blanket-blocked, because plan mode's whole job is exploring
+# the codebase. Instead every pipeline segment's leading token must be on
+# this read-only list, and redirections are refused outright — so `grep -rn
+# foo | head` runs while `rm -rf build`, `git push`, and `echo x > f` do not.
+_PLAN_MODE_READONLY_CMDS = frozenset({
+    "ls", "cat", "head", "tail", "wc", "file", "stat", "du", "df",
+    "grep", "rg", "egrep", "fgrep", "find", "fd", "tree", "which", "type",
+    "awk", "sed", "sort", "uniq", "cut", "tr", "jq", "diff", "basename",
+    "dirname", "realpath", "pwd", "echo", "date", "env", "printenv",
+    "git", "python3", "python", "node", "true", "false",
+})
+# `git` is allowed above for exploration only — these subcommands mutate.
+_PLAN_MODE_GIT_BLOCKED = frozenset({
+    "push", "commit", "merge", "rebase", "reset", "checkout", "switch",
+    "clean", "apply", "am", "cherry-pick", "revert", "restore", "rm", "mv",
+    "add", "stash", "tag", "branch", "fetch", "pull", "clone", "init",
+    "submodule", "worktree", "gc", "filter-branch",
+})
+
+
+def _plan_mode_shell_rejection(cmd: str) -> str | None:
+    """Reject a shell command that would mutate state while planning."""
+    text = (cmd or "").strip()
+    if not text:
+        return None
+    if ">" in text or "`" in text or "$(" in text:
+        return "redirection or command substitution is not allowed in plan mode"
+    import re as _re_local
+    for segment in _re_local.split(r"[;&|\n]+", text):
+        seg = segment.strip()
+        if not seg:
+            continue
+        tokens = seg.split()
+        head = tokens[0].lower()
+        head = head.rsplit("/", 1)[-1]
+        if head not in _PLAN_MODE_READONLY_CMDS:
+            return f"`{head}` is not a read-only command"
+        if head == "git":
+            sub = next((t for t in tokens[1:] if not t.startswith("-")), "").lower()
+            if sub in _PLAN_MODE_GIT_BLOCKED:
+                return f"`git {sub}` mutates the repository"
+    return None
+
+
+def _plan_mode_block(app: "LocalCodeApp", name: str, args: dict) -> str | None:
+    """Enforce plan mode. Returns a rejection reason, or None.
+
+    One write is permitted: `write_file` targeting the current session's
+    plan file. Everything else in `_FILE_WRITE_TOOLS` is refused, and shell
+    is limited to read-only exploration (see `_plan_mode_shell_rejection`).
+    """
+    if not getattr(app, "plan_mode", False):
+        return None
+    if name in _FILE_WRITE_TOOLS:
+        raw_path = str(args.get("path", "") or args.get("file_path", "") or "")
+        slug = getattr(app, "plan_slug", None)
+        if name == "write_file" and raw_path and slug:
+            try:
+                from ..plans import plan_path
+                candidate = Path(raw_path).expanduser()
+                if not candidate.is_absolute():
+                    candidate = Path(app.repo_root) / candidate
+                if candidate.resolve() == Path(plan_path(slug)).resolve():
+                    return None
+            except Exception:
+                pass
+        target = f" ({Path(raw_path).name})" if raw_path else ""
+        return (
+            f"plan mode is active — `{name}`{target} is not allowed. The plan "
+            "file is the only write permitted while planning. Finish the plan "
+            "and call exit_plan_mode before changing any code."
+        )
+    if name in _SHELL_EXEC_TOOLS:
+        if name != "bash":
+            return (
+                f"plan mode is active — `{name}` is not allowed. Use read-only "
+                "shell commands to explore, then call exit_plan_mode."
+            )
+        reason = _plan_mode_shell_rejection(str(args.get("command", "") or ""))
+        if reason:
+            return (
+                f"plan mode is active and this command is not read-only: {reason}. "
+                "Explore with read-only commands, then call exit_plan_mode before "
+                "changing anything."
+            )
     return None
 
 
@@ -276,9 +438,10 @@ def _should_reject_destructive_multi_edit(path: Path, edits: object) -> str | No
 def _execute_tool_result(app: "LocalCodeApp", name: str, args: dict, out: "OutputManager") -> ToolResult:
     """Execute a single tool and return the result string.
 
-    Routes through src/localcode/tools/{name}.py via tools.dispatch, with a
-    wrapping plan-mode policy layer that refuses destructive tools
-    while the agent is in plan-explore mode.
+    Routes through src/localcode/tools/{name}.py via tools.dispatch, with two
+    wrapping policy layers: the autonomy-independent safety hard-block, and
+    the plan-mode policy layer that refuses writes (other than the plan file)
+    and non-read-only shell while the agent is in plan-explore mode.
     """
     # Autonomy-independent safety hard-block. Runs FIRST, in every mode
     # (including FULL_AUTO / headless), and cannot be overridden — this is the
@@ -296,6 +459,22 @@ def _execute_tool_result(app: "LocalCodeApp", name: str, args: dict, out: "Outpu
             text=f"REJECTED: {_blocked}. This operation is blocked by the safety layer and cannot be auto-approved.",
             ok=False,
             facts={"tool": name, "ok": False, "safety_blocked": True},
+        )
+
+    # Plan-mode policy. Runs next, before any hook or tool work, so the
+    # promise plans.py makes to the user ("the ONE write allowed in plan
+    # mode") is actually true.
+    _plan_blocked = _plan_mode_block(app, name, args)
+    if _plan_blocked is not None:
+        try:
+            from ..events import emit as _emit_plan
+            _emit_plan("plan_mode_block", tool=name, reason=str(_plan_blocked)[:200])
+        except Exception:
+            pass
+        return ToolResult(
+            text=f"REJECTED: {_plan_blocked}",
+            ok=False,
+            facts={"tool": name, "ok": False, "plan_mode_blocked": True},
         )
 
     try:
@@ -413,8 +592,21 @@ def _needs_confirmation(name: str, args: dict, app: "LocalCodeApp | None" = None
     picks option 2 on a prompt ("always allow `git`"). That set is on
     `app._session_allow` — scoped to this process, cleared on next launch.
     """
+    # Leaving plan mode drops the read-only overlay, and the plan-mode prompt
+    # tells the user exit_plan_mode "will return control to the user for
+    # approval" — so it genuinely asks. FULL_AUTO (and headless, which forces
+    # it) still skips the prompt via the check below.
+    _needs_plan_exit_ack = (
+        name == "exit_plan_mode" and bool(getattr(app, "plan_mode", False))
+    )
+
     # Tools that don't execute shell or mutate files never need confirmation.
-    if name != "bash" and name not in _SHELL_EXEC_TOOLS and name not in _FILE_WRITE_TOOLS:
+    if (
+        not _needs_plan_exit_ack
+        and name != "bash"
+        and name not in _SHELL_EXEC_TOOLS
+        and name not in _FILE_WRITE_TOOLS
+    ):
         return False
 
     level = None
@@ -428,6 +620,9 @@ def _needs_confirmation(name: str, args: dict, app: "LocalCodeApp | None" = None
                 return False
         except Exception:
             level = None
+
+    if _needs_plan_exit_ack:
+        return True
 
     # File-write tools: auto-approved in auto_edit (the point of that mode);
     # in suggest (read-only) mode every write is confirmed. Notebook scratch
