@@ -942,7 +942,9 @@ def test_new_app_defers_dependency_install_until_source_exists(tmp_path: Path) -
         ToolContext(app=app, out=_Out()),
         {"command": "cd canonical-app && python3 -c 'print(1)'"},
     )
-    assert accepted == "1"
+    # bash output is now unconditionally fenced as untrusted data.
+    assert "UNTRUSTED_DATA" in accepted
+    assert "1" in accepted
 
 
 def test_tool_facts_extracts_launch_contract_fields() -> None:

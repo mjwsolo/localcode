@@ -32,7 +32,11 @@ def execute(ctx: ToolContext, args: dict) -> str:
             formatted.append(
                 f"**{r.get('title', '')}**\n{r.get('href', '')}\n{r.get('body', '')}\n"
             )
-        return "\n".join(formatted)
+        # Search result titles/snippets are attacker-controllable text
+        # from arbitrary web pages — untrusted exactly like web_fetch's
+        # body. Fence them so injected instructions can't read as ours.
+        from ..injection_defense import wrap_untrusted
+        return wrap_untrusted("\n".join(formatted), source=f"web_search {query!r}")
     except Exception as e:
         return f"Search error: {e}"
 

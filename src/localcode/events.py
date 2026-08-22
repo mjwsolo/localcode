@@ -241,13 +241,29 @@ def emit(event_type: str, **fields: Any) -> None:
         "pid": PID,
     }
     record.update(fields)
+    # Secret redaction chokepoint. events.jsonl is a durable, cleartext
+    # record of tool args and result summaries — a `cat .env` or a key
+    # pasted into a prompt would otherwise be written to disk verbatim
+    # and stay there. Scrub VALUES (not just secret-looking key names)
+    # before serialization. Cheap: scrub() short-circuits on strings
+    # with no credential-prefix substring, which is nearly all of them.
+    try:
+        from .redaction import scrub_obj
+        record = scrub_obj(record)
+    except Exception:
+        pass
     try:
         line = json.dumps(record, ensure_ascii=False, default=str)
     except Exception:
         # Last-ditch: serialize the record with everything stringified.
         # Better to write something than to silently drop it.
         try:
-            safe = {k: str(v) for k, v in record.items()}
+            try:
+                from .redaction import scrub as _scrub
+            except Exception:
+                def _scrub(x):  # type: ignore[misc]
+                    return x
+            safe = {k: _scrub(str(v)) for k, v in record.items()}
             line = json.dumps(safe, ensure_ascii=False)
         except Exception:
             return
