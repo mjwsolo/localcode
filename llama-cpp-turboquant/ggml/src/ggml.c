@@ -53,16 +53,6 @@
 
 #define UNUSED GGML_UNUSED
 
-uint64_t ggml_graph_next_uid(void) {
-#ifdef _MSC_VER
-    static volatile long long counter = 1;
-    return (uint64_t) _InterlockedIncrement64(&counter) - 1;
-#else
-    static uint64_t counter = 1;
-    return __atomic_fetch_add(&counter, 1, __ATOMIC_RELAXED);
-#endif
-}
-
 // Needed for ggml_fp32_to_bf16_row()
 #if defined(__AVX512BF16__)
 #if defined(_MSC_VER)
@@ -661,14 +651,6 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .to_float                 = (ggml_to_float_t) ggml_fp16_to_fp32_row,
         .from_float_ref           = (ggml_from_float_t) ggml_fp32_to_fp16_row,
     },
-    [GGML_TYPE_Q1_0] = {
-        .type_name                = "q1_0",
-        .blck_size                = QK1_0,
-        .type_size                = sizeof(block_q1_0),
-        .is_quantized             = true,
-        .to_float                 = (ggml_to_float_t) dequantize_row_q1_0,
-        .from_float_ref           = (ggml_from_float_t) quantize_row_q1_0_ref,
-    },
     [GGML_TYPE_Q4_0] = {
         .type_name                = "q4_0",
         .blck_size                = QK4_0,
@@ -1099,7 +1081,6 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "SOLVE_TRI",
     "GATED_DELTA_NET",
     "TURBO_WHT",
-    "MOE_ROUTER_FUSED",
 
     "UNARY",
 
@@ -1117,7 +1098,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 98, "GGML_OP_COUNT != 98");
+static_assert(GGML_OP_COUNT == 97, "GGML_OP_COUNT != 97");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1228,7 +1209,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 98, "GGML_OP_COUNT != 98");
+static_assert(GGML_OP_COUNT == 97, "GGML_OP_COUNT != 97");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -1445,7 +1426,6 @@ enum ggml_type ggml_ftype_to_ggml_type(enum ggml_ftype ftype) {
         case GGML_FTYPE_MOSTLY_BF16:          wtype = GGML_TYPE_BF16;  break;
         case GGML_FTYPE_MOSTLY_Q4_0:          wtype = GGML_TYPE_Q4_0;  break;
         case GGML_FTYPE_MOSTLY_Q4_1:          wtype = GGML_TYPE_Q4_1;  break;
-        case GGML_FTYPE_MOSTLY_Q1_0:          wtype = GGML_TYPE_Q1_0;  break;
         case GGML_FTYPE_MOSTLY_Q5_0:          wtype = GGML_TYPE_Q5_0;  break;
         case GGML_FTYPE_MOSTLY_Q5_1:          wtype = GGML_TYPE_Q5_1;  break;
         case GGML_FTYPE_MOSTLY_Q8_0:          wtype = GGML_TYPE_Q8_0;  break;
@@ -6288,36 +6268,6 @@ struct ggml_tensor * ggml_turbo_wht(
     return result;
 }
 
-// ggml_moe_router_fused
-
-struct ggml_tensor * ggml_moe_router_fused(
-        struct ggml_context * ctx,
-        struct ggml_tensor  * logits,
-        struct ggml_tensor  * weights_out,
-        int                   n_expert_used) {
-    GGML_ASSERT(logits->type == GGML_TYPE_F32);
-    GGML_ASSERT(weights_out->type == GGML_TYPE_F32);
-
-    const int64_t n_expert = logits->ne[0];
-    const int64_t n_tokens = logits->ne[1];
-
-    GGML_ASSERT(n_expert_used > 0 && n_expert_used <= n_expert);
-    GGML_ASSERT(weights_out->ne[0] == n_expert_used);
-    GGML_ASSERT(weights_out->ne[1] == n_tokens);
-
-    // Output: selected expert indices [n_expert_used, n_tokens] as I32
-    int64_t ne[4] = { n_expert_used, n_tokens, 1, 1 };
-    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_I32, 4, ne);
-
-    result->op = GGML_OP_MOE_ROUTER_FUSED;
-    result->src[0] = logits;
-    result->src[1] = weights_out;  // kernel writes normalized weights here
-
-    ggml_set_op_params_i32(result, 0, (int32_t) n_expert_used);
-
-    return result;
-}
-
 ////////////////////////////////////////////////////////////////////////////////
 
 struct ggml_hash_set ggml_hash_set_new(size_t size) {
@@ -7213,7 +7163,6 @@ struct ggml_cgraph * ggml_new_graph_custom(struct ggml_context * ctx, size_t siz
         /*.use_counts   =*/ use_counts_ptr,
         /*.hash_table   =*/ { hash_size, hash_used, hash_keys_ptr },
         /*.order        =*/ GGML_CGRAPH_EVAL_ORDER_LEFT_TO_RIGHT,
-        /*.uid          =*/ 0,
     };
 
     ggml_hash_set_reset(&cgraph->visited_hash_set);
@@ -7241,7 +7190,6 @@ struct ggml_cgraph ggml_graph_view(struct ggml_cgraph * cgraph0, int i0, int i1)
         /*.use_counts       =*/ cgraph0->use_counts,
         /*.visited_hash_set =*/ cgraph0->visited_hash_set,
         /*.order            =*/ cgraph0->order,
-        /*.uid              =*/ 0
     };
 
     return cgraph;
@@ -7778,7 +7726,6 @@ size_t ggml_quantize_chunk(
     size_t result = 0;
 
     switch (type) {
-        case GGML_TYPE_Q1_0:    result = quantize_q1_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q4_0:    result = quantize_q4_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q4_1:    result = quantize_q4_1(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q5_0:    result = quantize_q5_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;

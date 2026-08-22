@@ -17,7 +17,6 @@ struct ggml_context;
 struct ggml_tensor;
 
 struct llama_cparams;
-struct llama_layer;
 
 struct llama_memory_context_i;
 
@@ -309,7 +308,7 @@ public:
     ggml_tensor * self_kq_mask     = nullptr; // F32 [n_kv, n_batch/n_stream, 1, n_stream]
     ggml_tensor * self_kq_mask_cnv = nullptr; //     [n_kv, n_batch/n_stream, 1, n_stream]
 
-    // note: assumes v_rot^2 == I
+    // note: assumes v_rot^ == I
     ggml_tensor * self_k_rot = nullptr;
     ggml_tensor * self_v_rot = nullptr;
 
@@ -389,11 +388,9 @@ public:
     ggml_tensor * self_kq_mask_swa     = nullptr; // F32 [n_kv, n_batch/n_stream, 1, n_stream]
     ggml_tensor * self_kq_mask_swa_cnv = nullptr; //     [n_kv, n_batch/n_stream, 1, n_stream]
 
+    // note: using same rotation matrices for both base and swa cache
     ggml_tensor * self_k_rot = nullptr;
     ggml_tensor * self_v_rot = nullptr;
-
-    ggml_tensor * self_k_rot_swa = nullptr;
-    ggml_tensor * self_v_rot_swa = nullptr;
 
     const llama_hparams hparams;
     const llama_cparams cparams;
@@ -498,19 +495,6 @@ public:
     const llama_cparams cparams;
 
     const llama_memory_hybrid_iswa_context * mctx;
-};
-
-// Multi-step decode: position input for step 2 (fills with pos[0] + offset)
-class llm_graph_input_pos_offset : public llm_graph_input_i {
-public:
-    llm_graph_input_pos_offset(int32_t offset) : offset(offset) {}
-    virtual ~llm_graph_input_pos_offset() = default;
-
-    void set_input(const llama_ubatch * ubatch) override;
-
-    ggml_tensor * pos = nullptr; // I32 [1]
-
-    const int32_t offset;
 };
 
 class llm_graph_input_sampling : public llm_graph_input_i {
@@ -721,12 +705,6 @@ using llm_graph_result_ptr = std::unique_ptr<llm_graph_result>;
 // used in build_rs to properly order writes and avoid unnecessary copies
 using llm_graph_get_rows_fn = std::function<ggml_tensor * (ggml_context *, ggml_tensor * states, ggml_tensor * ids)>;
 
-struct llm_graph_qkv {
-    ggml_tensor * q; // [n_embd_head, n_head,    n_tokens]
-    ggml_tensor * k; // [n_embd_head, n_head_kv, n_tokens]
-    ggml_tensor * v; // [n_embd_head, n_head_kv, n_tokens]
-};
-
 struct llm_graph_context {
     const llm_arch arch;
 
@@ -812,17 +790,6 @@ struct llm_graph_context {
              ggml_tensor * mb,
            llm_norm_type   type,
                      int   il) const;
-
-
-    // compute Q, K, V projections with optional bias and reshape
-    // supports both fused wqkv and separate wq/wk/wv paths
-    llm_graph_qkv build_qkv(
-        const llama_layer & layer,
-              ggml_tensor * cur,
-                  int64_t   n_embd_head,
-                  int64_t   n_head,
-                  int64_t   n_head_kv,
-                      int   il) const;
 
     ggml_tensor * build_ffn(
              ggml_tensor * cur,
@@ -923,7 +890,6 @@ struct llm_graph_context {
             llm_graph_input_attn_no_cache * inp,
             ggml_tensor * wo,
             ggml_tensor * wo_b,
-            ggml_tensor * wo_s,
             ggml_tensor * q_cur, // [n_embd_head_q, n_head_q, n_tokens]
             ggml_tensor * k_cur, // [n_embd_head_k, n_head_k, n_tokens]
             ggml_tensor * v_cur, // [n_embd_head_v, n_head_v, n_tokens]
@@ -939,7 +905,6 @@ struct llm_graph_context {
             llm_graph_input_attn_kv * inp,
             ggml_tensor * wo,
             ggml_tensor * wo_b,
-            ggml_tensor * wo_s,
             ggml_tensor * q_cur, // [n_embd_head_q, n_head_q, n_tokens]
             ggml_tensor * k_cur, // [n_embd_head_k, n_head_k, n_tokens]
             ggml_tensor * v_cur, // [n_embd_head_v, n_head_v, n_tokens]
@@ -955,7 +920,6 @@ struct llm_graph_context {
             llm_graph_input_attn_k * inp,
             ggml_tensor * wo,
             ggml_tensor * wo_b,
-            ggml_tensor * wo_s,
             ggml_tensor * q_cur, // [n_embd_head_q, n_head_q, n_tokens]
             ggml_tensor * k_cur, // [n_embd_head_k, n_head_k, n_tokens]
             ggml_tensor * v_cur, // [n_embd_head_v, n_head_v, n_tokens]
@@ -972,7 +936,6 @@ struct llm_graph_context {
             llm_graph_input_attn_kv_iswa * inp,
             ggml_tensor * wo,
             ggml_tensor * wo_b,
-            ggml_tensor * wo_s,
             ggml_tensor * q_cur, // [n_embd_head_q, n_head_q, n_tokens]
             ggml_tensor * k_cur, // [n_embd_head_k, n_head_k, n_tokens] optional
             ggml_tensor * v_cur, // [n_embd_head_v, n_head_v, n_tokens] optional
@@ -988,7 +951,6 @@ struct llm_graph_context {
             llm_graph_input_attn_cross * inp,
             ggml_tensor * wo,
             ggml_tensor * wo_b,
-            ggml_tensor * wo_s,
             ggml_tensor * q_cur, // [n_embd_head_q, n_head_q, n_tokens]
             ggml_tensor * k_cur, // [n_embd_head_k, n_head_k, n_tokens]
             ggml_tensor * v_cur, // [n_embd_head_v, n_head_v, n_tokens]

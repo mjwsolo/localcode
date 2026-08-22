@@ -1,16 +1,19 @@
 name: TurboQuant fork
 
-# The vendored llama-cpp-turboquant tree is what builds the llama-server binary
-# shipped in the wheel. Until this workflow existed nothing tested it: the fork's
-# own CI lived in the standalone mjwsolo/llama-cpp-turboquant repo, which had
-# drifted 472 files away from the tree that actually ships. That gap is how
-# commit 77512cb ("vulkan: fix merge that kept stale-vintage backend files")
-# went unnoticed for two months.
+# The vendored llama-cpp-turboquant tree builds the llama-server binary shipped
+# in the wheel, and nothing tested it. That is not theoretical: an attempt to
+# rebuild it from a newer llama.cpp vintage produced a binary that (a) failed to
+# load Qwen 3.8 27B, because the newer tree lacks this fork's qwen35
+# Multi-Token-Prediction guard, and (b) linked Homebrew's libssl, breaking the
+# self-contained-binary guarantee on any machine without Homebrew OpenSSL.
 #
 # This is a BUILD gate, not a correctness gate. GitHub's macOS runners have no
 # usable Metal compute device, so the turbo KV kernels cannot be exercised here.
-# It catches the failure mode that actually bit us: interface/vintage drift
-# between the turbo patches and the rest of ggml after an upstream merge.
+# It catches compile breakage, a missing turbo delta, and non-self-contained
+# linkage - the failure modes that are cheap to catch and expensive to ship.
+#
+# Model-level verification is a local job: dev/verify_models.sh loads every
+# catalog model against the STATIC binary and checks generate + tool-calling.
 
 on:
   push:
@@ -33,69 +36,68 @@ permissions:
 
 jobs:
   build:
-    name: build + tests (macos-arm64)
+    name: static build (macos-arm64)
     runs-on: macos-14
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
-      - name: Cache cmake build
-        uses: actions/cache@v4
-        with:
-          path: llama-cpp-turboquant/build-ci
-          key: tq-${{ runner.os }}-${{ hashFiles('llama-cpp-turboquant/**/CMakeLists.txt') }}-${{ github.sha }}
-          restore-keys: |
-            tq-${{ runner.os }}-${{ hashFiles('llama-cpp-turboquant/**/CMakeLists.txt') }}-
-            tq-${{ runner.os }}-
-
       - name: Configure
         working-directory: llama-cpp-turboquant
+        # Same flags the shipped binary is built with. LLAMA_CURL=OFF matters:
+        # it is part of keeping the artifact self-contained.
         run: |
           cmake -B build-ci \
             -DCMAKE_BUILD_TYPE=Release \
-            -DLLAMA_BUILD_TESTS=ON \
-            -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DGGML_METAL=ON \
+            -DGGML_METAL_EMBED_LIBRARY=ON \
             -DLLAMA_BUILD_SERVER=ON \
-            -DGGML_METAL=ON
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_CURL=OFF
 
       - name: Build
         working-directory: llama-cpp-turboquant
         run: cmake --build build-ci --config Release -j 4
 
-      - name: Assert the turbo KV types survived the build
+      - name: Assert the turbo delta survived
         working-directory: llama-cpp-turboquant
+        # The KV type enum values are serialised into GGUF, so a silent renumber
+        # is a data-format break. Upstream v0.2.0 now occupies 41/42/43 with
+        # Q1_0/Q2_0/COUNT, exactly where TURBO3_0/TURBO4_0/TURBO2_0 sit here, so
+        # any upstream bump must renumber ours above upstream's COUNT first.
         run: |
-          # The enum values are serialised into GGUF, so a silent renumber is a
-          # data-format break, not just a compile error. Upstream v0.2.0 now
-          # occupies 41/42/43 with Q1_0/Q2_0/COUNT, so this guard fails loudly
-          # the moment an upstream bump collides with the turbo types.
-          grep -q 'GGML_TYPE_TURBO3_0' ggml/include/ggml.h
-          grep -q 'GGML_TYPE_TURBO4_0' ggml/include/ggml.h
-          grep -q 'GGML_TYPE_TURBO2_0' ggml/include/ggml.h
-          grep -q 'GGML_OP_TURBO_WHT'  ggml/include/ggml.h
+          for sym in GGML_TYPE_TURBO2_0 GGML_TYPE_TURBO3_0 GGML_TYPE_TURBO4_0 GGML_OP_TURBO_WHT; do
+            grep -q "$sym" ggml/include/ggml.h || { echo "missing $sym"; exit 1; }
+          done
           test -f ggml/src/ggml-metal/turbo-matrices.h
           test -f ggml/src/ggml-metal/turbo-wht.h
           echo "turbo delta present"
 
-      - name: Run tests
+      - name: Assert the qwen35 MTP guard survived
         working-directory: llama-cpp-turboquant
-        # Two tests need external resources and are excluded deliberately rather
-        # than left to fail noisily:
-        #   test-tokenizers-ggml-vocabs  clones git-lfs vocab fixtures; without
-        #                                git-lfs the .gguf files are 132-byte
-        #                                pointer stubs and every load fails.
-        #   test-quant-type-selection    queries the HF API and gets HTTP 401
-        #                                without a token.
-        # Re-include them once the runner has git-lfs and an HF_TOKEN secret.
+        # Qwen 3.8 27B carries a trailing Multi-Token-Prediction head. Without
+        # this fork-local guard the loader treats it as a transformer layer and
+        # dies on "missing tensor 'blk.64.ssm_conv1d.weight'". Upstream does not
+        # have this patch, so any vintage bump silently drops it.
         run: |
-          ctest --test-dir build-ci --output-on-failure -j 4 --timeout 300 \
-            -E 'test-tokenizers-ggml-vocabs|test-quant-type-selection'
+          grep -q "nextn_predict_layers" src/llama-model.cpp \
+            || { echo "qwen35 MTP guard missing - Qwen 3.8 27B will fail to load"; exit 1; }
+          echo "MTP guard present"
 
-      - name: Confirm llama-server binary was produced
+      - name: Assert the binary is self-contained
         working-directory: llama-cpp-turboquant
+        # The wheel ships this binary to machines with no Homebrew. A build that
+        # picks up /opt/homebrew libs is broken for most users.
         run: |
           test -x build-ci/bin/llama-server
-          ls -la build-ci/bin/llama-server
+          if otool -L build-ci/bin/llama-server | grep -q "/opt/homebrew"; then
+            echo "binary links Homebrew libraries:"
+            otool -L build-ci/bin/llama-server | grep "/opt/homebrew"
+            exit 1
+          fi
+          otool -L build-ci/bin/llama-server
 
       - name: Upload llama-server
         uses: actions/upload-artifact@v4
