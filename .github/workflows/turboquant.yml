@@ -77,9 +77,19 @@ jobs:
           test -f ggml/src/ggml-metal/turbo-wht.h
           echo "turbo delta present"
 
-      - name: Run CPU-side tests
+      - name: Run tests
         working-directory: llama-cpp-turboquant
-        run: ctest --test-dir build-ci --output-on-failure -j 4 -LE gpu || ctest --test-dir build-ci --output-on-failure -j 4
+        # Two tests need external resources and are excluded deliberately rather
+        # than left to fail noisily:
+        #   test-tokenizers-ggml-vocabs  clones git-lfs vocab fixtures; without
+        #                                git-lfs the .gguf files are 132-byte
+        #                                pointer stubs and every load fails.
+        #   test-quant-type-selection    queries the HF API and gets HTTP 401
+        #                                without a token.
+        # Re-include them once the runner has git-lfs and an HF_TOKEN secret.
+        run: |
+          ctest --test-dir build-ci --output-on-failure -j 4 --timeout 300 \
+            -E 'test-tokenizers-ggml-vocabs|test-quant-type-selection'
 
       - name: Confirm llama-server binary was produced
         working-directory: llama-cpp-turboquant
