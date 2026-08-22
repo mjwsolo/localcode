@@ -823,9 +823,16 @@ class ChatLog(RichLog):
         tail = self._think_stream_buf
         if not tail:
             return
-        boundary = tail[-1] in self._STREAM_WORD_BOUNDARIES
+        # Rate-cap only. The old condition also required the chunk to END on a
+        # word boundary, but SentencePiece/BPE emit LEADING-space tokens (" the",
+        # " and"), so the last character is almost always a letter and the test
+        # effectively only passed on ". , ; : ! ?" - thinking repainted one whole
+        # clause at a time, the jerkiest surface in the app. There is also no
+        # timer fallback here, so a failed test left the tail invisible until the
+        # next punctuation arrived. `_render_think_partial` rewrites a single
+        # logical line in place, so the 30 fps cap alone is enough.
         now = time.monotonic()
-        if boundary and (now - self._think_last_flush) >= self._STREAM_COALESCE_SEC:
+        if (now - self._think_last_flush) >= self._STREAM_COALESCE_SEC:
             self._render_think_partial(tail)
             self._think_last_flush = now
 
@@ -1072,6 +1079,8 @@ class ChatLog(RichLog):
     def _init_stream_state(self) -> None:
         self._stream_text = ""            # unflushed chars (after last newline)
         self._stream_full = ""            # full accumulated text for markdown render
+        self._stream_stable_len = 0       # chars already committed as a rendered prefix
+        self._stream_stable_rows = 0      # rows those committed chars occupy
         self._stream_buf = ""             # coalesce buffer since last flush
         self._stream_started = False
         self._stream_line_idx = -1        # legacy single-line tracker (unused by progressive renderer)
@@ -1143,23 +1152,17 @@ class ChatLog(RichLog):
                 self._flush_stream()
 
     def _stream_coalesce_window(self) -> float:
-        """Current min interval between stream flushes, adaptive to size.
+        """Min interval between stream flushes: a flat ~30 fps.
 
-        Each flush re-renders everything streamed so far, so a fixed
-        window makes total render work quadratic in response length.
-        Growing the window with the accumulated text keeps per-second
-        render cost roughly constant: ~30 fps while re-renders are cheap
-        (short answers), easing to ~4 fps when each re-render is
-        expensive (very long answers) — still well within "feels live".
+        This used to grow with the response (30 fps under 4 KB, then 12,
+        then 6.7, bottoming out at 4 fps past 64 KB) to cap the cost of
+        re-rendering the whole message every flush. That ladder was the
+        visible stutter: at 25 tok/s and a 0.25 s window the reader gets
+        ~6 tokens at a time, four times a second. The re-render cost is
+        handled properly now (single write per flush, stable prefix
+        rendered once), so the rate can stay constant.
         """
-        n = len(getattr(self, "_stream_full", ""))
-        if n < 4_000:
-            return self._STREAM_COALESCE_SEC
-        if n < 16_000:
-            return 0.08
-        if n < 64_000:
-            return 0.15
-        return 0.25
+        return self._STREAM_COALESCE_SEC
 
     def _cancel_stream_timer(self) -> None:
         t = getattr(self, "_stream_timer", None)
@@ -1169,6 +1172,49 @@ class ChatLog(RichLog):
             except Exception:
                 pass
             self._stream_timer = None
+
+    @staticmethod
+    def _stable_split(text: str) -> int:
+        """Char offset up to which `text` renders identically on its own.
+
+        Markdown is only block-compositional at certain boundaries, so this is
+        deliberately conservative. A split point qualifies when it is a blank
+        line that is NOT inside a code fence and does not fall *between* two
+        list items - a blank line inside a list makes CommonMark render it
+        "loose" (extra spacing), which the whole-message render would not do.
+        Boundaries before or after a list are fine, and allowing those keeps the
+        offset monotonic as text streams in, which the caller relies on.
+
+        Returns 0 when nothing is safely stable, which falls back to rendering
+        the whole message. tests/test_stream_append_only.py pins the guarantee
+        that piecewise rendering equals whole-message rendering.
+        """
+        best = 0
+        idx = text.find("\n\n")
+        while idx != -1:
+            cut = idx + 2
+            head = text[:cut]
+            if head.count("```") % 2 == 0:          # not inside an open fence
+                prev_lines = [l for l in head.splitlines() if l.strip()]
+                prev = prev_lines[-1].lstrip() if prev_lines else ""
+                rest = text[cut:].lstrip("\n")
+                nxt = rest.split("\n", 1)[0].lstrip() if rest else ""
+
+                def _is_list(line: str) -> bool:
+                    if line[:2] in ("- ", "* ", "+ "):
+                        return True
+                    head_num = line.split(". ", 1)[0]
+                    return head_num.isdigit() and line.startswith(head_num + ". ")
+
+                # Only a split *inside* a list is unsafe: a blank line between
+                # items makes CommonMark render it "loose" and add spacing the
+                # whole-message render never produces. A boundary before or
+                # after a list is fine, and allowing those keeps the split point
+                # monotonic as text arrives (see test_split_point_only_advances).
+                if not (_is_list(prev) and _is_list(nxt)):
+                    best = cut
+            idx = text.find("\n\n", idx + 1)
+        return best
 
     def _flush_stream(self) -> None:
         """Re-render the full accumulated stream through the SAME
@@ -1234,11 +1280,63 @@ class ChatLog(RichLog):
         # Render the whole accumulated stream via the unified helper.
         # Identical output to end-of-turn `_render_assistant`, so when
         # streaming ends and history-replay runs, nothing visually moves.
-        rendered = self._render_assistant_to_lines(self._stream_full)
-        for line in rendered:
-            self.write(line)
-            self._track_lines()
-            self._stream_lines_written += 1
+        # Append-only. Everything up to the last safe block boundary has
+        # already been rendered and written by an earlier flush, so re-render
+        # only what came after it. Without this every flush re-parses the whole
+        # message through commonmark - 31 ms at 10 KB, 127 ms at 40 KB - which
+        # is what forced the old frame-rate ladder down to 4 fps on long
+        # answers. Each piece is rendered exactly once, ever.
+        full = self._stream_full
+        prev_stable = getattr(self, "_stream_stable_len", 0)
+        stable_rows = getattr(self, "_stream_stable_rows", 0)
+        new_stable = self._stable_split(full)
+        if new_stable < prev_stable:
+            new_stable = prev_stable
+
+        if stable_rows and self._stream_lines_written >= stable_rows:
+            # Committed prefix stays on screen; drop only the volatile tail.
+            drop = self._stream_lines_written - stable_rows
+            for _ in range(drop):
+                self.lines.pop()
+            self._line_counter = max(0, self._line_counter - drop)
+            self._line_cache.clear()
+            self._stream_lines_written = stable_rows
+        else:
+            prev_stable = 0
+            self._stream_stable_len = 0
+            self._stream_stable_rows = stable_rows = 0
+
+        pieces = []
+        if new_stable > prev_stable:
+            newly_stable = full[prev_stable:new_stable]
+            if newly_stable.strip():
+                pieces.append(("stable", newly_stable))
+        tail = full[max(new_stable, prev_stable):]
+        if tail.strip():
+            pieces.append(("tail", tail))
+
+        for kind, text in pieces:
+            rows = self._render_assistant_to_lines(text)
+            if not rows:
+                continue
+            # ONE write per piece, not one per visual row. `RichLog.write`
+            # assigns `self.virtual_size`, a layout-invalidating reactive, and
+            # (with auto_scroll on, which is the streaming case) queues a
+            # `call_after_refresh` scroll callback. Row-by-row meant a 10 KB
+            # reply fired ~640 layout invalidations and ~640 queued callbacks
+            # per flush, flooding the same message pump that delivers incoming
+            # tokens - so tokens arrived in lumps between the storms.
+            from rich.console import Group
+            before = len(self.lines)
+            self.write(Group(*rows))
+            # Count what actually landed rather than assuming one row per
+            # element, so the counters can't drift out of sync with self.lines.
+            written = max(0, len(self.lines) - before)
+            self._track_lines(written)
+            self._stream_lines_written += written
+            if kind == "stable":
+                self._stream_stable_rows += written
+                self._stream_stable_len = new_stable
 
         # Auto-follow tail ONLY when the user was already at the bottom
         # before we added content. If they scrolled up to read history,
