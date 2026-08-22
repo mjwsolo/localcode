@@ -312,6 +312,11 @@ class ServerManager:
             self._idle_timeout_s = 600.0
         self._last_activity_ts: float = 0.0
         self._idle_thread: Optional[threading.Thread] = None
+        # Post-start verification: what the SERVER says it loaded, and the
+        # complaint if that disagreed with what we asked for. Never trust
+        # `_model_path` (what we *wanted*) as evidence of what is serving.
+        self._verified_model: Optional[str] = None
+        self._verification_error: Optional[str] = None
         # On construction, clean up any stale PID file from a prior crash.
         self._reap_stale_pid_file()
 
@@ -411,7 +416,11 @@ class ServerManager:
         subsequent localcode launch until reboot — which was user-
         reported on 2026-04-23.
         """
+        requested_port = port
         with self._lock:
+            # Nothing is verified until the post-health probe below says so.
+            self._verified_model = None
+            self._verification_error = None
             had_prior = self._process is not None
             _prev_model = self._model_path  # capture before shutdown clears it
             self._shutdown_locked(reason="start_or_model_swap")
@@ -525,11 +534,70 @@ class ServerManager:
         _lifecycle_log("server_health_result", port=port, healthy=ok,
                        free_mb=_system_free_memory_mb())
         if ok:
+            # A healthy port is NOT proof the model we asked for is loaded.
+            # `_shutdown_locked()` only kills a process THIS manager owns, and
+            # `_kill_port()` deliberately refuses to kill a healthy foreign
+            # llama-server (it belongs to another terminal's session) — so a
+            # start() can sail through the healthcheck while a prior session's
+            # server answers on the port. Live on 2026-08-22: /model switched
+            # to Muse Glimmer, UI said "server: ready", and pid 49152 was still
+            # serving Qwen3.8-27B. Ask the server what it loaded and FAIL if it
+            # isn't what we asked for. We do NOT kill the foreign server (that
+            # would end someone else's session) — we detect and report.
+            ok = self._verify_loaded_model(model_path, port,
+                                           requested_port=requested_port)
+        if ok:
             self.mark_activity()
             self._ensure_idle_thread()
             self._last_exit_code = None
             self._last_death_was_pressure = False
         return ok
+
+    def _verify_loaded_model(self, model_path: str, port: int,
+                             requested_port: int | None = None) -> bool:
+        """Confirm the live server on `port` really loaded `model_path`.
+
+        Returns False (and records `verification_error`) only on a genuine
+        MISMATCH. An unknown answer — older server, `/props` unreachable —
+        leaves `verified_model` None and returns True: we can't prove it's
+        wrong, but callers/UI must then say "unverified" rather than name a
+        model confidently.
+
+        Port fallback is the same class of bug: if we bound 8082 because a
+        foreign server held 8081, every caller still pointed at 8081 is
+        talking to that foreign server. We do not fail here — the existing
+        design is that callers re-read `mgr.port` after start() and rewrite
+        their base_url (runtime._restart_server does exactly this), which is
+        the recovery that keeps localcode usable when a port is squatted.
+        We log it loudly so a caller that forgot is diagnosable.
+        """
+        if requested_port is not None and port != requested_port:
+            _lifecycle_log("server_port_fallback", requested=requested_port,
+                           actual=port,
+                           note="callers must re-read mgr.port into base_url")
+        reported = probe_loaded_model(port, timeout=2.0)
+        if reported is None:
+            self._verified_model = None
+            self._verification_error = None
+            _lifecycle_log("model_verify_unknown", port=port,
+                           requested=Path(model_path).name)
+            return True
+        if model_identity_matches(model_path, reported):
+            self._verified_model = reported
+            self._verification_error = None
+            _lifecycle_log("model_verify_ok", port=port,
+                           model=Path(reported).name)
+            return True
+        self._verified_model = reported
+        self._verification_error = (
+            f"Wrong model on port {port}: asked for {model_path}, "
+            f"server is serving {reported}. A llama-server from another "
+            f"session is holding this port (localcode never kills a healthy "
+            f"one). Quit that session, or set LOCALCODE_PORT to a free port."
+        )
+        _lifecycle_log("model_verify_mismatch", port=port,
+                       requested=model_path, actual=reported)
+        return False
 
     def restart(self, cmd: list[str], model_path: str, port: int = DEFAULT_PORT,
                 timeout_s: int = HEALTH_TIMEOUT_S) -> bool:
@@ -586,6 +654,8 @@ class ServerManager:
         self._process = None
         self._model_path = None
         self._port = None
+        self._verified_model = None
+        self._verification_error = None
 
     def is_healthy(self, port: int | None = None) -> bool:
         """Non-blocking probe of the port the server ACTUALLY bound (default was 8081, wrong after port fallback)."""
@@ -598,7 +668,21 @@ class ServerManager:
 
     @property
     def current_model(self) -> Optional[str]:
+        """The model we ASKED the server to load. Not evidence of what is
+        actually serving — see `verified_model`."""
         return self._model_path
+
+    @property
+    def verified_model(self) -> Optional[str]:
+        """The model path the live server REPORTED after the last start(),
+        or None when verification hasn't run or couldn't answer."""
+        return self._verified_model
+
+    @property
+    def verification_error(self) -> Optional[str]:
+        """Human-readable complaint when the server is serving a different
+        model than the one requested. None when verified or unknown."""
+        return self._verification_error
 
     def disconnect_diagnostics(self) -> dict:
         """Snapshot of WHY the server is unreachable (disconnect CLASS:
@@ -797,6 +881,7 @@ class ServerManager:
         # Safe from the pressure-monitor thread (assignment is atomic in CPython).
         self._process = None
         self._model_path = None
+        self._verified_model = None
 
     def _pick_free_port(self, preferred: int) -> int:
         """Reclaim `preferred` if we can, otherwise delegate to the
@@ -922,3 +1007,63 @@ def _probe_health(port: int, timeout: float = 1.0) -> bool:
     except Exception:
         # Connection refused, read timeout — process is still coming up.
         return False
+
+
+def probe_loaded_model(port: int, timeout: float = 2.0) -> Optional[str]:
+    """Ask the server WHICH MODEL FILE IT ACTUALLY LOADED. None if unknown.
+
+    Why this exists (live evidence, 2026-08-22): the user ran `/model` to
+    switch to Muse Glimmer. The status bar said "model: Muse Glimmer 30B
+    UD-Q8_K_XL", the model claimed to be Muse Glimmer — and the only
+    llama-server on the machine was an hour-old pid serving
+    `Qwen3.8-27B-UD-Q8_K_XL.gguf` on 8081. `/health` says "a server is up",
+    it does NOT say "the server you asked for, with the model you asked
+    for". Nothing in the stack ever asked the second question, so a start()
+    that silently reused a foreign session's server reported "ready".
+
+    Prefer `/props` (`model_path`, an absolute path). Fall back to
+    `/v1/models` (`data[0].id`, usually just the basename). Cheap and
+    total: short timeout, never raises — an unreachable or older server
+    just yields None ("unknown"), which callers treat as unverified
+    rather than as a mismatch.
+    """
+    base = f"http://127.0.0.1:{port}"
+    try:
+        with urllib.request.urlopen(f"{base}/props", timeout=timeout) as r:
+            if r.status == 200:
+                import json as _json
+                data = _json.loads(r.read().decode("utf-8", "replace"))
+                mp = data.get("model_path") or data.get("model")
+                if isinstance(mp, str) and mp.strip():
+                    return mp.strip()
+    except Exception:
+        pass
+    try:
+        with urllib.request.urlopen(f"{base}/v1/models", timeout=timeout) as r:
+            if r.status == 200:
+                import json as _json
+                data = _json.loads(r.read().decode("utf-8", "replace"))
+                entries = data.get("data") or []
+                if entries:
+                    mid = entries[0].get("id")
+                    if isinstance(mid, str) and mid.strip():
+                        return mid.strip()
+    except Exception:
+        pass
+    return None
+
+
+def model_identity_matches(requested: str, reported: str) -> bool:
+    """True if `reported` names the same GGUF as `requested`.
+
+    Compare resolved BASENAMES, case-sensitively: the server reports the
+    path it was launched with, which may be absolute where we hold a
+    relative path (or vice versa), but the filename is the model's
+    identity. Case-sensitive on purpose — `Qwen3.8-27B-UD-Q8_K_XL.gguf`
+    and a differently-cased near-miss are different files on a
+    case-sensitive volume, and silently equating them is the exact class
+    of "wrong model, confident UI" bug this guards.
+    """
+    if not requested or not reported:
+        return False
+    return Path(str(requested)).name == Path(str(reported)).name

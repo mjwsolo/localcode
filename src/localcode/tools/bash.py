@@ -1091,16 +1091,17 @@ def execute(ctx: ToolContext, args: dict) -> str:
         output = (r.stdout + r.stderr).strip()
         # Prompt-injection guard. A repo file or web response echoed by the
         # command (`cat README`, `curl …`) can carry "ignore all prior
-        # instructions" text — bash was the one tool output that reached
-        # the model unguarded (read_file/web_fetch already wrap theirs).
-        # bash output is also read by internal heuristics and is the
-        # overwhelmingly-common case, so we do NOT blanket-wrap: only when
-        # a hostile pattern is actually detected do we fence the output +
-        # prepend the warning. Clean output passes through byte-for-byte,
-        # preserving the exact format every downstream consumer expects.
+        # instructions" text, so bash output is untrusted like any other
+        # external input. Wrap UNCONDITIONALLY: the delimiter is the real
+        # mitigation (injection_defense.py says so itself) and signature
+        # detection is only belt-and-braces. Wrapping just the output that
+        # trips a signature inverts that — it means every attack phrased
+        # outside the signature list arrives unfenced, which is precisely
+        # the attack that gets through. wrap_untrusted() still prepends
+        # the warning banner when a signature does fire.
         try:
-            from ..injection_defense import detect_injection_patterns, wrap_untrusted
-            if output and detect_injection_patterns(output):
+            from ..injection_defense import wrap_untrusted
+            if output:
                 output = wrap_untrusted(output, source=f"$ {cmd[:60]}")
         except Exception:
             pass
