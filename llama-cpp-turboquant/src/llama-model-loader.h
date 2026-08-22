@@ -14,15 +14,8 @@
 #include <map>
 #include <stdexcept>
 #include <unordered_map>
-#include <utility>
-#include <vector>
 
-// Maps a GGUF file index to the backend buffer(s) that wrap that file's mmap.
-// A file idx may have multiple buffers: on backends that register each buffer
-// with the OS (e.g. Metal residency sets on Apple Silicon), creating one buffer
-// per contiguous run of offloaded tensors instead of a single span avoids
-// pinning mmap pages that don't belong to any offloaded tensor.
-using llama_buf_map = std::unordered_map<uint32_t, std::vector<ggml_backend_buffer_t>>;
+using llama_buf_map = std::unordered_map<uint32_t, ggml_backend_buffer_t>;
 
 // lists of buffer types used for each layer
 using buft_list_t = std::vector<std::pair<ggml_backend_dev_t, ggml_backend_buffer_type_t>>;
@@ -196,17 +189,6 @@ struct llama_model_loader {
     void init_mappings(bool prefetch = true, llama_mlocks * mlock_mmaps = nullptr);
 
     void get_mapping_range(size_t * first, size_t * last, void ** addr, int idx, ggml_context * ctx) const;
-
-    // Like get_mapping_range, but returns one (first, last) pair per contiguous run of
-    // tensors in the file. Tensors separated by more than `gap_threshold` bytes start a
-    // new range. This lets a backend create one buffer per run instead of a single buffer
-    // that spans the entire file — critical on Apple Silicon, where the Metal driver adds
-    // every wrapped-mmap buffer to a residency set and forces the full range resident,
-    // wiring memory that doesn't belong to any offloaded tensor.
-    void get_mapping_ranges(
-        std::vector<std::pair<size_t, size_t>> * ranges,
-        void ** addr, int idx, ggml_context * ctx,
-        size_t gap_threshold = 1 * 1024 * 1024) const;
 
     // for backwards compatibility, does not support ggml-backend
     void load_data_for(struct ggml_tensor * cur) const;

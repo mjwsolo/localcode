@@ -540,20 +540,8 @@ void ggml_metal_encoder_dispatch_threadgroups(ggml_metal_encoder_t encoder, int 
     [encoder->obj dispatchThreadgroups:MTLSizeMake(tg0, tg1, tg2) threadsPerThreadgroup:MTLSizeMake(tptg0, tptg1, tptg2)];
 }
 
-static _Atomic int barrier_count = 0;
-static _Atomic int barrier_log_trigger = 0;
-
 void ggml_metal_encoder_memory_barrier(ggml_metal_encoder_t encoder) {
     [encoder->obj memoryBarrierWithScope:MTLBarrierScopeBuffers];
-    atomic_fetch_add(&barrier_count, 1);
-}
-
-// Call from outside to log and reset
-void ggml_metal_log_barrier_count(void) {
-    int count = atomic_exchange(&barrier_count, 0);
-    if (count > 0 && atomic_fetch_add(&barrier_log_trigger, 1) < 5) {
-        GGML_LOG_INFO("METAL BARRIERS: %d per graph compute\n", count);
-    }
 }
 
 void ggml_metal_encoder_end_encoding(ggml_metal_encoder_t encoder) {
@@ -1092,7 +1080,6 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 case GGML_UNARY_OP_CEIL:
                 case GGML_UNARY_OP_ROUND:
                 case GGML_UNARY_OP_TRUNC:
-                case GGML_UNARY_OP_XIELU:
                     return ggml_is_contiguous_rows(op->src[0]) && (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16);
                 default:
                     return false;
@@ -1187,7 +1174,6 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_ARGSORT:
         case GGML_OP_TOP_K:
         case GGML_OP_ARANGE:
-        case GGML_OP_ROLL:
             return true;
         case GGML_OP_FLASH_ATTN_EXT:
             // for new head sizes, add checks here
@@ -1226,23 +1212,6 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                     return false;
                 }
             }
-            switch (op->src[1]->type) {
-                case GGML_TYPE_F32:
-                case GGML_TYPE_F16:
-                case GGML_TYPE_Q8_0:
-                case GGML_TYPE_Q4_0:
-                case GGML_TYPE_Q4_1:
-                case GGML_TYPE_Q5_0:
-                case GGML_TYPE_Q5_1:
-                    break;
-                case GGML_TYPE_BF16:
-                    if (!has_bfloat) {
-                        return false;
-                    }
-                    break;
-                default:
-                    return false;
-            }
             return has_simdgroup_mm; // TODO: over-restricted for vec-kernels
         case GGML_OP_SSM_CONV:
         case GGML_OP_SSM_SCAN:
@@ -1254,8 +1223,6 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
             return has_simdgroup_reduction && op->src[2]->ne[0] % 32 == 0;
         case GGML_OP_TURBO_WHT:
             return op->src[0]->ne[0] % 128 == 0;
-        case GGML_OP_MOE_ROUTER_FUSED:
-            return op->src[0]->type == GGML_TYPE_F32 && op->src[0]->ne[0] <= 1024;
         case GGML_OP_SOLVE_TRI:
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:
@@ -1272,7 +1239,6 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                            case GGML_TYPE_F16:
                            case GGML_TYPE_BF16:
                            case GGML_TYPE_Q8_0:
-                           case GGML_TYPE_Q1_0:
                            case GGML_TYPE_Q4_0:
                            case GGML_TYPE_Q4_1:
                            case GGML_TYPE_Q5_0:
@@ -1299,7 +1265,6 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                             default:
                                 return false;
                         }
-                    case GGML_TYPE_Q1_0:
                     case GGML_TYPE_Q4_0:
                     case GGML_TYPE_Q4_1:
                     case GGML_TYPE_Q5_0:
