@@ -1,0 +1,335 @@
+name: Upstream bump
+
+# Keep the vendored llama.cpp fork riding latest upstream, continuously.
+#
+# WHY THIS EXISTS
+# The fork sat four months behind upstream (last merge 2026-04-22) and nobody
+# noticed, because nothing was watching. Two architectures the product ships -
+# cohere2moe and muse_glimmer - existed upstream but not in our tree, so each
+# needs a separately-built runner on the user's machine. A manual catch-up
+# attempt then silently dropped the qwen35 MTP guard (Qwen 3.8 27B stopped
+# loading) and produced a binary linked against Homebrew's libssl.
+#
+# THE MODEL
+# The fork is not a snapshot. It is: latest upstream master + patches/*.patch.
+# The delta is small - TurboQuant KV cache, the qwen35 MTP guard, TQ3_1S/TQ4_1S
+# weight quants, a fused MoE router, and a 3-line Muse thinking-tag fix carried
+# from still-open upstream PR #27475. Replaying that series weekly means the
+# fork can never drift; a patch that stops applying becomes a loud, dated,
+# individually-named failure instead of four months of silence.
+#
+# WHAT THIS CANNOT DO - READ THIS BEFORE TRUSTING A GREEN RUN
+# This is a BUILD gate, not a correctness gate. GitHub's macOS runners have no
+# usable Metal compute device, and the models are 7-38 GB, so no model is ever
+# loaded here. A green run proves: the patches apply, the tree compiles, the
+# turbo delta and the MTP guard are still in the source, and the binary is
+# self-contained. It proves NOTHING about whether the models still work.
+# That is why every PR this workflow opens carries a REQUIRED manual checklist:
+# `bash dev/verify_models.sh` must be run on a real Mac and its output pasted
+# into the PR before merge. Do not merge on green CI alone.
+#
+# All the real logic lives in scripts/bump_upstream.sh so a human can reproduce
+# a CI failure byte-for-byte locally. This file only wires it to a schedule and
+# turns its exit codes into an issue or a PR.
+#
+# No third-party actions are used here on purpose: everything is `gh` and git,
+# so there is no supply-chain surface and no action SHA to keep pinned.
+
+on:
+  schedule:
+    # Mondays 09:00 UTC. Weekly is the right cadence: often enough that a
+    # broken patch is caught against a small upstream delta, rare enough that
+    # the PR is worth a human's attention when it appears.
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Upstream ref to bump to (default: master)'
+        required: false
+        default: 'master'
+        type: string
+      force:
+        description: 'Replay even if upstream already equals patches/PINNED_UPSTREAM'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: upstream-bump
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+env:
+  UPSTREAM_REF: ${{ inputs.ref || 'master' }}
+  ISSUE_LABEL: upstream-bump
+
+jobs:
+  bump:
+    name: replay patches onto upstream master
+    runs-on: macos-14
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Replay the patch series and build
+        id: bump
+        # Never let a nonzero exit kill the step: the exit code IS the result,
+        # and the steps below turn it into an issue or a PR. Exit codes are
+        # documented at the top of scripts/bump_upstream.sh.
+        run: |
+          set +e
+          force_flag=""
+          if [ "${{ inputs.force }}" = "true" ]; then force_flag="--force"; fi
+          bash scripts/bump_upstream.sh \
+            --ref "$UPSTREAM_REF" \
+            --workdir "$RUNNER_TEMP/bump" \
+            --sync $force_flag 2>&1 | tee "$RUNNER_TEMP/bump.log"
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          # Surface whatever the script managed to record before it stopped.
+          if [ -f "$RUNNER_TEMP/bump/bump-result.env" ]; then
+            cat "$RUNNER_TEMP/bump/bump-result.env" >> "$GITHUB_OUTPUT"
+            cat "$RUNNER_TEMP/bump/bump-result.env"
+          fi
+          exit 0
+
+      - name: Already current
+        if: steps.bump.outputs.rc == '10'
+        run: |
+          {
+            echo "### Already current"
+            echo
+            echo "Upstream \`$UPSTREAM_REF\` is \`${{ steps.bump.outputs.NEW_SHA }}\`, which is"
+            echo "exactly what \`patches/PINNED_UPSTREAM\` names. Nothing to replay."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: The patch series does not exist yet
+        if: steps.bump.outputs.rc == '20'
+        # Deliberately a plain, explained failure rather than a stack trace: the
+        # patches/ contract is produced by a separate piece of work, and until
+        # it lands this workflow has nothing to do.
+        run: |
+          {
+            echo "### Cannot run: the patch series is missing"
+            echo
+            echo "This workflow replays \`patches/*.patch\` onto latest upstream. It needs:"
+            echo
+            echo '- `patches/PINNED_UPSTREAM` - one line, the upstream SHA the series applies to'
+            echo '- `patches/0001-*.patch` … - the numbered, individually-applicable series'
+            echo '- `llama-cpp-turboquant/PATCHES.md` - the human-readable inventory'
+            echo
+            echo "Until those exist, \`llama-cpp-turboquant/\` is an unmanaged snapshot and will"
+            echo "keep rotting. See \`docs/upstream-fork.md\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error::patches/ contract missing - see the job summary"
+          exit 1
+
+      - name: File the failure as an issue
+        if: steps.bump.outputs.rc == '30' || steps.bump.outputs.rc == '40' || steps.bump.outputs.rc == '50'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RC: ${{ steps.bump.outputs.rc }}
+          NEW_SHA: ${{ steps.bump.outputs.NEW_SHA }}
+          FAILED_PATCH: ${{ steps.bump.outputs.FAILED_PATCH }}
+        # One rolling issue per failure kind, reopened and commented rather than
+        # duplicated weekly - a new issue every Monday would train everyone to
+        # ignore them, which is how the fork got four months stale.
+        run: |
+          set -euo pipefail
+          case "$RC" in
+            30) title="upstream-bump: patch ${FAILED_PATCH:-?} no longer applies" ;;
+            40) title="upstream-bump: the fork delta did not survive the replay" ;;
+            50) title="upstream-bump: the replayed tree does not build" ;;
+          esac
+
+          body="$RUNNER_TEMP/issue-body.md"
+          {
+            echo "Automated weekly upstream replay failed."
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| upstream ref | \`$UPSTREAM_REF\` |"
+            echo "| upstream commit | \`${NEW_SHA:-unknown}\` |"
+            echo "| previously pinned | \`${{ steps.bump.outputs.PINNED }}\` |"
+            echo "| failing patch | \`${FAILED_PATCH:-n/a}\` |"
+            echo "| run | ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} |"
+            echo
+            if [ "$RC" = "30" ]; then
+              echo "Upstream changed the code this patch touches, so the patch needs rebasing."
+              echo "See \`docs/upstream-fork.md\` → *Rebasing a patch*. If upstream has"
+              echo "merged the equivalent change, delete the patch instead."
+            elif [ "$RC" = "40" ]; then
+              echo "The series applied but the fork delta is not in the resulting tree, or the"
+              echo "binary is not self-contained. A patch has become a no-op, or a Homebrew"
+              echo "library leaked into the link. This is the failure mode that shipped a broken"
+              echo "Qwen 3.8 27B last time."
+            else
+              echo "The patch series applied cleanly but the tree does not compile against this"
+              echo "upstream vintage. Usually an API rename upstream that a patch's code calls."
+            fi
+            echo
+            if [ -f "$RUNNER_TEMP/bump/patch-failure.txt" ]; then
+              echo '<details><summary>git apply output and reject hunks</summary>'
+              echo
+              echo '```'
+              cat "$RUNNER_TEMP/bump/patch-failure.txt"
+              echo '```'
+              echo
+              echo '</details>'
+              echo
+            fi
+            echo '<details><summary>Last 200 lines of the run log</summary>'
+            echo
+            echo '```'
+            tail -n 200 "$RUNNER_TEMP/bump.log" 2>/dev/null || echo "(no log)"
+            echo '```'
+            echo
+            echo '</details>'
+          } > "$body"
+
+          gh label create "$ISSUE_LABEL" --color BFD4F2 \
+            --description "Automated llama.cpp upstream replay" 2>/dev/null || true
+
+          existing="$(gh issue list --state open --label "$ISSUE_LABEL" \
+            --search "$title in:title" --json number,title \
+            --jq "[.[] | select(.title == \"$title\")][0].number" 2>/dev/null || echo "")"
+
+          if [ -n "$existing" ] && [ "$existing" != "null" ]; then
+            gh issue comment "$existing" --body-file "$body"
+            echo "commented on existing issue #$existing"
+          else
+            gh issue create --title "$title" --label "$ISSUE_LABEL" --body-file "$body"
+          fi
+
+          cat "$body" >> "$GITHUB_STEP_SUMMARY"
+          echo "::error::$title"
+          exit 1
+
+      - name: Open the bump PR
+        if: steps.bump.outputs.rc == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEW_SHA: ${{ steps.bump.outputs.NEW_SHA }}
+          PINNED: ${{ steps.bump.outputs.PINNED }}
+          PATCH_COUNT: ${{ steps.bump.outputs.PATCH_COUNT }}
+          COMMIT_COUNT: ${{ steps.bump.outputs.COMMIT_COUNT }}
+        run: |
+          set -euo pipefail
+          short="${NEW_SHA:0:12}"
+          branch="automation/upstream-bump-$short"
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "the replayed tree is identical to the vendored one - nothing to open" \
+              >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          git checkout -B "$branch"
+          git add -A
+          git commit \
+            -m "llama.cpp: replay the TurboQuant series onto upstream $short" \
+            -m "Vendored tree rebuilt as upstream $NEW_SHA plus the $PATCH_COUNT patches in patches/. Previously pinned: $PINNED." \
+            -m "Build-verified only. Model verification (dev/verify_models.sh) is manual and must be pasted into the PR before merge."
+
+          git push --force-with-lease origin "$branch"
+
+          body="$RUNNER_TEMP/pr-body.md"
+          {
+            echo "Weekly replay of the TurboQuant patch series onto latest upstream llama.cpp."
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| previous pin | \`$PINNED\` |"
+            echo "| new pin | \`$NEW_SHA\` |"
+            echo "| patches replayed | $PATCH_COUNT (all applied cleanly) |"
+            echo "| upstream commits pulled in | ${COMMIT_COUNT:-?} |"
+            echo
+            echo "## Upstream commits"
+            echo
+            echo '<details><summary>'"${COMMIT_COUNT:-?}"' commits</summary>'
+            echo
+            echo '```'
+            head -n 500 "$RUNNER_TEMP/bump/upstream-commits.txt" 2>/dev/null || echo "(unavailable)"
+            if [ "$(grep -c . "$RUNNER_TEMP/bump/upstream-commits.txt" 2>/dev/null || echo 0)" -gt 500 ]; then
+              echo "... (truncated; see the full range with git log ${PINNED:0:12}..$short)"
+            fi
+            echo '```'
+            echo
+            echo '</details>'
+            echo
+            echo "## What CI already proved"
+            echo
+            echo "- [x] every patch in \`patches/\` applied cleanly to \`$short\`"
+            echo "- [x] the tree builds Release/static with the shipped flags (Metal embedded, \`LLAMA_CURL=OFF\`)"
+            echo "- [x] \`GGML_TYPE_TURBO2_0/3_0/4_0\` and \`GGML_OP_TURBO_WHT\` still in \`ggml/include/ggml.h\`"
+            echo "- [x] \`turbo-matrices.h\` and \`turbo-wht.h\` still present"
+            echo "- [x] the qwen35 MTP guard still in \`src/llama-model.cpp\`"
+            echo "- [x] \`otool -L bin/llama-server\` names nothing under \`/opt/homebrew\`"
+            echo
+            echo "## REQUIRED before merge - CI cannot do this"
+            echo
+            echo "**Do not merge on green CI.** GitHub's macOS runners have no usable Metal"
+            echo "compute device and the models are 7-38 GB, so no model is loaded in CI. A green"
+            echo "run means the code compiles and the delta is present, not that the models work."
+            echo "The last bump that was merged on compile-passes-therefore-fine silently broke"
+            echo "Qwen 3.8 27B."
+            echo
+            echo "On a real Apple Silicon Mac, with this branch checked out and the bundled"
+            echo "binary rebuilt from it:"
+            echo
+            echo '```bash'
+            echo "bash dev/verify_models.sh    # 8 bundled-server configs: load + generate + tool-calling"
+            echo '```'
+            echo
+            echo "Reviewer checklist - tick each box only against pasted evidence:"
+            echo
+            echo "- [ ] \`dev/verify_models.sh\` was run locally against a binary built from **this branch**"
+            echo "- [ ] its full output is pasted in a comment below (all 8 configs, 0 FAIL)"
+            echo "- [ ] the turbo4 KV-cache path was exercised, not skipped"
+            echo "- [ ] tool-calling returned a well-formed call on the models that support it"
+            echo "- [ ] Qwen 3.8 27B loaded (the MTP-guard regression; source check is necessary, not sufficient)"
+            echo "- [ ] the three dedicated-runner architectures were re-checked: any that upstream now"
+            echo "      supports can drop its separate source-built runner (\`.github/workflows/runners.yml\`)"
+            echo "- [ ] \`llama-cpp-turboquant/PATCHES.md\` still matches \`patches/\`"
+            echo "- [ ] any patch upstream has now merged (e.g. PR #27475, the Muse thinking-tag fix) was deleted"
+            echo
+            echo "---"
+            echo "Opened by \`.github/workflows/upstream-bump.yml\`. Reproduce locally with"
+            echo "\`bash scripts/bump_upstream.sh --ref $NEW_SHA\`."
+          } > "$body"
+
+          if gh pr view "$branch" --json number >/dev/null 2>&1; then
+            gh pr edit "$branch" --body-file "$body"
+            echo "updated the existing PR for $branch"
+          else
+            gh pr create \
+              --base "${{ github.event.repository.default_branch }}" \
+              --head "$branch" \
+              --title "llama.cpp: bump vendored fork to upstream $short" \
+              --body-file "$body"
+          fi
+
+          cat "$body" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: upstream-bump-log
+          path: |
+            ${{ runner.temp }}/bump.log
+            ${{ runner.temp }}/bump/bump-result.env
+            ${{ runner.temp }}/bump/patch-failure.txt
+            ${{ runner.temp }}/bump/upstream-commits.txt
+          if-no-files-found: warn
+          retention-days: 30
