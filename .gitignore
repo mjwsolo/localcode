@@ -96,3 +96,6 @@ docs/plans/
 
 # Test fixtures cloned by tests/test-tokenizers-repo.sh (git-lfs backed)
 llama-cpp-turboquant/models/ggml-vocabs/
+
+# llama.cpp upstream workflows: inert here (GitHub only reads root .github/workflows)
+llama-cpp-turboquant/.github/
