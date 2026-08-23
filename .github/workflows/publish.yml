@@ -47,6 +47,12 @@ jobs:
         with:
           python-version: "3.13"
       - run: python -m pip install --upgrade pip build
+      - name: Clean stale build artifacts
+        # A leftover build/ or *.egg-info from a prior (local or cached) build can
+        # leak files into the wheel that are no longer in the source tree. A fresh
+        # CI checkout is normally clean, so this is belt-and-braces, but it is the
+        # exact failure that shipped stale binaries in a local build once.
+        run: rm -rf build dist src/*.egg-info
       - name: Build (pure-Python wheel + sdist)
         run: python -m build
       - name: Show artifacts
