@@ -43,10 +43,32 @@ def read_clipboard_png() -> bytes | None:
     """
     if sys.platform != "darwin":
         return None
+    # Fast path: `pngpaste` (Homebrew) when installed — noticeably quicker
+    # than round-tripping AppleScript. NEVER required: the osascript path
+    # below is the dependency-free guarantee.
+    data = _read_png_via_pngpaste()
+    if data:
+        return data
     data = _read_png_via_osascript()
     if data:
         return data
     return _read_image_from_file_url()
+
+
+def _read_png_via_pngpaste() -> bytes | None:
+    """Optional fast path via the `pngpaste` binary, when present."""
+    import shutil
+    exe = shutil.which("pngpaste")
+    if not exe:
+        return None
+    try:
+        result = subprocess.run(
+            [exe, "-"], capture_output=True, timeout=10
+        )
+    except Exception:
+        return None
+    data = result.stdout if result.returncode == 0 else None
+    return data if data and _looks_like_png(data) else None
 
 
 def _read_png_via_osascript() -> bytes | None:
