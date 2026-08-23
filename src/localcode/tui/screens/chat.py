@@ -721,8 +721,6 @@ _SLASH_COMMANDS = [
     ("/skills", "List loaded skills and where they're from"),
     ("/model", "List available models / switch (e.g. /model qwen)"),
     ("/delete", "Delete a downloaded model to free disk space (asks first)"),
-    ("/hooks", "Show this repo's .localcode/hooks.toml and trust it (runs shell)"),
-    ("/paste", "Attach an image/screenshot from the clipboard (or press Ctrl+G)"),
     ("/thinking", "Show / set hidden reasoning policy (off|auto)"),
     ("/sounds", "Toggle completion + approval notification sounds"),
     ("/voice", "Toggle voice mode (push-to-talk dictation into the input box)"),
@@ -742,7 +740,7 @@ _SLASH_COMMANDS = [
 # /Users/you/project — is sent to the model as a normal message instead of
 # being rejected as an "Unknown command". Only `!` enters shell mode.
 _KNOWN_COMMANDS = {name for name, _desc in _SLASH_COMMANDS} | {
-    "/quit", "/search", "/copy", "/image",
+    "/quit", "/search", "/copy",
 }
 
 
@@ -1099,6 +1097,7 @@ class ChatScreen(Screen):
         self._thinking_streamed: bool = False  # live reasoning shown this turn
         self._slash_matches: list[tuple[str, str]] = []  # current filtered commands
         self._slash_selected: int = 0  # highlighted index in slash menu
+        self._slash_window: int = 0  # first visible row of the windowed menu
         # Search state
         self._search_active: bool = False
         self._search_results: list[tuple[int, str]] = []
@@ -1151,7 +1150,8 @@ class ChatScreen(Screen):
                     getattr(self.tui.engine.hooks, "untrusted_project_hooks", False):
                 log.append_info(
                     "⚠ This repo has .localcode/hooks.toml (runs shell commands). "
-                    "It is disabled until you review it with /hooks and run /hooks trust."
+                    "It is disabled. Review the file, then relaunch with "
+                    "LOCALCODE_TRUST_PROJECT_HOOKS=1 to enable it."
                 )
         except Exception:
             pass
@@ -1855,11 +1855,13 @@ class ChatScreen(Screen):
                 status_bar.add_class("hidden")
             else:
                 self._slash_matches = []
+                self._slash_window = 0
                 menu.remove_class("active")
                 status_bar.remove_class("hidden")
         else:
             self._slash_matches = []
             self._slash_selected = 0
+            self._slash_window = 0
             menu.remove_class("active")
             status_bar.remove_class("hidden")
 
@@ -1912,6 +1914,10 @@ class ChatScreen(Screen):
                 return idx
         return start
 
+    # Visible command rows in the slash palette. With up to two "N more"
+    # affordance rows this fills the CSS `max-height: 10` exactly.
+    _SLASH_MENU_ROWS = 8
+
     def _render_slash_menu(self) -> None:
         """Render the slash palette below the input.
 
@@ -1929,8 +1935,26 @@ class ChatScreen(Screen):
             avail = max(20, (self.size.width or 80) - 18)
         except Exception:
             avail = 60
+        # Window the list so the highlighted command is ALWAYS on screen.
+        # #slash-menu is capped at `max-height: 10`; rendering every match
+        # (17+ on a bare "/") pushed everything past row 10 out of view and
+        # made Down-arrow look frozen once the highlight left the cap.
+        # Standard scrolling list: keep `_slash_selected` inside a
+        # `_SLASH_MENU_ROWS`-row slice, with "↑/↓ N more" affordances.
+        n = len(self._slash_matches)
+        cap = self._SLASH_MENU_ROWS
+        start = self._slash_window
+        if self._slash_selected < start:
+            start = self._slash_selected
+        elif self._slash_selected >= start + cap:
+            start = self._slash_selected - cap + 1
+        start = max(0, min(start, max(0, n - cap)))
+        self._slash_window = start
+        end = min(n, start + cap)
         lines = []
-        for i, (cmd, desc) in enumerate(self._slash_matches):
+        if start > 0:
+            lines.append(f"[dim]  ↑ {start} more[/]")
+        for i, (cmd, desc) in list(enumerate(self._slash_matches))[start:end]:
             disabled = self._slash_cmd_disabled(cmd)
             d = "unavailable for this model" if disabled else desc
             # Truncate BOTH the real and the "unavailable" text so neither wraps
@@ -1946,6 +1970,8 @@ class ChatScreen(Screen):
                 lines.append(f"[bold]{cmd:<14}[/]  [bold]{d}[/]")
             else:
                 lines.append(f"[dim]{cmd:<14}[/]  [dim]{d}[/]")
+        if end < n:
+            lines.append(f"[dim]  {n - end} more ↓[/]")
         menu.update("\n".join(lines))
 
     # Screen-level on_paste was removed 2026-04-26: `_NoTintInput._on_paste`
@@ -2259,12 +2285,6 @@ class ChatScreen(Screen):
             self._handle_model_command(text)
         elif text == "/delete" or text.startswith("/delete "):
             self._handle_delete_command(text)
-        elif text == "/hooks" or text.startswith("/hooks "):
-            self._handle_hooks_command(text)
-        elif text == "/paste" or text == "/image":
-            log = self.query_one("#chat-log", ChatLog)
-            if not self._attach_clipboard_image():
-                log.append_info("[dim]No image on the clipboard — copy or screenshot one first.[/]")
         elif text == "/thinking" or text.startswith("/thinking "):
             self._handle_thinking_command(text)
         elif text == "/status":
@@ -3158,54 +3178,6 @@ class ChatScreen(Screen):
             return
         for kind, line in lines:
             (log.append_error if kind == "error" else log.append_info)(line)
-
-    def _handle_hooks_command(self, text: str) -> None:
-        """Handle /hooks — review and trust this repo's .localcode/hooks.toml.
-
-        Project hooks run shell commands (session start, every prompt, before
-        every tool), so an untrusted repo's hooks are NOT loaded until the user
-        explicitly trusts them here — this is what stops clone-and-open RCE.
-
-          /hooks          — show the file and whether it's trusted
-          /hooks trust    — trust the current content (re-prompts if it changes)
-        """
-        from pathlib import Path
-        from ...hooks import is_project_hooks_trusted, trust_project_hooks
-        log = self.query_one("#chat-log", ChatLog)
-        repo_root = "."
-        try:
-            repo_root = str(getattr(self.tui.engine, "repo_root", ".") or ".")
-        except Exception:
-            pass
-        project_path = Path(repo_root) / ".localcode" / "hooks.toml"
-        arg = text[len("/hooks"):].strip().lower()
-        if not project_path.is_file():
-            log.append_info("No .localcode/hooks.toml in this repo — nothing to trust.")
-            return
-        if arg == "trust":
-            if trust_project_hooks(repo_root):
-                log.append_info(
-                    "Trusted this repo's hooks. They take effect next session "
-                    "(restart LocalCode). Re-run /hooks trust if you edit the file."
-                )
-            else:
-                log.append_error("Could not write the hooks trust store.")
-            return
-        # Bare /hooks — show status + content for review.
-        trusted = is_project_hooks_trusted(repo_root)
-        log.append_info(f"{project_path} — {'TRUSTED' if trusted else 'NOT TRUSTED (hooks disabled)'}")
-        try:
-            body = project_path.read_text()[:4000]
-            for line in body.splitlines():
-                log.append_info(f"  {line}")
-        except Exception as e:  # noqa: BLE001
-            log.append_error(f"Could not read hooks file: {e}")
-            return
-        if not trusted:
-            log.append_info(
-                "These hooks run shell commands. Review them above, then run "
-                "`/hooks trust` to enable them for this repo."
-            )
 
     def _handle_model_command(self, text: str) -> None:
         """Handle /model — open the visual picker or switch directly by key."""
@@ -4459,10 +4431,14 @@ class ChatScreen(Screen):
             self._thinking_text += chunk
             self._turn_tokens += max(1, len(chunk) // 4) if chunk else 0
             self._thinking_phase = "thinking"
-            # Stream the reasoning to the log live
-            # instead of hiding it. On the first chunk, drop the spinner and
-            # start the dimmed reasoning stream; then feed each chunk.
-            if chunk:
+            # Collapsed by default (user request 2026-04-27, reaffirmed
+            # 2026-08-22 after Muse Glimmer flooded the chat with its whole
+            # chain of thought): do NOT paint raw reasoning live. Keep the
+            # compact animated "thinking" indicator running and accumulate
+            # the text in `_thinking_text`; `thinking_done` lands it as a
+            # single collapsible "▶ thinking" row the user can expand.
+            # Only when thinking is explicitly expanded do we stream live.
+            if chunk and self._thinking_expanded:
                 if not self._thinking_streamed:
                     self._hide_active_step()
                     self._thinking_streamed = True
@@ -4472,11 +4448,15 @@ class ChatScreen(Screen):
         elif t == "thinking_peek":
             self._thinking_phase = "thinking"
             # thinking_peek carries model text in p["text"]; deliberately
-            # ignore it — the live stream (thinking_chunk) shows the real text.
+            # ignore it — thinking_chunk accumulates the real text for the
+            # collapsible block (and live-streams it only when expanded).
             if self._active_mode != "thinking" and not self._thinking_streamed:
                 self._show_active_thinking("thinking")
         elif t == "thinking_done":
-            text = p.get("text", "")
+            # Some backends only send chunks and leave `text` empty here —
+            # fall back to the accumulated stream so the collapsible block
+            # never silently drops the reasoning.
+            text = p.get("text", "") or self._thinking_text
             self._thinking_text = text
             self._hide_active_step()
             # If we already streamed the reasoning live, it's on screen — just
@@ -4603,6 +4583,7 @@ class ChatScreen(Screen):
                 inp.text = cmd
                 self._slash_matches = []
                 self._slash_selected = 0
+                self._slash_window = 0
                 self.query_one("#slash-menu", Static).remove_class("active")
                 self.query_one("#status-bar", Static).remove_class("hidden")
                 event.prevent_default()
@@ -4612,6 +4593,7 @@ class ChatScreen(Screen):
             elif key == "escape":
                 self._slash_matches = []
                 self._slash_selected = 0
+                self._slash_window = 0
                 self.query_one("#slash-menu", Static).remove_class("active")
                 event.prevent_default()
                 event.stop()

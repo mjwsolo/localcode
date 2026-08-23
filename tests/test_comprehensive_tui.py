@@ -70,6 +70,7 @@ async def _drive(tmp_path, project, script, keystrokes_text, configure=None):
 
         return {
             "log_text": _chat_log_text(app),
+            "log_lines": len(app.screen.query_one("#chat-log").lines),
             "input_value": app.screen.query_one("#chat-input").value,
             "model_calls": len(backend.engine.calls),
             "think_calls": list(backend.engine.think_calls),
@@ -101,24 +102,39 @@ def test_tui_prompt_renders_model_response(tmp_path, project):
     asyncio.run(scenario())
 
 
-def test_tui_streams_reasoning_live_before_answer(tmp_path, project):
-    """The model's reasoning must render live in the log (like Claude Code),
-    not be hidden behind a spinner. Drives a turn whose response is preceded by
-    a thinking block and asserts the reasoning text is in the visible log."""
+def test_tui_collapses_reasoning_by_default(tmp_path, project):
+    """Raw chain-of-thought must NOT flood the chat (user report 2026-08-22:
+    Muse Glimmer painted paragraphs of reasoning live, in dim italic, including
+    the system prompt recited back). Collapsed is the default: the turn ends
+    with ONE expandable "▶ …" row holding the reasoning, the compact indicator
+    covers the live phase, and the final answer still renders normally."""
     async def scenario():
+        # Several hundred chars over many sentences/lines — the shape that
+        # used to become a wall of dim text, one rendered row per line.
+        reasoning = "\n".join(
+            f"Reasoning sentence number {i} about following the system "
+            f"instructions and planning the answer carefully." for i in range(12)
+        )
+        assert len(reasoning) > 800
         snap = await _drive(
             tmp_path,
             project,
-            [say("The answer is 42.",
-                 thinking="Consider the constraints.\nWeigh the options carefully.")],
+            [say("The answer is 42.", thinking=reasoning)],
             "think about it",
         )
         assert snap["model_calls"] >= 1
-        # Reasoning streamed into the visible log, not swallowed.
-        assert "Consider the constraints." in snap["log_text"]
-        assert "Weigh the options carefully." in snap["log_text"]
-        # The final answer still renders too.
+        # The reasoning body is NOT dumped into the visible log. (The first
+        # line may appear truncated in the collapsed header preview.)
+        assert "Reasoning sentence number 5" not in snap["log_text"]
+        assert "Reasoning sentence number 11" not in snap["log_text"]
+        # Exactly one collapsed, expandable thinking row landed instead.
+        assert snap["log_text"].count("▶") == 1
+        assert "(+11 lines)" in snap["log_text"]
+        # The final answer still renders normally.
         assert "The answer is 42." in snap["log_text"]
+        # And the whole log stays SHORT: user line + collapsed row + answer
+        # + chrome, nowhere near the 12+ rows the reasoning would occupy.
+        assert snap["log_lines"] < 15, snap["log_text"]
 
     asyncio.run(scenario())
 
@@ -231,6 +247,66 @@ def test_tui_slash_clear_command(tmp_path, project):
             assert backend.engine.calls == []
             # App is still alive and input is clear.
             assert app.screen.query_one("#chat-input").value == ""
+
+    asyncio.run(scenario())
+
+
+def test_tui_slash_menu_windows_selection_and_drops_removed_commands(tmp_path, project):
+    """The slash palette must keep the highlighted command VISIBLE.
+
+    #slash-menu is capped at `max-height: 10`; before the windowing fix,
+    a bare "/" rendered every command, so rows past the cap were invisible
+    and Down-arrow appeared frozen once the highlight left the window.
+    Also guards that /paste, /image and /hooks are gone (removed 2026-08-22)."""
+    async def scenario():
+        from localcode.tui.app import LocalCodeTUI
+        from textual.widgets import Static
+
+        os.environ["LOCALCODE_AUTONOMY"] = "full_auto"
+        app = LocalCodeTUI()
+        app._preview_screen = "chat"
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            backend = build_test_app(tmp_path, script=[say("hi")], cwd=project)
+            app.engine = backend
+            backend.out.set_event_callback(app.bridge.on_event)
+
+            await pilot.press("slash")
+            await pilot.pause()
+            screen = app.screen
+            names = [c for c, _ in screen._slash_matches]
+            # Removed commands are gone from the palette and the alias set.
+            from localcode.tui.screens.chat import _is_known_command
+            for gone in ("/paste", "/hooks", "/image"):
+                assert gone not in names
+                assert not _is_known_command(gone)
+            n = len(names)
+            cap = screen._SLASH_MENU_ROWS
+            assert n > cap, "windowing test needs more commands than the cap"
+
+            menu = screen.query_one("#slash-menu", Static)
+            # Initial window starts at the top and advertises the overflow.
+            assert screen._slash_window == 0
+            assert f"{n - cap} more ↓" in str(menu.content)
+
+            # Walk PAST the window (and wrap around): the highlighted
+            # command must stay inside the rendered slice at every step.
+            for _ in range(n + 3):
+                await pilot.press("down")
+                await pilot.pause()
+                sel = screen._slash_selected
+                start = screen._slash_window
+                assert start <= sel < start + cap
+                assert names[sel] in str(menu.content)
+            # After walking to the bottom and wrapping, the "↑ N more"
+            # affordance appeared at least conceptually — re-check bottom:
+            for _ in range(n - 1):
+                await pilot.press("down")
+                await pilot.pause()
+                if screen._slash_selected == n - 1:
+                    break
+            assert "↑" in str(menu.content)
+            await pilot.press("escape")
 
     asyncio.run(scenario())
 
