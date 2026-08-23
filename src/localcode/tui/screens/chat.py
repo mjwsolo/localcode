@@ -2928,6 +2928,14 @@ class ChatScreen(Screen):
         parts = text.strip().split()
         sub = parts[1] if len(parts) >= 2 else None
 
+        # Bare /mcp opens the interactive management screen (status glyphs,
+        # expandable tools, r-reload, d-disconnect). Subcommands keep the text
+        # path below for muscle memory / scripting (/mcp reload).
+        if sub is None:
+            from .mcp_screen import MCPScreen
+            self.app.push_screen(MCPScreen())
+            return
+
         # Every MCP call below can spawn subprocesses / touch the async bridge;
         # a bad server config must surface as a message, never crash the TUI.
         try:
