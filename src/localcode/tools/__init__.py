@@ -44,6 +44,7 @@ from . import (
     web_search,
     write_file,
 )
+from ..paths import PathContainmentError
 from .base import ToolContext, ToolResult
 from .facts import extract_tool_facts
 
@@ -336,7 +337,19 @@ def dispatch_result(name: str, ctx: ToolContext, args: dict) -> ToolResult:
     except Exception:
         pass
 
-    raw_result = executor(ctx, args)
+    try:
+        raw_result = executor(ctx, args)
+    except PathContainmentError as exc:
+        # A write tool aimed outside the project root (absolute path, `../`
+        # traversal, or a symlink whose target escapes). Refused here so the
+        # model gets one clear, actionable sentence instead of a traceback.
+        text = (
+            f"REJECTED: {exc} "
+            "Writes are confined to the project directory; re-issue the call "
+            "with a path relative to the project root."
+        )
+        return ToolResult(text=text, ok=False,
+                          facts={"tool": clean, "ok": False, "path_escape": True})
     result = raw_result if isinstance(raw_result, ToolResult) else _normalize_result(clean, args, str(raw_result))
 
     # Auto-surface typecheck diagnostics after a successful CODE edit — the weak

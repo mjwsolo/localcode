@@ -1299,6 +1299,13 @@ class ChatScreen(Screen):
                 self._server_alive = _mgr.is_running() or _mgr.is_healthy()
             except Exception:
                 self._server_alive = True  # can't probe → don't cry wolf
+            # Ask the server WHICH MODEL it actually loaded, off the UI
+            # thread. `/health` only proves "a server is up" — on 2026-08-22
+            # the bar read "model: Muse Glimmer 30B UD-Q8_K_XL" while the one
+            # llama-server on the box (pid 49152, an hour old) was serving
+            # Qwen3.8-27B-UD-Q8_K_XL.gguf. The bar must never name a model it
+            # hasn't confirmed with the server itself.
+            self._verify_serving_model()
             if _tick % 15 == 0:  # first tick, then every ~30 s
                 try:
                     from ...telemetry import current_git_branch as _cgb
@@ -1309,6 +1316,55 @@ class ChatScreen(Screen):
             _tick += 1
             if stop.wait(2.0):
                 return
+
+    def _verify_serving_model(self) -> None:
+        """Refresh `_verified_model_name` / `_model_mismatch` from the live
+        server. Runs on the status-probe thread only (a localhost GET with a
+        short timeout, but still too slow for the UI thread). Never raises.
+
+        Three outcomes, all consumed by `_update_status`:
+          - mismatch  → `_model_mismatch` set: the bar shows the wrong model
+                        loudly instead of the name the user picked.
+          - verified  → `_verified_model_name` = the reported basename.
+          - unknown   → both None: the bar marks the model "unverified".
+        """
+        self._verified_model_name = None
+        self._model_mismatch = None
+        try:
+            from ...server_manager import (
+                ServerManager as _SM, probe_loaded_model as _probe_model,
+                model_identity_matches as _same_model,
+            )
+            from pathlib import Path as _P
+            mgr = _SM.get()
+            config = self.tui.config
+            if (config.runtime.provider or "").lower() != "llama_cpp":
+                return
+            # What we BELIEVE is loaded: the path ServerManager was asked for,
+            # else the catalog filename for the configured choice, else the
+            # raw config value.
+            expected = mgr.current_model or ""
+            if not expected:
+                from ...models_catalog import current as _cur
+                choice = _cur(config)
+                expected = (getattr(choice, "filename", "") if choice else "") \
+                    or (config.runtime.model or "")
+            if not expected or not str(expected).endswith(".gguf"):
+                return  # nothing file-shaped to compare against
+            reported = _probe_model(mgr.port, timeout=1.0)
+            if reported is None:
+                return  # unknown → unverified, not a mismatch
+            if _same_model(expected, reported):
+                self._verified_model_name = _P(str(reported)).name
+            else:
+                # `_model_mismatch` holds the basename of what is REALLY
+                # serving (that's the fact the user is missing); the model
+                # they picked is already on screen everywhere else.
+                self._model_mismatch = _P(str(reported)).name
+        except Exception:
+            # A probe failure is "unverified", never a false mismatch.
+            self._verified_model_name = None
+            self._model_mismatch = None
 
     def on_unmount(self) -> None:
         ev = getattr(self, "_status_probe_stop", None)
@@ -1588,6 +1644,8 @@ class ChatScreen(Screen):
             except Exception:
                 pass
         config = self.tui.config
+        # Verified-model state, refreshed off-thread by `_verify_serving_model`.
+        _mismatch = getattr(self, "_model_mismatch", None)
         from ...models_catalog import current as current_choice
         cur = current_choice(config)
         # Thinking indicator: reflects the `/thinking` policy
@@ -1641,6 +1699,13 @@ class ChatScreen(Screen):
             # non-blocking.
             _alive = getattr(self, "_server_alive", True)
             server_label = "server: ready" if _alive else "server: stopped"
+            # A verified mismatch outranks "ready": the server IS up, it's
+            # just not serving the model the user picked (2026-08-22: an
+            # hour-old Qwen server answering while the bar said Muse
+            # Glimmer). This segment sits near the left edge, so it survives
+            # the narrow-terminal truncation that eats the model segment.
+            if _mismatch and _alive:
+                server_label = "server: WRONG MODEL"
         elif provider:
             server_label = f"server: {provider}"
         else:
@@ -1700,6 +1765,29 @@ class ChatScreen(Screen):
         else:
             short_model = model
         short_model = short_model.replace("-A3B", "")
+        # Never state a model as fact unless the server confirmed it. A
+        # mismatch is the loudest thing on the bar (the user is talking to a
+        # different model than the one they picked); an un-probed / unknown
+        # server gets an explicit "unverified" so the name reads as a claim,
+        # not a confirmation. See `_verify_serving_model`.
+        # Only the llama-server path can be verified this way — remote
+        # providers and the serverless diffusion runner have no /props to ask,
+        # so they keep the plain label rather than a permanent "(unverified)".
+        _verifiable = provider == "llama_cpp" and not (
+            cur is not None
+            and str(getattr(cur, "architecture", "")).startswith("diffusion")
+        )
+        if _mismatch:
+            # Name what is ACTUALLY serving — that's the fact the user doesn't
+            # have. `.gguf` is dropped so the name survives on a narrow bar;
+            # the full "asked for X, got Y" text goes to the chat log and
+            # events.jsonl via ServerManager.verification_error.
+            model_seg = f"model: serving {_mismatch.removesuffix('.gguf')}"
+        elif not _verifiable or getattr(self, "_verified_model_name", None):
+            model_seg = f"model: {short_model}"
+        else:
+            model_seg = f"model: {short_model} (unverified)"
+
         # Brand prefix + status (LEFT) | version (RIGHT). Like a tmux /
         # vim statusline — left content pinned to the left edge, right
         # content pinned to the right edge, padded with spaces to fill
@@ -1740,7 +1828,7 @@ class ChatScreen(Screen):
             + f" · {server_label} · permissions: {self._permissions_label()} · "
             f"context: {pct_remaining}% free · "
             f"thinking: {thinking_label}"
-            + f" · model: {short_model}"
+            + f" · {model_seg}"
         )
         # Use the adaptive `build_tag` chosen above; honour the
         # narrow-terminal "drop entirely" policy by emitting an empty
@@ -3348,13 +3436,25 @@ class ChatScreen(Screen):
             if ok:
                 self.app.call_from_thread(self._on_server_ready, choice.name)
             else:
-                from ...errors import LocalCodeError, by_code
-                code = by_code("E1002")
-                msg = (
-                    str(LocalCodeError(code=code, detail=choice.name))
-                    if code is not None
-                    else "Server didn't come up in time."
-                )
+                # A verification mismatch is NOT a timeout — the server came up
+                # fine, it's just serving somebody else's model. Say exactly
+                # that (both paths) instead of the generic "didn't come up",
+                # which is what left the 2026-08-22 Qwen-vs-Muse swap looking
+                # like a success everywhere in the UI.
+                msg = ""
+                try:
+                    from ...server_manager import ServerManager as _SM2
+                    msg = _SM2.get().verification_error or ""
+                except Exception:
+                    msg = ""
+                if not msg:
+                    from ...errors import LocalCodeError, by_code
+                    code = by_code("E1002")
+                    msg = (
+                        str(LocalCodeError(code=code, detail=choice.name))
+                        if code is not None
+                        else "Server didn't come up in time."
+                    )
                 self.app.call_from_thread(self._on_server_restart_failed, msg)
 
         self.run_worker(_worker, thread=True, exclusive=False)
