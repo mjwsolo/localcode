@@ -1763,13 +1763,11 @@ class ChatScreen(Screen):
         # different model than the one they picked); an un-probed / unknown
         # server gets an explicit "unverified" so the name reads as a claim,
         # not a confirmation. See `_verify_serving_model`.
-        # Only the llama-server path can be verified this way — remote
-        # providers and the serverless diffusion runner have no /props to ask,
-        # so they keep the plain label rather than a permanent "(unverified)".
-        _verifiable = provider == "llama_cpp" and not (
-            cur is not None
-            and str(getattr(cur, "architecture", "")).startswith("diffusion")
-        )
+        # Only the llama-server path can be verified this way; remote
+        # providers have no /props to ask, so they keep the plain label rather
+        # than a permanent "(unverified)". Every local model, DiffusionGemma
+        # included, is served by the one bundled llama-server and is verified.
+        _verifiable = provider == "llama_cpp"
         if _mismatch:
             # Name what is ACTUALLY serving — that's the fact the user doesn't
             # have. `.gguf` is dropped so the name survives on a narrow bar;
