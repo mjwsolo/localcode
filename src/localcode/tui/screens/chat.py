@@ -640,6 +640,16 @@ class _ChatTextArea(TextArea):
         # and awaits super() for the keys we don't handle ourselves.
         key = event.key
 
+        # Record that a REAL keystroke reached the composer. The post-submit
+        # `_double_clear` guard uses this to tell "user re-typed text" apart
+        # from "a background write re-inserted the submitted text" — only the
+        # latter should be wiped. (Voice/paste write via `.text =`, which
+        # never enters `_on_key`, so this counter stays put for them.)
+        try:
+            self.screen._user_edit_seq += 1
+        except Exception:
+            pass
+
         # ── Enter submits ──
         if key == "enter":
             # When the slash menu is open, Enter is handled by the
@@ -668,14 +678,18 @@ class _ChatTextArea(TextArea):
         # Mouse capture is OFF by default (native terminal text selection
         # must keep working — see tui/app.py), so the wheel scrolls the
         # terminal's scrollback, not the ChatLog. These keys are the way
-        # to scroll the conversation. The composer keeps its own keys:
-        # PageUp/PageDown page the log always (the few-row composer has no
-        # use for page-wise cursor movement); Shift+Up/Down scroll a line
-        # unless a multi-line document needs them for selection past the
-        # cursor's line; Home/End jump to top/bottom only when the input
-        # is empty (otherwise they move the cursor within the line).
+        # to scroll the conversation. Key choice mirrors less/vim and the
+        # reference agents (Codex, Claude Code): Ctrl+U/Ctrl+D half-page,
+        # Ctrl+Home/Ctrl+End jump to top / bottom-and-re-follow. We keep
+        # PageUp/PageDown OUT of scrolling here so the multi-line composer
+        # can use them for page-wise CURSOR movement in a long draft —
+        # binding them to scroll stole the cursor (they never moved it).
+        # Shift+Up/Down scroll a line unless a multi-line document needs
+        # them for selection past the cursor's line; Home/End jump to
+        # top/bottom only when the input is empty (otherwise they move the
+        # cursor within the line).
         _scroll_key = None
-        if key in ("pageup", "pagedown"):
+        if key in ("ctrl+u", "ctrl+d", "ctrl+home", "ctrl+end"):
             _scroll_key = key
         elif key == "shift+up" and self.cursor_at_first_line:
             _scroll_key = key
@@ -1097,13 +1111,32 @@ class ChatScreen(Screen):
         # When the chat input has focus these keys are routed by
         # _ChatTextArea._on_key; the bindings here cover every other
         # focus target.
-        Binding("pageup", "chat_scroll('pageup')", "Scroll up", show=False),
-        Binding("pagedown", "chat_scroll('pagedown')", "Scroll down", show=False),
+        Binding("ctrl+u", "chat_scroll('ctrl+u')", "Scroll up half a page", show=False),
+        Binding("ctrl+d", "chat_scroll('ctrl+d')", "Scroll down half a page", show=False),
         Binding("shift+up", "chat_scroll('shift+up')", "Scroll up a line", show=False),
         Binding("shift+down", "chat_scroll('shift+down')", "Scroll down a line", show=False),
-        Binding("home", "chat_scroll('home')", "Scroll to top", show=False),
-        Binding("end", "chat_scroll('end')", "Scroll to bottom", show=False),
+        Binding("ctrl+home", "chat_scroll('ctrl+home')", "Scroll to top", show=False),
+        Binding("ctrl+end", "chat_scroll('ctrl+end')", "Scroll to bottom", show=False),
+        # PageUp/PageDown intentionally NOT bound to chat scroll: the
+        # multi-line composer needs them for cursor navigation. Keep them
+        # as a scroll fallback only when the composer isn't focused.
+        Binding("pageup", "chat_scroll('pageup')", "Scroll up", show=False),
+        Binding("pagedown", "chat_scroll('pagedown')", "Scroll down", show=False),
+        # Expand/collapse reasoning from the keyboard. The ▶/▼ thinking
+        # toggle is a mouse click, but mouse capture is OFF by default, so
+        # keyboard-only users could never reveal a collapsed reasoning
+        # block. Ctrl+O is Claude Code's reasoning-visibility toggle.
+        Binding("ctrl+o", "toggle_thinking", "Show / hide reasoning", show=False),
     ]
+
+    def action_toggle_thinking(self) -> None:
+        """Expand/collapse reasoning blocks (keyboard path for the ▶/▼ toggle)."""
+        try:
+            log = self.query_one("#chat-log", ChatLog)
+        except Exception:
+            return
+        if not log.toggle_all_thinking():
+            log.append_info("No reasoning to show for this conversation yet.")
 
     def __init__(self) -> None:
         super().__init__()
@@ -1180,6 +1213,14 @@ class ChatScreen(Screen):
         self._slash_matches: list[tuple[str, str]] = []  # current filtered commands
         self._slash_selected: int = 0  # highlighted index in slash menu
         self._slash_window: int = 0  # first visible row of the windowed menu
+        # Monotonic counter bumped on every REAL user keystroke in the
+        # composer (see _ChatTextArea._on_key). Programmatic writes to the
+        # input (voice transcript write-back, paste-chip expansion) do NOT
+        # bump it. The post-submit `_double_clear` guards on this so it only
+        # wipes text the user did NOT type — otherwise a stale clear timer
+        # from submitting a command would eat an identical command the user
+        # re-typed within ~1.5s (e.g. toggling /permissions twice quickly).
+        self._user_edit_seq: int = 0
         # Search state
         self._search_active: bool = False
         self._search_results: list[tuple[int, str]] = []
@@ -2216,8 +2257,16 @@ class ChatScreen(Screen):
         # starts typing a NEW message within 1.5 s produces different
         # text, which we must not wipe (that was eating fast follow-ups).
         _submitted = text
-        def _double_clear(expected=_submitted) -> None:
+        _edit_gen = self._user_edit_seq
+        def _double_clear(expected=_submitted, edit_gen=_edit_gen) -> None:
             try:
+                # A real keystroke since this submit means the text now in
+                # the box was TYPED by the user (even if it happens to equal
+                # what we just submitted, e.g. re-running the same command) —
+                # never wipe that. Only clear when nothing was typed since,
+                # i.e. a background write re-inserted the submitted text.
+                if self._user_edit_seq != edit_gen:
+                    return
                 inp2 = self.query_one("#chat-input", _ChatTextArea)
                 if inp2.text and inp2.text == expected:
                     inp2.text = ""
@@ -2408,17 +2457,21 @@ class ChatScreen(Screen):
             log = self.query_one("#chat-log", ChatLog)
         except Exception:
             return False
-        if key == "pageup":
-            log.scroll_page_up(animate=False)
-        elif key == "pagedown":
-            log.scroll_page_down(animate=False)
+        if key in ("ctrl+u", "pageup"):
+            # Half-page up (less/vim style). PageUp is accepted too for the
+            # cases where the composer isn't focused, but the composer itself
+            # no longer routes PageUp here — it needs it for cursor nav in a
+            # multi-line draft (see _ChatTextArea._on_key).
+            log.scroll_relative(y=-max(1, (log.size.height or 2) // 2), animate=False)
+        elif key in ("ctrl+d", "pagedown"):
+            log.scroll_relative(y=max(1, (log.size.height or 2) // 2), animate=False)
         elif key == "shift+up":
             log.scroll_up(animate=False)
         elif key == "shift+down":
             log.scroll_down(animate=False)
-        elif key == "home":
+        elif key in ("ctrl+home", "home"):
             log.scroll_home(animate=False)
-        elif key == "end":
+        elif key in ("ctrl+end", "end"):
             log.scroll_end(animate=False)
         else:
             return False
