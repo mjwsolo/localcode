@@ -300,15 +300,23 @@ def test_telemetry_env_var_still_wins_both_ways(monkeypatch):
     assert telemetry.telemetry_enabled() is False
 
 
-def test_events_honour_the_config_default(tmp_path, monkeypatch):
+def test_events_local_log_defaults_on_but_env_can_disable(tmp_path, monkeypatch):
+    # The local events.jsonl is a redacted, no-id, never-uploaded debug log, so
+    # it writes by default; LOCALCODE_EVENTS=0 turns it off. This is decoupled
+    # from the UI turn-trace telemetry on purpose - the privacy fix was deleting
+    # the persistent install id, not silencing the local debug log the user tails.
     from localcode import events
-    from localcode import telemetry
-    monkeypatch.delenv("LOCALCODE_EVENTS", raising=False)
-    monkeypatch.setattr(telemetry, "_CONFIG_ENABLED_CACHE", False)
     log = tmp_path / "events.jsonl"
     monkeypatch.setattr(events, "_resolve_path", lambda: log)
+
+    monkeypatch.delenv("LOCALCODE_EVENTS", raising=False)
     events.emit("tool_call", args="ls")
-    assert not log.exists()
+    assert log.exists()  # default on
+
+    log.unlink()
+    monkeypatch.setenv("LOCALCODE_EVENTS", "0")
+    events.emit("tool_call", args="ls")
+    assert not log.exists()  # env opt-out honoured
 
 
 def test_events_carry_no_persistent_user_id(tmp_path, monkeypatch):
