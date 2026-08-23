@@ -82,7 +82,7 @@ localcode recommends a model by your Mac's memory and marks it with a star. You 
 | Gemma 4 26B-A4B | 28.0 GB | UD-Q8_K_XL | 3.8B (MoE) | 64 GB |
 | Qwen 3.6 35B-A3B | 38.5 GB | UD-Q8_K_XL | 3.0B (MoE) | 96 GB |
 
-Min RAM is the memory at which localcode will recommend the model. You can pick a heavier one by hand. DiffusionGemma is a research model that is never recommended automatically.
+Min RAM is the memory at which localcode will recommend the model. You can pick a heavier one by hand. Every model runs on the same bundled server. DiffusionGemma is a research model that is never recommended automatically; its replies arrive a block at a time rather than word by word.
 
 Measured on a MacBook Pro (M5 Max, 128 GB) with Qwen 3.6 35B-A3B UD-IQ2_M at a 131072-token context: about 89 tokens/s generation, about 1174 tokens/s prompt processing, and 12 to 15 seconds for a typical four-tool-call task.
 

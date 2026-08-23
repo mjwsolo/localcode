@@ -9,7 +9,6 @@ import httpx
 
 from .config import RuntimeConfig
 from .reasoning_capabilities import ReasoningControl, reasoning_capabilities
-from .runtime_diffusion import _DiffusionMixin
 
 
 def _thinking_budget_tokens(configured: int = 0, default: int = 8192) -> int:
@@ -272,7 +271,7 @@ def apply_param_overrides(cmd: list[str], env: dict | None = None) -> list[str]:
     return cmd
 
 
-class LocalCodeRuntimeGateway(_DiffusionMixin):
+class LocalCodeRuntimeGateway:
     """Talks to the local llama.cpp (llama-server) backend."""
 
     def __init__(self, config: RuntimeConfig) -> None:
@@ -290,8 +289,10 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
         # _target_num_ctx on every request) — caching it removes a subprocess
         # spawn from every TTFT. None = not yet probed.
         self._cached_ram_gb: int | None = None
-        # llama_cpp is the only HTTP runtime (ollama/mlx/hf removed); diffusion
-        # models are architecture-routed to the one-shot CLI, not this endpoint.
+        # llama_cpp is the only HTTP runtime (ollama/mlx/hf removed). Every
+        # model, DiffusionGemma included, is served by the bundled llama-server
+        # (the fork hosts the block-diffusion denoiser inside it, see
+        # llama-cpp-turboquant/PATCHES.md 0005), so there is exactly one path.
         base = self.config.base_url.rstrip("/")
         self.endpoint = f"{base}/v1/chat/completions"
         self.tags_endpoint = f"{base}/v1/models"
@@ -1134,8 +1135,8 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
             return {"temperature": 1.0, "top_p": 0.95, "top_k": 0,
                     "min_p": 0.0, "presence_penalty": 0.0, "repeat_penalty": 1.0}
         # Llama / DeepSeek / unknown — safe coding default.
-        # (DiffusionGemma does NOT reach here: it runs through the diffusion
-        # runner with its own Entropy-Bound sampler, not llama-server sampling.)
+        # (DiffusionGemma ignores these: the server's block-diffusion path uses
+        # the model's own entropy-bound denoiser, not the sampler chain.)
         return {"temperature": 0.6, "top_p": 0.95, "top_k": 40,
                 "min_p": 0.05, "presence_penalty": 0.0, "repeat_penalty": 1.05}
 
@@ -1147,20 +1148,6 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
         format: dict[str, Any] | str | None = None,
         num_predict: int | None = None,
     ) -> dict[str, Any]:
-        if self._diffusion_choice() is not None:
-            # Same one-shot CLI backend as stream_chat_events, collected
-            # into the non-streaming response shape.
-            content_parts: list[str] = []
-            tool_calls: list[Any] = []
-            for ev in self._stream_diffusion_events(
-                messages, tools=tools, num_predict=num_predict
-            ):
-                if ev.get("type") == "content":
-                    content_parts.append(str(ev.get("content") or ""))
-                elif ev.get("type") == "tool_calls":
-                    tool_calls = ev.get("tool_calls") or []
-            return {"message": {"content": "".join(content_parts), "tool_calls": tool_calls}}
-
         # Reset idle-suspend countdown — a chat is incoming.
         try:
             from .server_manager import ServerManager as _SM
@@ -1224,13 +1211,6 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
         `[E3102] Lost connection to the model server` after model
         swaps. (See RESUME.md port-isolation TODO.)
         """
-        # Diffusion models have NO persistent server — each turn spawns the
-        # one-shot llama-diffusion-cli. Trying to start a llama-server for
-        # them just times out (E1002). Nothing to restart → report ready so
-        # the /model hot-swap and recovery paths don't choke on them.
-        if self._diffusion_choice() is not None:
-            return True
-
         from .bootstrap import get_model_path
         from .server_manager import ServerManager, HEALTH_TIMEOUT_S
         from pathlib import Path
@@ -1395,16 +1375,6 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
         recovery_mode: str = "",
         stream_policy: str = "",
     ) -> Iterator[dict[str, Any]]:
-        # Diffusion models (architecture="diffusion_gemma") cannot be
-        # served by llama-server — they generate via the one-shot
-        # llama-diffusion-cli runner. Dispatch on the catalog's
-        # architecture field BEFORE any HTTP machinery runs.
-        if self._diffusion_choice() is not None:
-            yield from self._stream_diffusion_events(
-                messages, tools=tools, num_predict=num_predict
-            )
-            return
-
         payload = self._payload(messages, stream=True, tools=tools, think=think, num_ctx=num_ctx, num_predict=num_predict)
         last_error: Exception | None = None
         # Cap server restarts across the WHOLE stream, not per-attempt.

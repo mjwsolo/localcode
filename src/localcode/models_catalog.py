@@ -423,11 +423,11 @@ def _system_ram_gb() -> int:
 # and muse_glimmer (Muse Glimmer) are recommendable like any other model.
 #
 # diffusion_gemma stays excluded on PRODUCT grounds, not technical ones: it is
-# a research block-denoising model on a different execution path (one-shot
-# llama-diffusion-cli, weights remapped per turn, coarse chunked output, no
-# streaming tokens). It works, but it is not the coding-agent experience a
-# first-run user should land on by default. Owner can override by emptying
-# this set.
+# a research block-denoising model. It is served by the same bundled
+# llama-server as everything else, but output arrives one 256-token block at a
+# time (not token by token) and it reasons visibly every turn. It works, but
+# it is not the coding-agent experience a first-run user should land on by
+# default. Owner can override by emptying this set.
 _NO_AUTO_RECOMMEND_ARCHS = {"diffusion_gemma"}
 
 # Capability order for auto-recommend, best → worst for coding-agent use. This
@@ -699,12 +699,12 @@ MODEL_GROUPS: list[ModelGroup] = [
         architecture="diffusion_gemma",
         license="Apache 2.0",
         notes=(
-            "EXPERIMENTAL block-diffusion model — denoises whole blocks in "
-            "parallel instead of decoding token-by-token. Runs through the "
-            "one-shot llama-diffusion-cli runner (llama.cpp PR #24423, built "
-            "automatically on first setup, ~3-6 min) — NOT llama-server: "
-            "output arrives in coarse chunks and weights re-map each turn "
-            "(first turn slow, later turns page-cache fast). The repo ships "
+            "EXPERIMENTAL block-diffusion model — denoises whole 256-token "
+            "blocks in parallel instead of decoding token-by-token. Served by "
+            "the bundled llama-server like every other model (the fork hosts "
+            "the denoiser from llama.cpp PR #24423 inside the server), so the "
+            "model loads once and stays resident; output streams one block "
+            "at a time rather than token by token. The repo ships "
             "plain quants only (Q4_K_M/Q5_K_M/Q6_K/Q8_0/BF16, no UD-* "
             "dynamic quants); Q4_K_M (~15.7 GB) is the recommended pick. "
             "Text-only."

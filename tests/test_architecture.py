@@ -285,17 +285,9 @@ def test_gemma_specific_literals_live_only_in_model_families():
 
     Allowed locations:
       • src/localcode/model_families.py (the adapter itself)
-      • src/localcode/runtime_diffusion.py (the DiffusionGemma backend
-        extracted from runtime.py — it cleans raw `<|channel>` /
-        `<channel|>` / `<|tool_call>` markers out of llama-diffusion-cli
-        stdout, since that one-shot CLI path has no tokenizer-decode step
-        to normalise them. These literals were grandfathered in runtime.py
-        and merely MOVED here by the extraction; same deferred T0.9
-        adapter work applies.)
     """
     ALLOWED = {
         (SRC / "model_families.py").resolve(),
-        (SRC / "runtime_diffusion.py").resolve(),
         # The cross-family tool-call repair parser legitimately needs every
         # family's markup (it recovers tool calls the server failed to parse,
         # for ALL families) — the one place besides the adapters that must know
