@@ -726,7 +726,6 @@ _SLASH_COMMANDS = [
     ("/voice", "Toggle voice mode (push-to-talk dictation into the input box)"),
     ("/audio", "Toggle audio output (assistant reads replies aloud via macOS say)"),
     ("/vision", "Toggle vision mode (let the model see images)"),
-    ("/undo", "Revert the last file change the agent made (/undo all for every change)"),
     ("/clear", "Clear conversation history"),
     ("/exit", "Exit LocalCode"),
 ]
@@ -2316,22 +2315,6 @@ class ChatScreen(Screen):
             self._last_round_prompt_tokens = 0
             self._total_tokens = 0
             self._update_status()
-        elif text == "/undo" or text == "/undo all":
-            engine = self.tui.engine
-            changes = getattr(getattr(engine, "toolkit", None), "changes", None)
-            if changes is None:
-                log.append_info("Nothing to undo yet.")
-            elif text == "/undo all":
-                msgs = changes.undo_all()
-                if msgs:
-                    for m in msgs:
-                        log.append_info(f"  └ {m}")
-                    log.append_info(f"Reverted {len(msgs)} change(s).")
-                else:
-                    log.append_info("Nothing to undo.")
-            else:
-                ok, msg = changes.undo_last()
-                (log.append_info if ok else log.append_error)(msg)
         elif text == "/copy":
             # Copy last assistant response to clipboard
             last_text = ""
@@ -2837,6 +2820,11 @@ class ChatScreen(Screen):
             # Toggle off ⇄ final
             if state.tts_speak_mode != "off":
                 state.tts_speak_mode = "off"
+                try:
+                    from ...voice import stop_speaking as _stop_tts
+                    _stop_tts()  # stop mid-utterance, don't finish the sentence
+                except Exception:
+                    pass
                 log.append_info("Audio output OFF.")
             else:
                 state.tts_speak_mode = "final"
@@ -4003,6 +3991,13 @@ class ChatScreen(Screen):
                 self._kick_backend_wait()
             self._update_queue()
             return
+        # Silence any in-flight TTS the moment a new turn begins, so a long
+        # spoken reply never talks over the next answer.
+        try:
+            from ...voice import stop_speaking as _stop_tts
+            _stop_tts()
+        except Exception:
+            pass
         self._agent_busy = True
         self._stream_buf.clear()
         self._last_assistant_text = ""
@@ -4185,7 +4180,8 @@ class ChatScreen(Screen):
             if vs is not None and vs.tts_speak_mode != "off":
                 spoken = (self._last_assistant_text or "").strip()
                 if spoken:
-                    from ...voice import speak as _speak
+                    from ...voice import speak as _speak, stop_speaking as _stop_tts
+                    _stop_tts()  # kill any prior utterance so turns don't overlap
                     _speak(spoken, vs)
         except Exception:
             pass

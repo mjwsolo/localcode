@@ -56,7 +56,6 @@ Every error localcode shows has a code. Look it up in the [Errors reference](ERR
 - Searches code by name, content or structure
 - Scaffolds and launches apps, then checks that they respond
 - Remembers the task across messages
-- Undoes its own changes with `/undo`
 
 ## Requirements
 
