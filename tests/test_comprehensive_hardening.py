@@ -6,8 +6,8 @@ Each test pins a specific bug that was fixed:
     turn used to poison every later turn);
   * save_config must be atomic (no half-written TOML under concurrency);
   * download_model must refuse when the disk can't hold the model;
-  * bash output that looks like a prompt injection is fenced, clean
-    output passes through byte-for-byte.
+  * bash output is fenced as untrusted data unconditionally, and
+    additionally flagged when it looks like a prompt injection.
 """
 from __future__ import annotations
 
@@ -139,7 +139,7 @@ def test_download_refuses_when_disk_too_small(tmp_path, monkeypatch):
     assert "disk space" in msg.lower()
 
 
-# ── bash: injection fence is conditional ─────────────────────────────
+# ── bash: injection fence is unconditional ───────────────────────────
 
 
 class _App:
@@ -160,9 +160,12 @@ def test_bash_clean_output_passes_through(tmp_path):
         ToolContext(app=_App(tmp_path), out=_Out()),
         {"command": "echo hello-world"},
     )
-    # Clean output is byte-identical — no untrusted wrapper, no warning.
-    assert out == "hello-world"
-    assert "UNTRUSTED_DATA" not in out
+    # bash output is untrusted regardless of whether a signature fires:
+    # the delimiter is the mitigation, signatures are only belt-and-braces.
+    # Clean output is fenced but NOT flagged, and arrives intact.
+    assert "UNTRUSTED_DATA" in out
+    assert "PROMPT-INJECTION" not in out
+    assert "hello-world" in out
 
 
 def test_bash_injection_output_gets_fenced(tmp_path):

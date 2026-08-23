@@ -36,7 +36,7 @@ def execute(ctx: ToolContext, args: dict) -> str:
         return "Error: 'content' argument is required for append_file."
 
     rel_path = str(args["path"])
-    path = ctx.resolve_path(rel_path)
+    path = ctx.resolve_write_path(rel_path)
     if path.is_dir():
         return f"Error: append_file cannot append to directory: {rel_path}"
     content = str(args.get("content", ""))

@@ -7,6 +7,7 @@ from pathlib import Path
 import uuid
 
 from .config import ensure_home_dirs
+from .paths import write_private
 
 
 Message = dict[str, str]
@@ -230,7 +231,18 @@ class SessionStore:
                 for task in session.recent_tasks[-20:]
             ],
         }
-        path.write_text(json.dumps(payload, indent=2))
+        # Secret redaction chokepoint. The transcript is verbatim: a key
+        # the user pasted, or one a tool result echoed, would persist in
+        # cleartext across restarts. Scrub credential VALUES out of every
+        # string in the payload before it hits disk.
+        try:
+            from .redaction import scrub_obj
+            payload = scrub_obj(payload)
+        except Exception:
+            pass
+        # Session JSON is a verbatim transcript (every user message, every
+        # model response, every tool result) — owner-read only.
+        write_private(path, json.dumps(payload, indent=2))
         return path
 
     def list_sessions(self) -> list[tuple[str, str, str]]:
