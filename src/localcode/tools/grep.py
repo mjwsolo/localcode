@@ -45,7 +45,14 @@ def execute(ctx: ToolContext, args: dict) -> str:
         lines = result.splitlines()
         if len(lines) > 50:
             result = "\n".join(lines[:50]) + f"\n\n[{len(lines) - 50} more matches]"
-        return result or "No matches found"
+        if not result:
+            return "No matches found"
+        # Matched lines are verbatim file content — the same untrusted
+        # source read_file wraps. A hostile string planted in any repo
+        # file reaches the model through here too, so fence it the same
+        # way rather than leaving grep as the unguarded side door.
+        from ..injection_defense import wrap_untrusted
+        return wrap_untrusted(result, source=f"grep {pattern!r}")
     except subprocess.TimeoutExpired:
         return "Error: search timed out"
 

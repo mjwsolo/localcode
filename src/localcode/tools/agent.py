@@ -120,6 +120,61 @@ _AGENTS = {
 }
 
 
+def _dispatch_guarded(ctx: ToolContext, name: str, tool_args: dict) -> str:
+    """Run one sub-agent tool call through the SAME guarded path the parent uses.
+
+    Calling the tool's raw executor here would bypass every protection the
+    main loop applies: the autonomy-independent `_safety_hard_block`, the
+    pre_tool_use hook veto, the destructive-write guards, and the user
+    approval gate. A sub-agent is still the same process acting on the same
+    machine, so it gets the same gate — one `agent` call must not buy
+    unapproved shell/file access.
+
+    Imports are function-local: `localcode.agent.helpers` imports
+    `localcode.tools`, so a module-level import here would be circular.
+    """
+    from ..agent.helpers import (
+        _execute_tool_result,
+        _first_token,
+        _needs_confirmation,
+        _request_approval_verdict,
+    )
+
+    app = getattr(ctx, "app", None)
+    out = getattr(ctx, "out", None)
+
+    # Approval gate — identical semantics to agent/loop.py: verdict is one of
+    # "once" / "always" / "deny"; "always" whitelists the command's first
+    # token for the session; "deny" refuses the call.
+    try:
+        needs = _needs_confirmation(name, tool_args, app)
+    except Exception:
+        needs = True  # fail closed
+    if needs:
+        cmd = tool_args.get("command", "")
+        if not cmd:
+            _wpath = tool_args.get("path") or tool_args.get("file_path") or ""
+            cmd = f"{name} {_wpath}".strip()
+        try:
+            verdict = _request_approval_verdict(app, out, name, cmd)
+        except Exception:
+            verdict = "deny"
+        if verdict == "always":
+            allow_set = getattr(app, "_session_allow", None)
+            if allow_set is None and app is not None:
+                app._session_allow = set()
+                allow_set = app._session_allow
+            if allow_set is not None:
+                allow_set.add(_first_token(cmd))
+        elif verdict != "once":
+            return "Denied by user."
+
+    try:
+        return _execute_tool_result(app, name, tool_args, out).text
+    except Exception as e:
+        return f"Tool {name} raised: {e}"
+
+
 def execute(ctx: ToolContext, args: dict) -> str:
     """Run a sub-agent loop with the requested type + prompt.
 
@@ -193,11 +248,7 @@ def execute(ctx: ToolContext, args: dict) -> str:
             if entry is None:
                 tool_result = f"Tool {name!r} not available to this sub-agent."
             else:
-                _, exec_fn = entry
-                try:
-                    tool_result = exec_fn(ctx, tool_args)
-                except Exception as e:
-                    tool_result = f"Tool {name} raised: {e}"
+                tool_result = _dispatch_guarded(ctx, name, tool_args)
             messages.append({"role": "tool",
                              "tool_call_id": call.get("id", ""),
                              "content": str(tool_result)[:8000]})

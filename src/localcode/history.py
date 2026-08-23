@@ -18,11 +18,12 @@ import sqlite3
 import threading
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
 
 from .config import ensure_home_dirs
+from .paths import chmod_quiet
 
 
 DB_NAME = "history.db"
@@ -81,6 +82,31 @@ class SessionSummary:
 
 # ── Database ────────────────────────────────────────────────────────
 
+def _scrub_entry(entry: HistoryEntry) -> HistoryEntry:
+    """Redaction chokepoint for history.db.
+
+    Every prompt, model response and tool arg/result lands in a durable
+    SQLite file. A credential in any of them would sit there in
+    cleartext indefinitely, and history search would happily surface it
+    again later. Scrub the free-text fields (value-level — see
+    redaction.py) before the INSERT. Best-effort: a redaction failure
+    must never cost us the history row.
+    """
+    try:
+        from .redaction import scrub
+        return replace(
+            entry,
+            content=scrub(entry.content),
+            tool_args=scrub(entry.tool_args),
+            tool_result=scrub(entry.tool_result),
+            goal_summary=scrub(entry.goal_summary),
+            blocked_reason=scrub(entry.blocked_reason),
+            diff_summary=scrub(entry.diff_summary),
+        )
+    except Exception:
+        return entry
+
+
 class HistoryDB:
     """SQLite-backed conversation history."""
 
@@ -108,6 +134,10 @@ class HistoryDB:
             # busy_timeout also covers a second localcode instance sharing the
             # same ~/.localcode/history.db. Callers must hold `self._lock`.
             self._conn.execute("PRAGMA busy_timeout=5000")
+            # The DB holds every prompt and response verbatim. SQLite creates
+            # it 0644 (umask-dependent); tighten to owner-only. Best-effort:
+            # a chmod failure (Windows, exotic FS) must not break history.
+            chmod_quiet(self.db_path, 0o600)
         return self._conn
 
     def _ensure_schema(self) -> None:
@@ -195,6 +225,7 @@ class HistoryDB:
 
     def record_turn(self, entry: HistoryEntry) -> None:
         """Record a single conversation turn."""
+        entry = _scrub_entry(entry)
         with self._lock:
             self._record_turn_locked(entry)
 

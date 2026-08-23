@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import sys
+import dataclasses
 from pathlib import Path
 
 import pytest
@@ -50,8 +51,20 @@ def test_error_classification(exc, expected):
 # ── Orchestration paths (network mocked) ────────────────────────────
 
 
+def _unpinned(choice):
+    """A catalog entry with its integrity pins stripped.
+
+    These tests exercise download ORCHESTRATION with fake byte content, so the
+    real sha256/size_bytes pins (added so a stale upstream re-publish is
+    caught) would correctly reject every stub. Strip them here; integrity is
+    covered by its own tests.
+    """
+    return dataclasses.replace(choice, sha256=None, size_bytes=None)
+
+
+
 def test_already_downloaded_short_circuits(isolated_model_dir, monkeypatch):
-    choice = catalog.by_key("gemma-12b")
+    choice = _unpinned(catalog.by_key("gemma-12b"))
     # Pretend the file is already on disk AT FULL SIZE. A tiny stub no
     # longer counts as downloaded — partial files at the final name must
     # fall through to a resume (see
@@ -69,7 +82,7 @@ def test_already_downloaded_short_circuits(isolated_model_dir, monkeypatch):
 
 
 def test_fast_path_success(isolated_model_dir, monkeypatch):
-    choice = catalog.by_key("gemma-12b")
+    choice = _unpinned(catalog.by_key("gemma-12b"))
 
     def _fake_hf(c, model_file, on_progress=None):
         Path(model_file).write_bytes(b"downloaded")
@@ -82,7 +95,7 @@ def test_fast_path_success(isolated_model_dir, monkeypatch):
 
 
 def test_falls_back_to_urllib_when_fast_path_fails(isolated_model_dir, monkeypatch):
-    choice = catalog.by_key("gemma-12b")
+    choice = _unpinned(catalog.by_key("gemma-12b"))
 
     def _hf_boom(*a, **k):
         raise ConnectionError("transient network blip")  # retryable category
@@ -98,7 +111,7 @@ def test_falls_back_to_urllib_when_fast_path_fails(isolated_model_dir, monkeypat
 
 
 def test_fatal_error_fails_fast_without_retry(isolated_model_dir, monkeypatch):
-    choice = catalog.by_key("gemma-12b")
+    choice = _unpinned(catalog.by_key("gemma-12b"))
     attempts = {"n": 0}
 
     def _hf_auth_fail(*a, **k):
@@ -128,7 +141,7 @@ def test_real_download_smoke(tmp_path, monkeypatch):
     d = tmp_path / "models"
     d.mkdir()
     monkeypatch.setattr(catalog, "model_dir", lambda: d)
-    choice = min(catalog.CHOICES, key=lambda c: c.size_gb)
+    choice = _unpinned(min(catalog.CHOICES, key=lambda c: c.size_gb))
     ok, path = bootstrap.download_model(choice)
     assert ok is True, path
     assert Path(path).exists()
@@ -140,7 +153,7 @@ def test_partial_at_final_name_is_not_treated_as_done(isolated_model_dir, monkey
     short-circuited download_model as success — llama-server then failed
     on a truncated GGUF. A too-small file must fall through to the
     download, which resumes/replaces it."""
-    choice = catalog.by_key("gemma-12b")
+    choice = _unpinned(catalog.by_key("gemma-12b"))
     # A few bytes where a ~7 GB model should be.
     choice.local_path.write_bytes(b"partial junk")
     completed = {"hub": False}

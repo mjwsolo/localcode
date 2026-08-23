@@ -47,7 +47,7 @@ from .constants import (
     MAX_AGGREGATE_PER_TURN,
     CROSS_ROUND_REPEAT_LIMIT,
 )
-from .goal import GoalState, infer_goal_state
+from .goal import GoalState, infer_goal_state, is_trivial_turn
 from .context import (
     _msg_bytes,
     _prepare_model_messages,
@@ -56,6 +56,7 @@ from .context import (
     build_progress_ledger,
 )
 from .helpers import (
+    _request_approval_verdict,
     _execute_tool,
     _execute_tool_result,
     _needs_confirmation,
@@ -966,6 +967,17 @@ def run_agent_loop(
                 user_text,
                 task_stage=round_task_stage,
             )
+            # Don't hand `todo_write` to a greeting. The prompt's carve-out is
+            # phrased in task sizes and never says "this turn isn't a task", so
+            # a small model opens a plan for "hi" - and once one exists, the
+            # open-todo gate below refuses to let the turn end. Withholding the
+            # tool is a mechanism rather than more persuasion. Still offered
+            # when todos already exist, so a follow-up "ok" can close them out.
+            if is_trivial_turn(user_text) and not (getattr(app.session, "todos", None) or []):
+                round_tool_schemas = [
+                    _s for _s in round_tool_schemas
+                    if ((_s.get("function") or {}).get("name")) != "todo_write"
+                ]
             try:
                 app._tool_content_max_chars = None
             except Exception:
@@ -1966,52 +1978,7 @@ def run_agent_loop(
                 if not cmd:
                     _wpath = args.get("path") or args.get("file_path") or ""
                     cmd = f"{tool_name} {_wpath}".strip()
-                verdict = "deny"
-                if out._approval_callback is not None:
-                    raw = out._approval_callback(tool_name, cmd)
-                    # Callback may be a bool (legacy) or the new verdict string.
-                    if isinstance(raw, bool):
-                        verdict = "once" if raw else "deny"
-                    else:
-                        verdict = str(raw)
-                else:
-                    # CLI mode: terminal-based approval with 3 options.
-                    import tty
-                    import termios
-                    out._stop_indicator()
-                    rule = app._composer_rule() if hasattr(app, "_composer_rule") else "  " + ("─" * 60)
-                    first_tok = _first_token(cmd) or tool_name
-                    sys.stdout.write("\n\033[33m  Allow this command?\033[0m\n")
-                    sys.stdout.write(f"\033[2m  {cmd[:80]}\033[0m\n")
-                    sys.stdout.write("  \033[1m1\033[0m  allow once\n")
-                    sys.stdout.write(f"  \033[1m2\033[0m  always allow `{first_tok}` (this session)\n")
-                    sys.stdout.write("  \033[1m3\033[0m  deny\n")
-                    sys.stdout.write("\033[s")
-                    sys.stdout.write(f"\033[2m{rule}\033[0m\n")
-                    sys.stdout.write("  › ")
-                    sys.stdout.write(f"\n\033[2m{rule}\033[0m")
-                    sys.stdout.write("\033[1A\r    ")
-                    sys.stdout.flush()
-                    try:
-                        fd = sys.stdin.fileno()
-                        old = termios.tcgetattr(fd)
-                        try:
-                            tty.setraw(fd)
-                            ch = sys.stdin.read(1)
-                        finally:
-                            termios.tcsetattr(fd, termios.TCSADRAIN, old)
-                    except Exception:
-                        try:
-                            ch = input().strip()
-                        except EOFError:
-                            ch = "3"
-                    sys.stdout.write("\033[u\033[J")
-                    if ch in ("1", "y"):
-                        verdict = "once"
-                    elif ch == "2":
-                        verdict = "always"
-                    else:
-                        verdict = "deny"
+                verdict = _request_approval_verdict(app, out, tool_name, cmd)
 
                 # Act on the verdict.
                 if verdict == "always":

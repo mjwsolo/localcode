@@ -1274,9 +1274,18 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
             pass
         self._client = None
         cmd = self.llama_server_command(str(model))
+        # restart() now also VERIFIES (via /props) that the live server really
+        # loaded `model`; it returns False on a mismatch. See
+        # ServerManager._verify_loaded_model — 2026-08-22 the app happily talked
+        # to another session's Qwen server after a switch to Muse Glimmer.
         ok = mgr.restart(cmd, str(model))
         # Propagate the (possibly fallback) port back to our config and
         # endpoint URL so downstream HTTP requests hit the live server.
+        # This is also the fix for the port half of the wrong-model bug: if
+        # start() bound 8082 because a foreign server squats 8081, leaving
+        # base_url on 8081 means every request goes to THAT server. We adopt
+        # the actual port rather than failing, because port fallback exists
+        # precisely so localcode still runs when a port is squatted.
         try:
             actual_port = mgr.port
             new_base = f"http://localhost:{actual_port}"
@@ -2177,8 +2186,19 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
         except Exception:
             _user_t = sampler["temperature"]
         temperature = min(sampler["temperature"], _user_t)
+        # Pass the BASENAME. config.model is an absolute path, and
+        # reasoning_capabilities -> models_catalog.by_filename() matches on the
+        # GGUF filename, so a path never matched and EVERY model silently fell
+        # through to the substring heuristic. Qwen and Gemma happened to still
+        # match on their path text; Muse Glimmer and North-Mini-Code resolved to
+        # family "generic". Measured effect of the fix across the catalog: only
+        # `family` changes, and only to the correct value - the capability flags
+        # (supports_budget, supports_parallel_tools, preserves_reasoning) are
+        # identical either way.
+        from pathlib import Path as _RP
+        _model_name = _RP(str(getattr(self.config, "model", "") or "")).name
         _reasoning_caps = reasoning_capabilities(
-            getattr(self.config, "model", ""), getattr(self.config, "provider", "llama_cpp")
+            _model_name, getattr(self.config, "provider", "llama_cpp")
         )
         effective_think = bool(think and _reasoning_caps.supported)
         payload: dict[str, Any] = {

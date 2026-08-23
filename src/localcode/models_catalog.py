@@ -78,6 +78,13 @@ class ModelChoice:
     # any entry left unpinned downloads exactly as before.
     revision: str = "main"
     sha256: str | None = None
+    # Exact byte size from the HF API. The old completeness check allowed a
+    # 3% tolerance, which cannot distinguish a good file from a stale one:
+    # upstream re-published gemma-4-26B-A4B UD-Q8_K_XL with the same name and
+    # a 1,984-byte difference, and the stale copy was silently kept for months
+    # while emitting <unused17> garbage instead of text. An exact size catches
+    # that for free; sha256 above catches a same-size swap.
+    size_bytes: int | None = None
     reasoning_control: str = "chat_template"
     reasoning_budget_tokens: int = 8192
     preserves_reasoning: bool = True
@@ -182,6 +189,8 @@ class ModelChoice:
 CHOICES: list[ModelChoice] = [
     ModelChoice(
         key="gemma",
+        sha256="878be93f9c238ea853b3fd1eb602637ce3cf1cddea56dc345d9a7bf2d6093e29",
+        size_bytes=11289671136,
         name="Gemma 4 26B-A4B (Q3)",
         hf_repo="unsloth/gemma-4-26B-A4B-it-GGUF",
         filename="gemma-4-26B-A4B-it-UD-IQ3_S.gguf",
@@ -197,6 +206,8 @@ CHOICES: list[ModelChoice] = [
     ),
     ModelChoice(
         key="gemma-12b",
+        sha256="90fd944d227e9d9b68e7e2c7d5b57b79d4c66ed521b0919fbbd932cf834f6f8e",
+        size_bytes=7366423360,
         name="Gemma 4 12B (Q4)",
         hf_repo="unsloth/gemma-4-12b-it-GGUF",
         filename="gemma-4-12b-it-UD-Q4_K_XL.gguf",
@@ -219,6 +230,8 @@ CHOICES: list[ModelChoice] = [
     ),
     ModelChoice(
         key="gemma-12b-bf16",
+        sha256="5a5eefea73350705c6753105b725a51301d653e8d6646173db29a7e8da8e6efd",
+        size_bytes=23832066656,
         name="Gemma 4 12B (BF16, full)",
         hf_repo="unsloth/gemma-4-12b-it-GGUF",
         filename="gemma-4-12b-it-BF16.gguf",
@@ -242,6 +255,8 @@ CHOICES: list[ModelChoice] = [
     ),
     ModelChoice(
         key="qwen",
+        sha256="2be7ef1ed7e1af8b10d3829102cf9a6c2bd5ddb64d675b4ece23a60799403d43",
+        size_bytes=11522702304,
         name="Qwen 3.6 35B-A3B (Q2)",
         hf_repo="unsloth/Qwen3.6-35B-A3B-GGUF",
         filename="Qwen3.6-35B-A3B-UD-IQ2_M.gguf",
@@ -257,6 +272,8 @@ CHOICES: list[ModelChoice] = [
     ),
     ModelChoice(
         key="diffusiongemma",
+        sha256="24523b6c833c9ce9f5f34f9b333ab1517d73d6f1e76a103645353114c8028bc5",
+        size_bytes=16806810208,
         name="DiffusionGemma 26B-A4B (Q4)",
         hf_repo="unsloth/diffusiongemma-26B-A4B-it-GGUF",
         filename="diffusiongemma-26B-A4B-it-Q4_K_M.gguf",
@@ -276,6 +293,8 @@ CHOICES: list[ModelChoice] = [
     ),
     ModelChoice(
         key="north-mini-code",
+        sha256="d59f4cb3abec1bd3e5e185b99cdd811e3be3402cbc2bab8223081a460d5724bf",
+        size_bytes=19203186784,
         name="North Mini Code 30B-A3B (Q4)",
         hf_repo="unsloth/North-Mini-Code-1.0-GGUF",
         filename="North-Mini-Code-1.0-UD-Q4_K_M.gguf",
@@ -295,6 +314,8 @@ CHOICES: list[ModelChoice] = [
     ),
     ModelChoice(
         key="muse-glimmer",
+        sha256="82bece304887a313ece08400bc030f6066c7bff5b906b0cd40308ec8a409fd38",
+        size_bytes=15878222368,
         name="Muse Glimmer 30B (Q4)",
         hf_repo="unsloth/Muse-Glimmer-30B-GGUF",
         filename="Muse-Glimmer-30B-UD-Q4_K_XL.gguf",
@@ -321,6 +342,8 @@ CHOICES: list[ModelChoice] = [
     ),
     ModelChoice(
         key="gemma-q8",
+        sha256="d4bf9791d727d7b88aeea89aba309c68086a4d51cf337047c4e51dde7e243058",
+        size_bytes=27636232928,
         name="Gemma 4 26B-A4B (Q8)",
         hf_repo="unsloth/gemma-4-26B-A4B-it-GGUF",
         filename="gemma-4-26B-A4B-it-UD-Q8_K_XL.gguf",
@@ -336,6 +359,8 @@ CHOICES: list[ModelChoice] = [
     ),
     ModelChoice(
         key="qwen-q8",
+        sha256="b762215c5f507f4865df4ac3d1afa803828afa41e05ecac3fac431a67bbd88e8",
+        size_bytes=38451182560,
         name="Qwen 3.6 35B-A3B (Q8)",
         hf_repo="unsloth/Qwen3.6-35B-A3B-GGUF",
         filename="Qwen3.6-35B-A3B-UD-Q8_K_XL.gguf",
@@ -351,6 +376,8 @@ CHOICES: list[ModelChoice] = [
     ),
     ModelChoice(
         key="qwen38",
+        sha256="3f227079003add2511437e5b1e94812e363385225bf6a9b47b0054a72bc8b01e",
+        size_bytes=17559178144,
         name="Qwen 3.8 27B (Q4)",
         hf_repo="unsloth/Qwen3.8-27B-GGUF",
         filename="Qwen3.8-27B-UD-Q4_K_XL.gguf",

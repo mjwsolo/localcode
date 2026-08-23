@@ -56,9 +56,12 @@ def _spill_tool_output(result: str, tool_name: str) -> str | None:
     try:
         import hashlib
         import time as _time
-        from ..paths import global_state_dir
+        from ..paths import chmod_quiet, global_state_dir, write_private
         spill_dir = global_state_dir() / "tool_output"
+        existed = spill_dir.is_dir()
         spill_dir.mkdir(parents=True, exist_ok=True)
+        if not existed:
+            chmod_quiet(spill_dir, 0o700)
         # Reap spills older than 7 days so this never grows unbounded.
         try:
             cutoff = _time.time() - 7 * 86400
@@ -70,7 +73,9 @@ def _spill_tool_output(result: str, tool_name: str) -> str | None:
         digest = hashlib.sha1(result.encode("utf-8", "replace")).hexdigest()[:12]
         path = spill_dir / f"{tool_name}_{digest}.txt"
         if not path.exists():
-            path.write_text(result, encoding="utf-8", errors="replace")
+            # Spilled tool output can be file contents, command output or
+            # anything else the agent read — owner-read only.
+            write_private(path, result)
         return str(path)
     except Exception:
         return None
