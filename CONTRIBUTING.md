@@ -50,6 +50,17 @@ If a change affects model/runtime setup, document:
 - failure mode
 - fallback behavior
 
+## The Vendored llama.cpp Fork
+
+`llama-cpp-turboquant/` is **latest upstream llama.cpp plus `patches/*.patch`**, not
+a snapshot. Do not hand-merge upstream into it. Add or rebase a patch in
+`patches/`, and let `.github/workflows/upstream-bump.yml` replay the series.
+
+A bump PR is never merged on green CI: CI cannot load a model, so
+`bash dev/verify_models.sh` must be run locally and pasted into the PR.
+
+Full details, including how to add, rebase, and drop a patch: [docs/upstream-fork.md](docs/upstream-fork.md).
+
 ## Large Changes
 
 For architecture changes, open an issue first so the direction can be discussed before implementation.

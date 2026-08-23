@@ -405,6 +405,16 @@ class LocalCodeApp:
             prev_status = str(getattr(_current_task, "status", "") or "")
             if prev_slug and next_slug and prev_slug != next_slug and prev_status in {"completed", "blocked", "failed", "cancelled"}:
                 self.session.messages.clear()
+                # Drop the finished task's plan too. `session.todos` is written
+                # only by todo_write and cleared only when the model marks every
+                # item complete, so a task that ended blocked/failed leaves its
+                # list behind - and it is persisted, so it survives a restart.
+                # The open-todo gate in the agent loop then refuses to end ANY
+                # later turn, re-injecting "DO NOW: <old task>" for up to 15
+                # forced rounds. That is why an unrelated "hi" could inherit a
+                # plan and refuse to just say hello.
+                if getattr(self.session, "todos", None):
+                    self.session.todos = []
 
         # ── Dynamic task name (like agent) ──
         # Keep task_slug internal. Showing it here made users think LocalCode
