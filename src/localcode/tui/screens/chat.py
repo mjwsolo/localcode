@@ -2768,21 +2768,45 @@ class ChatScreen(Screen):
 
             config = load_mcp_config()
             if not config:
+                # Clean empty state: what MCP is, where the file goes, and a
+                # readable example (not a one-line JSON wall). ~/.localcode/mcp.json
                 log.append_info(
-                    f"No MCP servers configured. Create {MCP_CONFIG_PATH} with:\n"
-                    '  {"mcpServers": {"myserver": {"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/path"]}}}'
+                    "MCP servers\n"
+                    "  None configured. MCP lets the model call tools from external\n"
+                    "  programs you trust. Add one in " + str(MCP_CONFIG_PATH) + ":\n"
+                    "\n"
+                    "    {\n"
+                    '      "mcpServers": {\n'
+                    '        "files": { "command": "npx",\n'
+                    '                   "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path"] }\n'
+                    "      }\n"
+                    "    }\n"
+                    "\n"
+                    "  Then run /mcp reload."
                 )
                 return
             connected = list_connected()
             if not connected:
                 count, errors = connect_all()
-                log.append_info(f"Connected {count} MCP server(s).")
-                for e in errors:
-                    log.append_error(f"  {e}")
                 connected = list_connected()
+            else:
+                errors = []
+            # Grouped, aligned view with a per-server status - the shape
+            # claude-code / codex use. Header + count, then one row per server:
+            # name, tool count, and a status glyph.
+            rows = [f"MCP servers", f"  {len(connected)} connected" if connected else "  0 connected", ""]
             for name, tools in connected:
-                tool_names = ", ".join(t.get("name", "?") for t in tools) or "(no tools)"
-                log.append_info(f"  {name}: {tool_names}")
+                n = len(tools)
+                names = ", ".join(t.get("name", "?") for t in tools[:6])
+                if n > 6:
+                    names += f", +{n - 6} more"
+                status = f"{n} tool{'s' if n != 1 else ''}" if n else "no tools"
+                rows.append(f"  \u25cf {name:<20} {status}")
+                if names:
+                    rows.append(f"      {names}")
+            log.append_info("\n".join(rows))
+            for e in errors:
+                log.append_error(f"  \u26a0 {e}")
         except Exception as _e:  # noqa: BLE001 — never let /mcp crash the app
             log.append_error(f"MCP error: {type(_e).__name__}: {_e}")
 
