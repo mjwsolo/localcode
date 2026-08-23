@@ -165,7 +165,10 @@ class ChatLog(RichLog):
                 pass
         try:
             w = self._content_width()
-            if w > 10 and "width" not in kwargs:
+            # `args` check: RichLog replays pre-layout deferred writes as
+            # `self.write(*deferred_render)` with width POSITIONAL — adding
+            # the kwarg then raises "multiple values for argument 'width'".
+            if w > 10 and "width" not in kwargs and not args:
                 kwargs["width"] = w
         except Exception:
             pass
