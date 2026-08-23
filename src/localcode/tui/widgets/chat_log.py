@@ -59,7 +59,14 @@ _TOOL_HEADERS = {
     "web_search": ("WebSearch", "searched web"),
     "web_fetch": ("WebFetch", "fetched"),
     "multi_edit": ("MultiEdit", "edited"),
+    "todo_write": ("Todo", "updated"),
 }
+
+# Tools whose raw args are noise on the tool line - the result summary already
+# says what happened, and the argument blob (e.g. todo_write's whole
+# {'todos': [...]} dict) just overflows the row. We render the name + summary
+# and drop the args.
+_HIDE_ARGS_TOOLS = {"todo_write"}
 
 
 def _looks_like_markdown(text: str) -> bool:
@@ -1689,7 +1696,9 @@ class ChatLog(RichLog):
             return
         header_info = _TOOL_HEADERS.get(name, (name, name))
         display_name = header_info[0]
-        args_one = (args.strip().replace("\n", " ")) if args else ""
+        args_one = "" if name in _HIDE_ARGS_TOOLS else (
+            (args.strip().replace("\n", " ")) if args else ""
+        )
         # Pre-compose the line as a plain string and truncate before
         # styling. Rich's overflow="ellipsis" on Text is fragile when
         # the Text contains multiple styled spans; manual truncation
@@ -1713,7 +1722,9 @@ class ChatLog(RichLog):
             return
         header_info = _TOOL_HEADERS.get(name, (name, name))
         display_name = header_info[0]
-        args_one = (args.strip().replace("\n", " ")) if args else ""
+        args_one = "" if name in _HIDE_ARGS_TOOLS else (
+            (args.strip().replace("\n", " ")) if args else ""
+        )
         prefix = f"  ✓ {display_name}"
         body = prefix
         if args_one:

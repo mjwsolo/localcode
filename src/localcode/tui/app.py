@@ -417,7 +417,7 @@ class LocalCodeTUI(App):
             try:
                 if not handler():
                     log = screen.query_one("#chat-log")
-                    log.append_info("[dim]No image on the clipboard — copy or screenshot one first.[/]")
+                    log.append_info("[dim]No image on the clipboard. Copy or screenshot one first.[/]")
             except Exception:
                 pass
 

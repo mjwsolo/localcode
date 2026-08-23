@@ -45,6 +45,32 @@ _BADGE = {
 }
 
 
+
+
+def _default_quant_idx(sizes, rec, downloaded):
+    """Which quant row the cursor should land on when a group's quants load.
+
+    Prefer an already-downloaded quant so a naive Enter reuses local weights
+    instead of starting a fresh multi-GB download. Among downloaded quants:
+    the recommended one if it is local, else the largest downloaded that is no
+    bigger than the recommendation, else the largest downloaded. With nothing
+    downloaded, fall back to the recommended index (or 0).
+
+    `sizes` is per-row size in GB, `rec` the recommended index (or None),
+    `downloaded` the list of downloaded row indices.
+    """
+    if not sizes:
+        return 0
+    if downloaded:
+        if rec is not None and rec in downloaded:
+            return rec
+        rec_size = sizes[rec] if rec is not None else None
+        at_or_below = [i for i in downloaded
+                       if rec_size is None or sizes[i] <= rec_size]
+        pool = at_or_below or downloaded
+        return max(pool, key=lambda i: sizes[i])
+    return rec or 0
+
 class ModelPickerScreen(Screen):
     """Two-level model picker.
 
@@ -84,6 +110,8 @@ class ModelPickerScreen(Screen):
     #   "quants" — Level 2; list every quant of the open group.
     _LEVEL_GROUPS = "groups"
     _LEVEL_QUANTS = "quants"
+
+    # (helper defined at module scope below: _default_quant_idx)
 
     # Delete flow states (Level 1 only):
     #   "idle"         — default; numbers pick a model group
@@ -413,6 +441,17 @@ class ModelPickerScreen(Screen):
             return "downloaded"
         return ""
 
+    def _is_quant_downloaded(self, q) -> bool:
+        """True when this quant's weights are already complete on disk, so
+        selecting it reuses them with no download. Disk truth only — an
+        in-flight download (partial file under a different name) does not count.
+        """
+        from ...models_catalog import model_dir
+        try:
+            return (model_dir() / q.filename).is_file()
+        except Exception:
+            return False
+
     # The recommended quant must decode at least this fraction of the FASTEST
     # fitting quant's speed. A relative bar (not an absolute tok/s) because the
     # speed estimate is rough and mis-scales between dense and MoE — but its
@@ -608,11 +647,14 @@ class ModelPickerScreen(Screen):
         ):
             return
         self._quants = quants
-        # Land focus on the recommended quant for this machine (biggest that fits).
         visible = self._visible_quants()
         if visible:
             from ...models_catalog import _system_ram_gb
-            self._focused_idx = self._recommended_quant_idx(visible, _system_ram_gb()) or 0
+            rec = self._recommended_quant_idx(visible, _system_ram_gb())
+            downloaded = [i for i, q in enumerate(visible) if self._is_quant_downloaded(q)]
+            self._focused_idx = _default_quant_idx(
+                [q.size_gb for q in visible], rec, downloaded
+            )
         else:
             self._focused_idx = 0
         self._refresh()
