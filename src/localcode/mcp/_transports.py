@@ -12,7 +12,11 @@ import os
 
 # ── Official MCP SDK imports ─────────────────────────────────────────────
 from mcp.client.stdio import StdioServerParameters, stdio_client
-from mcp.client.streamable_http import streamablehttp_client
+try:
+    from mcp.client.streamable_http import streamablehttp_client
+except ImportError:
+    # mcp >= 2.0 renamed this to streamable_http_client (with underscores).
+    from mcp.client.streamable_http import streamable_http_client as streamablehttp_client
 from mcp.client.sse import sse_client
 
 
