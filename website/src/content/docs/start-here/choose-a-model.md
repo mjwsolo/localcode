@@ -1,41 +1,35 @@
 ---
 title: Choose a Model
-description: How localcode picks a model for your Mac, and how to override it.
+description: Which model localcode recommends for your Mac, and how to pick a different one.
 ---
 
-localcode has **no fixed default model**. When it starts, it checks your Mac's unified memory. It then recommends the most capable production-ready model whose weights fit in the available memory.
+localcode has no fixed default model. On first launch it checks your Mac's unified memory, marks the recommended model with a star, and lets you choose. Every model in the list runs on the binaries shipped with localcode. The only download is the weights.
 
-## The rule
-
-Model weights must use about **55% of unified memory** or less. The rest is for the KV cache, activations, and macOS. localcode recommends the most capable model that fits. It never recommends experimental architectures automatically, but you can choose them yourself.
-
-## Recommendations for each Mac
+## Recommendations by memory
 
 | Unified memory | Recommended | Quant | Weights |
 | ---: | --- | --- | ---: |
-| 16 GB | Gemma 4 12B | UD-Q4_K_XL | 7.37 GB |
-| 24–48 GB | Qwen 3.6 35B-A3B | Q2 | 10.7 GB |
-| 64 GB | Gemma 4 26B-A4B | Q8 | 28.0 GB |
-| 96 GB+ | Qwen 3.6 35B-A3B | UD-Q8_K_XL | 38.5 GB |
+| 16 GB | Gemma 4 12B | UD-Q4_K_XL | 7.4 GB |
+| 24 to 48 GB | Qwen 3.6 35B-A3B | UD-IQ2_M | 10.7 GB |
+| 64 GB | Gemma 4 26B-A4B | UD-Q8_K_XL | 28.0 GB |
+| 96 GB and up | Qwen 3.6 35B-A3B | UD-Q8_K_XL | 38.5 GB |
 
-These are the results that `localcode.models_catalog.recommend()` returns for each memory size. They are not marketing choices picked by hand. You can reproduce them:
+The rule: the weights must fit in about 55% of unified memory, leaving room for context and macOS. Among the models that fit, localcode recommends the most capable one.
 
-```sh
-python -c "from localcode import models_catalog as m; c = m.recommend(32); print(c.name, c.size_gb)"
-```
+The full list of models, with sizes and minimum memory, is in [Models & Performance](/localcode/models-and-performance).
 
-## Why the mid-range choice uses a Mixture-of-Experts model
+## Why the mid-range picks are Mixture-of-Experts
 
-The recommendations for 24–96 GB use MoE models. Only a few billion parameters are active for each token, even though the full model is much larger. Decode speed depends on the *active* parameters. This gives you the ability of a larger model at the per-token cost of a smaller one. That makes these larger models practical on a laptop.
+A Mixture-of-Experts model only uses a few billion parameters for each token, so it generates text about as fast as a much smaller model while keeping the quality of a larger one. That is what makes a 35B model practical on a laptop.
 
 ## Switching models
 
-Inside the TUI:
+Inside the app:
 
 ```text
-/model              # list what's available
+/model              # list models
 /model qwen         # switch
-/delete             # remove a downloaded model to free disk (asks first)
+/delete             # remove a downloaded model to free disk space
 ```
 
 From the command line:
@@ -44,17 +38,15 @@ From the command line:
 localcode --model <tag>
 ```
 
-If you switch to a model you do not have, localcode downloads it first. You only need to download each model once. See [Network Boundary](/localcode/concepts/network-boundary).
+Switching to a model you have not downloaded starts the download.
 
-## Experimental models
+## Picking by hand
 
-You can choose some models from the catalogue even though localcode never recommends them automatically. Their architecture needs a different runner from the bundled server. Examples include diffusion models and architectures that the bundled fork does not support. localcode builds a dedicated server the first time you use one. These models are experimental and are not the standard choice.
+The picker also lists other quantisations of each model. A smaller quant uses less memory and leaves room for a longer context. A larger quant gives better answers. You can pick a model that is heavier than the recommendation; the fit check is advice, not a limit.
 
-## Choosing by hand
-
-The picker also shows other quantisations for supported model families. A smaller quant uses less memory and allows a longer context. A larger quant uses more memory but gives better quality. You can still choose a model whose weights exceed your memory budget. The fit check is advice, not a lock.
+DiffusionGemma is a research model that is never recommended automatically. It runs through a separate bundled binary instead of the normal server.
 
 ## Next
 
-- [Unified Memory](/localcode/concepts/unified-memory) — explains the memory budget.
-- [Models & Performance](/localcode/models-and-performance) — shows the full catalogue.
+- [Unified Memory](/localcode/concepts/unified-memory)
+- [Models & Performance](/localcode/models-and-performance)
