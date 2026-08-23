@@ -23,7 +23,6 @@ Start a line with `!` to run a shell command yourself.
 | `/voice` | Push-to-talk dictation into the input box |
 | `/audio` | Read replies aloud with macOS `say` |
 | `/sounds` | Turn completion and approval sounds on or off |
-| `/undo` | Undo the agent's last file change. `/undo all` undoes every change this session |
 | `/search` | Search the conversation, like `Ctrl+F` |
 | `/clear` | Clear the conversation |
 | `/exit` | Quit localcode |
