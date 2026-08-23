@@ -9,7 +9,7 @@ By default, inference runs on your Mac. localcode needs no API key and has no cl
 
 - **Inference.** Prompts go to the model server localcode starts at `http://localhost:8081`.
 - **Your files, prompts and edits.**
-- **Logs.** `<project>/.localcode/events.jsonl` records tool calls and turns. It is never uploaded.
+- **Logs.** `<project>/.localcode/events.jsonl` records tool calls and turns. It is never uploaded. API keys, tokens and private keys are blanked out before anything is written to logs or session files.
 
 There is no analytics, usage reporting or version check.
 
@@ -22,7 +22,7 @@ There is no analytics, usage reporting or version check.
 | Quant browsing | Hugging Face API | When you browse other quantisations in the model picker |
 | Voice models (optional) | `huggingface.co` | The first time you turn on voice input or output |
 | `web_search` tool | DuckDuckGo | When the model calls it. Never prompts |
-| `web_fetch` tool | The URL in the call | When the model calls it. Never prompts |
+| `web_fetch` tool | The URL in the call | When the model calls it. Never prompts. Refuses addresses on your own machine or local network |
 | Skill install from URL | That URL | When you install one that way |
 | MCP servers | Wherever you pointed them | When the model calls their tools. Never prompts |
 | Shell commands | Wherever the command goes | Subject to [approvals](/localcode/start-here/permissions) |
@@ -38,6 +38,7 @@ The `search` section of the config file has keys for Google, Brave and SerpAPI. 
 ## Things to think about
 
 - `web_search` and `web_fetch` send text from your conversation to a third party. The model decides when to call them, and they never ask first.
+- localcode checks which model the server is actually running. If it is not the one you picked, the status bar says so instead of showing the wrong name.
 - An MCP server is a program you run. A remote one sees every argument the model sends it.
 - `localcode run` (headless) never prompts for anything.
 
