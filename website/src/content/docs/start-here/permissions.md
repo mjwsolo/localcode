@@ -69,7 +69,7 @@ These actions are refused, not confirmed. No autonomy level or session approval 
 
 ## Hooks can also veto
 
-A repository's `.localcode/hooks.toml` can define a `pre_tool_use` hook. The hook can block a tool call by exiting with a non-zero status. Hooks run shell commands, so a project's hook file is not loaded until you explicitly trust it with `/hooks`. See [Skills & Hooks](/localcode/guides/skills-and-hooks).
+A repository's `.localcode/hooks.toml` can define a `pre_tool_use` hook. The hook can block a tool call by exiting with a non-zero status. Hooks run shell commands, so a project's hook file is not loaded until you explicitly trust it by launching with `LOCALCODE_TRUST_PROJECT_HOOKS=1`. See [Skills & Hooks](/localcode/guides/skills-and-hooks).
 
 ## Related
 
