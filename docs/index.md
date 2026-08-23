@@ -2,7 +2,7 @@
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/mjwsolo/localcode/main/docs/assets/logo/dark.png">
     <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/mjwsolo/localcode/main/docs/assets/logo/light.png">
-    <img alt="LocalCode" src="https://raw.githubusercontent.com/mjwsolo/localcode/main/docs/assets/logo/light.png" width="480">
+    <img alt="localcode" src="https://raw.githubusercontent.com/mjwsolo/localcode/main/docs/assets/logo/light.png" width="480">
   </picture>
 </p>
 
@@ -14,17 +14,25 @@
 </p>
 
 <p align="center">
-  <strong>A coding agent that runs one local model, well, on your Mac.</strong><br>
-  llama.cpp + GGUF. No cloud inference, no API keys, no account.
+  <strong>A coding agent that runs a local model on your Mac.</strong><br>
+  No cloud inference, no API key, no account.
 </p>
 
-> ⚠️ **Alpha software.** Active development; expect rough edges, breaking changes between versions, and bugs. Issues and feedback welcome.
+<p align="center">
+  <img src="https://raw.githubusercontent.com/mjwsolo/localcode/main/docs/assets/demo/first-change.gif" alt="A localcode turn: two reads, one edit, then pytest reporting 5 passed" width="900">
+</p>
+
+> **Alpha software.** Expect rough edges and breaking changes between versions. Issues and feedback are welcome.
+
+localcode runs an open-weight model on your Mac and uses it to read, edit and test your code. Your prompts and your files stay on your machine. The only thing it downloads is the model weights, once per model.
 
 ## Install
 
 ```bash
-pip install -U localcode
+pip install -U localcode      # or: uv pip install -U localcode
 ```
+
+The inference server ships inside the package. Nothing is compiled or cloned on your machine.
 
 ## Run
 
@@ -33,81 +41,62 @@ cd your-project
 localcode
 ```
 
-That's it. The inference server ships inside the package, so the first launch only downloads the model (a few minutes, one time). Nothing is built, cloned or fetched when you pick a model. After that, startup is about 15 seconds.
+On first launch localcode recommends a model for your Mac's memory. Pick one, wait for the download, and start typing.
+
+```
+> Implement the retry decorator in retry.py so every test in test_retry.py passes. Then run: pytest -q
+```
+
+Every error localcode shows has a code. Look it up in the [Errors reference](ERRORS.md).
 
 ## What it does
 
-- **Reads and edits files** — understands your codebase, makes surgical edits, refuses destructive overwrites
-- **Runs commands** — tests, builds, git, shell; auto-detects long-running servers and backgrounds them
-- **Searches code** — by filename pattern, content (grep), or directory structure
-- **Builds and launches apps** — detects `package.json` / `pyproject.toml` / static, picks a free port, starts and verifies the process
-- **Tracks tasks across turns** — task state, stage (scaffolding → implementing → verifying), and goal carry between user messages
-- **Adaptive thinking** — uses reasoning for planning and debugging, skips it for routine codegen
-- **Uses tools automatically** — the model picks its own tools
-
-```
-> build me a Flask app for studying music theory with quizzes
-```
-
-LocalCode infers the goal, scaffolds the project, writes the files, runs `pip install`, launches the server, opens it in your browser, and verifies it responds — all locally.
-
-## Why local?
-
-We are building for a world of truly democratized AI — where everyone has access to powerful, personalized AI on any device, in any location. True local-first AI. LocalCode is the first step toward that vision.
+- Reads and edits files in your project
+- Runs your tests, builds, Git and shell commands, and asks before anything risky
+- Searches code by name, content or structure
+- Scaffolds and launches apps, then checks that they respond
+- Remembers the task across messages
+- Undoes its own changes with `/undo`
 
 ## Requirements
 
-- **Mac with Apple Silicon**
-- **16 GB RAM** minimum
-- **Python 3.10+**
-- **~12 GB free disk** (10 GB model + server)
-
-### Tested hardware
-
-LocalCode is early software. Hardware support is expected to broaden, but only the configuration below has been tested by the maintainers so far.
-
-| Mac | Memory | Status | Notes |
-| --- | ---: | --- | --- |
-| M4 MacBook | 16 GB | Tested | Primary development and validation machine |
-| M1/M2/M3 Apple Silicon | 16 GB+ | Not yet tested | Expected to work, but needs validation |
-| M4 Apple Silicon | 24 GB+ | Not yet tested | Expected to support larger contexts, but needs validation |
-| Intel Mac | Any | Not supported | LocalCode targets Apple Silicon |
+- Mac with Apple Silicon
+- 16 GB unified memory or more
+- Python 3.10 or newer
+- About 12 GB of free disk for the smallest model
 
 ## Models
 
-On launch, LocalCode recommends the best model for **your Mac's RAM** — there's no fixed default. You can pick any of these (or a different quant) in the model picker.
+localcode recommends a model by your Mac's memory and marks it with a star. You choose; nothing is selected for you. Every model runs on binaries shipped in the package.
 
-| Model | Size (quant) | Active params | Min RAM | Architecture |
-| --- | ---: | --- | ---: | --- |
-| Gemma 4 12B | 7.4 GB (Q4) | 12B (dense) | 16 GB | gemma4-iswa |
-| Gemma 4 26B-A4B | 11.2 GB (Q3) | 3.8B (8/128 experts) | 24 GB | gemma4-iswa |
-| Qwen 3.6 35B-A3B | 10.7 GB (Q2) | 3.0B (8+1/256) | 24 GB | qwen35moe |
-| Qwen 3.8 27B | 17.9 GB (Q4) | 27B (dense) | 32 GB | qwen35 |
-| Muse Glimmer 30B | 15.9 GB (Q4) | 30B (dense, multimodal) | 32 GB | muse_glimmer |
-| DiffusionGemma 26B-A4B † | 15.7 GB (Q4) | 4B (diffusion MoE) | 32 GB | diffusion_gemma |
-| North-Mini-Code 30B-A3B | 17.9 GB (Q4) | 3B (30B MoE) | 36 GB | cohere2_moe |
-| Gemma 4 12B (full) | 23.8 GB (BF16) | 12B (dense) | 48 GB | gemma4-iswa |
-| Gemma 4 26B-A4B | 28 GB (Q8) | 3.8B (8/128 experts) | 64 GB | gemma4-iswa |
-| Qwen 3.6 35B-A3B | 38.5 GB (Q8) | 3.0B (8+1/256) | 96 GB | qwen35moe |
+| Model | Weights | Quant | Active params | Min RAM |
+| --- | ---: | --- | --- | ---: |
+| Gemma 4 12B | 7.4 GB | UD-Q4_K_XL | 12B (dense) | 16 GB |
+| Qwen 3.6 35B-A3B | 10.7 GB | UD-IQ2_M | 3.0B (MoE) | 24 GB |
+| Gemma 4 26B-A4B | 11.2 GB | UD-IQ3_S | 3.8B (MoE) | 24 GB |
+| DiffusionGemma 26B-A4B | 15.7 GB | Q4_K_M | 4B (diffusion MoE) | 32 GB |
+| Muse Glimmer 30B | 15.9 GB | UD-Q4_K_XL | 30B (dense, vision) | 32 GB |
+| Qwen 3.8 27B | 17.9 GB | UD-Q4_K_XL | 27B (dense) | 36 GB |
+| North-Mini-Code 30B-A3B | 17.9 GB | UD-Q4_K_M | 3B (MoE) | 36 GB |
+| Gemma 4 12B (full) | 23.8 GB | BF16 | 12B (dense) | 48 GB |
+| Gemma 4 26B-A4B | 28.0 GB | UD-Q8_K_XL | 3.8B (MoE) | 64 GB |
+| Qwen 3.6 35B-A3B | 38.5 GB | UD-Q8_K_XL | 3.0B (MoE) | 96 GB |
 
-*Min RAM* is the threshold for auto-recommendation (weights at or under about 55% of unified memory, leaving room for KV cache and macOS); you can still pick a heavier model manually. Every model runs on the bundled binaries. **†** research model: pickable but not auto-recommended. DiffusionGemma is a block-denoising model that runs through the bundled `llama-diffusion-cli` instead of the server, and is not the default coding experience.
+Min RAM is the memory at which localcode will recommend the model. You can pick a heavier one by hand. DiffusionGemma is a research model that is never recommended automatically.
 
-## How LocalCode works
+Measured on a MacBook Pro (M5 Max, 128 GB) with Qwen 3.6 35B-A3B UD-IQ2_M at a 131072-token context: about 89 tokens/s generation, about 1174 tokens/s prompt processing, and 12 to 15 seconds for a typical four-tool-call task.
 
-LocalCode runs a custom [llama.cpp](https://github.com/ggerganov/llama.cpp) fork with **TurboQuant KV cache compression** — a technique from Google's ICLR 2026 paper that we patched into llama.cpp for Apple Silicon. This compresses the KV cache 3.8× — fitting 32K context in 355 MiB on a 16 GB MacBook.
+## Network
 
-LocalCode picks a model based on **your Mac's RAM** — there's no fixed default. It scales from Gemma 4 12B on 16 GB up to Qwen 3.6 35B-A3B on 64 GB+. The recommended models are Mixture-of-Experts — only ~3.8 B parameters active per token — which is what makes ~27 tok/s possible on a laptop.
+Inference is local. Three features use the network: model downloads, the `web_search` and `web_fetch` tools, and any MCP servers you add. See [Network Boundary](https://mjwsolo.github.io/localcode/concepts/network-boundary/) for the full list.
 
-Under the hood:
+## Why local?
 
-- **TurboQuant KV cache** — asymmetric q8\_0-K + turbo4-V quantization, 3.8× compression vs. f16
-- **Multi-region mmap patch** — fixes a Metal OOM crash where llama.cpp's loader spanned the entire GGUF file into one Metal buffer
-- **GPU memory unlock** — auto-prompts to raise `iogpu.wired_limit_mb` for full Metal offload
-- **Agent loop** — goal-typed routing (build / edit / run / chat) with task state, evidence-driven completion, and recovery modes for small-model failure patterns
+Powerful, personal AI should work for everyone, on any device, anywhere. That means running it locally. localcode is a first step.
 
 ## Sponsors
 
-If you'd like to sponsor LocalCode, [reach out](https://github.com/mjwsolo/localcode).
+To sponsor localcode, [reach out](https://github.com/mjwsolo/localcode).
 
 ## Contributing
 
@@ -115,4 +104,4 @@ See [CONTRIBUTING.md](https://github.com/mjwsolo/localcode/blob/main/CONTRIBUTIN
 
 ## License
 
-Apache 2.0 — see [LICENSE](https://github.com/mjwsolo/localcode/blob/main/LICENSE).
+Apache 2.0. See [LICENSE](https://github.com/mjwsolo/localcode/blob/main/LICENSE).
