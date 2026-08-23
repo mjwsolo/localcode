@@ -271,7 +271,7 @@ def test_no_diffusion_side_channel_in_gateway(tmp_path):
 
 
 def test_one_shipped_binary():
-    names = sorted(p.name for p in (SRC / "bin").iterdir() if p.name != "__init__.py" and not p.name.startswith("."))
+    names = sorted(p.name for p in (SRC / "bin").iterdir() if p.is_file() and p.name != "__init__.py" and not p.name.startswith("."))
     assert names == ["llama-server"], f"exactly one shipped binary expected, got {names}"
     for text in ((ROOT / "MANIFEST.in").read_text(), (ROOT / "pyproject.toml").read_text()):
         assert "llama-diffusion" not in text
