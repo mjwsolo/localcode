@@ -210,35 +210,6 @@ def _turboquant_binary_path() -> Path | None:
     return _bundled_binary_path("llama-server")
 
 
-def diffusion_cli_path(config=None) -> Path | None:
-    """Return path to the bundled llama-diffusion-cli (DiffusionGemma runner).
-
-    An explicit `runtime.diffusion_cli_binary` in config wins; otherwise the
-    same bundled / data-dir / source-build order as llama-server.
-    """
-    if config is not None:
-        p = (getattr(config.runtime, "diffusion_cli_binary", "") or "").strip()
-        if p and Path(p).is_file():
-            return Path(p)
-    return _bundled_binary_path(_DIFFUSION_BIN_NAME)
-
-
-def diffusion_visual_server_path() -> Path | None:
-    """Return path to the bundled llama-diffusion-gemma-visual-server.
-
-    Shipped alongside the CLI for the persistent-server diffusion path
-    (not wired into the runtime yet; see runtime_diffusion.py).
-    """
-    return _bundled_binary_path(_DIFFUSION_VISUAL_SERVER_NAME)
-
-
-# Binaries that ship in the wheel next to llama-server (see MANIFEST.in and
-# pyproject [tool.setuptools.package-data]). All are built from the same
-# llama-cpp-turboquant tree, static, Metal-embedded, no Homebrew links.
-_DIFFUSION_BIN_NAME = "llama-diffusion-cli"
-_DIFFUSION_VISUAL_SERVER_NAME = "llama-diffusion-gemma-visual-server"
-
-
 _BINARY_RELEASE_URL = "https://github.com/mjwsolo/localcode/releases/download/v{version}/llama-server-{platform}"
 
 def download_turboquant_binary(on_progress: Callable[[str], None] | None = None) -> tuple[bool, str]:

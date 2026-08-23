@@ -30,8 +30,11 @@ if (BUILD_SHARED_LIBS)
 endif()
 
 target_include_directories(${TARGET} PRIVATE ../mtmd)
+# fork-local: the DiffusionGemma denoising loop (tools/diffusion/diffusion.cpp) drives canvas diffusion
+# models from inside the server (see diffusion_process_slot in server-context.cpp)
+target_include_directories(${TARGET} PRIVATE ../diffusion)
 target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
-target_link_libraries(${TARGET} PUBLIC llama-common mtmd ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries(${TARGET} PUBLIC llama-common mtmd llama-diffusion ${CMAKE_THREAD_LIBS_INIT})
 
 # llama-server-impl: server logic, reusable by app
 
