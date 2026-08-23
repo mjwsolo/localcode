@@ -192,7 +192,7 @@ def execute(ctx: ToolContext, args: dict) -> str:
     # round (see loop.py render_todo_reminder), so returning it here too both
     # duplicated it for the model AND leaked the internal reminder onto the
     # user's screen.
-    return f"Task list updated — {_done}/{len(cleaned)} done, {len(in_progress)} in progress.{note}"
+    return f"Task list updated: {_done}/{len(cleaned)} done, {len(in_progress)} in progress.{note}"
 
 
 def is_concurrency_safe(args: dict) -> bool:
