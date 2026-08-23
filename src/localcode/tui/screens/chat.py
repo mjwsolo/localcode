@@ -1304,10 +1304,15 @@ class ChatScreen(Screen):
                 # replay it as "you: SYSTEM: …" (it was never the user's words).
                 if text.startswith("SYSTEM:") or text.startswith("SYSTEM —"):
                     continue
+                # Escape the replayed content: it's the user's / model's own
+                # words and may contain literal brackets (`arr[0]`, `[TODO]`)
+                # that must NOT be parsed as Rich markup now that _render_info
+                # renders markup.
+                from rich.markup import escape as _mesc
                 if role == "user":
-                    log.append_info(f"[dim]you:[/] {text}")
+                    log.append_info(f"[dim]you:[/] {_mesc(text)}")
                 elif role == "assistant":
-                    log.append_info(f"[dim]assistant:[/] {text}")
+                    log.append_info(f"[dim]assistant:[/] {_mesc(text)}")
                 # tool / system messages are noise on replay — skip
             log.append_info("[dim]── continuing… ──[/]")
             # Clear so a reload doesn't double-replay
@@ -2600,7 +2605,8 @@ class ChatScreen(Screen):
             else:
                 log.append_info("Sounds OFF")
         else:
-            log.append_info(f"Unknown command: {text}")
+            from rich.markup import escape as _mesc
+            log.append_info(f"Unknown command: {_mesc(text)}")
 
     def _handle_thinking_command(self, text: str) -> None:
         """Handle `/thinking` policy changes for hidden reasoning.

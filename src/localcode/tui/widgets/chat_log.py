@@ -1898,28 +1898,42 @@ class ChatLog(RichLog):
         render_diff(self, diff_text)
 
     def _render_info(self, text: str) -> None:
-        # Pre-wrap so EVERY line of the info block keeps the 2-space
-        # indent. Previously we wrote a single Text("  {text}") and
-        # RichLog's natural wrap only indented the first line — wrapped
-        # continuations sat flush to the left edge (visible on plan-mode
-        # info text and other multi-line messages).
-        import textwrap
+        # Info lines carry Rich markup (`[dim]…[/]`, the approval hint, resume
+        # headers). Parse it so the tags STYLE the text instead of showing up
+        # as literal `[dim]`/`[/]` — the bug the PTY QA pass caught on every
+        # approval prompt. Malformed markup (rare) falls back to literal so a
+        # stray bracket can never crash the render.
+        #
+        # Wrap on the PARSED (plain) width via Rich, not the raw markup string,
+        # so a tag never counts toward the width or splits mid-tag; prepend the
+        # 2-space indent to every wrapped row so continuations stay aligned
+        # (the reason this stopped using RichLog's first-line-only wrap).
+        from rich.markup import MarkupError
+
         try:
             avail = max(20, self.size.width - 4)
         except Exception:
             avail = 76
+        indent = "  "
+        wrap_width = max(1, avail - len(indent))
         for paragraph in (text or "").split("\n"):
             if not paragraph.strip():
                 self.write(Text("", style="dim"))
                 self._track_lines()
                 continue
-            wrapped = textwrap.fill(
-                paragraph, width=avail,
-                initial_indent="  ", subsequent_indent="  ",
-                break_long_words=False, break_on_hyphens=False,
-            )
-            for line in wrapped.split("\n"):
-                self.write(Text(line, style="dim"))
+            try:
+                body = Text.from_markup(paragraph, style="dim")
+            except MarkupError:
+                body = Text(paragraph, style="dim")
+            try:
+                rows = body.wrap(self.app.console, wrap_width)
+            except Exception:
+                # No console yet (unmounted) — fall back to a single row.
+                rows = [body]
+            for row in rows:
+                out = Text(indent, style="dim")
+                out.append_text(row)
+                self.write(out)
                 self._track_lines()
 
     def _render_error(self, text: str) -> None:
