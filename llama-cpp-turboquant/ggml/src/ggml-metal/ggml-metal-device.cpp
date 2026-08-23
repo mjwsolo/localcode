@@ -1612,7 +1612,10 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
     const int32_t dk = (int32_t) op->src[1]->ne[0];
     const int32_t dv = (int32_t) op->src[2]->ne[0];
 
-    const char * type = use_kv_f16 ? "f16" : ggml_type_name(op->src[1]->type);
+    // fork: asymmetric K/V. When upstream dequantizes KV to F16 both K and V
+    // become f16; otherwise name both real types (they may differ, e.g. q8_0 K + turbo4 V).
+    const char * ktype = use_kv_f16 ? "f16" : ggml_type_name(op->src[1]->type);
+    const char * vtype = use_kv_f16 ? "f16" : ggml_type_name(op->src[2]->type);
 
     // do bounds checks for the mask?
     const bool bc_mask = op->src[3] && (op->src[3]->ne[1] % 8 != 0);
@@ -1622,7 +1625,8 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
     // This avoids ambiguity if a type name contains underscores (e.g. q4_0).
     snprintf(base, 256, "kernel_%s_k%s_v%s_dk%d_dv%d",
             "flash_attn_ext",
-            type,
+            ktype,
+            vtype,
             dk,
             dv);
 
@@ -1684,13 +1688,17 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_v
     const int32_t dk = (int32_t) op->src[1]->ne[0];
     const int32_t dv = (int32_t) op->src[2]->ne[0];
 
-    const char * type = use_kv_f16 ? "f16" : ggml_type_name(op->src[1]->type);
+    // fork: asymmetric K/V. When upstream dequantizes KV to F16 both K and V
+    // become f16; otherwise name both real types (they may differ, e.g. q8_0 K + turbo4 V).
+    const char * ktype = use_kv_f16 ? "f16" : ggml_type_name(op->src[1]->type);
+    const char * vtype = use_kv_f16 ? "f16" : ggml_type_name(op->src[2]->type);
 
     // Asymmetric K/V: always encode both K and V types in the pipeline name.
     // Uses k/v prefix to avoid ambiguity with type names containing underscores.
     snprintf(base, 256, "kernel_%s_k%s_v%s_dk%d_dv%d",
             "flash_attn_ext_vec",
-            type,
+            ktype,
+            vtype,
             dk,
             dv);
 
