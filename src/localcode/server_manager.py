@@ -807,7 +807,7 @@ class ServerManager:
             ).stdout.strip()
         except Exception:
             return False
-        return "llama-server" in out or "llama-diffusion" in out
+        return "llama-server" in out
 
     def _kill_pid_file(self) -> None:
         if not PID_FILE.exists():
@@ -935,7 +935,7 @@ class ServerManager:
                         ["ps", "-p", str(pid), "-o", "command="],
                         capture_output=True, text=True, timeout=3,
                     ).stdout
-                    if "llama-server" not in out and "llama-diffusion" not in out:
+                    if "llama-server" not in out:
                         _lifecycle_log("port_kill_skipped_not_ours", port=port, pid=pid)
                         continue
                 except Exception:

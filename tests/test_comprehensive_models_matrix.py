@@ -10,10 +10,10 @@ RAM ladder and assert those decisions, with `_system_ram_gb` mocked.
 The companion real-inference tier (actually loading each GGUF and running
 a turn) lives in test_real_models.py behind the `real_models` marker.
 
-Backends by architecture:
-  * diffusion_gemma  → llama-diffusion-cli (one-shot, NO server)
-  * cohere2_moe      → llama-server-cohere (stock flags only)
-  * everything else  → the TurboQuant llama-server
+Backend: EVERY architecture, DiffusionGemma included, runs on the one bundled
+TurboQuant llama-server (the fork hosts the block-diffusion denoiser inside
+the server, see llama-cpp-turboquant/PATCHES.md 0005). There is no per-arch
+runner and no second binary.
 """
 from __future__ import annotations
 
@@ -40,11 +40,8 @@ def _ctx_ceiling(ram_gb: int) -> int:
 
 
 def _backend_for(arch: str) -> str:
-    a = (arch or "").lower()
-    if "diffusion" in a:
-        return "diffusion_cli"
-    # Every autoregressive arch (incl. cohere2_moe, muse_glimmer) runs on the
-    # one bundled llama-server since the upstream bump.
+    # Every arch (incl. cohere2_moe, muse_glimmer AND diffusion_gemma) runs on
+    # the one bundled llama-server.
     return "turboquant_server"
 
 
@@ -60,10 +57,7 @@ def _make_gw(tmp_path: Path, choice, ram_gb: int) -> LocalCodeRuntimeGateway:
     # Real binaries on disk so command building is deterministic (no discovery).
     turbo = tmp_path / "llama-server"
     turbo.write_text("#!/bin/sh\n")
-    diff = tmp_path / "llama-diffusion-cli"
-    diff.write_text("#!/bin/sh\n")
     cfg.llama_cpp_binary = str(turbo)
-    cfg.diffusion_cli_binary = str(diff)
     gw = LocalCodeRuntimeGateway(cfg)
     return gw
 
@@ -98,11 +92,12 @@ def test_every_choice_is_wellformed(choice):
 @pytest.mark.parametrize("choice", ALL_CHOICES, ids=_choice_ids)
 def test_backend_dispatch_matches_architecture(tmp_path, choice):
     gw = _make_gw(tmp_path, choice, 64)
-    is_diffusion = gw._diffusion_choice() is not None
-    if _backend_for(choice.architecture) == "diffusion_cli":
-        assert is_diffusion, "diffusion arch must dispatch to the CLI runner"
-    else:
-        assert not is_diffusion, "non-diffusion arch must NOT take the diffusion path"
+    # One HTTP path for everything: the gateway has no architecture dispatch
+    # and no diffusion side-channel any more.
+    assert _backend_for(choice.architecture) == "turboquant_server"
+    assert not hasattr(gw, "_diffusion_choice")
+    assert not hasattr(gw, "_stream_diffusion_events")
+    assert gw.endpoint.endswith("/v1/chat/completions")
 
 
 # ── Server command construction across the RAM ladder ────────────────
@@ -111,9 +106,6 @@ def test_backend_dispatch_matches_architecture(tmp_path, choice):
 @pytest.mark.parametrize("ram_gb", RAM_LADDER)
 @pytest.mark.parametrize("choice", ALL_CHOICES, ids=_choice_ids)
 def test_server_command_is_sane_for_every_ram(tmp_path, choice, ram_gb):
-    backend = _backend_for(choice.architecture)
-    if backend == "diffusion_cli":
-        pytest.skip("diffusion has no server command (one-shot CLI path)")
     gw = _make_gw(tmp_path, choice, ram_gb)
     from unittest.mock import patch
     with patch.object(gw, "_system_ram_gb", return_value=ram_gb):

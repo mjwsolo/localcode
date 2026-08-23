@@ -3,7 +3,29 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## 0.3.60 — 2026-08-19
+## Unreleased
+
+### Changed
+
+- **DiffusionGemma runs inside the bundled `llama-server`.** One binary, one
+  process, `/v1/chat/completions` for every model. The fork now hosts the
+  block-diffusion denoiser (llama.cpp PR #24423) in the server itself
+  (`llama-cpp-turboquant/PATCHES.md`, patch 0005), so the 16 GB model loads
+  ONCE and stays resident instead of being re-mapped by a fresh
+  `llama-diffusion-cli` process on every turn. Turn 2 on the same process:
+  ~1.5 s instead of a multi-second reload stall. The server applies the GGUF's
+  own chat template, so tool calls go through the OpenAI `tools` key and are
+  parsed server-side (no more hand-built Gemma prompt or plain-JSON tool
+  block), the `<|channel>thought ...` preamble comes back as
+  `reasoning_content`, `max_tokens` maps to whole 256-token blocks, and
+  streaming delivers one chunk per committed block. `llama-diffusion-cli` and
+  `llama-diffusion-gemma-visual-server` are no longer shipped;
+  `runtime_diffusion.py`, `diffusion_cli_binary` and the setup-screen special
+  case are gone. `/props` and the status bar see a normal server.
+- Fixed the denoiser's repetition-loop trimmer (inherited from the PR): it
+  compared only every other token at stride 2, so a comma-separated list was
+  cut as a "loop" after a few words.
+
 
 ### Fixed (both grounded in the Anki-run logs)
 

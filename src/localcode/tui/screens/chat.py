@@ -1679,13 +1679,6 @@ class ChatScreen(Screen):
         # would be decoration. Same shape as the other status fields.
         if self._server_restarting:
             server_label = "server: loading model"
-        elif cur is not None and str(
-            getattr(cur, "architecture", "")
-        ).startswith("diffusion"):
-            # Block-diffusion models have no llama-server — each turn
-            # spawns the one-shot diffusion runner. Probing the HTTP
-            # port would always say "stopped", which reads as broken.
-            server_label = "server: diffusion runner"
         elif provider == "llama_cpp":
             # Liveness rather than hardcoded "ready" whenever the provider
             # config is llama_cpp. Prior bug (2026-04-27): after

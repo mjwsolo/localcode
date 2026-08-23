@@ -1,9 +1,9 @@
 """Central per-model × per-Mac configuration — the single source of truth.
 
 The per-model and per-RAM-tier numbers that govern context windows, KV-cache
-sizing, generation caps, compaction tiering, diffusion limits, thermal
+sizing, generation caps, compaction tiering, thermal
 back-off, and the per-chip bandwidth table USED to be scattered across
-runtime.py, runtime_diffusion.py, compaction.py, thermal.py, performance.py,
+runtime.py, compaction.py, thermal.py, performance.py,
 and models_catalog.py. They were tuned carefully (OOM / KV / context / tok-s),
 so this module collects them in ONE place to edit and test.
 
@@ -148,21 +148,6 @@ KV_FIT_MIN_CTX = 2048
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Diffusion limits (runtime_diffusion.py)
-# ─────────────────────────────────────────────────────────────────────
-#
-# llama-diffusion-cli `-n` is the TOTAL token budget across blocks. The agent
-# loop passes num_predict=-1; treat non-positive as DIFFUSION_DEFAULT_CANVAS.
-# The canvas handed to `-n` is min(_n, DIFFUSION_MAX_CANVAS).
-DIFFUSION_DEFAULT_CANVAS = 2048
-DIFFUSION_MAX_CANVAS = 2048
-
-# A prompt larger than this makes DiffusionGemma denoise to empty / <unused>
-# collapse even with the eb-off retry (verified ~16K+ chars). Surface E3107
-# immediately rather than burn retries.
-DIFFUSION_PROMPT_CHAR_LIMIT = 16000
-
-
 # ─────────────────────────────────────────────────────────────────────
 # Compaction tiers (compaction.py)
 # ─────────────────────────────────────────────────────────────────────

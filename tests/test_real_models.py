@@ -88,19 +88,14 @@ def _collect(gw, messages, tools, *, think=False):
 
 
 class _Server:
-    """Start the right backend for a model, wait for health, tear it down.
-
-    Diffusion has no server (one-shot CLI) so this is a no-op for it.
-    """
+    """Start the bundled llama-server for a model (every arch, DiffusionGemma
+    included), wait for health, tear it down."""
     def __init__(self, gw, model_path):
         self.gw = gw
         self.model_path = model_path
         self.proc = None
 
     def __enter__(self):
-        arch = (catalog.by_filename(Path(self.model_path).name).architecture or "").lower()
-        if "diffusion" in arch:
-            return self  # no server needed
         cmd = self.gw.llama_server_command(self.model_path)
         # Force our test port.
         if "--port" in cmd:
@@ -131,11 +126,6 @@ def _gateway_for(choice) -> LocalCodeRuntimeGateway:
     cfg = RuntimeConfig()
     cfg.provider = "llama_cpp"
     cfg.model = str(_model_path(choice))
-    # Wire the bundled diffusion runner if present (so the right backend is used).
-    from localcode.bootstrap import diffusion_cli_path
-    dp = diffusion_cli_path()
-    if dp:
-        cfg.diffusion_cli_binary = str(dp)
     return LocalCodeRuntimeGateway(cfg)
 
 
@@ -197,8 +187,9 @@ def test_real_diffusion_reliable_across_runs(choice):
     gw = _gateway_for(choice)
     tools = _toolkit_schemas()
     fails = 0
-    for _ in range(3):
-        content, tcs, _ = _collect(gw, [SYS, {"role": "user", "content": "hi"}], tools)
-        if _has_error(content) or not (content or tcs):
-            fails += 1
+    with _Server(gw, gw.config.model):
+        for _ in range(3):
+            content, tcs, _ = _collect(gw, [SYS, {"role": "user", "content": "hi"}], tools)
+            if _has_error(content) or not (content or tcs):
+                fails += 1
     assert fails == 0, f"{choice.key}: {fails}/3 diffusion chat runs failed"
