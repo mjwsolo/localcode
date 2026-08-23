@@ -53,7 +53,6 @@ Then review the diff yourself:
 git diff
 ```
 
-`/undo` reverts the last change. `/undo all` reverts the whole session.
 
 ## Commands you will use
 
@@ -62,7 +61,6 @@ git diff
 | `/status` | Server health, current model, performance settings |
 | `/model` | List or switch models (`/model qwen`) |
 | `/permissions` | Turn command approvals on or off |
-| `/undo` | Revert the last file change (`/undo all` reverts everything) |
 | `/clear` | Clear the conversation |
 | `/exit` | Quit |
 
