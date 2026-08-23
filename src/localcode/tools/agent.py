@@ -134,6 +134,7 @@ def _dispatch_guarded(ctx: ToolContext, name: str, tool_args: dict) -> str:
     `localcode.tools`, so a module-level import here would be circular.
     """
     from ..agent.helpers import (
+        _approval_display_command,
         _execute_tool_result,
         _first_token,
         _needs_confirmation,
@@ -151,10 +152,7 @@ def _dispatch_guarded(ctx: ToolContext, name: str, tool_args: dict) -> str:
     except Exception:
         needs = True  # fail closed
     if needs:
-        cmd = tool_args.get("command", "")
-        if not cmd:
-            _wpath = tool_args.get("path") or tool_args.get("file_path") or ""
-            cmd = f"{name} {_wpath}".strip()
+        cmd = _approval_display_command(app, name, tool_args)
         try:
             verdict = _request_approval_verdict(app, out, name, cmd)
         except Exception:

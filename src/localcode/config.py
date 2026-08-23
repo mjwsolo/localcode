@@ -82,7 +82,24 @@ enabled = true
 log_prompts = true
 log_responses = true
 max_days = 30
+
+[telemetry]
+enabled = false
 """
+
+
+def _toml_str(value: object) -> str:
+    """Render a value as a quoted, escaped TOML basic string.
+
+    save_config used to interpolate raw values into `"{value}"` — an API key
+    (or any config string) containing a double quote or backslash produced a
+    file the next launch's `tomllib.loads` could not parse, or worse, one
+    where the tail of a value escaped into the document as live TOML. JSON
+    string escaping is a strict subset of TOML basic-string escaping, so
+    json.dumps is a correct encoder here.
+    """
+    import json as _json
+    return _json.dumps(str(value if value is not None else ""), ensure_ascii=False)
 
 
 @dataclass
@@ -173,18 +190,29 @@ class LoggingConfig:
 
 
 @dataclass
+class TelemetryConfig:
+    # Local telemetry (events.jsonl / turn traces) is OPT-IN. Nothing is
+    # ever uploaded either way — this controls whether the local trace
+    # files are written at all.
+    enabled: bool = False
+
+
+@dataclass
 class AppConfig:
     runtime: RuntimeConfig
     search: SearchConfig
     ui: UIConfig
     safety: SafetyConfig = None  # type: ignore[assignment]
     logging: LoggingConfig = None  # type: ignore[assignment]
+    telemetry: TelemetryConfig = None  # type: ignore[assignment]
 
     def __post_init__(self):
         if self.safety is None:
             self.safety = SafetyConfig()
         if self.logging is None:
             self.logging = LoggingConfig()
+        if self.telemetry is None:
+            self.telemetry = TelemetryConfig()
 
 
 def get_home_dir() -> Path:
@@ -233,14 +261,14 @@ def save_config(config: AppConfig) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     content = (
         "[runtime]\n"
-        f'provider = "{config.runtime.provider}"\n'
-        f'base_url = "{config.runtime.base_url}"\n'
-        f'profile = "{config.runtime.profile}"\n'
-        f'model = "{config.runtime.model}"\n'
-        f'mode = "{config.runtime.mode}"\n'
-        f'execution_engine = "{config.runtime.execution_engine}"\n'
-        f'planner_model = "{config.runtime.planner_model}"\n'
-        f'draft_model = "{config.runtime.draft_model}"\n'
+        f'provider = {_toml_str(config.runtime.provider)}\n'
+        f'base_url = {_toml_str(config.runtime.base_url)}\n'
+        f'profile = {_toml_str(config.runtime.profile)}\n'
+        f'model = {_toml_str(config.runtime.model)}\n'
+        f'mode = {_toml_str(config.runtime.mode)}\n'
+        f'execution_engine = {_toml_str(config.runtime.execution_engine)}\n'
+        f'planner_model = {_toml_str(config.runtime.planner_model)}\n'
+        f'draft_model = {_toml_str(config.runtime.draft_model)}\n'
         f"planner_enabled = {'true' if config.runtime.planner_enabled else 'false'}\n"
         f"planner_hints_enabled = {'true' if config.runtime.planner_hints_enabled else 'false'}\n"
         f"adaptive_execution = {'true' if config.runtime.adaptive_execution else 'false'}\n"
@@ -248,39 +276,39 @@ def save_config(config: AppConfig) -> Path:
         f"low_overhead_mode = {'true' if config.runtime.low_overhead_mode else 'false'}\n"
         f"max_rounds = {config.runtime.max_rounds}\n"
         f"thinking_budget_tokens = {config.runtime.thinking_budget_tokens}\n"
-        f'laptop_26b_runtime_mode = "{config.runtime.laptop_26b_runtime_mode}"\n'
-        f'internal_thinking_mode = "{config.runtime.internal_thinking_mode}"\n'
-        f'quant_preset = "{config.runtime.quant_preset}"\n'
-        f'cache_policy = "{config.runtime.cache_policy}"\n'
+        f'laptop_26b_runtime_mode = {_toml_str(config.runtime.laptop_26b_runtime_mode)}\n'
+        f'internal_thinking_mode = {_toml_str(config.runtime.internal_thinking_mode)}\n'
+        f'quant_preset = {_toml_str(config.runtime.quant_preset)}\n'
+        f'cache_policy = {_toml_str(config.runtime.cache_policy)}\n'
         f"rolling_window_messages = {config.runtime.rolling_window_messages}\n"
         f"llama_cpp_gpu_layers = {config.runtime.llama_cpp_gpu_layers}\n"
         f"llama_cpp_threads = {config.runtime.llama_cpp_threads}\n"
         f"llama_cpp_batch_size = {config.runtime.llama_cpp_batch_size}\n"
-        f'llama_cpp_spec_type = "{config.runtime.llama_cpp_spec_type}"\n'
+        f'llama_cpp_spec_type = {_toml_str(config.runtime.llama_cpp_spec_type)}\n'
         f"llama_cpp_draft_max = {config.runtime.llama_cpp_draft_max}\n"
         f"llama_cpp_expert_offload = {'true' if config.runtime.llama_cpp_expert_offload else 'false'}\n"
-        f'llama_cpp_draft_model = "{config.runtime.llama_cpp_draft_model}"\n'
+        f'llama_cpp_draft_model = {_toml_str(config.runtime.llama_cpp_draft_model)}\n'
         f"llama_cpp_lookup_cache = {'true' if config.runtime.llama_cpp_lookup_cache else 'false'}\n"
-        f'kv_cache_type_k = "{config.runtime.kv_cache_type_k}"\n'
-        f'kv_cache_type_v = "{config.runtime.kv_cache_type_v}"\n'
-        f'llama_cpp_binary = "{config.runtime.llama_cpp_binary}"\n'
+        f'kv_cache_type_k = {_toml_str(config.runtime.kv_cache_type_k)}\n'
+        f'kv_cache_type_v = {_toml_str(config.runtime.kv_cache_type_v)}\n'
+        f'llama_cpp_binary = {_toml_str(config.runtime.llama_cpp_binary)}\n'
         f"llama_cpp_cache_reuse = {config.runtime.llama_cpp_cache_reuse}\n"
-        f'model_dir = "{config.runtime.model_dir}"\n'
+        f'model_dir = {_toml_str(config.runtime.model_dir)}\n'
         f"vision_enabled = {'true' if config.runtime.vision_enabled else 'false'}\n"
         f"temperature = {config.runtime.temperature}\n"
         f"max_context_chars = {config.runtime.max_context_chars}\n"
         f"request_timeout_seconds = {config.runtime.request_timeout_seconds}\n"
         f"max_retries = {config.runtime.max_retries}\n\n"
         "[search]\n"
-        f'provider = "{config.search.provider}"\n'
-        f'google_api_key = "{config.search.google_api_key}"\n'
-        f'google_cx = "{config.search.google_cx}"\n'
-        f'brave_api_key = "{config.search.brave_api_key}"\n'
+        f'provider = {_toml_str(config.search.provider)}\n'
+        f'google_api_key = {_toml_str(config.search.google_api_key)}\n'
+        f'google_cx = {_toml_str(config.search.google_cx)}\n'
+        f'brave_api_key = {_toml_str(config.search.brave_api_key)}\n'
         f'serpapi_api_key = "{config.search.serpapi_api_key}"\n\n'
         # [browser] / [voice] sections removed during T0.9 purge.
         "[ui]\n"
         f"show_debug = {'true' if config.ui.show_debug else 'false'}\n"
-        f'thinking_mode = "{config.ui.thinking_mode}"\n'
+        f'thinking_mode = {_toml_str(config.ui.thinking_mode)}\n'
         f"sounds_enabled = {'true' if config.ui.sounds_enabled else 'false'}\n\n"
         "[safety]\n"
         f"confirm_destructive = {'true' if config.safety.confirm_destructive else 'false'}\n"
@@ -294,7 +322,9 @@ def save_config(config: AppConfig) -> Path:
         f"enabled = {'true' if config.logging.enabled else 'false'}\n"
         f"log_prompts = {'true' if config.logging.log_prompts else 'false'}\n"
         f"log_responses = {'true' if config.logging.log_responses else 'false'}\n"
-        f"max_days = {config.logging.max_days}\n"
+        f"max_days = {config.logging.max_days}\n\n"
+        "[telemetry]\n"
+        f"enabled = {'true' if config.telemetry.enabled else 'false'}\n"
     )
     # Atomic write: a reader (or a crash) must never observe a
     # half-written config. Write to a temp file in the same directory,
@@ -320,7 +350,16 @@ def load_config() -> AppConfig:
     # Repair an install from before config.toml was written 0600: this file
     # holds google / brave / serpapi API keys and was created world-readable.
     chmod_quiet(path, 0o600)
-    data = tomllib.loads(path.read_text())
+    # A config file that fails to parse (hand-edited, or written by an old
+    # save_config that didn't escape string values) must not crash launch —
+    # fall back to defaults instead of dying on tomllib.TOMLDecodeError.
+    try:
+        data = tomllib.loads(path.read_text())
+    except Exception:
+        try:
+            data = tomllib.loads(DEFAULT_CONFIG)
+        except Exception:
+            data = {}
     runtime_data = data.get("runtime", {})
     search_data = data.get("search", {})
     # browser / voice sections removed during T0.9 purge
@@ -418,6 +457,10 @@ def load_config() -> AppConfig:
         log_responses=str(logging_data.get("log_responses", True)).lower() in {"1", "true", "yes", "on"},
         max_days=int(logging_data.get("max_days", 30)),
     )
+    telemetry_data = data.get("telemetry", {})
+    telemetry_cfg = TelemetryConfig(
+        enabled=str(telemetry_data.get("enabled", False)).lower() in {"1", "true", "yes", "on"},
+    )
     # Migration: the mlx-local, huggingface-local, AND ollama backends were
     # removed — llama_cpp (the tuned llama-server) is the sole HTTP runtime.
     # A persisted `provider` pointing at any removed backend is coerced to
@@ -431,7 +474,8 @@ def load_config() -> AppConfig:
             runtime.base_url = "http://localhost:8081"
 
     config = AppConfig(runtime=runtime, search=search,
-                       ui=ui, safety=safety, logging=logging_cfg)
+                       ui=ui, safety=safety, logging=logging_cfg,
+                       telemetry=telemetry_cfg)
 
     # Layer project-level config on top (if .localcode/config.toml exists)
     config = _apply_project_config(config)

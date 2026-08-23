@@ -56,6 +56,7 @@ from .context import (
     build_progress_ledger,
 )
 from .helpers import (
+    _approval_display_command,
     _request_approval_verdict,
     _execute_tool,
     _execute_tool_result,
@@ -1973,11 +1974,9 @@ def run_agent_loop(
             if _needs_confirmation(tool_name, args, app):
                 # `cmd` drives the approval prompt display and the "always
                 # allow `<token>`" key. Shell tools carry a command; file-write
-                # tools carry a path — show that instead of a blank line.
-                cmd = args.get("command", "")
-                if not cmd:
-                    _wpath = args.get("path") or args.get("file_path") or ""
-                    cmd = f"{tool_name} {_wpath}".strip()
+                # tools carry a path; launch_app resolves the repo-controlled
+                # command it would actually run; mcp_* shows an args preview.
+                cmd = _approval_display_command(app, tool_name, args)
                 verdict = _request_approval_verdict(app, out, tool_name, cmd)
 
                 # Act on the verdict.
