@@ -159,6 +159,14 @@ class LocalCodeTUI(App):
         try:
             signal.signal(signal.SIGINT, _sig_cleanup)
             signal.signal(signal.SIGTERM, _sig_cleanup)
+            # SIGHUP = the controlling terminal went away: the user closed the
+            # terminal window, or an SSH session dropped. Without this the app
+            # dies on the default SIGHUP action WITHOUT running _sig_cleanup,
+            # orphaning a multi-GB llama-server that keeps holding RAM until
+            # the machine is rebooted or it's killed by hand. Guarded because
+            # SIGHUP does not exist on Windows.
+            if hasattr(signal, "SIGHUP"):
+                signal.signal(signal.SIGHUP, _sig_cleanup)
         except (ValueError, OSError):
             # Non-main thread or unsupported platform — fall back to atexit.
             pass
