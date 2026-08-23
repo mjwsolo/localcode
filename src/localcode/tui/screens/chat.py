@@ -664,6 +664,76 @@ class _ChatTextArea(TextArea):
             self.insert("\n")
             return
 
+        # ── Chat-log scrolling from the keyboard ──
+        # Mouse capture is OFF by default (native terminal text selection
+        # must keep working — see tui/app.py), so the wheel scrolls the
+        # terminal's scrollback, not the ChatLog. These keys are the way
+        # to scroll the conversation. The composer keeps its own keys:
+        # PageUp/PageDown page the log always (the few-row composer has no
+        # use for page-wise cursor movement); Shift+Up/Down scroll a line
+        # unless a multi-line document needs them for selection past the
+        # cursor's line; Home/End jump to top/bottom only when the input
+        # is empty (otherwise they move the cursor within the line).
+        _scroll_key = None
+        if key in ("pageup", "pagedown"):
+            _scroll_key = key
+        elif key == "shift+up" and self.cursor_at_first_line:
+            _scroll_key = key
+        elif key == "shift+down" and self.cursor_at_last_line:
+            _scroll_key = key
+        elif key in ("home", "end") and not (self.text or "").strip():
+            _scroll_key = key
+        if _scroll_key is not None:
+            scroller = getattr(self.screen, "_scroll_chat", None)
+            if callable(scroller) and scroller(_scroll_key):
+                event.prevent_default()
+                event.stop()
+                return
+
+        # ── Ctrl+V: attach a clipboard image / paste clipboard text ──
+        # A terminal never delivers image data through a paste event —
+        # Cmd+V with an image on the clipboard usually produces NO event
+        # at all, so the empty-paste hook in _on_paste can't fire. The
+        # literal Ctrl+V keypress DOES reach the app (byte 0x16), so hook
+        # it: attach a clipboard image if there is one, else fall back to
+        # pasting the clipboard's text through the normal paste path.
+        if key == "ctrl+v":
+            handled = False
+            try:
+                handler = getattr(self.screen, "_attach_clipboard_image", None)
+                if callable(handler) and handler():
+                    handled = True
+            except Exception:
+                pass
+            if not handled:
+                clip_text = ""
+                try:
+                    import subprocess as _sp
+                    import sys as _sys
+                    if _sys.platform == "darwin":
+                        clip_text = _sp.run(
+                            ["pbpaste"], capture_output=True, text=True, timeout=5
+                        ).stdout
+                except Exception:
+                    clip_text = ""
+                if clip_text:
+                    from textual import events as _events
+                    self._on_paste(_events.Paste(clip_text))
+                    handled = True
+            if not handled:
+                # Neither an image nor text on the clipboard: say so in
+                # one clear line rather than doing a silent nothing.
+                try:
+                    self.screen.query_one("#chat-log").append_info(
+                        "No image on the clipboard — copy or screenshot "
+                        "one first."
+                    )
+                except Exception:
+                    pass
+            event.prevent_default()
+            event.stop()
+            return
+
         # ── Space → push-to-talk when voice mode is on (empty input) ──
         if key == "space":
             vs = getattr(self.app, "voice_state", None)
@@ -1021,6 +1091,18 @@ class ChatScreen(Screen):
         # Esc cancels an active recording (throws away the audio, no
         # transcription). Doesn't fire when no recording is in flight.
         ("escape", "ptt_cancel", "Cancel recording"),
+        # Keyboard scrolling for the chat log. Mouse capture is OFF by
+        # default (native text selection must keep working — see
+        # tui/app.py), so the wheel scrolls the terminal, not the log.
+        # When the chat input has focus these keys are routed by
+        # _ChatTextArea._on_key; the bindings here cover every other
+        # focus target.
+        Binding("pageup", "chat_scroll('pageup')", "Scroll up", show=False),
+        Binding("pagedown", "chat_scroll('pagedown')", "Scroll down", show=False),
+        Binding("shift+up", "chat_scroll('shift+up')", "Scroll up a line", show=False),
+        Binding("shift+down", "chat_scroll('shift+down')", "Scroll down a line", show=False),
+        Binding("home", "chat_scroll('home')", "Scroll to top", show=False),
+        Binding("end", "chat_scroll('end')", "Scroll to bottom", show=False),
     ]
 
     def __init__(self) -> None:
@@ -1142,6 +1224,13 @@ class ChatScreen(Screen):
         self._update_status()
         self.query_one("#chat-input", _ChatTextArea).focus()
         log = self.query_one("#chat-log", ChatLog)
+        # One dim line of keyboard help. There is no footer/help screen, and
+        # with mouse capture off (native text selection) the wheel cannot
+        # scroll the chat — these keys are how, so they must be discoverable.
+        log.append_info(
+            "PgUp/PgDn scroll · Shift+↑/↓ line · Home/End jump · "
+            "Shift+Enter newline · Ctrl+G attach image"
+        )
         # Warn if this repo ships hooks that shell out but haven't been trusted.
         # They are NOT loaded (see hooks.py) — this just tells the user they
         # exist and how to enable them after review.
@@ -2143,6 +2232,15 @@ class ChatScreen(Screen):
         # message for the model, not an "Unknown command".
         if _is_known_command(text):
             self._handle_command(text)
+            # The user deliberately ran a command — they want to SEE its
+            # output. Without this, output written while the user is
+            # scrolled up lands below the fold (ChatLog.write only follows
+            # the tail when already at the bottom) and looks like the
+            # command "did nothing" until the next input.
+            try:
+                self.query_one("#chat-log", ChatLog).scroll_end(animate=False)
+            except Exception:
+                pass
             return
 
         # Bash mode — `!command` runs through the user's shell and the
@@ -2297,6 +2395,37 @@ class ChatScreen(Screen):
         if dropped:
             note += f" (dropped {dropped} queued message{'s' if dropped != 1 else ''})"
         log.append_info(note)
+
+    def _scroll_chat(self, key: str) -> bool:
+        """Scroll the chat log for one of the keyboard-scroll keys.
+
+        Returns True when the key was recognized and a scroll was issued,
+        so callers (the TextArea key hook, the screen bindings) can stop
+        the event. Mouse capture is off by default, so these keys are the
+        only way to scroll the conversation.
+        """
+        try:
+            log = self.query_one("#chat-log", ChatLog)
+        except Exception:
+            return False
+        if key == "pageup":
+            log.scroll_page_up(animate=False)
+        elif key == "pagedown":
+            log.scroll_page_down(animate=False)
+        elif key == "shift+up":
+            log.scroll_up(animate=False)
+        elif key == "shift+down":
+            log.scroll_down(animate=False)
+        elif key == "home":
+            log.scroll_home(animate=False)
+        elif key == "end":
+            log.scroll_end(animate=False)
+        else:
+            return False
+        return True
+
+    def action_chat_scroll(self, key: str) -> None:
+        self._scroll_chat(key)
 
     def _handle_command(self, text: str) -> None:
         log = self.query_one("#chat-log", ChatLog)
@@ -2488,7 +2617,6 @@ class ChatScreen(Screen):
             f"  provider        {config.runtime.provider}",
             f"  model file      {_P(config.runtime.model or '').name or '—'}",
             f"  model name      {model_disp}",
-            f"  profile         {config.runtime.profile}",
             f"  vision (mmproj) {mmproj_on}",
             f"  voice           {voice_disp}",
             "",
