@@ -50,7 +50,7 @@ def test_fresh_config_defaults():
     print(f"  kv_cache_type_v: {config.runtime.kv_cache_type_v}")
     # These are the raw defaults before benchmark_report runs
     assert config.runtime.kv_cache_type_k == "q8_0", f"Expected q8_0, got {config.runtime.kv_cache_type_k}"
-    assert config.runtime.kv_cache_type_v == "turbo4", f"Expected turbo4, got {config.runtime.kv_cache_type_v}"
+    assert config.runtime.kv_cache_type_v == "q8_0", f"Expected q8_0, got {config.runtime.kv_cache_type_v}"
     print("  ✓ PASS")
 
 
@@ -67,7 +67,7 @@ def test_preset_apple_silicon_16gb():
     print(f"  kv_cache_type_v: {preset.kv_cache_type_v}")
     assert preset.runtime_provider == "llama_cpp", f"Expected llama_cpp, got {preset.runtime_provider}"
     assert preset.kv_cache_type_k == "q8_0"
-    assert preset.kv_cache_type_v == "turbo4"
+    assert preset.kv_cache_type_v == "q8_0"
     print("  ✓ PASS")
 
 
