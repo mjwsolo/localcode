@@ -1534,11 +1534,17 @@ class ChatScreen(Screen):
         except Exception:
             width = 80
 
-        # Advance sweep position before width-specific rendering. The
-        # narrow-terminal branch used to return before this increment, so
-        # minimized terminals showed a static "writing..." / "thinking..."
-        # line instead of the animated scan.
-        self._scan_pos = (self._scan_pos + 1) % max(len(label), 1)
+        # Derive the sweep position from ELAPSED WALL-CLOCK TIME, not from a
+        # per-tick counter. The animation timer is 0.05 s best-effort, but the
+        # UI event loop is periodically saturated (token streaming, status
+        # polling, and for block-diffusion a multi-second silence then a burst).
+        # Textual then delivers the queued ticks bunched: a +1-per-tick counter
+        # races through several positions, pauses, races again - which reads as
+        # the spinner speeding up and slowing down. A time-derived position
+        # renders where the sweep should be *now*, so a late or bunched tick
+        # lands at the right spot and the visual rate stays constant.
+        _sweep_cells_per_s = 24.0  # steady left-to-right scan speed
+        self._scan_pos = int(time.time() * _sweep_cells_per_s) % max(len(label), 1)
 
         if width < 64:
             compact_text = "thinking" if self._active_mode == "thinking" else text
