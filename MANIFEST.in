@@ -1,4 +1,6 @@
 include src/localcode/bin/llama-server
+include src/localcode/bin/llama-diffusion-cli
+include src/localcode/bin/llama-diffusion-gemma-visual-server
 recursive-include src/localcode/tui/styles *.tcss
 recursive-include llama-cpp-turboquant/cmake *
 recursive-include llama-cpp-turboquant/common *.cpp *.h *.hpp

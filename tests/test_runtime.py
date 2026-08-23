@@ -122,7 +122,7 @@ class TestLlamaServerCommand:
         cmd = gw.llama_server_command("/path/model.gguf")
         idx = cmd.index("--ctx-checkpoints")
         assert cmd[idx + 1] == "0"
-        assert "--checkpoint-every-n-tokens" not in cmd
+        assert "--checkpoint-min-step" not in cmd
 
     def test_ctx_checkpoints_enabled_below_256k(self) -> None:
         """Below the 256K crash tier checkpoints stay on (128K → 4 snapshots)
@@ -132,7 +132,7 @@ class TestLlamaServerCommand:
         cmd = gw.llama_server_command("/path/model.gguf")
         idx = cmd.index("--ctx-checkpoints")
         assert cmd[idx + 1] == "4"
-        assert "--checkpoint-every-n-tokens" in cmd
+        assert "--checkpoint-min-step" in cmd
 
     def test_ctx_checkpoints_env_override(self, monkeypatch) -> None:
         """LOCALCODE_CTX_CHECKPOINTS forces the count at every tier (reversibility
@@ -143,7 +143,7 @@ class TestLlamaServerCommand:
         cmd = gw.llama_server_command("/path/model.gguf")
         idx = cmd.index("--ctx-checkpoints")
         assert cmd[idx + 1] == "2"
-        assert "--checkpoint-every-n-tokens" in cmd
+        assert "--checkpoint-min-step" in cmd
 
     def test_custom_binary_used(self, tmp_path) -> None:
         # A configured binary is honored only when it exists on disk; the

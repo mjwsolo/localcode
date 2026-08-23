@@ -3,7 +3,7 @@
 DiffusionGemma is a block-diffusion LM: llama-server cannot generate from
 it, so the runtime dispatches (on the catalog's ``architecture`` field) to
 the one-shot ``llama-diffusion-cli`` runner instead of HTTP. The real
-runner is a one-time cmake build (bootstrap.ensure_diffusion_cli); tests
+runner ships in the wheel (bootstrap.diffusion_cli_path); tests
 here use a stub executable so they run in milliseconds:
 
   * prompt formatting — Gemma chat template applied by hand (system fold,
@@ -452,15 +452,6 @@ def test_diffusion_cli_path_prefers_config(tmp_path, monkeypatch):
         runtime = _RT()
 
     assert bootstrap.diffusion_cli_path(_Cfg()) == fake
-
-
-def test_ensure_diffusion_cli_short_circuits_on_cached(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    cached = tmp_path / ".local" / "share" / "localcode" / "llama-diffusion-cli"
-    cached.parent.mkdir(parents=True)
-    cached.write_text("#!/bin/sh\n")
-    ok, path = bootstrap.ensure_diffusion_cli()
-    assert ok is True and Path(path) == cached
 
 
 def test_diffusion_preempts_oversized_prompt(tmp_path, monkeypatch):

@@ -28,10 +28,13 @@ jobs:
             tests/test_execution_policies.py \
             tests/test_code_navigation_and_processes.py
 
-  # LocalCode is a pure-Python package (the llama-server binary is fetched
-  # at runtime, not bundled), so we build a normal wheel + sdist with
-  # `python -m build`. No cibuildwheel — that's for packages with compiled
-  # extensions, and it errors out ("pure Python wheel generated") here.
+  # LocalCode has no compiled Python extensions; the llama-server and
+  # diffusion binaries are checked in under src/localcode/bin/ and ride
+  # along as package data (see .github/workflows/turboquant.yml for how
+  # they are built and checked). So a normal wheel + sdist via
+  # `python -m build` is right. No cibuildwheel — that is for packages
+  # with compiled extensions, and it errors out ("pure Python wheel
+  # generated") here.
   build:
     name: Build wheel + sdist
     needs: [test]
