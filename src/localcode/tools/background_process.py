@@ -9,7 +9,16 @@ from pathlib import Path
 
 from .base import ToolContext
 from .._subproc_env import clean_env
-from ..process_registry import ProcessRecord, find_record, load_records, record_process, refresh_record, save_records
+from ..process_registry import (
+    ProcessRecord,
+    find_record,
+    load_records,
+    mark_spawned,
+    record_process,
+    refresh_record,
+    save_records,
+    spawned_this_session,
+)
 
 SCHEMA = {
     "type": "function",
@@ -56,6 +65,7 @@ def execute(ctx: ToolContext, args: dict) -> str:
             proc = subprocess.Popen(command, cwd=ctx.repo, shell=True, executable="/bin/sh", stdout=stream, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=clean_env(), start_new_session=True)
         finally:
             stream.close()
+        mark_spawned(proc.pid)
         provisional.pid = proc.pid
         provisional.pgid = proc.pid
         provisional.log_path = str(log_path)
@@ -66,8 +76,17 @@ def execute(ctx: ToolContext, args: dict) -> str:
         return f"Error: unknown process_id: {process_id}"
     if action == "stop":
         if not record.stopped_at:
+            target = record.pgid or record.pid
+            # Registry records are durable on-disk state. Refuse to signal
+            # any pid this LocalCode process did not spawn — a crafted or
+            # stale record must never drive killpg at an arbitrary pid.
+            if target <= 1 or not (spawned_this_session(record.pid) or spawned_this_session(target)):
+                return (
+                    f"Error: refusing to stop {process_id}: its pid was not "
+                    "started by this session (stop it manually if needed)."
+                )
             try:
-                os.killpg(record.pgid or record.pid, signal.SIGTERM)
+                os.killpg(target, signal.SIGTERM)
             except ProcessLookupError:
                 pass
             except OSError as exc:

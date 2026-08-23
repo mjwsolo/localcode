@@ -1,10 +1,11 @@
 """Turn-level telemetry: append-only JSONL trace for DEV/MANAGER review.
 
-This log is for the team building LocalCode (me + the user who owns the
-project), not for end-users. Purpose is offline quality analysis — read
-the file, cluster bad turns, fix prompts/tools/skills. Nothing in here
-is exposed through the TUI; there's no user-facing privacy surface to
-defend. Capture everything useful.
+This log records user prompts, model output, file paths, and tool args —
+that IS a privacy surface, even though nothing ever leaves the machine.
+Capture is therefore OPT-IN: `[telemetry] enabled = true` in config.toml
+(or the LOCALCODE_TELEMETRY env var) turns it on; the default is off.
+Purpose is offline quality analysis — read the file, cluster bad turns,
+fix prompts/tools/skills.
 
 One JSON object per completed user turn is written to:
 
@@ -71,10 +72,31 @@ _TURNS_LOG = _TELEMETRY_DIR / "turns.jsonl"
 
 
 def telemetry_enabled() -> bool:
-    """Env-var kill switch for dev convenience (e.g. running the test
-    suite without polluting the log). Default is ON — this is an
-    internal dev/manager tool; we want the data."""
-    return os.environ.get("LOCALCODE_TELEMETRY", "1") not in ("0", "false", "no", "off")
+    """Telemetry capture is OPT-IN.
+
+    Resolution order: the LOCALCODE_TELEMETRY env var wins when set
+    (dev/test override in either direction); otherwise `[telemetry]
+    enabled` in config.toml decides, and its default is FALSE.
+    """
+    env = os.environ.get("LOCALCODE_TELEMETRY")
+    if env is not None:
+        return env not in ("0", "false", "no", "off")
+    return _config_telemetry_enabled()
+
+
+_CONFIG_ENABLED_CACHE: bool | None = None
+
+
+def _config_telemetry_enabled() -> bool:
+    """Read `[telemetry] enabled` from config.toml once per process."""
+    global _CONFIG_ENABLED_CACHE
+    if _CONFIG_ENABLED_CACHE is None:
+        try:
+            from .config import load_config
+            _CONFIG_ENABLED_CACHE = bool(load_config().telemetry.enabled)
+        except Exception:
+            _CONFIG_ENABLED_CACHE = False
+    return _CONFIG_ENABLED_CACHE
 
 
 @dataclass
