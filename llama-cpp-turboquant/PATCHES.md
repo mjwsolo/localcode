@@ -148,6 +148,61 @@ Re-check on the next bump whether upstream has taken this too.
 benchmark outputs. Development aids, not product code. Safe to drop if they
 ever conflict.
 
+### `0005-diffusion-gemma-pr24423.patch` — DiffusionGemma (upstream PR #24423)
+
+**Status: OPEN upstream PR, unmerged.** [ggml-org/llama.cpp#24423](https://github.com/ggml-org/llama.cpp/pull/24423),
+vendored at head SHA `daca8075d871483545dd85d58ce11970b304b541` (the same SHA
+`src/localcode/bootstrap.py` pins as `_DIFFUSION_PR_SHA`).
+**DROP WHEN MERGED** — once the PR lands, bump past it and delete this patch.
+
+Adds the `diffusion-gemma` architecture (`src/models/diffusion-gemma.cpp`,
+`src/models/gemma4-common.h`, `LLM_ARCH_DIFFUSION_GEMMA` plumbing in
+`llama-arch`/`llama-model`/`llama-context`, `llama_set_causal_attn` support,
+`diffusion.*` GGUF keys in `gguf-py`), the entropy-bound block-diffusion
+decoder, the `--diffusion-eb*` / `--diffusion-blocks` / `--diffusion-kv-cache`
+/ `--diffusion-gpu-sampling*` CLI flags, and a CUDA on-device sampling kernel
+(`ggml-cuda/diffusion-sampling.cu`, not compiled in the Metal wheel).
+
+Why this is a patch and not "just use llama-server": the PR touches
+`tools/server` **zero** times. Diffusion generates by iterative denoising of a
+whole canvas, not by autoregressive decode, so `llama-server`'s slot/completion
+loop has nowhere to host it. The PR instead ships its own programs, and so do we:
+
+| binary | what it is |
+| --- | --- |
+| `llama-diffusion-cli` | one-shot generation; what `runtime_diffusion.py` drives today |
+| `llama-diffusion-gemma-visual-server` | persistent process: loads once, prints `READY`, then one JSON chat request per stdin line, streams `F`/`C`/`STATS`/`DONE` records on stdout |
+| `llama-diffusion-gemma-server` | persistent **raw-logits** forward server (one forward pass per request, returns `C × n_vocab` float32). For external denoising drivers; not a text server |
+
+#### Relocation: `examples/diffusion*` → `tools/diffusion*`
+
+Upstream keeps these under `examples/`, which this vendored tree omits
+entirely (see *Vendoring exclusions*). They are product code for us, so they
+live under `tools/diffusion/` and `tools/diffusion-gemma-server/` and are wired
+into `tools/CMakeLists.txt`, exactly like `tools/server`. The shipped build
+therefore stays `-DLLAMA_BUILD_EXAMPLES=OFF` and one cmake invocation produces
+`llama-server` and all three diffusion binaries. Everything they need is in
+this tree; nothing is fetched at build or run time.
+
+`tools/diffusion/` is the upstream `examples/diffusion/` at the pinned SHA plus
+the PR's hunks; `diffusion-gemma-eval` was dropped (eval harness, not product).
+
+#### Fork-local edits on top of the PR
+
+- `common/arg.cpp`: `-no-cnv` gained `LLAMA_EXAMPLE_DIFFUSION` (the PR put it
+  on the `-cnv` option; upstream had since narrowed that option's example set,
+  so the hunk needed re-targeting).
+- `diffusion-gemma-visual-server.cpp`: `chat.h` now takes `common_json`, not
+  nlohmann; the request is parsed once more with `common_json::parse` for the
+  chat-template calls. Re-check whether the PR has caught up on the next bump.
+
+#### Verified (2026-08-23, M-series, `diffusiongemma-26B-A4B-it-Q4_K_M.gguf`)
+
+`llama-diffusion-cli -no-cnv -ngl 99 -n 2048` and the `--diffusion-eb off`
+retry both produce coherent text; the visual server answered two consecutive
+requests from one resident process. `otool -L` on all four binaries shows only
+system frameworks.
+
 ---
 
 ## Retired at the 2026-08-22 bump
