@@ -43,7 +43,7 @@ llama_cpp_expert_offload = false
 llama_cpp_draft_model = ""
 llama_cpp_lookup_cache = false
 kv_cache_type_k = "q8_0"
-kv_cache_type_v = "turbo4"
+kv_cache_type_v = "q8_0"
 llama_cpp_binary = ""
 vision_enabled = false
 temperature = 1.0
@@ -115,7 +115,7 @@ class RuntimeConfig:
     llama_cpp_draft_model: str = ""       # path to draft GGUF for speculative decoding
     llama_cpp_lookup_cache: bool = False   # prompt lookup decoding (2-4x on code edits)
     kv_cache_type_k: str = "q8_0"          # K cache type: q8_0, q4_0, f16, turbo2, turbo3, turbo4
-    kv_cache_type_v: str = "turbo4"        # V cache type: turbo4 recommended (3.8x compression, +0.23% PPL)
+    kv_cache_type_v: str = "q8_0"          # V cache type: q8_0 default; q4_0, f16, turbo2, turbo3, turbo4 available
     llama_cpp_cache_reuse: int = 256       # --cache-reuse N: reuse KV chunks across partial prefix matches (0 = off). Recovers prefix-cache hits after mid-context edits/compaction shift the tail; the stable system-prompt prefix is already reused automatically per slot.
     llama_cpp_binary: str = ""             # custom llama-server path (e.g. TurboQuant fork)
     diffusion_cli_binary: str = ""         # override for the bundled llama-diffusion-cli (DiffusionGemma runner); empty = use the shipped binary
@@ -359,7 +359,7 @@ def load_config() -> AppConfig:
         # config gets rewritten to false on the next save_config call.
         llama_cpp_lookup_cache=str(os.environ.get("LOCALCODE_LLAMA_CPP_LOOKUP_CACHE", "false")).lower() in {"1", "true", "yes", "on"},
         kv_cache_type_k=os.environ.get("LOCALCODE_KV_CACHE_TYPE_K", runtime_data.get("kv_cache_type_k", runtime_data.get("kv_cache_type", "q8_0"))),
-        kv_cache_type_v=os.environ.get("LOCALCODE_KV_CACHE_TYPE_V", runtime_data.get("kv_cache_type_v", runtime_data.get("kv_cache_type", "turbo4"))),
+        kv_cache_type_v=os.environ.get("LOCALCODE_KV_CACHE_TYPE_V", runtime_data.get("kv_cache_type_v", runtime_data.get("kv_cache_type", "q8_0"))),
         llama_cpp_binary=os.environ.get("LOCALCODE_LLAMA_CPP_BINARY", runtime_data.get("llama_cpp_binary", "")),
         temperature=float(os.environ.get("LOCALCODE_TEMPERATURE", runtime_data.get("temperature", 1.0))),
         max_context_chars=int(os.environ.get("LOCALCODE_MAX_CONTEXT_CHARS", runtime_data.get("max_context_chars", 40000))),

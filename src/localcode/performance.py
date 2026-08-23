@@ -219,7 +219,7 @@ class PerformancePreset:
     llama_cpp_draft_model: str = ""
     llama_cpp_lookup_cache: bool = False
     kv_cache_type_k: str = "q8_0"
-    kv_cache_type_v: str = "turbo4"
+    kv_cache_type_v: str = "q8_0"
     low_overhead_mode: bool = False
     laptop_26b_runtime_mode: str = "speed"
     notes: list[str] = None  # type: ignore[assignment]
@@ -512,14 +512,21 @@ def recommend_preset(
     llama_cpp_draft_model_path = ""
     lookup_cache = False
     kv_cache_type_k = "q8_0"
-    kv_cache_type_v = "turbo4"
+    kv_cache_type_v = "q8_0"
 
-    # Small tier (≤16GB): TurboQuant KV compression
+    # q8_0 for both K and V on every tier. Measured on code text against an f16
+    # reference (Qwen 3.6 35B, M5 Max): q8_0/q8_0 has 4x lower mean KLD and 4x
+    # lower 99.9%-tail KLD than q8_0/turbo4, at 5% less generation speed. The
+    # tail is the token that breaks a JSON key or drops a closing brace, which
+    # is the failure a coding agent cannot afford. Memory is not the constraint
+    # it looks like: on the 16 GB tier, Gemma 12B Q4 at the full 131k context
+    # is 544 MiB of KV with q8_0/q8_0 vs 272 MiB with turbo4 - 272 MiB on a
+    # 7.4 GB model. Mixed K/V types (q8_0 K with a q4_0 V) must be avoided: the
+    # Metal flash-attention fast path needs matching types and falls back to a
+    # path 28x slower on prefill.
     if machine.tier == "small":
-        kv_cache_type_k = "q8_0"
-        kv_cache_type_v = "turbo4"
         expert_offload = False
-        notes.append("TurboQuant KV (q8_0-K + turbo4-V).")
+        notes.append("KV cache q8_0/q8_0.")
 
     # Apple Silicon: always TurboQuant llama.cpp — it's what gives us 32K context
     if machine.system == "darwin" and machine.has_gpu and profile in ("gemma4-26b-laptop", "gemma4-26b-moe"):
