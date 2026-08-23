@@ -1,26 +1,41 @@
 """Feature flag registry.
 
-One central list of every behaviour-modifying feature in LocalCode.
-Each call site that implements a feature guard consults
-`is_enabled(Feature.X)` instead of reading scattered config booleans.
+One central list of behaviour-modifying features in LocalCode. A call
+site that implements a feature guard consults `is_enabled(Feature.X)`
+instead of reading scattered config booleans.
 
-Three reasons this exists:
+## Which flags are actually wired
+
+Only these five are read by any call site today:
+
+    WRITE_ARG_REDACTION, DUPLICATE_READ_STUB, TOOL_RESULT_AGING,
+    THINKING_CAPS, AUTO_NUDGE_RECOVERY
+
+They are consulted in `agent/context.py`, `agent/loop.py` and
+`agent/streaming.py`. Toggling one of those five changes behaviour.
+
+The other members of `Feature` are **inventory entries, not switches**.
+Their behaviour is unconditional in the code, so setting
+`LOCALCODE_FEATURE_<NAME>=0` for them does nothing. Each such member is
+marked "NOT WIRED" in its docstring below. This matters most for
+`SAFETY_LAYER_HARD_BLOCKS`: the hard block cannot be turned off, which
+is the safe direction, but do not tell a user the flag disables it.
+
+Two reasons this module exists:
 
   1. **Inventory.** Before this module existed, nobody could answer
      "how many toggleable behaviours does LocalCode have?" The
      `Feature` enum below is the answer — update it when adding a
      behaviour, not a config dict somewhere.
 
-  2. **Ops knob.** Users can disable any feature via env var or the
-     per-project `.localcode/features.toml` file when debugging
-     suspected regressions. `LOCALCODE_FEATURE_CONTEXT_COMPACTION=0`
-     turns context compaction off for one session without code changes.
+  2. **Test surface.** Eval can flip the wired features individually
+     and measure each in isolation. Was the speed win from
+     minimal-core actually from the shorter prompt, or from some other
+     feature that happened to land the same week? Being able to A/B
+     single features answers questions monoliths can't.
 
-  3. **Test surface.** Eval can flip features individually and
-     measure each in isolation. Was the speed win from minimal-core
-     actually from the shorter prompt, or from some other feature
-     that happened to land the same week? Being able to A/B single
-     features answers questions monoliths can't.
+Wiring an unwired flag is a small change: guard the behaviour with
+`is_enabled(Feature.X)` and delete its "NOT WIRED" note.
 
 ## Precedence
 
@@ -67,7 +82,11 @@ __all__ = [
 
 
 class Feature(str, Enum):
-    """Every toggleable behaviour in LocalCode.
+    """The inventory of behaviour-modifying features in LocalCode.
+
+    Members marked "NOT WIRED" have no `is_enabled` call site, so their
+    behaviour is unconditional and their env var does nothing. See the
+    module docstring.
 
     Adding a feature: (1) define it here with a lowercase_with_underscores
     name that matches the env var `LOCALCODE_FEATURE_<UPPER>`, (2) add
@@ -124,8 +143,13 @@ class Feature(str, Enum):
 
     # ── Agent behaviour ────────────────────────────────────────
     PLAN_MODE = "plan_mode"
-    """Read-only plan-mode overlay that forbids write/edit tools
-    until the user exits. See plans/."""
+    """Plan-mode overlay. While `app.plan_mode` is set, every write
+    tool is refused except one write to the current plan file, and
+    `bash` is restricted to a read-only allowlist (`ls`, `grep`,
+    `git log`, ...) with redirection and command substitution
+    refused. `background_process` is refused outright. Enforced in
+    `agent/helpers.py::_plan_mode_block`, called from
+    `_execute_tool_result` before any tool runs. See plans.py."""
 
     SKILLS = "skills"
     """Markdown-based prompt-template registry + auto-activate
@@ -137,9 +161,19 @@ class Feature(str, Enum):
 
     # ── Safety layer ───────────────────────────────────────────
     SAFETY_LAYER_HARD_BLOCKS = "safety_layer_hard_blocks"
-    """Regex-based hard blocks on destructive commands (rm -rf /,
-    curl | bash, mkfs, etc). See permissions_v2.SafetyLayer.
-    Disabling this is a safety foot-gun — only flip during eval."""
+    """Hard blocks on catastrophic shell commands (rm -rf /, mkfs,
+    dd of=/dev/..., fork bomb) and on writes to credential files,
+    shell startup files, OS persistence hooks and ~/.localcode.
+    The live implementation is `_safety_hard_block` in
+    agent/helpers.py, which runs before every dispatch in every
+    autonomy mode including headless. NOT permissions_v2.SafetyLayer:
+    that class is only reachable through `PermissionManager.check`,
+    which has no callers. Disabling this is a safety foot-gun — only
+    flip during eval.
+
+    Note: `curl | bash` is deliberately NOT hard-blocked. It routes
+    through the confirmation gate (`_CONFIRM_SHELL_RE`) so the user
+    can approve it."""
 
     # ── Telemetry ──────────────────────────────────────────────
     EVENTS_TELEMETRY = "events_telemetry"
