@@ -120,7 +120,6 @@ class RuntimeConfig:
     kv_cache_type_v: str = "q8_0"          # V cache type: q8_0 default; q4_0, f16, turbo2, turbo3, turbo4 available
     llama_cpp_cache_reuse: int = 256       # --cache-reuse N: reuse KV chunks across partial prefix matches (0 = off). Recovers prefix-cache hits after mid-context edits/compaction shift the tail; the stable system-prompt prefix is already reused automatically per slot.
     llama_cpp_binary: str = ""             # custom llama-server path (e.g. TurboQuant fork)
-    diffusion_cli_binary: str = ""         # override for the bundled llama-diffusion-cli (DiffusionGemma runner); empty = use the shipped binary
     model_dir: str = ""                    # directory where GGUFs download to (blank → ~/.local/share/localcode/models)
     # Vision toggle. Tracks whether the multimodal projector should be
     # loaded (--mmproj) alongside the text decoder. Persisted so turning
@@ -266,7 +265,6 @@ def save_config(config: AppConfig) -> Path:
         f'kv_cache_type_v = "{config.runtime.kv_cache_type_v}"\n'
         f'llama_cpp_binary = "{config.runtime.llama_cpp_binary}"\n'
         f"llama_cpp_cache_reuse = {config.runtime.llama_cpp_cache_reuse}\n"
-        f'diffusion_cli_binary = "{config.runtime.diffusion_cli_binary}"\n'
         f'model_dir = "{config.runtime.model_dir}"\n'
         f"vision_enabled = {'true' if config.runtime.vision_enabled else 'false'}\n"
         f"temperature = {config.runtime.temperature}\n"
@@ -351,11 +349,9 @@ def load_config() -> AppConfig:
         llama_cpp_gpu_layers=int(os.environ.get("LOCALCODE_LLAMA_CPP_GPU_LAYERS", runtime_data.get("llama_cpp_gpu_layers", 0))),
         llama_cpp_threads=int(os.environ.get("LOCALCODE_LLAMA_CPP_THREADS", runtime_data.get("llama_cpp_threads", 8))),
         llama_cpp_batch_size=int(os.environ.get("LOCALCODE_LLAMA_CPP_BATCH_SIZE", runtime_data.get("llama_cpp_batch_size", 128))),
-        # These four were saved but never loaded back (silent data loss on
-        # every save→restart cycle): custom model dir, cache-reuse tuning, and
-        # the on-demand-built diffusion/cohere binary paths.
+        # These were saved but never loaded back (silent data loss on every
+        # save→restart cycle): custom model dir and cache-reuse tuning.
         llama_cpp_cache_reuse=int(os.environ.get("LOCALCODE_LLAMA_CPP_CACHE_REUSE", runtime_data.get("llama_cpp_cache_reuse", 256))),
-        diffusion_cli_binary=os.environ.get("LOCALCODE_DIFFUSION_CLI_BINARY", runtime_data.get("diffusion_cli_binary", "")),
         model_dir=os.environ.get("LOCALCODE_MODEL_DIR", runtime_data.get("model_dir", "")),
         vision_enabled=str(os.environ.get("LOCALCODE_VISION_ENABLED", runtime_data.get("vision_enabled", False))).lower() in {"1", "true", "yes", "on"},
         # `llama_cpp_spec_type` migration (2026-04-26): old configs

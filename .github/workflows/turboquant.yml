@@ -1,11 +1,12 @@
 name: TurboQuant binaries
 
-# Builds the three binaries that ship in the wheel (src/localcode/bin/) from
-# the vendored llama-cpp-turboquant tree and proves each one is
-# self-contained: static, Metal library embedded, no Homebrew dylibs.
+# Builds the ONE binary that ships in the wheel (src/localcode/bin/llama-server)
+# from the vendored llama-cpp-turboquant tree and proves it is self-contained:
+# static, Metal library embedded, no Homebrew dylibs. Every model localcode
+# serves, DiffusionGemma included, runs inside this binary (PATCHES.md 0005).
 #
 # The flag set below MUST stay identical to the one that produced the
-# verified binaries checked into src/localcode/bin/ (dev/verify_models.sh
+# verified binary checked into src/localcode/bin/ (dev/verify_models.sh
 # gate). -DLLAMA_OPENSSL=OFF is mandatory: upstream defaults it ON and that
 # links libssl from /opt/homebrew, which users' Macs do not have.
 
@@ -41,21 +42,20 @@ jobs:
             -DLLAMA_CURL=OFF \
             -DLLAMA_OPENSSL=OFF
 
-      - name: Build the three shipped binaries
-        # The diffusion binaries live under tools/diffusion* and build with
-        # EXAMPLES=OFF. llama-diffusion-gemma-server (raw logits) is an eval
-        # harness backend and is not shipped.
+      - name: Build the shipped binary
         run: |
           cmake --build llama-cpp-turboquant/build-ci --config Release \
             -j"$(sysctl -n hw.ncpu)" \
-            --target llama-server llama-diffusion-cli llama-diffusion-gemma-visual-server
+            --target llama-server
 
       - name: Self-containment check
         run: |
           set -euo pipefail
           cd llama-cpp-turboquant/build-ci/bin
           fail=0
-          for b in llama-server llama-diffusion-cli llama-diffusion-gemma-visual-server; do
+          # Exactly one binary is produced for shipping.
+          [ "$(ls | wc -l | tr -d ' ')" = "1" ] || { echo "expected exactly one binary, got: $(ls)"; fail=1; }
+          for b in llama-server; do
             echo "== $b"
             ls -l "$b"
             file "$b" | grep -q "arm64" || { echo "not arm64"; fail=1; }
@@ -77,5 +77,3 @@ jobs:
           name: turboquant-binaries-macos-arm64
           path: |
             llama-cpp-turboquant/build-ci/bin/llama-server
-            llama-cpp-turboquant/build-ci/bin/llama-diffusion-cli
-            llama-cpp-turboquant/build-ci/bin/llama-diffusion-gemma-visual-server
