@@ -22,7 +22,7 @@ import time
 import urllib.request
 
 from ._subproc_env import clean_env
-from .process_registry import ProcessRecord, latest_live_record, record_process, stop_record
+from .process_registry import ProcessRecord, latest_live_record, mark_spawned, record_process, stop_record
 
 
 @dataclass(frozen=True)
@@ -107,6 +107,7 @@ def launch_project_app(
             env=env,
         )
 
+    mark_spawned(proc.pid)
     url = f"http://localhost:{port}{candidate.url_path}"
     verified = _wait_for_http(url, timeout_s=12)
     record_process(

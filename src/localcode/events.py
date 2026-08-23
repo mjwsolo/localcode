@@ -75,36 +75,26 @@ SESSION_ID = uuid.uuid4().hex[:12]
 PID = os.getpid()
 
 
-def _get_or_create_user_id() -> str:
-    """Stable per-install anonymous user id.
+def _remove_legacy_user_id() -> None:
+    """Delete the persistent per-install id earlier versions minted.
 
-    Written ONCE at first use to `~/.localcode/user_id`. Subsequent
-    launches read the same value, so events from the same user across
-    sessions and projects can be correlated without needing real auth.
-    Standard analytics pattern (matches PostHog's `distinct_id`,
-    Mixpanel's `$device_id`, etc.).
-
-    Value is a random 16-char hex string — opaque, not derived from
-    MAC/hostname/username, so nothing identifiable leaks even if the
-    file is read. Written to the GLOBAL state dir (not per-project) so
-    the same install is tracked consistently regardless of cwd.
+    `~/.localcode/user_id` was a stable 16-hex id stamped on every event.
+    The log is local-only, so the only thing a persistent install id could
+    ever serve is cross-machine correlation by a remote sink that does not
+    exist — SESSION_ID already groups all events from one run. Remove the
+    code that minted it AND the file it left behind. Best-effort: failure
+    to unlink must never break startup.
     """
     try:
         from .paths import global_state_dir
         p = global_state_dir() / "user_id"
         if p.is_file():
-            existing = p.read_text().strip()
-            if existing and len(existing) == 16:
-                return existing
-        new_id = uuid.uuid4().hex[:16]
-        p.write_text(new_id)
-        return new_id
+            p.unlink()
     except Exception:
-        # Fallback: ephemeral per-process id. Better than nothing.
-        return uuid.uuid4().hex[:16]
+        pass
 
 
-USER_ID = _get_or_create_user_id()
+_remove_legacy_user_id()
 
 
 # ── MECE event taxonomy ──────────────────────────────────────────────
@@ -187,10 +177,18 @@ def _iso_now() -> str:
     return now.isoformat(timespec="milliseconds")
 
 
-# Optional in-process disable switch (e.g. test suites that don't
-# want to pollute the project's events.jsonl). Defaults to ON.
+# Event capture is OPT-IN. The LOCALCODE_EVENTS env var wins when set
+# (test suites set it explicitly in either direction); otherwise
+# `[telemetry] enabled` in config.toml decides, and its default is FALSE.
 def _enabled() -> bool:
-    return os.environ.get("LOCALCODE_EVENTS", "1") not in ("0", "false", "no", "off")
+    env = os.environ.get("LOCALCODE_EVENTS")
+    if env is not None:
+        return env not in ("0", "false", "no", "off")
+    try:
+        from .telemetry import _config_telemetry_enabled
+        return _config_telemetry_enabled()
+    except Exception:
+        return False
 
 
 # Cache the resolved path per-process. find_project_root() walks the
@@ -236,7 +234,6 @@ def emit(event_type: str, **fields: Any) -> None:
         "t": _iso_now(),
         "bucket": _bucket_for(event_type),
         "type": event_type,
-        "user": USER_ID,
         "session": SESSION_ID,
         "pid": PID,
     }
