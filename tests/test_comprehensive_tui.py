@@ -251,6 +251,61 @@ def test_tui_slash_clear_command(tmp_path, project):
     asyncio.run(scenario())
 
 
+def test_tui_slash_clear_confirms_when_there_is_history(tmp_path, project):
+    """/clear on a non-empty conversation must ask before wiping it.
+
+    Wiping the whole conversation can't be undone, so it routes through the
+    ConfirmScreen (Cancel keeps the history; Clear wipes it). An empty
+    conversation skips the dialog - that path is covered by the test above.
+    """
+    async def scenario():
+        from localcode.tui.app import LocalCodeTUI
+        from localcode.tui.screens.confirm import ConfirmScreen
+
+        os.environ["LOCALCODE_AUTONOMY"] = "full_auto"
+        app = LocalCodeTUI()
+        app._preview_screen = "chat"
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            backend = build_test_app(tmp_path, script=[say("hi")], cwd=project)
+            app.engine = backend
+            backend.out.set_event_callback(app.bridge.on_event)
+            # Seed a conversation so /clear has something to lose.
+            backend.session.messages.extend(
+                [
+                    {"role": "user", "content": "hello"},
+                    {"role": "assistant", "content": "hi there"},
+                ]
+            )
+            chat_screen = app.screen
+
+            # /clear must open the confirm dialog, NOT wipe immediately.
+            chat_input = chat_screen.query_one("#chat-input")
+            chat_input.value = "/clear"
+            await pilot.press("enter")
+            await pilot.pause(0.1)
+            assert isinstance(app.screen, ConfirmScreen), "no confirm dialog shown"
+            assert len(backend.session.messages) == 2, "history wiped before confirming"
+
+            # Cancel keeps the history.
+            await pilot.press("escape")
+            await pilot.pause(0.1)
+            assert not isinstance(app.screen, ConfirmScreen)
+            assert len(backend.session.messages) == 2, "cancel should keep history"
+
+            # Now confirm: /clear -> dialog -> y wipes it.
+            chat_input = app.screen.query_one("#chat-input")
+            chat_input.value = "/clear"
+            await pilot.press("enter")
+            await pilot.pause(0.1)
+            assert isinstance(app.screen, ConfirmScreen)
+            await pilot.press("y")
+            await pilot.pause(0.1)
+            assert len(backend.session.messages) == 0, "confirm should wipe history"
+
+    asyncio.run(scenario())
+
+
 def test_tui_slash_menu_windows_selection_and_drops_removed_commands(tmp_path, project):
     """The slash palette must keep the highlighted command VISIBLE.
 
