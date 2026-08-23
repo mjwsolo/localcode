@@ -54,6 +54,7 @@ import re
 
 __all__ = [
     "wrap_untrusted",
+    "strip_untrusted",
     "detect_injection_patterns",
     "UNTRUSTED_OPEN",
     "UNTRUSTED_CLOSE",
@@ -135,6 +136,30 @@ def detect_injection_patterns(content: str) -> list[str]:
             seen.add(h)
             out.append(h)
     return out
+
+
+def strip_untrusted(text: str) -> str:
+    """Remove the UNTRUSTED_DATA wrapper for DISPLAY only.
+
+    `wrap_untrusted` fences tool output so the MODEL treats it as data, not
+    instructions. That wrapper is for the model transcript; a user watching the
+    TUI should just see the command's output, not `<UNTRUSTED_DATA source="...">`
+    markers around it. This unwraps the outermost fence (and any injection
+    warning prefix) so the display shows the clean text. The model-facing copy is
+    untouched - only call this on the string being rendered to the user.
+    """
+    if not text or UNTRUSTED_OPEN not in text:
+        return text
+    # Drop everything up to and including the opening tag's newline, and the
+    # trailing close tag. Non-greedy on the open tag so a nested/escaped marker
+    # inside the body is left alone.
+    m = re.search(r"%s source=\"[^\"]*\">\n" % re.escape(UNTRUSTED_OPEN), text)
+    if not m:
+        return text
+    body = text[m.end():]
+    if body.endswith(UNTRUSTED_CLOSE):
+        body = body[: -len(UNTRUSTED_CLOSE)]
+    return body.rstrip("\n")
 
 
 def wrap_untrusted(content: str, source: str, *, max_warn_labels: int = 5) -> str:

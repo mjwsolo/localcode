@@ -4440,6 +4440,14 @@ class ChatScreen(Screen):
                 self._telemetry_turn.tool_started(name, args)
         elif t == "tool_result":
             result = p.get("result", "")
+            # The model's transcript keeps the <UNTRUSTED_DATA> fence that
+            # injection defense wraps tool output in; the USER should just see
+            # the output, not the delimiter. Unwrap for display only.
+            try:
+                from ...injection_defense import strip_untrusted as _strip_u
+                result = _strip_u(result)
+            except Exception:
+                pass
             error = p.get("error", "")
             is_error = str(error).lower() == "true"
             # Hide floating animation
