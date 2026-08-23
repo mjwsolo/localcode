@@ -90,7 +90,7 @@ On launch, LocalCode recommends the best model for **your Mac's RAM** — there'
 | Gemma 4 26B-A4B | 28 GB (Q8) | 3.8B (8/128 experts) | 64 GB | gemma4-iswa |
 | Qwen 3.6 35B-A3B | 38.5 GB (Q8) | 3.0B (8+1/256) | 96 GB | qwen35moe |
 
-*Min RAM* is the threshold for auto-recommendation (weights at or under about 55% of unified memory, leaving room for KV cache and macOS); you can still pick a heavier model manually. Every model runs on the bundled binaries. **†** research model: pickable but not auto-recommended. DiffusionGemma is a block-denoising model that runs through the bundled `llama-diffusion-cli` instead of the server, and is not the default coding experience.
+*Min RAM* is the threshold for auto-recommendation (weights at or under about 55% of unified memory, leaving room for KV cache and macOS); you can still pick a heavier model manually. Every model runs on the one bundled `llama-server`. **†** research model: pickable but not auto-recommended. DiffusionGemma is a block-denoising model: the bundled server hosts its denoiser, so it loads once and stays resident like any other model, but output arrives one 256-token block at a time and it is not the default coding experience.
 
 ## How LocalCode works
 

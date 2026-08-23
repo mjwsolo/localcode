@@ -47,6 +47,16 @@ int server_queue::post(server_task && task, bool front) {
     return task_id;
 }
 
+bool server_queue::has_pending_cancel(int id_target) {
+    std::unique_lock<std::mutex> lock(mutex_tasks);
+    for (const auto & task : queue_tasks) {
+        if (task.type == SERVER_TASK_TYPE_CANCEL && task.id_target == id_target) {
+            return true;
+        }
+    }
+    return false;
+}
+
 int server_queue::post(std::vector<server_task> && tasks, bool front) {
     std::unique_lock<std::mutex> lock(mutex_tasks);
     bool reset_timer = false;

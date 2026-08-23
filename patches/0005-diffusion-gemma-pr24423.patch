@@ -1836,23 +1836,26 @@ index 780df32..5ba01ad 100644
      if (LLAMA_BUILD_SERVER)
 diff --git a/tools/diffusion-gemma-server/CMakeLists.txt b/tools/diffusion-gemma-server/CMakeLists.txt
 new file mode 100644
-index 0000000..768ce58
+index 0000000..d005a42
 --- /dev/null
 +++ b/tools/diffusion-gemma-server/CMakeLists.txt
-@@ -0,0 +1,13 @@
-+set(TARGET llama-diffusion-gemma-server)
-+add_executable(${TARGET} diffusion-gemma-server.cpp)
-+install(TARGETS ${TARGET} RUNTIME)
-+target_link_libraries(${TARGET} PRIVATE llama ${CMAKE_THREAD_LIBS_INIT})
-+target_compile_features(${TARGET} PRIVATE cxx_std_17)
+@@ -0,0 +1,16 @@
++# fork-local (PATCHES.md 0005): development/eval servers, NOT shipped. llama-server hosts DiffusionGemma itself.
++if (LLAMA_BUILD_DIFFUSION_TOOLS)
++    set(TARGET llama-diffusion-gemma-server)
++    add_executable(${TARGET} diffusion-gemma-server.cpp)
++    install(TARGETS ${TARGET} RUNTIME)
++    target_link_libraries(${TARGET} PRIVATE llama ${CMAKE_THREAD_LIBS_INIT})
++    target_compile_features(${TARGET} PRIVATE cxx_std_17)
 +
-+# Visual server: runs the optimized entropy-bound decoder and streams per-step canvas frames.
-+set(TARGET llama-diffusion-gemma-visual-server)
-+add_executable(${TARGET} diffusion-gemma-visual-server.cpp)
-+install(TARGETS ${TARGET} RUNTIME)
-+target_include_directories(${TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../diffusion)
-+target_link_libraries(${TARGET} PRIVATE llama-diffusion llama ${CMAKE_THREAD_LIBS_INIT})
-+target_compile_features(${TARGET} PRIVATE cxx_std_17)
++    # Visual server: runs the optimized entropy-bound decoder and streams per-step canvas frames.
++    set(TARGET llama-diffusion-gemma-visual-server)
++    add_executable(${TARGET} diffusion-gemma-visual-server.cpp)
++    install(TARGETS ${TARGET} RUNTIME)
++    target_include_directories(${TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../diffusion)
++    target_link_libraries(${TARGET} PRIVATE llama-diffusion llama ${CMAKE_THREAD_LIBS_INIT})
++    target_compile_features(${TARGET} PRIVATE cxx_std_17)
++endif()
 diff --git a/tools/diffusion-gemma-server/diffusion-gemma-server.cpp b/tools/diffusion-gemma-server/diffusion-gemma-server.cpp
 new file mode 100644
 index 0000000..3a1c122
@@ -2044,10 +2047,10 @@ index 0000000..3a1c122
 +}
 diff --git a/tools/diffusion-gemma-server/diffusion-gemma-visual-server.cpp b/tools/diffusion-gemma-server/diffusion-gemma-visual-server.cpp
 new file mode 100644
-index 0000000..961337c
+index 0000000..06df54e
 --- /dev/null
 +++ b/tools/diffusion-gemma-server/diffusion-gemma-visual-server.cpp
-@@ -0,0 +1,390 @@
+@@ -0,0 +1,376 @@
 +// Persistent "visual" generation server for DiffusionGemma: load the GGUF once, then run the OPTIMIZED
 +// entropy-bound decoder (the same diffusion_generate_entropy_bound the CLI's --diffusion-visual uses)
 +// and stream the per-step argmax canvas back so a UI can watch the denoise resolve in place. Unlike the
@@ -2134,23 +2137,9 @@ index 0000000..961337c
 +    return true;
 +}
 +
-+// Trim a denoised canvas like the CLI: cut at the first end-of-generation token, else at the onset of a
-+// repetition loop (a token recurring at stride 1-2 for >= 6 steps).
++// Trim a denoised canvas to the answer (EOG / repetition loop); shared with llama-server, see diffusion.h
 +static size_t trim_canvas(const llama_vocab * vocab, const llama_token * canvas, size_t n) {
-+    size_t cut = n;
-+    for (size_t i = 0; i < n; i++) {
-+        if (llama_vocab_is_eog(vocab, canvas[i])) { cut = i; break; }
-+    }
-+    for (size_t i = 0; i + 1 < cut; i++) {
-+        bool loop = false;
-+        for (size_t stride = 1; stride <= 2 && !loop; stride++) {
-+            size_t reps = 0;
-+            for (size_t j = i; j + stride < n && canvas[j] == canvas[j + stride]; j += stride) { reps++; }
-+            loop = reps >= 6;
-+        }
-+        if (loop) { cut = i; break; }
-+    }
-+    return cut;
++    return diffusion_trim_canvas(vocab, canvas, n);
 +}
 +
 +static float meta_f(llama_model * m, const char * key, float def) {
@@ -2440,20 +2429,26 @@ index 0000000..961337c
 +}
 diff --git a/tools/diffusion/CMakeLists.txt b/tools/diffusion/CMakeLists.txt
 new file mode 100644
-index 0000000..42a84b2
+index 0000000..a92f7a1
 --- /dev/null
 +++ b/tools/diffusion/CMakeLists.txt
-@@ -0,0 +1,10 @@
+@@ -0,0 +1,16 @@
++# fork-local (PATCHES.md 0005): the denoising loop is a static library linked into llama-server, which
++# is the only shipped binary. The standalone CLI is a development aid; opt in with -DLLAMA_BUILD_DIFFUSION_TOOLS=ON.
 +set(TARGET llama-diffusion)
 +add_library(${TARGET} STATIC diffusion.cpp diffusion.h)
 +target_link_libraries(${TARGET} PUBLIC llama llama-common ${CMAKE_THREAD_LIBS_INIT})
 +target_compile_features(${TARGET} PUBLIC cxx_std_17)
 +
-+set(TARGET llama-diffusion-cli)
-+add_executable(${TARGET} diffusion-cli.cpp)
-+install(TARGETS ${TARGET} RUNTIME)
-+target_link_libraries(${TARGET} PRIVATE llama-diffusion llama llama-common ${CMAKE_THREAD_LIBS_INIT})
-+target_compile_features(${TARGET} PRIVATE cxx_std_17)
++option(LLAMA_BUILD_DIFFUSION_TOOLS "llama: build the standalone diffusion CLI/servers (dev aids, not shipped)" OFF)
++
++if (LLAMA_BUILD_DIFFUSION_TOOLS)
++    set(TARGET llama-diffusion-cli)
++    add_executable(${TARGET} diffusion-cli.cpp)
++    install(TARGETS ${TARGET} RUNTIME)
++    target_link_libraries(${TARGET} PRIVATE llama-diffusion llama llama-common ${CMAKE_THREAD_LIBS_INIT})
++    target_compile_features(${TARGET} PRIVATE cxx_std_17)
++endif()
 diff --git a/tools/diffusion/README.md b/tools/diffusion/README.md
 new file mode 100644
 index 0000000..6d2fffd
@@ -2521,10 +2516,10 @@ index 0000000..6d2fffd
 +```
 diff --git a/tools/diffusion/diffusion-cli.cpp b/tools/diffusion/diffusion-cli.cpp
 new file mode 100644
-index 0000000..70487d7
+index 0000000..1919764
 --- /dev/null
 +++ b/tools/diffusion/diffusion-cli.cpp
-@@ -0,0 +1,626 @@
+@@ -0,0 +1,604 @@
 +#include "arg.h"
 +#include "chat.h"
 +#include "common.h"
@@ -2908,31 +2903,9 @@ index 0000000..70487d7
 +                eb_params.gpu_sampling ? "on" : "off", eb_params.gpu_sample_reduce ? "on" : "off");
 +    }
 +
-+    // Trim a denoised canvas: cut at the first end-of-generation token, or (checkpoints often emit no stop
-+    // token) at the onset of a repetition loop (a token recurring at stride 1-2 for >= 6 steps).
++    // Trim a denoised canvas to the answer (EOG / repetition loop); shared with llama-server, see diffusion.h
 +    auto trim_canvas = [&](const llama_token * canvas, size_t n) -> size_t {
-+        size_t cut = n;
-+        for (size_t i = 0; i < n; i++) {
-+            if (llama_vocab_is_eog(vocab, canvas[i])) {
-+                cut = i;
-+                break;
-+            }
-+        }
-+        for (size_t i = 0; i + 1 < cut; i++) {
-+            bool loop = false;
-+            for (size_t stride = 1; stride <= 2 && !loop; stride++) {
-+                size_t reps = 0;
-+                for (size_t j = i; j + stride < n && canvas[j] == canvas[j + stride]; j += stride) {
-+                    reps++;
-+                }
-+                loop = reps >= 6;
-+            }
-+            if (loop) {
-+                cut = i;
-+                break;
-+            }
-+        }
-+        return cut;
++        return diffusion_trim_canvas(vocab, canvas, n);
 +    };
 +
 +    // Generate one response for a chat-formatted prompt. Canvas models denoise a fixed canvas_length block
@@ -3153,10 +3126,10 @@ index 0000000..70487d7
 +}
 diff --git a/tools/diffusion/diffusion.cpp b/tools/diffusion/diffusion.cpp
 new file mode 100644
-index 0000000..7364947
+index 0000000..4e15a55
 --- /dev/null
 +++ b/tools/diffusion/diffusion.cpp
-@@ -0,0 +1,683 @@
+@@ -0,0 +1,709 @@
 +#include "diffusion.h"
 +
 +#include "log.h"
@@ -3840,12 +3813,38 @@ index 0000000..7364947
 +    llama_batch_free(batch);
 +    n_generated = params.max_length;
 +}
++
++size_t diffusion_trim_canvas(const llama_vocab * vocab, const llama_token * canvas, size_t n) {
++    size_t cut = n;
++    for (size_t i = 0; i < n; i++) {
++        if (llama_vocab_is_eog(vocab, canvas[i])) {
++            cut = i;
++            break;
++        }
++    }
++    for (size_t i = 0; i + 1 < cut; i++) {
++        bool loop = false;
++        for (size_t period = 1; period <= 2 && !loop; period++) {
++            // length of the periodic run starting at i: canvas[j] == canvas[j + period] for every j in it
++            size_t matches = 0;
++            for (size_t j = i; j + period < n && canvas[j] == canvas[j + period]; j++) {
++                matches++;
++            }
++            loop = matches >= 6 * period;
++        }
++        if (loop) {
++            cut = i;
++            break;
++        }
++    }
++    return cut;
++}
 diff --git a/tools/diffusion/diffusion.h b/tools/diffusion/diffusion.h
 new file mode 100644
-index 0000000..a7f305e
+index 0000000..23eea19
 --- /dev/null
 +++ b/tools/diffusion/diffusion.h
-@@ -0,0 +1,95 @@
+@@ -0,0 +1,102 @@
 +#pragma once
 +
 +#include "llama.h"
@@ -3941,3 +3940,610 @@ index 0000000..a7f305e
 +                                      int32_t                     n_input,
 +                                      const diffusion_eb_params & params,
 +                                      int32_t &                   n_generated);
++
++// Trim a denoised canvas to the answer: cut at the first end-of-generation token, or (checkpoints often
++// emit no stop token) at the onset of a repetition loop. A loop is a run that is PERIODIC with period
++// 1 or 2 for at least 6 periods: "\n\n\n\n\n\n\n" or "a b a b a b a b a b a b a b". The check compares every
++// position of the run against the one a period later, so a list like ", tides, salt, blue, deep" (where
++// only the commas recur at stride 2) is NOT a loop. Returns the number of tokens to keep.
++size_t diffusion_trim_canvas(const llama_vocab * vocab, const llama_token * canvas, size_t n);
+diff --git a/PATCHES.md b/PATCHES.md
+index 5af3bfc..0a134c3 100644
+--- a/PATCHES.md
++++ b/PATCHES.md
+@@ -44,8 +44,9 @@ The vendored copy deliberately omits these upstream top-level paths:
+    `otool -L build/bin/llama-server | grep /opt/homebrew` must be **empty**.
+    A previous rebuild linked Homebrew `libssl` and would have broken every user
+    without Homebrew installed.
+-2. `bash dev/verify_models.sh` — **all 8** bundled-server configs pass
+-   (load + generate + tool-call, including the `turbo4` KV path).
++2. `bash dev/verify_models.sh` — **all 11** bundled-server configs pass
++   (load + generate + tool-call, including the `turbo4` KV path and
++   DiffusionGemma on the same binary).
+ 
+ A bump that regresses a working model is strictly worse than staying stale.
+ 
+@@ -148,12 +149,13 @@ Re-check on the next bump whether upstream has taken this too.
+ benchmark outputs. Development aids, not product code. Safe to drop if they
+ ever conflict.
+ 
+-### `0005-diffusion-gemma-pr24423.patch` — DiffusionGemma (upstream PR #24423)
++### `0005-diffusion-gemma-pr24423.patch` — DiffusionGemma (upstream PR #24423) inside llama-server
+ 
+ **Status: OPEN upstream PR, unmerged.** [ggml-org/llama.cpp#24423](https://github.com/ggml-org/llama.cpp/pull/24423),
+-vendored at head SHA `daca8075d871483545dd85d58ce11970b304b541` (the same SHA
+-`src/localcode/bootstrap.py` pins as `_DIFFUSION_PR_SHA`).
+-**DROP WHEN MERGED** — once the PR lands, bump past it and delete this patch.
++vendored at head SHA `daca8075d871483545dd85d58ce11970b304b541`.
++**When it merges, keep only the fork-local server integration below** (the PR
++itself does not touch `tools/server`); bump past it and shrink this patch to
++those hunks.
+ 
+ Adds the `diffusion-gemma` architecture (`src/models/diffusion-gemma.cpp`,
+ `src/models/gemma4-common.h`, `LLM_ARCH_DIFFUSION_GEMMA` plumbing in
+@@ -163,45 +165,65 @@ decoder, the `--diffusion-eb*` / `--diffusion-blocks` / `--diffusion-kv-cache`
+ / `--diffusion-gpu-sampling*` CLI flags, and a CUDA on-device sampling kernel
+ (`ggml-cuda/diffusion-sampling.cu`, not compiled in the Metal wheel).
+ 
+-Why this is a patch and not "just use llama-server": the PR touches
+-`tools/server` **zero** times. Diffusion generates by iterative denoising of a
+-whole canvas, not by autoregressive decode, so `llama-server`'s slot/completion
+-loop has nowhere to host it. The PR instead ships its own programs, and so do we:
++#### Fork-local: the denoiser runs inside `llama-server`
+ 
+-| binary | what it is |
++The PR ships its own programs (`llama-diffusion-cli`, two stdin "servers") and
++touches `tools/server` zero times: diffusion generates by iterative denoising
++of a whole 256-token canvas, not by autoregressive decode, so the server's
++slot/completion loop has nowhere to host it. The product mandate is **one
++binary, one process, `/v1/chat/completions` for everything**, so this patch
++hosts the denoiser in the server instead. Shipped binary list: exactly
++`llama-server`.
++
++| file | what |
+ | --- | --- |
+-| `llama-diffusion-cli` | one-shot generation; what `runtime_diffusion.py` drives today |
+-| `llama-diffusion-gemma-visual-server` | persistent process: loads once, prints `READY`, then one JSON chat request per stdin line, streams `F`/`C`/`STATS`/`DONE` records on stdout |
+-| `llama-diffusion-gemma-server` | persistent **raw-logits** forward server (one forward pass per request, returns `C × n_vocab` float32). For external denoising drivers; not a text server |
++| `common/common.cpp` | `common_init_result` enables `llama_diffusion_set_sc()` between model load and context creation for canvas diffusion models (the graph reserve must size the self-conditioning input). No-op for every other arch. |
++| `tools/server/server-context.cpp` | `diffusion_probe()` (vocab-only GGUF peek before the context exists: single slot, `ctx_shift`/`cache_reuse`/`fit`/`warmup` off, `n_ubatch >= canvas`, `n_outputs_max = canvas`), `diffusion_init()` (entropy-bound params from GGUF metadata, prompt-KV cache + device SC auto on single GPU, `llama_set_causal_attn(false)`), and `diffusion_process_slot()`: `update_slots()` routes every task there. It applies the **same** chat template / tokenizer as any model (so OpenAI `tools` and `<\|channel>thought…` reasoning work through the normal chat parser), maps `max_tokens` to `n_blocks = ceil(max_tokens / 256)`, runs `diffusion_generate_entropy_bound()` block by block, commits each finished block and feeds its text through `process_token()` (stop strings, budget, EOG) as ONE streaming chunk, and finishes through `send_final_response()`. `finish_reason` is `stop` on EOG / repetition stop, `length` when the block budget is exhausted. `seed` is honoured; unset draws a fresh one except at `temperature: 0`, where it is pinned so the turn is reproducible. |
++| `tools/server/CMakeLists.txt` | links the `llama-diffusion` static library (the loop) into `server-context`. |
++| `tools/server/server-queue.{h,cpp}` | `server_queue::has_pending_cancel(id)`: the denoiser's per-step callback polls it (4x/s) so a client disconnect aborts the turn within a step, instead of the server denoising the abandoned request to completion before the queued CANCEL is even looked at. |
++| `tools/diffusion/*` | the denoising loop, now a library plus an **opt-in** CLI (`-DLLAMA_BUILD_DIFFUSION_TOOLS=ON`, dev aid, not shipped). `diffusion_trim_canvas()` moved here and **fixed**: the PR's repetition-loop detector compared only every other token at stride 2, so any comma-separated list (`, tides, salt, blue`) was cut as a "loop". It now requires a genuinely periodic run. |
++| `tools/diffusion-gemma-server/*` | the PR's stdin servers, opt-in only (same flag), not shipped. |
++
++Constraints, by design: single slot, strictly synchronous (one request at a
++time, `n_parallel` is forced to 1), text only (no mtmd). A client disconnect
++is honoured between denoise steps (~100 ms), not mid-step. `/props`, `/v1/models`, `/health` and `/slots`
++are the stock endpoints and need no special-casing. The request must leave
++room for one canvas: `prompt + 256 <= n_ctx`, else `ERROR_TYPE_EXCEED_CONTEXT_SIZE`.
++
++Known model behaviour, not a server bug: with `chat_template_kwargs:
++{"enable_thinking": false}` the model emits end-of-generation at canvas
++position 0 (empty reply) on every seed. The Gemma-4 template variant is one
++this checkpoint was not trained on. localcode never sends it for this arch
++(`reasoning_capabilities` → `NONE`); `dev/verify_models.sh` omits it for the
++diffusion line.
+ 
+ #### Relocation: `examples/diffusion*` → `tools/diffusion*`
+ 
+ Upstream keeps these under `examples/`, which this vendored tree omits
+-entirely (see *Vendoring exclusions*). They are product code for us, so they
+-live under `tools/diffusion/` and `tools/diffusion-gemma-server/` and are wired
+-into `tools/CMakeLists.txt`, exactly like `tools/server`. The shipped build
+-therefore stays `-DLLAMA_BUILD_EXAMPLES=OFF` and one cmake invocation produces
+-`llama-server` and all three diffusion binaries. Everything they need is in
+-this tree; nothing is fetched at build or run time.
+-
+-`tools/diffusion/` is the upstream `examples/diffusion/` at the pinned SHA plus
+-the PR's hunks; `diffusion-gemma-eval` was dropped (eval harness, not product).
++entirely (see *Vendoring exclusions*). They are product code for us (the
++library is linked into the server), so they live under `tools/diffusion/` and
++`tools/diffusion-gemma-server/` and are wired into `tools/CMakeLists.txt`.
++The shipped build stays `-DLLAMA_BUILD_EXAMPLES=OFF` and one cmake invocation
++produces `llama-server` only. `diffusion-gemma-eval` was dropped (eval harness,
++not product).
+ 
+-#### Fork-local edits on top of the PR
++#### Other fork-local edits on top of the PR
+ 
+ - `common/arg.cpp`: `-no-cnv` gained `LLAMA_EXAMPLE_DIFFUSION` (the PR put it
+   on the `-cnv` option; upstream had since narrowed that option's example set,
+   so the hunk needed re-targeting).
+ - `diffusion-gemma-visual-server.cpp`: `chat.h` now takes `common_json`, not
+   nlohmann; the request is parsed once more with `common_json::parse` for the
+-  chat-template calls. Re-check whether the PR has caught up on the next bump.
++  chat-template calls.
+ 
+ #### Verified (2026-08-23, M-series, `diffusiongemma-26B-A4B-it-Q4_K_M.gguf`)
+ 
+-`llama-diffusion-cli -no-cnv -ngl 99 -n 2048` and the `--diffusion-eb off`
+-retry both produce coherent text; the visual server answered two consecutive
+-requests from one resident process. `otool -L` on all four binaries shows only
+-system frameworks.
++`llama-server -m … -c 8192 -ngl 999 --jinja -fa on` loads in ~18 s and answers
++`/v1/chat/completions` from one resident process: text (`Reply with exactly:
++OK` → `OK`, reproducible at temperature 0), a second request with no reload,
++streaming one SSE chunk per committed block, a `get_weather` tool call through
++the OpenAI `tools` key, `max_tokens` honoured exactly, ~55 tok/s over a
++4-block answer. `otool -L` shows only system frameworks.
+ 
+ ---
+ 
+diff --git a/common/common.cpp b/common/common.cpp
+index d84d57a..42584c4 100644
+--- a/common/common.cpp
++++ b/common/common.cpp
+@@ -16,6 +16,7 @@
+ #include <cmath>
+ #include <chrono>
+ #include <cstdarg>
++#include <cstdlib>
+ #include <cstring>
+ #include <ctime>
+ #include <filesystem>
+@@ -1336,6 +1337,18 @@ common_init_result::common_init_result(common_params & params, bool model_only)
+         return;
+     }
+ 
++    // fork-local (DiffusionGemma, see PATCHES.md 0005): canvas diffusion models self-condition through a
++    // full-vocab soft-embedding in the graph. The flag must be on BEFORE the context is created so the
++    // graph reserve sizes the compute buffer for it (the denoiser supplies the real logits per step).
++    // No-op for every other architecture.
++    if (llama_model_is_diffusion(model)) {
++        char canvas_str[32];
++        if (llama_model_meta_val_str(model, "diffusion.canvas_length", canvas_str, sizeof(canvas_str)) >= 0 &&
++            strtol(canvas_str, nullptr, 10) > 0) {
++            llama_diffusion_set_sc(model, nullptr, /*use_sc*/ 0.0f, /*temp_inv*/ 1.0f, /*enabled*/ true);
++        }
++    }
++
+     const llama_vocab * vocab = llama_model_get_vocab(model);
+ 
+     // load and optionally apply lora adapters
+diff --git a/tools/server/CMakeLists.txt b/tools/server/CMakeLists.txt
+index 280bd9e..bffa0b6 100644
+--- a/tools/server/CMakeLists.txt
++++ b/tools/server/CMakeLists.txt
+@@ -30,8 +30,11 @@ if (BUILD_SHARED_LIBS)
+ endif()
+ 
+ target_include_directories(${TARGET} PRIVATE ../mtmd)
++# fork-local: the DiffusionGemma denoising loop (tools/diffusion/diffusion.cpp) drives canvas diffusion
++# models from inside the server (see diffusion_process_slot in server-context.cpp)
++target_include_directories(${TARGET} PRIVATE ../diffusion)
+ target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
+-target_link_libraries(${TARGET} PUBLIC llama-common mtmd ${CMAKE_THREAD_LIBS_INIT})
++target_link_libraries(${TARGET} PUBLIC llama-common mtmd llama-diffusion ${CMAKE_THREAD_LIBS_INIT})
+ 
+ # llama-server-impl: server logic, reusable by app
+ 
+diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
+index c54a5e9..509460e 100644
+--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -16,6 +16,7 @@
+ #include "speculative.h"
+ #include "mtmd.h"
+ #include "mtmd-helper.h"
++#include "diffusion.h" // fork-local: DiffusionGemma denoising loop (tools/diffusion)
+ 
+ #include <algorithm>
+ #include <cstddef>
+@@ -879,6 +880,22 @@ private:
+ 
+     std::string model_name; // name of the loaded model, to be used by API
+     std::set<std::string> model_aliases; // additional names for the model
++
++    // fork-local: DiffusionGemma (block-diffusion) support. The model denoises a whole canvas of
++    // canvas_length tokens per step instead of sampling one token per llama_decode, so the slot/batch loop
++    // below cannot drive it. When the loaded model is a canvas diffusion model, update_slots() routes every
++    // task through diffusion_process_slot() instead, which runs the entropy-bound denoiser from
++    // tools/diffusion/diffusion.cpp block by block and feeds the committed text through the SAME
++    // stop-string / streaming / chat-parsing machinery (process_token, send_final_response) as the
++    // autoregressive path. Single slot, strictly synchronous: one request at a time, no parallel slots;
++    // a client disconnect is honoured between denoise steps. That is acceptable for a single-user local
++    // server, which is what this fork ships.
++    struct {
++        bool                     enabled       = false;
++        int32_t                  canvas_length = 0;
++        diffusion_eb_params      eb;            // GGUF-metadata defaults; seed/max_length are per request
++        std::vector<llama_token> output_tokens; // [prompt | canvas] scratch, sized to n_ctx
++    } diffusion;
+     std::set<std::string> model_tags;    // informational tags
+ 
+     bool sleeping = false;
+@@ -965,6 +982,10 @@ private:
+         params_base.n_outputs_max = output_limits.total;
+         params_base.n_outputs_max_per_seq = output_limits.per_seq;
+ 
++        // fork-local: DiffusionGemma needs a differently shaped context (see diffusion_probe). Decide
++        // BEFORE the context is created.
++        diffusion_probe(params_base);
++
+         const bool has_mmproj = !params.mmproj.path.empty();
+         const bool has_draft = params.speculative.has_dft();
+         const bool spec_mtp = std::find(params_base.speculative.types.begin(),
+@@ -1067,6 +1088,10 @@ private:
+ 
+         add_bos_token = llama_vocab_get_add_bos(vocab);
+ 
++        if (diffusion.enabled) {
++            diffusion_init();
++        }
++
+         if (has_spec) {
+             // spec_mtp doesn't use load a model internally, so we report 0.0 and 1.0 manually
+             load_progress_callback(0.0f, &load_progress_spec);
+@@ -2663,6 +2688,321 @@ private:
+     };
+ #endif
+ 
++
++    //
++    // fork-local: DiffusionGemma (block-diffusion) path. See the `diffusion` member for the overview.
++    //
++
++    // Decide before context creation whether the model is a canvas diffusion model. A vocab-only load
++    // reads the GGUF header (no tensors), so this is cheap even for a 16 GB file.
++    void diffusion_probe(common_params & params) {
++        diffusion.enabled       = false;
++        diffusion.canvas_length = 0;
++
++        llama_model_params mparams = llama_model_default_params();
++        mparams.vocab_only = true;
++        llama_model * probe = llama_model_load_from_file(params.model.path.c_str(), mparams);
++        if (probe == nullptr) {
++            return; // the real load below reports the error
++        }
++        int32_t canvas = 0;
++        if (llama_model_is_diffusion(probe)) {
++            char buf[32];
++            if (llama_model_meta_val_str(probe, "diffusion.canvas_length", buf, sizeof(buf)) >= 0) {
++                canvas = (int32_t) strtol(buf, nullptr, 10);
++            }
++        }
++        llama_model_free(probe);
++        if (canvas <= 0) {
++            return;
++        }
++
++        diffusion.enabled       = true;
++        diffusion.canvas_length = canvas;
++
++        // Context shape, mirroring tools/diffusion/diffusion-cli.cpp: the model has no KV memory (the
++        // denoiser keeps its own prompt-KV store), so the slot machinery's cache features do not apply.
++        // Single slot: the denoiser owns the whole context for one request at a time.
++        if (params.n_parallel != 1) {
++            SRV_WRN("diffusion: forcing n_parallel = 1 (was %d)\n", params.n_parallel);
++            params.n_parallel = 1;
++        }
++        params.ctx_shift     = false;
++        params.n_cache_reuse = 0;
++        params.fit_params    = false; // context is sized by -c; the denoiser reserves per ubatch, not per n_ctx
++        params.warmup        = false; // a 2-token warmup graph is not representative of a canvas forward
++        // there is no KV cache to quantize (llama_model::create_memory returns none for this arch), but
++        // llama_init_from_model validates the K/V types up front ("quantized V cache requires flash_attn"),
++        // so a --cache-type-v turbo4 / q8_0 launch line with -fa off would refuse to load for nothing
++        params.cache_type_k = GGML_TYPE_F16;
++        params.cache_type_v = GGML_TYPE_F16;
++        // each denoise step forwards the whole canvas in one ubatch and needs logits for every canvas row
++        params.n_ubatch = std::max(params.n_ubatch, canvas);
++        params.n_batch  = std::max(params.n_batch,  params.n_ubatch);
++        params.n_outputs_max         = canvas;
++        params.n_outputs_max_per_seq = canvas;
++
++        SRV_INF("diffusion: canvas diffusion model detected (canvas_length = %d), n_ubatch = %d, n_batch = %d\n",
++                canvas, params.n_ubatch, params.n_batch);
++    }
++
++    // Entropy-bound denoiser parameters: GGUF metadata, then the reference defaults (same as the CLI).
++    void diffusion_init() {
++        auto meta_f = [&](const char * key, float def) -> float {
++            char buf[32];
++            return llama_model_meta_val_str(model_tgt, key, buf, sizeof(buf)) >= 0 ? strtof(buf, nullptr) : def;
++        };
++        auto meta_i = [&](const char * key, int32_t def) -> int32_t {
++            char buf[32];
++            return llama_model_meta_val_str(model_tgt, key, buf, sizeof(buf)) >= 0 ? (int32_t) strtol(buf, nullptr, 10) : def;
++        };
++        auto & eb = diffusion.eb;
++        eb.max_denoising_steps  = meta_i("diffusion.eb_max_steps", 48);
++        eb.t_min                = meta_f("diffusion.eb_t_min", 0.4f);
++        eb.t_max                = meta_f("diffusion.eb_t_max", 0.8f);
++        eb.entropy_bound        = meta_f("diffusion.eb_entropy_bound", 0.1f);
++        eb.stability_threshold  = meta_i("diffusion.eb_stability_threshold", 1);
++        eb.confidence_threshold = meta_f("diffusion.eb_confidence_threshold", 0.005f);
++
++        // prompt-KV cache + device-resident self-conditioning are single-device features (auto, like the CLI)
++        int gpu_devs = 0;
++        for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
++            const auto dt = ggml_backend_dev_type(ggml_backend_dev_get(i));
++            if (dt == GGML_BACKEND_DEVICE_TYPE_GPU || dt == GGML_BACKEND_DEVICE_TYPE_IGPU) {
++                gpu_devs++;
++            }
++        }
++        eb.kv_cache          = (gpu_devs <= 1);
++        eb.gpu_sampling      = (gpu_devs <= 1);
++        eb.gpu_sample_reduce = eb.gpu_sampling && (gpu_devs == 1);
++
++        diffusion.output_tokens.assign(n_ctx, 0);
++
++        llama_set_causal_attn(ctx_tgt, false);
++
++        SRV_INF("diffusion_eb: max_steps=%d t=[%.3f,%.3f] entropy_bound=%.4f stability=%d confidence=%.4f kv_cache=%s gpu_sampling=%s n_ctx=%d\n",
++                eb.max_denoising_steps, eb.t_min, eb.t_max, eb.entropy_bound, eb.stability_threshold,
++                eb.confidence_threshold, eb.kv_cache ? "on" : "off", eb.gpu_sampling ? "on" : "off", n_ctx);
++    }
++
++    void update_slots_diffusion() {
++        for (auto & slot : slots) {
++            if (slot.state == SLOT_STATE_STARTED) {
++                diffusion_process_slot(slot);
++            }
++        }
++    }
++
++    // Run one request end-to-end: denoise up to n_blocks canvases of canvas_length tokens, committing each
++    // finished block to the prompt prefix and streaming its text as ONE chunk. max_tokens (n_predict) maps
++    // to n_blocks = ceil(max_tokens / canvas_length); the loop stops early on an end-of-generation token.
++    void diffusion_process_slot(server_slot & slot) {
++        slot.stats.update_prompt_start();
++        slot.state = SLOT_STATE_PROCESSING_PROMPT;
++
++        if (!slot.task->need_sampling()) {
++            send_error(slot, "this diffusion model only supports text completion", ERROR_TYPE_NOT_SUPPORTED);
++            slot.release();
++            return;
++        }
++        if (slot.task->tokens.has_mtmd) {
++            send_error(slot, "multimodal input is not supported by this diffusion model", ERROR_TYPE_NOT_SUPPORTED);
++            slot.release();
++            return;
++        }
++
++        llama_tokens prefix = slot.task->tokens.get_text_tokens();
++        if (prefix.empty()) {
++            SLT_WRN(slot, "%s", "empty prompt - releasing slot\n");
++            slot.print_timings();
++            send_final_response(slot);
++            slot.release();
++            return;
++        }
++
++        const int32_t cl      = diffusion.canvas_length;
++        const int32_t n_input = (int32_t) prefix.size();
++
++        // the whole [prompt | canvas] must fit the context (the denoiser addresses positions up to n_ctx)
++        if (n_input + cl > slot.n_ctx) {
++            send_error(slot,
++                       string_format("request (%d tokens) plus one %d-token canvas exceeds the context size (%d tokens), try increasing it",
++                                     n_input, cl, slot.n_ctx),
++                       ERROR_TYPE_EXCEED_CONTEXT_SIZE);
++            slot.release();
++            return;
++        }
++        // without the prompt-KV cache every step forwards [prompt | canvas] in one non-causal ubatch
++        if (!diffusion.eb.kv_cache && n_input + cl > (int32_t) llama_n_ubatch(ctx_tgt)) {
++            send_error(slot,
++                       string_format("request (%d tokens) plus one %d-token canvas exceeds the physical batch size (%d tokens), increase -ub",
++                                     n_input, cl, (int32_t) llama_n_ubatch(ctx_tgt)),
++                       ERROR_TYPE_SERVER);
++            slot.release();
++            return;
++        }
++
++        // block budget: n_predict (max_tokens) rounded up to whole canvases; -1 (no limit) = whatever fits
++        int32_t n_blocks;
++        if (slot.n_predict_max > 0) {
++            n_blocks = (slot.n_predict_max + cl - 1) / cl;
++        } else {
++            n_blocks = (slot.n_ctx - n_input) / cl;
++        }
++        n_blocks = std::max(1, n_blocks);
++
++        // seed: the request's `seed`; unset draws a fresh one so repeated prompts differ, except at
++        // temperature 0 where the turn is pinned to be reproducible (the autoregressive path's intent).
++        int32_t seed = (int32_t) slot.task->params.sampling.seed;
++        if (slot.task->params.sampling.seed == LLAMA_DEFAULT_SEED || seed < 0) {
++            seed = slot.task->params.sampling.temp <= 0.0f ? 0 : (int32_t) (ggml_time_us() & 0x7fffffff);
++        }
++
++        auto accept_special_token = [&](llama_token token) {
++            return params_base.special ||
++                slot.task->params.sampling.preserved_tokens.find(token) != slot.task->params.sampling.preserved_tokens.end();
++        };
++
++        SLT_INF(slot, "diffusion: n_input = %d, canvas = %d, n_blocks = %d, seed = %d\n", n_input, cl, n_blocks, seed);
++
++        // Cancellation: the HTTP side posts a CANCEL task when the client goes away, but this loop holds
++        // the task thread, so peek for it between denoise steps (a step is ~50-100 ms) and abort the turn.
++        struct cancel_probe {
++            server_queue * queue;
++            int            id_task;
++            int64_t        t_last_us;
++            bool           cancelled;
++        } probe { &queue_tasks, slot.task->id, 0, false };
++        auto step_cb = [](int32_t, int32_t, const llama_token *, int32_t, void * ud) -> bool {
++            auto * p = (cancel_probe *) ud;
++            const int64_t now = ggml_time_us();
++            if (now - p->t_last_us > 250 * 1000) { // poll the queue at most 4x per second
++                p->t_last_us = now;
++                if (p->queue->has_pending_cancel(p->id_task)) {
++                    p->cancelled = true;
++                }
++            }
++            return !p->cancelled; // false stops the denoiser after this step
++        };
++
++        // streaming: send the HTTP headers (200) now, the same way the autoregressive path does when it
++        // starts on the prompt, so the client is not left without a status for the whole first block
++        if (slot.task->params.stream) {
++            send_partial_response(slot, {}, false, true);
++        }
++
++        slot.stats.n_prompt_processed = n_input;
++        slot.stats.n_gen = 0;
++        // the prompt is templated + tokenized by the HTTP thread and prefilled inside the first block, so
++        // "prompt" time is ~0 here and the whole denoise is reported as generation time (tokens/s is then
++        // committed tokens per wall second, the number a user cares about)
++        slot.stats.update_prompt_last();
++
++        for (int32_t b = 0; b < n_blocks; b++) {
++            const int32_t prefix_len = (int32_t) prefix.size();
++            const int32_t max_length = prefix_len + cl;
++            if (max_length > slot.n_ctx) {
++                slot.truncated = true;
++                slot.stop      = STOP_TYPE_LIMIT;
++                break;
++            }
++
++            diffusion_eb_params eb = diffusion.eb;
++            eb.max_length              = max_length;
++            eb.seed                    = seed + b; // distinct per block, deterministic from the request seed
++            eb.step_callback           = step_cb;
++            eb.step_callback_user_data = &probe;
++
++            int32_t n_generated = 0;
++            diffusion_generate_entropy_bound(ctx_tgt, prefix.data(), diffusion.output_tokens.data(), prefix_len, eb, n_generated);
++            if (probe.cancelled) {
++                // the client is gone: drop the half-denoised block, no response to send. The queued
++                // CANCEL task is processed next and finds the slot already idle.
++                SLT_INF(slot, "diffusion: cancelled by client during block %d/%d\n", b + 1, n_blocks);
++                slot.release();
++                return;
++            }
++            if (n_generated <= prefix_len) {
++                if (b == 0) {
++                    send_error(slot, "diffusion generation failed", ERROR_TYPE_SERVER);
++                    slot.release();
++                    return;
++                }
++                break;
++            }
++
++            const llama_token * canvas = diffusion.output_tokens.data() + prefix_len;
++            size_t cut = diffusion_trim_canvas(vocab, canvas, (size_t) cl);
++            const bool block_complete = cut < (size_t) cl; // eog / repetition loop: the answer is complete
++            const bool ended_on_eog   = block_complete && llama_vocab_is_eog(vocab, canvas[cut]);
++
++            SLT_INF(slot, "diffusion: block %d/%d: %zu/%d tokens committed (%s)\n", b + 1, n_blocks, cut, cl,
++                    !block_complete ? "full canvas" : ended_on_eog ? "end of generation" : "repetition loop");
++            if (block_complete && !ended_on_eog) {
++                // the loop detector fired: log what it cut so a mis-trim is diagnosable
++                std::string tail;
++                for (size_t i = cut; i < std::min((size_t) cl, cut + 12); i++) {
++                    tail += common_token_to_piece(ctx_tgt, canvas[i], true);
++                }
++                SLT_DBG(slot, "diffusion: trimmed tail starts: '%s'\n", tail.c_str());
++            }
++
++            // honour max_tokens exactly, even though a block is generated whole
++            if (slot.n_predict_max > 0) {
++                const int64_t remaining = (int64_t) slot.n_predict_max - (int64_t) slot.stats.n_gen;
++                if ((int64_t) cut > remaining) {
++                    cut = (size_t) std::max<int64_t>(0, remaining);
++                }
++            }
++
++            std::string block_text;
++            for (size_t i = 0; i < cut; i++) {
++                block_text += common_token_to_piece(ctx_tgt, canvas[i], accept_special_token(canvas[i]));
++                if (slot.task->params.return_tokens) {
++                    slot.generated_tokens.push_back(canvas[i]);
++                }
++            }
++
++            slot.stats.n_gen += cut;
++            if (b == 0) {
++                slot.t_print_last = ggml_time_us();
++                slot.n_gen_last   = 0;
++            }
++            slot.stats.update_gen_last();
++
++            // one result per committed block: process_token applies stop strings, the n_predict budget and
++            // the EOG stop exactly as for a sampled token, and streams the chunk if requested
++            completion_token_output result;
++            result.tok          = ended_on_eog ? canvas[cut] : canvas[cut > 0 ? cut - 1 : 0];
++            result.text_to_send = block_text;
++            result.prob         = 1.0f;
++
++            const bool keep_going = process_token(result, slot);
++
++            if (block_complete && slot.stop == STOP_TYPE_NONE) {
++                // a repetition-loop cut ends the answer like an EOG would (the CLI treats it the same):
++                // the model stopped on its own, it did not run out of budget
++                slot.stop           = STOP_TYPE_EOS;
++                slot.has_next_token = false;
++            }
++
++            if (!keep_going || block_complete) {
++                break;
++            }
++
++            prefix.insert(prefix.end(), canvas, canvas + cut); // commit the block, denoise the next
++        }
++
++        if (slot.stop == STOP_TYPE_NONE) {
++            // neither EOG nor a stop string: the block budget (max_tokens) is exhausted
++            slot.stop = STOP_TYPE_LIMIT;
++        }
++
++        slot.print_timings();
++        send_final_response(slot);
++        slot.release();
++    }
++
+     void update_slots() {
+ #ifdef DEBUG_TIMINGS
+         static int64_t t_prev = 0;
+@@ -2704,6 +3044,12 @@ private:
+             }
+         }
+ 
++        // fork-local: canvas diffusion models never enter the batch/decode loop below
++        if (diffusion.enabled) {
++            update_slots_diffusion();
++            return;
++        }
++
+         try {
+             scoped_timer t(t_pre_decode, n_pre_decode);
+             pre_decode();
+diff --git a/tools/server/server-queue.cpp b/tools/server/server-queue.cpp
+index 78169e9..e9aa1be 100644
+--- a/tools/server/server-queue.cpp
++++ b/tools/server/server-queue.cpp
+@@ -47,6 +47,16 @@ int server_queue::post(server_task && task, bool front) {
+     return task_id;
+ }
+ 
++bool server_queue::has_pending_cancel(int id_target) {
++    std::unique_lock<std::mutex> lock(mutex_tasks);
++    for (const auto & task : queue_tasks) {
++        if (task.type == SERVER_TASK_TYPE_CANCEL && task.id_target == id_target) {
++            return true;
++        }
++    }
++    return false;
++}
++
+ int server_queue::post(std::vector<server_task> && tasks, bool front) {
+     std::unique_lock<std::mutex> lock(mutex_tasks);
+     bool reset_timer = false;
+diff --git a/tools/server/server-queue.h b/tools/server/server-queue.h
+index e17733a..d698533 100644
+--- a/tools/server/server-queue.h
++++ b/tools/server/server-queue.h
+@@ -61,6 +61,11 @@ public:
+     // Get the next id for creating a new task
+     int get_new_id();
+ 
++    // fork-local: true if a CANCEL for id_target is already waiting in the queue. Lets a long
++    // synchronous generation (the diffusion path) notice a client disconnect between denoise steps,
++    // since the cancel task itself is only processed once that generation returns.
++    bool has_pending_cancel(int id_target);
++
+     // Call when the state of one slot is changed, it will move one task from deferred to main queue
+     // prioritize tasks that use the specified slot (otherwise, pop the first deferred task)
+     void pop_deferred_task(int id_slot);
