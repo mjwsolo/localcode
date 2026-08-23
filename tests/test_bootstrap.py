@@ -1,4 +1,4 @@
-"""Tests for localcode.bootstrap — TurboQuant source detection, binary path, install plans."""
+"""Tests for localcode.bootstrap — TurboQuant source detection and bundled binary paths."""
 from __future__ import annotations
 
 import platform
@@ -9,11 +9,9 @@ from unittest.mock import patch
 import pytest
 
 from localcode.bootstrap import (
-    InstallPlan,
     _find_turboquant_source,
     _turboquant_binary_path,
-    build_turboquant,
-    detect_llama_cpp_install_plan,
+    diffusion_cli_path,
 )
 
 
@@ -93,38 +91,30 @@ class TestTurboquantBinaryPath:
         assert result is None
 
 
-class TestBuildTurboquant:
-    """Verify build_turboquant fails gracefully when prerequisites are missing."""
+class TestDiffusionCliPath:
+    """The diffusion runner resolves like llama-server: bundled first, never built."""
 
-    def test_fails_when_source_missing(self) -> None:
-        with patch("localcode.bootstrap._find_turboquant_source", return_value=None):
-            ok, msg = build_turboquant()
-        assert ok is False
-        assert "not found" in msg.lower()
+    def test_bundled_wins(self, tmp_path: Path) -> None:
+        fake_file = tmp_path / "pkg" / "localcode" / "bootstrap.py"
+        fake_file.parent.mkdir(parents=True)
+        fake_file.touch()
+        bundled = fake_file.parent / "bin" / "llama-diffusion-cli"
+        bundled.parent.mkdir()
+        bundled.write_text("#!/bin/sh\n")
+        with patch("localcode.bootstrap.__file__", str(fake_file)):
+            assert diffusion_cli_path() == bundled
 
-    def test_fails_without_cmake(self, tmp_path: Path) -> None:
-        tq = tmp_path / "llama-cpp-turboquant"
-        tq.mkdir()
-        (tq / "CMakeLists.txt").write_text("cmake_minimum_required(VERSION 3.10)")
-        with patch("localcode.bootstrap._find_turboquant_source", return_value=tq):
-            with patch("localcode.bootstrap._ensure_cmake", return_value=False):
-                ok, msg = build_turboquant()
-        assert ok is False
-        assert "cmake" in msg.lower()
+    def test_none_when_absent(self, tmp_path: Path) -> None:
+        fake_file = tmp_path / "pkg" / "localcode" / "bootstrap.py"
+        fake_file.parent.mkdir(parents=True)
+        fake_file.touch()
+        with patch("localcode.bootstrap.__file__", str(fake_file)):
+            with patch("pathlib.Path.home", return_value=tmp_path / "fakehome"):
+                with patch("localcode.bootstrap._find_turboquant_source", return_value=None):
+                    assert diffusion_cli_path() is None
 
-
-class TestDetectLlamaCppInstallPlan:
-    """Verify detect_llama_cpp_install_plan picks the right tool."""
-
-    def test_darwin_with_brew(self) -> None:
-        with patch("platform.system", return_value="Darwin"):
-            with patch("shutil.which", return_value="/usr/local/bin/brew"):
-                plan = detect_llama_cpp_install_plan()
-        assert plan is not None
-        assert "llama.cpp" in plan.command or "llama" in str(plan.command)
-
-    def test_no_tools_returns_none(self) -> None:
-        with patch("platform.system", return_value="Linux"):
-            with patch("shutil.which", return_value=None):
-                plan = detect_llama_cpp_install_plan()
-        assert plan is None
+    def test_no_build_or_network_helpers_exist(self) -> None:
+        import localcode.bootstrap as b
+        for name in ("ensure_diffusion_cli", "ensure_cohere_server", "ensure_muse_server",
+                     "_ensure_cmake", "build_turboquant", "install_llama_cpp"):
+            assert not hasattr(b, name), f"{name} must not come back: picking a model never builds"

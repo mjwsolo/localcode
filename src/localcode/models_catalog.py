@@ -390,10 +390,18 @@ def _system_ram_gb() -> int:
     return 16
 
 
-# Architectures we never AUTO-recommend (users can still pick them explicitly in
-# the model picker): diffusion needs a separate one-shot runner — not the
-# standard llama-server — and cohere2_moe is unvalidated on this stack.
-_NO_AUTO_RECOMMEND_ARCHS = {"diffusion_gemma", "cohere2_moe", "muse_glimmer"}
+# Architectures we never AUTO-recommend (users can still pick them explicitly
+# in the model picker). Every catalog architecture now loads on the bundled
+# binaries with no runtime build or download, so cohere2_moe (North-Mini-Code)
+# and muse_glimmer (Muse Glimmer) are recommendable like any other model.
+#
+# diffusion_gemma stays excluded on PRODUCT grounds, not technical ones: it is
+# a research block-denoising model on a different execution path (one-shot
+# llama-diffusion-cli, weights remapped per turn, coarse chunked output, no
+# streaming tokens). It works, but it is not the coding-agent experience a
+# first-run user should land on by default. Owner can override by emptying
+# this set.
+_NO_AUTO_RECOMMEND_ARCHS = {"diffusion_gemma"}
 
 # Capability order for auto-recommend, best → worst for coding-agent use. This
 # is deliberately NOT raw file size: the big MoEs measure ~95% HumanEval here
@@ -419,8 +427,8 @@ def _capability_rank(choice) -> int:
 
 
 def recommend(ram_gb: int | None = None) -> ModelChoice:
-    """Pick the best model for THIS machine's RAM — capability-ranked, never an
-    experimental architecture, and never a hardcoded default.
+    """Pick the best model for THIS machine's RAM — capability-ranked, never the
+    research diffusion architecture, and never a hardcoded default.
 
     Weights must fit in ~55% of unified memory (leaves room for KV cache,
     activations, OS). Among the production-ready models that fit, return the

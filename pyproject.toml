@@ -72,7 +72,13 @@ include-package-data = true
 where = ["src"]
 
 [tool.setuptools.package-data]
-"localcode" = ["**/*.tcss", "bin/llama-server", "skills/*.md"]
+"localcode" = [
+    "**/*.tcss",
+    "bin/llama-server",
+    "bin/llama-diffusion-cli",
+    "bin/llama-diffusion-gemma-visual-server",
+    "skills/*.md",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

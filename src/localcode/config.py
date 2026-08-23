@@ -118,9 +118,7 @@ class RuntimeConfig:
     kv_cache_type_v: str = "turbo4"        # V cache type: turbo4 recommended (3.8x compression, +0.23% PPL)
     llama_cpp_cache_reuse: int = 256       # --cache-reuse N: reuse KV chunks across partial prefix matches (0 = off). Recovers prefix-cache hits after mid-context edits/compaction shift the tail; the stable system-prompt prefix is already reused automatically per slot.
     llama_cpp_binary: str = ""             # custom llama-server path (e.g. TurboQuant fork)
-    diffusion_cli_binary: str = ""         # llama-diffusion-cli path (DiffusionGemma runner; built on demand)
-    cohere_server_binary: str = ""         # llama-server with cohere2moe (North-Mini-Code; built on demand from PR #24260)
-    muse_server_binary: str = ""           # llama-server with muse_glimmer (Meta Muse Glimmer; built on demand from llama.cpp master, PR #26841)
+    diffusion_cli_binary: str = ""         # override for the bundled llama-diffusion-cli (DiffusionGemma runner); empty = use the shipped binary
     model_dir: str = ""                    # directory where GGUFs download to (blank → ~/.local/share/localcode/models)
     # Vision toggle. Tracks whether the multimodal projector should be
     # loaded (--mmproj) alongside the text decoder. Persisted so turning
@@ -252,8 +250,6 @@ def save_config(config: AppConfig) -> Path:
         f'llama_cpp_binary = "{config.runtime.llama_cpp_binary}"\n'
         f"llama_cpp_cache_reuse = {config.runtime.llama_cpp_cache_reuse}\n"
         f'diffusion_cli_binary = "{config.runtime.diffusion_cli_binary}"\n'
-        f'cohere_server_binary = "{config.runtime.cohere_server_binary}"\n'
-        f'muse_server_binary = "{config.runtime.muse_server_binary}"\n'
         f'model_dir = "{config.runtime.model_dir}"\n'
         f"vision_enabled = {'true' if config.runtime.vision_enabled else 'false'}\n"
         f"temperature = {config.runtime.temperature}\n"
@@ -336,8 +332,6 @@ def load_config() -> AppConfig:
         # the on-demand-built diffusion/cohere binary paths.
         llama_cpp_cache_reuse=int(os.environ.get("LOCALCODE_LLAMA_CPP_CACHE_REUSE", runtime_data.get("llama_cpp_cache_reuse", 256))),
         diffusion_cli_binary=os.environ.get("LOCALCODE_DIFFUSION_CLI_BINARY", runtime_data.get("diffusion_cli_binary", "")),
-        cohere_server_binary=os.environ.get("LOCALCODE_COHERE_SERVER_BINARY", runtime_data.get("cohere_server_binary", "")),
-        muse_server_binary=os.environ.get("LOCALCODE_MUSE_SERVER_BINARY", runtime_data.get("muse_server_binary", "")),
         model_dir=os.environ.get("LOCALCODE_MODEL_DIR", runtime_data.get("model_dir", "")),
         vision_enabled=str(os.environ.get("LOCALCODE_VISION_ENABLED", runtime_data.get("vision_enabled", False))).lower() in {"1", "true", "yes", "on"},
         # `llama_cpp_spec_type` migration (2026-04-26): old configs

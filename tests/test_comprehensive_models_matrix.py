@@ -43,16 +43,9 @@ def _backend_for(arch: str) -> str:
     a = (arch or "").lower()
     if "diffusion" in a:
         return "diffusion_cli"
-    if "cohere" in a:
-        return "cohere_server"
-    if "muse" in a:
-        return "muse_server"
+    # Every autoregressive arch (incl. cohere2_moe, muse_glimmer) runs on the
+    # one bundled llama-server since the upstream bump.
     return "turboquant_server"
-
-
-# Flags that are TurboQuant-only — a stock cohere server must never see them.
-_TURBO_ONLY = ("--spec-type", "-fit", "--ctx-checkpoints")
-_TURBO_CACHE_VALUES = ("turbo4", "turbo")
 
 
 def _make_gw(tmp_path: Path, choice, ram_gb: int) -> LocalCodeRuntimeGateway:
@@ -67,15 +60,9 @@ def _make_gw(tmp_path: Path, choice, ram_gb: int) -> LocalCodeRuntimeGateway:
     # Real binaries on disk so command building is deterministic (no discovery).
     turbo = tmp_path / "llama-server"
     turbo.write_text("#!/bin/sh\n")
-    cohere = tmp_path / "llama-server-cohere"
-    cohere.write_text("#!/bin/sh\n")
-    muse = tmp_path / "llama-server-muse"
-    muse.write_text("#!/bin/sh\n")
     diff = tmp_path / "llama-diffusion-cli"
     diff.write_text("#!/bin/sh\n")
     cfg.llama_cpp_binary = str(turbo)
-    cfg.cohere_server_binary = str(cohere)
-    cfg.muse_server_binary = str(muse)
     cfg.diffusion_cli_binary = str(diff)
     gw = LocalCodeRuntimeGateway(cfg)
     return gw
@@ -133,28 +120,11 @@ def test_server_command_is_sane_for_every_ram(tmp_path, choice, ram_gb):
         cmd = gw.llama_server_command(gw.config.model)
 
     assert isinstance(cmd, list) and cmd, "must return a non-empty argv"
-    # Binary matches the backend.
-    if backend == "cohere_server":
-        assert cmd[0].endswith("llama-server-cohere")
-        # Stock binary: none of the TurboQuant-only flags.
-        for flag in _TURBO_ONLY:
-            assert flag not in cmd, f"cohere server must not get {flag}"
-        for i, tok in enumerate(cmd):
-            if tok in ("--cache-type-v", "--cache-type-k"):
-                assert cmd[i + 1] not in _TURBO_CACHE_VALUES, "cohere = stock KV only"
-    elif backend == "muse_server":
-        assert cmd[0].endswith("llama-server-muse")
+    # One bundled binary for every server-backed arch; no per-arch runner.
+    assert cmd[0].endswith("llama-server")
+    assert cmd[0] == gw.config.llama_cpp_binary
+    if "muse" in choice.architecture:
         assert "--jinja" in cmd, "Muse Glimmer requires --jinja (its chat template)"
-        # Stock binary: none of the TurboQuant-only flags / KV values.
-        for flag in _TURBO_ONLY:
-            assert flag not in cmd, f"muse server must not get {flag}"
-        for i, tok in enumerate(cmd):
-            if tok in ("--cache-type-v", "--cache-type-k"):
-                assert cmd[i + 1] not in _TURBO_CACHE_VALUES, "muse = stock KV only"
-    else:
-        assert cmd[0].endswith("llama-server")
-        assert not cmd[0].endswith("llama-server-cohere")
-        assert not cmd[0].endswith("llama-server-muse")
 
     # Common required flags.
     assert "--model" in cmd and "--port" in cmd
@@ -175,9 +145,9 @@ def test_server_command_is_sane_for_every_ram(tmp_path, choice, ram_gb):
 @pytest.mark.parametrize("ram_gb", RAM_LADDER)
 def test_recommended_model_dispatches_to_a_real_backend(tmp_path, ram_gb):
     choice = catalog.recommend(ram_gb)
-    assert _backend_for(choice.architecture) in {
-        "diffusion_cli", "cohere_server", "turboquant_server",
-    }
+    # Auto-recommend never lands on the research diffusion path (product call,
+    # see models_catalog._NO_AUTO_RECOMMEND_ARCHS).
+    assert _backend_for(choice.architecture) == "turboquant_server"
 
 
 def test_every_choice_has_a_picker_group():
