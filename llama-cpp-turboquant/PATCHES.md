@@ -44,8 +44,9 @@ The vendored copy deliberately omits these upstream top-level paths:
    `otool -L build/bin/llama-server | grep /opt/homebrew` must be **empty**.
    A previous rebuild linked Homebrew `libssl` and would have broken every user
    without Homebrew installed.
-2. `bash dev/verify_models.sh` — **all 8** bundled-server configs pass
-   (load + generate + tool-call, including the `turbo4` KV path).
+2. `bash dev/verify_models.sh` — **all 11** bundled-server configs pass
+   (load + generate + tool-call, including the `turbo4` KV path and
+   DiffusionGemma on the same binary).
 
 A bump that regresses a working model is strictly worse than staying stale.
 
@@ -148,12 +149,13 @@ Re-check on the next bump whether upstream has taken this too.
 benchmark outputs. Development aids, not product code. Safe to drop if they
 ever conflict.
 
-### `0005-diffusion-gemma-pr24423.patch` — DiffusionGemma (upstream PR #24423)
+### `0005-diffusion-gemma-pr24423.patch` — DiffusionGemma (upstream PR #24423) inside llama-server
 
 **Status: OPEN upstream PR, unmerged.** [ggml-org/llama.cpp#24423](https://github.com/ggml-org/llama.cpp/pull/24423),
-vendored at head SHA `daca8075d871483545dd85d58ce11970b304b541` (the same SHA
-`src/localcode/bootstrap.py` pins as `_DIFFUSION_PR_SHA`).
-**DROP WHEN MERGED** — once the PR lands, bump past it and delete this patch.
+vendored at head SHA `daca8075d871483545dd85d58ce11970b304b541`.
+**When it merges, keep only the fork-local server integration below** (the PR
+itself does not touch `tools/server`); bump past it and shrink this patch to
+those hunks.
 
 Adds the `diffusion-gemma` architecture (`src/models/diffusion-gemma.cpp`,
 `src/models/gemma4-common.h`, `LLM_ARCH_DIFFUSION_GEMMA` plumbing in
@@ -163,45 +165,65 @@ decoder, the `--diffusion-eb*` / `--diffusion-blocks` / `--diffusion-kv-cache`
 / `--diffusion-gpu-sampling*` CLI flags, and a CUDA on-device sampling kernel
 (`ggml-cuda/diffusion-sampling.cu`, not compiled in the Metal wheel).
 
-Why this is a patch and not "just use llama-server": the PR touches
-`tools/server` **zero** times. Diffusion generates by iterative denoising of a
-whole canvas, not by autoregressive decode, so `llama-server`'s slot/completion
-loop has nowhere to host it. The PR instead ships its own programs, and so do we:
+#### Fork-local: the denoiser runs inside `llama-server`
 
-| binary | what it is |
+The PR ships its own programs (`llama-diffusion-cli`, two stdin "servers") and
+touches `tools/server` zero times: diffusion generates by iterative denoising
+of a whole 256-token canvas, not by autoregressive decode, so the server's
+slot/completion loop has nowhere to host it. The product mandate is **one
+binary, one process, `/v1/chat/completions` for everything**, so this patch
+hosts the denoiser in the server instead. Shipped binary list: exactly
+`llama-server`.
+
+| file | what |
 | --- | --- |
-| `llama-diffusion-cli` | one-shot generation; what `runtime_diffusion.py` drives today |
-| `llama-diffusion-gemma-visual-server` | persistent process: loads once, prints `READY`, then one JSON chat request per stdin line, streams `F`/`C`/`STATS`/`DONE` records on stdout |
-| `llama-diffusion-gemma-server` | persistent **raw-logits** forward server (one forward pass per request, returns `C × n_vocab` float32). For external denoising drivers; not a text server |
+| `common/common.cpp` | `common_init_result` enables `llama_diffusion_set_sc()` between model load and context creation for canvas diffusion models (the graph reserve must size the self-conditioning input). No-op for every other arch. |
+| `tools/server/server-context.cpp` | `diffusion_probe()` (vocab-only GGUF peek before the context exists: single slot, `ctx_shift`/`cache_reuse`/`fit`/`warmup` off, `n_ubatch >= canvas`, `n_outputs_max = canvas`), `diffusion_init()` (entropy-bound params from GGUF metadata, prompt-KV cache + device SC auto on single GPU, `llama_set_causal_attn(false)`), and `diffusion_process_slot()`: `update_slots()` routes every task there. It applies the **same** chat template / tokenizer as any model (so OpenAI `tools` and `<\|channel>thought…` reasoning work through the normal chat parser), maps `max_tokens` to `n_blocks = ceil(max_tokens / 256)`, runs `diffusion_generate_entropy_bound()` block by block, commits each finished block and feeds its text through `process_token()` (stop strings, budget, EOG) as ONE streaming chunk, and finishes through `send_final_response()`. `finish_reason` is `stop` on EOG / repetition stop, `length` when the block budget is exhausted. `seed` is honoured; unset draws a fresh one except at `temperature: 0`, where it is pinned so the turn is reproducible. |
+| `tools/server/CMakeLists.txt` | links the `llama-diffusion` static library (the loop) into `server-context`. |
+| `tools/server/server-queue.{h,cpp}` | `server_queue::has_pending_cancel(id)`: the denoiser's per-step callback polls it (4x/s) so a client disconnect aborts the turn within a step, instead of the server denoising the abandoned request to completion before the queued CANCEL is even looked at. |
+| `tools/diffusion/*` | the denoising loop, now a library plus an **opt-in** CLI (`-DLLAMA_BUILD_DIFFUSION_TOOLS=ON`, dev aid, not shipped). `diffusion_trim_canvas()` moved here and **fixed**: the PR's repetition-loop detector compared only every other token at stride 2, so any comma-separated list (`, tides, salt, blue`) was cut as a "loop". It now requires a genuinely periodic run. |
+| `tools/diffusion-gemma-server/*` | the PR's stdin servers, opt-in only (same flag), not shipped. |
+
+Constraints, by design: single slot, strictly synchronous (one request at a
+time, `n_parallel` is forced to 1), text only (no mtmd). A client disconnect
+is honoured between denoise steps (~100 ms), not mid-step. `/props`, `/v1/models`, `/health` and `/slots`
+are the stock endpoints and need no special-casing. The request must leave
+room for one canvas: `prompt + 256 <= n_ctx`, else `ERROR_TYPE_EXCEED_CONTEXT_SIZE`.
+
+Known model behaviour, not a server bug: with `chat_template_kwargs:
+{"enable_thinking": false}` the model emits end-of-generation at canvas
+position 0 (empty reply) on every seed. The Gemma-4 template variant is one
+this checkpoint was not trained on. localcode never sends it for this arch
+(`reasoning_capabilities` → `NONE`); `dev/verify_models.sh` omits it for the
+diffusion line.
 
 #### Relocation: `examples/diffusion*` → `tools/diffusion*`
 
 Upstream keeps these under `examples/`, which this vendored tree omits
-entirely (see *Vendoring exclusions*). They are product code for us, so they
-live under `tools/diffusion/` and `tools/diffusion-gemma-server/` and are wired
-into `tools/CMakeLists.txt`, exactly like `tools/server`. The shipped build
-therefore stays `-DLLAMA_BUILD_EXAMPLES=OFF` and one cmake invocation produces
-`llama-server` and all three diffusion binaries. Everything they need is in
-this tree; nothing is fetched at build or run time.
+entirely (see *Vendoring exclusions*). They are product code for us (the
+library is linked into the server), so they live under `tools/diffusion/` and
+`tools/diffusion-gemma-server/` and are wired into `tools/CMakeLists.txt`.
+The shipped build stays `-DLLAMA_BUILD_EXAMPLES=OFF` and one cmake invocation
+produces `llama-server` only. `diffusion-gemma-eval` was dropped (eval harness,
+not product).
 
-`tools/diffusion/` is the upstream `examples/diffusion/` at the pinned SHA plus
-the PR's hunks; `diffusion-gemma-eval` was dropped (eval harness, not product).
-
-#### Fork-local edits on top of the PR
+#### Other fork-local edits on top of the PR
 
 - `common/arg.cpp`: `-no-cnv` gained `LLAMA_EXAMPLE_DIFFUSION` (the PR put it
   on the `-cnv` option; upstream had since narrowed that option's example set,
   so the hunk needed re-targeting).
 - `diffusion-gemma-visual-server.cpp`: `chat.h` now takes `common_json`, not
   nlohmann; the request is parsed once more with `common_json::parse` for the
-  chat-template calls. Re-check whether the PR has caught up on the next bump.
+  chat-template calls.
 
 #### Verified (2026-08-23, M-series, `diffusiongemma-26B-A4B-it-Q4_K_M.gguf`)
 
-`llama-diffusion-cli -no-cnv -ngl 99 -n 2048` and the `--diffusion-eb off`
-retry both produce coherent text; the visual server answered two consecutive
-requests from one resident process. `otool -L` on all four binaries shows only
-system frameworks.
+`llama-server -m … -c 8192 -ngl 999 --jinja -fa on` loads in ~18 s and answers
+`/v1/chat/completions` from one resident process: text (`Reply with exactly:
+OK` → `OK`, reproducible at temperature 0), a second request with no reload,
+streaming one SSE chunk per committed block, a `get_weather` tool call through
+the OpenAI `tools` key, `max_tokens` honoured exactly, ~55 tok/s over a
+4-block answer. `otool -L` shows only system frameworks.
 
 ---
 

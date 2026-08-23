@@ -11,7 +11,6 @@ import pytest
 from localcode.bootstrap import (
     _find_turboquant_source,
     _turboquant_binary_path,
-    diffusion_cli_path,
 )
 
 
@@ -91,27 +90,24 @@ class TestTurboquantBinaryPath:
         assert result is None
 
 
-class TestDiffusionCliPath:
-    """The diffusion runner resolves like llama-server: bundled first, never built."""
+class TestSingleShippedBinary:
+    """llama-server is the ONE shipped binary: DiffusionGemma runs inside it
+    (fork PATCHES.md 0005), so there is no diffusion runner to resolve, build
+    or download."""
 
-    def test_bundled_wins(self, tmp_path: Path) -> None:
-        fake_file = tmp_path / "pkg" / "localcode" / "bootstrap.py"
-        fake_file.parent.mkdir(parents=True)
-        fake_file.touch()
-        bundled = fake_file.parent / "bin" / "llama-diffusion-cli"
-        bundled.parent.mkdir()
-        bundled.write_text("#!/bin/sh\n")
-        with patch("localcode.bootstrap.__file__", str(fake_file)):
-            assert diffusion_cli_path() == bundled
+    def test_no_diffusion_binary_resolvers(self) -> None:
+        import localcode.bootstrap as b
+        for name in ("diffusion_cli_path", "diffusion_visual_server_path",
+                     "_DIFFUSION_BIN_NAME", "_DIFFUSION_VISUAL_SERVER_NAME"):
+            assert not hasattr(b, name), f"{name} must not come back: one server binary serves every model"
 
-    def test_none_when_absent(self, tmp_path: Path) -> None:
-        fake_file = tmp_path / "pkg" / "localcode" / "bootstrap.py"
-        fake_file.parent.mkdir(parents=True)
-        fake_file.touch()
-        with patch("localcode.bootstrap.__file__", str(fake_file)):
-            with patch("pathlib.Path.home", return_value=tmp_path / "fakehome"):
-                with patch("localcode.bootstrap._find_turboquant_source", return_value=None):
-                    assert diffusion_cli_path() is None
+    def test_wheel_ships_exactly_llama_server(self) -> None:
+        root = Path(__file__).resolve().parent.parent
+        manifest = (root / "MANIFEST.in").read_text()
+        pyproject = (root / "pyproject.toml").read_text()
+        for text in (manifest, pyproject):
+            assert "bin/llama-server" in text
+            assert "llama-diffusion" not in text
 
     def test_no_build_or_network_helpers_exist(self) -> None:
         import localcode.bootstrap as b
