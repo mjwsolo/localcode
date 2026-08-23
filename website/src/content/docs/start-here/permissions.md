@@ -52,4 +52,9 @@ This is a guard against mistakes, not a sandbox. Use `suggest` mode when you wan
 
 ## Hooks can also block
 
-A project's `.localcode/hooks.toml` can define a `pre_tool_use` hook that blocks a tool call by exiting non-zero. Project hooks only run after you trust them with `/hooks`. See [Skills & Hooks](/localcode/guides/skills-and-hooks).
+A repository's `.localcode/hooks.toml` can define a `pre_tool_use` hook. The hook can block a tool call by exiting with a non-zero status. Hooks run shell commands, so a project's hook file is not loaded until you explicitly trust it by launching with `LOCALCODE_TRUST_PROJECT_HOOKS=1`. See [Skills & Hooks](/localcode/guides/skills-and-hooks).
+
+## Related
+
+- [Getting Started](/localcode/start-here/first-change)
+- [Network Boundary](/localcode/concepts/network-boundary)
