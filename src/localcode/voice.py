@@ -295,8 +295,17 @@ def detect_voice_capability() -> tuple[bool, str]:
                 "No audio input device found. Plug in a mic or set a default "
                 "input in System Settings → Sound."
             )
+    except ImportError:
+        # The `voice` extra (Whisper + sounddevice) is not installed. This is
+        # the common case, so name the exact install command rather than
+        # surfacing a raw "No module named 'sounddevice'".
+        return False, (
+            "Voice input needs the voice extra. Install it with:\n"
+            "  uv tool install --force 'localcode[voice]'\n"
+            "(or: pip install 'localcode[voice]')"
+        )
     except Exception as e:
-        return False, f"Audio backend (PortAudio) couldn't enumerate devices: {e}"
+        return False, f"Microphone unavailable: {e}"
     # Disk
     try:
         free_bytes = shutil.disk_usage(str(DEFAULT_STT_MODEL_DIR.parent)).free
