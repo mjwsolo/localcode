@@ -1529,6 +1529,11 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
         "<|tool_call>",
         "<tool_call|>",
         "<|turn>",
+        // string delimiter of the tool-call syntax (`{path:<|"|>.<|"|>}`). Some GGUF conversions
+        // (e.g. DiffusionGemma BF16) export it as a CONTROL token; a non-preserved control token is
+        // dropped from the generated text, the arguments become `{path:.}` and the parser rejects
+        // the whole tool call.
+        "<|\"|>",
     };
 
     if (inputs.has_continuation()) {
