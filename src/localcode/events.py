@@ -181,14 +181,16 @@ def _iso_now() -> str:
 # (test suites set it explicitly in either direction); otherwise
 # `[telemetry] enabled` in config.toml decides, and its default is FALSE.
 def _enabled() -> bool:
+    # The per-project events.jsonl is a LOCAL debug log: append-only, never
+    # uploaded, redacted of secrets at emit, and (since the user-id removal) it
+    # carries no cross-session identifier. So it defaults ON - it is the log the
+    # user tails to see what a turn did. `LOCALCODE_EVENTS=0` turns it off. This
+    # is deliberately separate from the UI turn-trace telemetry: the privacy fix
+    # was deleting the persistent install id, not silencing local debugging.
     env = os.environ.get("LOCALCODE_EVENTS")
     if env is not None:
         return env not in ("0", "false", "no", "off")
-    try:
-        from .telemetry import _config_telemetry_enabled
-        return _config_telemetry_enabled()
-    except Exception:
-        return False
+    return True
 
 
 # Cache the resolved path per-process. find_project_root() walks the
