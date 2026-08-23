@@ -1,35 +1,33 @@
 ---
 title: Slash Commands
-description: Commands available inside the localcode TUI.
+description: Commands available inside the localcode app.
 ---
 
-Type `/` in the chat box to open the command palette. Text that starts with `/` is only a command if the first word is a known command. A path like `/Users/you/project` is sent to the model as a normal message.
+Type `/` in the chat box to open the command list. A line is only a command if its first word is one of the commands below, so a path like `/Users/you/project` is sent to the model as normal text.
 
-Start a line with `!` to enter shell mode.
+Start a line with `!` to run a shell command yourself.
 
 | Command | What it does |
 | --- | --- |
-| `/permissions` | Turn command approvals on or off |
-| `/status` | Show the server health, current model, and performance settings |
-| `/restart` | Restart the model server when `/status` shows "unreachable" |
-| `/mcp` | List or reload MCP servers from `~/.localcode/mcp.json` |
-| `/skills` | List loaded skills and their sources |
+| `/status` | Server health, current model, performance settings |
 | `/model` | List or switch models, for example `/model qwen` |
-| `/delete` | Delete a downloaded model to free disk space after asking first |
-| `/hooks` | Show this repo's `.localcode/hooks.toml` and trust it so it can run shell commands |
-| `/paste` | Attach an image or screenshot from the clipboard, or press `Ctrl+G` |
-| `/thinking` | Show or set the hidden-reasoning policy to `off` or `auto` |
-| `/sounds` | Turn completion and approval sounds on or off |
-| `/voice` | Turn voice mode on or off for push-to-talk dictation in the input box |
-| `/audio` | Turn audio output on or off so macOS `say` can read replies aloud |
-| `/vision` | Turn vision mode on or off so the model can see images |
-| `/search` | Turn the conversation search bar on or off, like `Ctrl+F` |
-| `/undo` | Undo the agent's last file change, or use `/undo all` to undo every change |
-| `/clear` | Clear the conversation history |
-| `/exit` | Exit localcode |
+| `/delete` | Delete a downloaded model to free disk space (asks first) |
+| `/restart` | Restart the model server |
+| `/permissions` | Turn command approvals on or off |
+| `/undo` | Undo the last file change. `/undo all` undoes every change this session |
+| `/thinking` | Show or set hidden reasoning: `off` or `auto` |
+| `/vision` | Let the model see images |
+| `/paste` | Attach an image from the clipboard (or press `Ctrl+G`) |
+| `/mcp` | List MCP servers, or reload them after editing `mcp.json` |
+| `/skills` | List loaded skills and where they came from |
+| `/hooks` | Show this project's `hooks.toml` and trust it |
+| `/voice` | Push-to-talk dictation into the input box |
+| `/audio` | Read replies aloud |
+| `/sounds` | Completion and approval sounds |
+| `/search` | Search the conversation (or press `Ctrl+F`) |
+| `/clear` | Clear the conversation |
+| `/exit` | Quit |
 
-`/search` is a valid command, but it does not appear in the `/` palette. `Ctrl+F` is the main way to open it. Typing `/search` opens or closes the same search bar.
+`/quit` is the same as `/exit`, and `/image` is the same as `/paste`.
 
-You can also use `/quit` instead of `/exit`, `/image` instead of `/paste`, and `/copy`.
-
-`/thinking` does nothing for models without a hidden-reasoning channel. localcode tells you this instead of acting as if the setting worked.
+`/thinking` has no effect on models without a hidden-reasoning channel; localcode tells you when that is the case.
