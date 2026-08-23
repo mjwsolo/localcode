@@ -64,12 +64,6 @@ from .runtime import LocalCodeRuntimeGateway
 
 
 @dataclass(frozen=True)
-class InstallPlan:
-    label: str
-    command: list[str]
-
-
-@dataclass(frozen=True)
 class SetupStep:
     key: str
     phase: str
@@ -171,15 +165,6 @@ def _set_progress(line: str) -> None:
     _progress_status["line"] = line.strip()[-80:]  # keep last 80 chars
 
 
-def detect_llama_cpp_install_plan() -> InstallPlan | None:
-    system = platform.system().lower()
-    if system == "darwin" and shutil.which("brew"):
-        return InstallPlan("Homebrew", ["brew", "install", "llama.cpp"])
-    if system == "linux" and shutil.which("pipx"):
-        return InstallPlan("pipx", ["pipx", "install", "llama-cpp-python"])
-    return None
-
-
 def _find_turboquant_source() -> Path | None:
     """Locate the TurboQuant llama.cpp fork source directory."""
     # Check relative to this package (repo checkout)
@@ -194,25 +179,64 @@ def _find_turboquant_source() -> Path | None:
     return None
 
 
-def _turboquant_binary_path() -> Path | None:
-    """Return path to the TurboQuant llama-server binary."""
-    # Check bundled binary in package first (pip install)
-    bundled = Path(__file__).parent / "bin" / "llama-server"
+def _bundled_binary_path(name: str) -> Path | None:
+    """Resolve a shipped llama.cpp binary by name, in fixed order:
+
+    1. the copy bundled inside the package (`src/localcode/bin/`, what the
+       wheel ships);
+    2. the user data dir (`~/.local/share/localcode/`, a manual drop-in);
+    3. a developer source build (`llama-cpp-turboquant/build/bin/`).
+
+    Nothing here downloads, clones or compiles. If the binary is not on
+    disk the answer is None and the caller reports a broken install.
+    """
+    bundled = Path(__file__).parent / "bin" / name
     if bundled.exists():
         return bundled
-    # Check data dir (downloaded by bootstrap)
-    data_dir = Path.home() / ".local" / "share" / "localcode"
-    data_binary = data_dir / "llama-server"
+    data_binary = Path.home() / ".local" / "share" / "localcode" / name
     if data_binary.exists():
         return data_binary
-    # Check source build
     source = _find_turboquant_source()
     if source is None:
         return None
-    binary = source / "build" / "bin" / "llama-server"
+    binary = source / "build" / "bin" / name
     if binary.exists():
         return binary
     return None
+
+
+def _turboquant_binary_path() -> Path | None:
+    """Return path to the bundled llama-server binary."""
+    return _bundled_binary_path("llama-server")
+
+
+def diffusion_cli_path(config=None) -> Path | None:
+    """Return path to the bundled llama-diffusion-cli (DiffusionGemma runner).
+
+    An explicit `runtime.diffusion_cli_binary` in config wins; otherwise the
+    same bundled / data-dir / source-build order as llama-server.
+    """
+    if config is not None:
+        p = (getattr(config.runtime, "diffusion_cli_binary", "") or "").strip()
+        if p and Path(p).is_file():
+            return Path(p)
+    return _bundled_binary_path(_DIFFUSION_BIN_NAME)
+
+
+def diffusion_visual_server_path() -> Path | None:
+    """Return path to the bundled llama-diffusion-gemma-visual-server.
+
+    Shipped alongside the CLI for the persistent-server diffusion path
+    (not wired into the runtime yet; see runtime_diffusion.py).
+    """
+    return _bundled_binary_path(_DIFFUSION_VISUAL_SERVER_NAME)
+
+
+# Binaries that ship in the wheel next to llama-server (see MANIFEST.in and
+# pyproject [tool.setuptools.package-data]). All are built from the same
+# llama-cpp-turboquant tree, static, Metal-embedded, no Homebrew links.
+_DIFFUSION_BIN_NAME = "llama-diffusion-cli"
+_DIFFUSION_VISUAL_SERVER_NAME = "llama-diffusion-gemma-visual-server"
 
 
 _BINARY_RELEASE_URL = "https://github.com/mjwsolo/localcode/releases/download/v{version}/llama-server-{platform}"
@@ -261,7 +285,7 @@ def download_turboquant_binary(on_progress: Callable[[str], None] | None = None)
             "over an unverified connection."
         )
     except Exception as e:
-        return False, f"Download failed: {e}\nBuild from source instead: clone llama-cpp-turboquant and run cmake."
+        return False, f"Download failed: {e}\nReinstall localcode; the server ships inside the package."
 
 
 def _is_complete_download(p: Path, catalog_entry) -> bool:
@@ -1019,365 +1043,6 @@ def _try_hub_download(choice, dest: Path, on_progress: Callable[[str], None] | N
             import shutil as _sh
             _sh.copyfile(dp, dest)
     return dest.is_file()
-
-
-def _ensure_cmake() -> bool:
-    """Install cmake if not present. Returns True if cmake is available."""
-    if shutil.which("cmake"):
-        return True
-    system = platform.system().lower()
-    if system == "darwin" and shutil.which("brew"):
-        result = subprocess.run(["brew", "install", "cmake"], capture_output=True, text=True, check=False)
-        return result.returncode == 0
-    if system == "linux":
-        for mgr, cmd in [("apt-get", ["sudo", "apt-get", "install", "-y", "cmake"]),
-                         ("dnf", ["sudo", "dnf", "install", "-y", "cmake"])]:
-            if shutil.which(mgr):
-                result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-                return result.returncode == 0
-    return False
-
-
-# ── DiffusionGemma runner (experimental) ────────────────────────────
-#
-# DiffusionGemma is a block-diffusion LM: llama-server cannot generate
-# from it. Upstream support lives in llama.cpp PR #24423, which ships a
-# dedicated one-shot runner, `llama-diffusion-cli`. The TurboQuant fork
-# predates the diffusion_gemma arch and has no diffusion-cli target, so
-# we build the runner ONCE from a stock llama.cpp checkout of the PR
-# branch (Metal is llama.cpp's default backend on macOS — no flags
-# needed) and cache the binary next to llama-server in the data dir.
-
-_DIFFUSION_LLAMA_REPO = "https://github.com/ggml-org/llama.cpp"
-_DIFFUSION_PR_REF = "refs/pull/24423/head"  # diffusion_gemma arch + entropy-bounded denoising
-_DIFFUSION_BIN_NAME = "llama-diffusion-cli"
-
-
-def diffusion_cli_path(config=None) -> Path | None:
-    """Locate an existing llama-diffusion-cli binary, or None."""
-    if config is not None:
-        p = (getattr(config.runtime, "diffusion_cli_binary", "") or "").strip()
-        if p and Path(p).is_file():
-            return Path(p)
-    cached = Path.home() / ".local" / "share" / "localcode" / _DIFFUSION_BIN_NAME
-    if cached.is_file():
-        return cached
-    return None
-
-
-def ensure_diffusion_cli(
-    on_progress: Callable[[str], None] | None = None,
-) -> tuple[bool, str]:
-    """Build (once) and cache the llama-diffusion-cli runner.
-
-    Returns (ok, binary_path_or_error). Idempotent — short-circuits if a
-    cached binary exists. The build is a few minutes of cmake on first
-    use; every later launch reuses the cached binary.
-    """
-    existing = diffusion_cli_path()
-    if existing is not None:
-        return True, str(existing)
-
-    def _say(msg: str) -> None:
-        if on_progress:
-            on_progress(msg)
-
-    if not shutil.which("git"):
-        return False, "git is required to build the diffusion runner (xcode-select --install)."
-    if not _ensure_cmake():
-        return False, "cmake is required to build the diffusion runner (brew install cmake)."
-
-    data_dir = Path.home() / ".local" / "share" / "localcode"
-    data_dir.mkdir(parents=True, exist_ok=True)
-    src = data_dir / "llama.cpp-diffusion"
-
-    def _run(cmd: list[str], cwd: Path | None, timeout: int) -> tuple[bool, str]:
-        r = subprocess.run(cmd, cwd=str(cwd) if cwd else None,
-                           capture_output=True, text=True, timeout=timeout, check=False)
-        if r.returncode != 0:
-            tail = (r.stderr or r.stdout or "").strip().splitlines()[-8:]
-            return False, "\n".join(tail)
-        return True, ""
-
-    try:
-        if not (src / "CMakeLists.txt").is_file():
-            _say("Fetching llama.cpp (diffusion branch, one-time)...")
-            shutil.rmtree(src, ignore_errors=True)
-            ok, err = _run(["git", "clone", "--depth", "1", _DIFFUSION_LLAMA_REPO, str(src)],
-                           cwd=None, timeout=600)
-            if not ok:
-                return False, f"git clone failed:\n{err}"
-        _say("Checking out diffusion support (PR #24423)...")
-        ok, err = _run(["git", "fetch", "--depth", "1", "origin", _DIFFUSION_PR_REF],
-                       cwd=src, timeout=600)
-        if not ok:
-            return False, f"git fetch of {_DIFFUSION_PR_REF} failed:\n{err}"
-        ok, err = _run(["git", "checkout", "--force", "FETCH_HEAD"], cwd=src, timeout=120)
-        if not ok:
-            return False, f"git checkout failed:\n{err}"
-
-        _say("Building llama-diffusion-cli (one-time, ~3-6 min)...")
-        ok, err = _run(["cmake", "-B", "build", "-DCMAKE_BUILD_TYPE=Release",
-                        "-DLLAMA_CURL=OFF"], cwd=src, timeout=600)
-        if not ok:
-            return False, f"cmake configure failed:\n{err}"
-        ok, err = _run(["cmake", "--build", "build", "-j", "--config", "Release",
-                        "--target", _DIFFUSION_BIN_NAME], cwd=src, timeout=2400)
-        if not ok:
-            return False, f"cmake build failed:\n{err}"
-
-        built = src / "build" / "bin" / _DIFFUSION_BIN_NAME
-        if not built.is_file():
-            return False, f"build finished but {built} is missing."
-        dest = data_dir / _DIFFUSION_BIN_NAME
-        shutil.copyfile(built, dest)
-        dest.chmod(0o755)
-        _say("Diffusion runner ready.")
-        return True, str(dest)
-    except subprocess.TimeoutExpired as e:
-        return False, f"build step timed out: {' '.join(map(str, e.cmd))}"
-    except Exception as e:
-        return False, f"diffusion runner build failed: {e}"
-
-
-# ── cohere2moe server (North-Mini-Code) ─────────────────────────────
-#
-# The TurboQuant llama-server can't load North-Mini-Code's cohere2moe
-# architecture. Upstream llama.cpp PR #24260 adds it, so — exactly like
-# the diffusion runner — we build a stock llama-server from that PR ONCE
-# and cache it. cohere2moe is an ordinary autoregressive model, so it's
-# served over the normal HTTP path (no special runner); it just needs a
-# binary with the arch compiled in, launched with stock (non-TurboQuant)
-# flags (see runtime.llama_server_command).
-_COHERE_PR_REF = "refs/pull/24260/head"  # adds the cohere2moe architecture
-_COHERE_BIN_NAME = "llama-server-cohere"
-
-
-def cohere_server_path(config=None) -> Path | None:
-    """Locate an existing cohere2moe-capable llama-server binary, or None."""
-    if config is not None:
-        p = (getattr(config.runtime, "cohere_server_binary", "") or "").strip()
-        if p and Path(p).is_file():
-            return Path(p)
-    cached = Path.home() / ".local" / "share" / "localcode" / _COHERE_BIN_NAME
-    if cached.is_file():
-        return cached
-    return None
-
-
-def ensure_cohere_server(
-    on_progress: Callable[[str], None] | None = None,
-) -> tuple[bool, str]:
-    """Build (once) and cache a llama-server with cohere2moe support.
-
-    Returns (ok, binary_path_or_error). Idempotent — short-circuits if a
-    cached binary exists. First build is several minutes of cmake.
-    """
-    existing = cohere_server_path()
-    if existing is not None:
-        return True, str(existing)
-
-    def _say(msg: str) -> None:
-        if on_progress:
-            on_progress(msg)
-
-    if not shutil.which("git"):
-        return False, "git is required to build the cohere server (xcode-select --install)."
-    if not _ensure_cmake():
-        return False, "cmake is required to build the cohere server (brew install cmake)."
-
-    data_dir = Path.home() / ".local" / "share" / "localcode"
-    data_dir.mkdir(parents=True, exist_ok=True)
-    src = data_dir / "llama.cpp-cohere"
-
-    def _run(cmd: list[str], cwd: Path | None, timeout: int) -> tuple[bool, str]:
-        r = subprocess.run(cmd, cwd=str(cwd) if cwd else None,
-                           capture_output=True, text=True, timeout=timeout, check=False)
-        if r.returncode != 0:
-            tail = (r.stderr or r.stdout or "").strip().splitlines()[-8:]
-            return False, "\n".join(tail)
-        return True, ""
-
-    try:
-        if not (src / "CMakeLists.txt").is_file():
-            _say("Fetching llama.cpp (cohere2moe branch, one-time)...")
-            shutil.rmtree(src, ignore_errors=True)
-            ok, err = _run(["git", "clone", "--depth", "1", _DIFFUSION_LLAMA_REPO, str(src)],
-                           cwd=None, timeout=600)
-            if not ok:
-                return False, f"git clone failed:\n{err}"
-        _say("Checking out cohere2moe support (PR #24260)...")
-        ok, err = _run(["git", "fetch", "--depth", "1", "origin", _COHERE_PR_REF],
-                       cwd=src, timeout=600)
-        if not ok:
-            return False, f"git fetch of {_COHERE_PR_REF} failed:\n{err}"
-        ok, err = _run(["git", "checkout", "--force", "FETCH_HEAD"], cwd=src, timeout=120)
-        if not ok:
-            return False, f"git checkout failed:\n{err}"
-
-        _say("Building llama-server with cohere2moe (one-time, ~5-12 min)...")
-        ok, err = _run(["cmake", "-B", "build", "-DCMAKE_BUILD_TYPE=Release",
-                        "-DLLAMA_CURL=OFF"], cwd=src, timeout=600)
-        if not ok:
-            return False, f"cmake configure failed:\n{err}"
-        ok, err = _run(["cmake", "--build", "build", "-j", "--config", "Release",
-                        "--target", "llama-server"], cwd=src, timeout=3600)
-        if not ok:
-            return False, f"cmake build failed:\n{err}"
-
-        built = src / "build" / "bin" / "llama-server"
-        if not built.is_file():
-            return False, f"build finished but {built} is missing."
-        dest = data_dir / _COHERE_BIN_NAME
-        shutil.copyfile(built, dest)
-        dest.chmod(0o755)
-        _say("Cohere server ready.")
-        return True, str(dest)
-    except subprocess.TimeoutExpired as e:
-        return False, f"build step timed out: {' '.join(map(str, e.cmd))}"
-    except Exception as e:
-        return False, f"cohere server build failed: {e}"
-
-
-# ── Muse Glimmer server (Meta Muse-Glimmer-30B) ─────────────────────
-#
-# The TurboQuant llama-server doesn't have Meta's muse_glimmer architecture.
-# Upstream llama.cpp added it in PR #26841 (merged 2026-08-10, first shipped in
-# release b10353), so — exactly like the cohere2moe and diffusion runners — we
-# build a stock llama-server from current master ONCE and cache it. Muse Glimmer
-# is an ordinary autoregressive multimodal model, served over the normal HTTP
-# path with stock (non-TurboQuant) flags; it just needs a binary with the arch
-# compiled in. Master is well past b10353, so the arch is present.
-_MUSE_BIN_NAME = "llama-server-muse"
-
-
-def muse_server_path(config=None) -> Path | None:
-    """Locate an existing muse_glimmer-capable llama-server binary, or None."""
-    if config is not None:
-        p = (getattr(config.runtime, "muse_server_binary", "") or "").strip()
-        if p and Path(p).is_file():
-            return Path(p)
-    cached = Path.home() / ".local" / "share" / "localcode" / _MUSE_BIN_NAME
-    if cached.is_file():
-        return cached
-    return None
-
-
-def ensure_muse_server(
-    on_progress: Callable[[str], None] | None = None,
-) -> tuple[bool, str]:
-    """Build (once) and cache a llama-server with muse_glimmer support.
-
-    Returns (ok, binary_path_or_error). Idempotent — short-circuits if a
-    cached binary exists. First build is several minutes of cmake.
-    """
-    existing = muse_server_path()
-    if existing is not None:
-        return True, str(existing)
-
-    def _say(msg: str) -> None:
-        if on_progress:
-            on_progress(msg)
-
-    if not shutil.which("git"):
-        return False, "git is required to build the Muse Glimmer server (xcode-select --install)."
-    if not _ensure_cmake():
-        return False, "cmake is required to build the Muse Glimmer server (brew install cmake)."
-
-    data_dir = Path.home() / ".local" / "share" / "localcode"
-    data_dir.mkdir(parents=True, exist_ok=True)
-    src = data_dir / "llama.cpp-muse"
-
-    def _run(cmd: list[str], cwd: Path | None, timeout: int) -> tuple[bool, str]:
-        r = subprocess.run(cmd, cwd=str(cwd) if cwd else None,
-                           capture_output=True, text=True, timeout=timeout, check=False)
-        if r.returncode != 0:
-            tail = (r.stderr or r.stdout or "").strip().splitlines()[-8:]
-            return False, "\n".join(tail)
-        return True, ""
-
-    try:
-        if not (src / "CMakeLists.txt").is_file():
-            _say("Fetching llama.cpp (Muse Glimmer support, one-time)...")
-            shutil.rmtree(src, ignore_errors=True)
-            # master is past b10353 (PR #26841), so it has the muse_glimmer arch.
-            ok, err = _run(["git", "clone", "--depth", "1", _DIFFUSION_LLAMA_REPO, str(src)],
-                           cwd=None, timeout=600)
-            if not ok:
-                return False, f"git clone failed:\n{err}"
-
-        _say("Building llama-server with muse_glimmer (one-time, ~5-12 min)...")
-        ok, err = _run(["cmake", "-B", "build", "-DCMAKE_BUILD_TYPE=Release",
-                        "-DGGML_METAL=ON", "-DLLAMA_CURL=OFF"], cwd=src, timeout=600)
-        if not ok:
-            return False, f"cmake configure failed:\n{err}"
-        ok, err = _run(["cmake", "--build", "build", "-j", "--config", "Release",
-                        "--target", "llama-server"], cwd=src, timeout=3600)
-        if not ok:
-            return False, f"cmake build failed:\n{err}"
-
-        built = src / "build" / "bin" / "llama-server"
-        if not built.is_file():
-            return False, f"build finished but {built} is missing."
-        dest = data_dir / _MUSE_BIN_NAME
-        shutil.copyfile(built, dest)
-        dest.chmod(0o755)
-        _say("Muse Glimmer server ready.")
-        return True, str(dest)
-    except subprocess.TimeoutExpired as e:
-        return False, f"build step timed out: {' '.join(map(str, e.cmd))}"
-    except Exception as e:
-        return False, f"Muse Glimmer server build failed: {e}"
-
-
-def build_turboquant(on_progress: Callable[[str], None] | None = None) -> tuple[bool, str]:
-    """Build the TurboQuant llama.cpp fork from source with Metal support."""
-    source = _find_turboquant_source()
-    if source is None:
-        return False, "TurboQuant source not found. Expected at llama-cpp-turboquant/ in repo root."
-    if on_progress:
-        on_progress("checking cmake...")
-    if not _ensure_cmake():
-        return False, "cmake is required and could not be auto-installed. Install with: brew install cmake"
-    build_dir = source / "build"
-    build_dir.mkdir(exist_ok=True)
-    # Configure
-    if on_progress:
-        on_progress("configuring cmake...")
-    result = subprocess.run(
-        ["cmake", "..", "-DGGML_METAL=ON", "-DCMAKE_BUILD_TYPE=Release",
-         "-DLLAMA_BUILD_TESTS=OFF", "-DLLAMA_BUILD_EXAMPLES=OFF"],
-        cwd=str(build_dir), capture_output=True, text=True, check=False,
-    )
-    if result.returncode != 0:
-        return False, f"cmake configure failed:\n{result.stderr[-500:]}"
-    # Build
-    import os
-    jobs = str(min(os.cpu_count() or 4, 10))
-    if on_progress:
-        on_progress(f"compiling with {jobs} threads...")
-    result = subprocess.run(
-        ["cmake", "--build", ".", "--config", "Release", "-j", jobs],
-        cwd=str(build_dir), capture_output=True, text=True, check=False,
-        timeout=600,  # 10 min max
-    )
-    if result.returncode != 0:
-        return False, f"build failed:\n{result.stderr[-500:]}"
-    binary = build_dir / "bin" / "llama-server"
-    if not binary.exists():
-        return False, f"Build completed but llama-server binary not found at {binary}"
-    return True, str(binary)
-
-
-def install_llama_cpp(console: Console) -> tuple[bool, str]:
-    plan = detect_llama_cpp_install_plan()
-    if plan is None:
-        return False, "Automatic llama.cpp install is not available on this system."
-    result = subprocess.run(plan.command, capture_output=True, text=True, check=False)
-    output = (result.stdout + "\n" + result.stderr).strip()
-    if result.returncode != 0:
-        return False, output or "llama.cpp install command failed."
-    return True, output or f"Installed via {plan.label}."
 
 
 def detect_llama_cpp_server_command() -> str | None:
