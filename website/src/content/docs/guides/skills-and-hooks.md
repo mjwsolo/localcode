@@ -48,10 +48,10 @@ A blocked tool call shows error `E2111`.
 
 ### Trust project hooks first
 
-A project's `hooks.toml` runs shell commands on your machine, so localcode does not load it just because you opened the directory. Review it, then trust it:
+A repo's `.localcode/hooks.toml` runs shell commands on your machine. Because of this, localcode does **not** load it when you only open the directory. Review it, then opt in explicitly:
 
-```text
-/hooks      # show this repo's hooks.toml and trust it
+```bash
+LOCALCODE_TRUST_PROJECT_HOOKS=1 localcode
 ```
 
 Trusting a hooks file is the same as running a script from that repository.
