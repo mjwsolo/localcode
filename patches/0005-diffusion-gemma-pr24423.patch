@@ -4424,3 +4424,19 @@ index e17733a..d698533 100644
      // Call when the state of one slot is changed, it will move one task from deferred to main queue
      // prioritize tasks that use the specified slot (otherwise, pop the first deferred task)
      void pop_deferred_task(int id_slot);
+diff --git a/common/chat.cpp b/common/chat.cpp
+index 24618d3..90c5838 100644
+--- a/common/chat.cpp
++++ b/common/chat.cpp
+@@ -1529,6 +1529,11 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
+         "<|tool_call>",
+         "<tool_call|>",
+         "<|turn>",
++        // string delimiter of the tool-call syntax (`{path:<|"|>.<|"|>}`). Some GGUF conversions
++        // (e.g. DiffusionGemma BF16) export it as a CONTROL token; a non-preserved control token is
++        // dropped from the generated text, the arguments become `{path:.}` and the parser rejects
++        // the whole tool call.
++        "<|\"|>",
+     };
+ 
+     if (inputs.has_continuation()) {
