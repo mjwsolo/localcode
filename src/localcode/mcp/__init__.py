@@ -59,10 +59,12 @@ from .client import (
     _clients,
     call,
     connect_all,
+    disconnect,
     dispatch_mcp_tool,
     get_client,
     list_connected,
     mcp_tool_schemas,
+    server_status,
     shutdown_all,
 )
 
@@ -75,7 +77,9 @@ __all__ = [
     # registry
     "connect_all",
     "list_connected",
+    "server_status",
     "get_client",
+    "disconnect",
     "call",
     "shutdown_all",
     # tool schemas / dispatch
