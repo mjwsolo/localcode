@@ -263,3 +263,234 @@ def test_startup_always_shows_model_picker(monkeypatch):
             return landed
 
     assert asyncio.run(scenario()) == "ModelPickerScreen"
+
+
+# ─── Scroll / command-visibility / clipboard-image regression tests ────────
+#
+# Mouse capture is OFF by default (native terminal text selection), so the
+# keyboard is the ONLY way to scroll the chat log. These pilots guard:
+#   1. PageUp/PageDown/Home/End/Shift+Up/Down scroll the ChatLog even while
+#      the chat TextArea has focus.
+#   2. A slash command always scrolls its output into view (previously the
+#      output landed below the fold when the user had scrolled up).
+#   3. Ctrl+G and Ctrl+V attach a clipboard image end to end.
+#   4. /status no longer leaks the internal perf-profile name.
+
+
+async def _boot_chat_app():
+    """Start the real TUI headless on the chat screen (no backend needed)."""
+    from localcode.tui.app import LocalCodeTUI
+
+    os.environ["LOCALCODE_AUTONOMY"] = "full_auto"
+    app = LocalCodeTUI()
+    app._preview_screen = "chat"
+    return app
+
+
+def _fill_log(app, n: int = 120) -> None:
+    log = app.screen.query_one("#chat-log")
+    for i in range(n):
+        log.append_info(f"filler line {i}")
+
+
+def test_tui_keyboard_scrolls_chat_log_while_input_focused():
+    """PageUp scrolls the log up, PageDown/End return to the bottom, Home
+    jumps to the top, Shift+Up/Down move a line — all while the chat input
+    (a TextArea that owns plain Up/Down) has focus."""
+    async def scenario():
+        app = await _boot_chat_app()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            _fill_log(app)
+            log = app.screen.query_one("#chat-log")
+            log.scroll_end(animate=False)
+            await pilot.pause()
+            bottom = log.scroll_offset.y
+            assert bottom > 0, "log did not overflow — test setup broken"
+
+            await pilot.press("pageup")
+            await pilot.pause()
+            assert log.scroll_offset.y < bottom, "PageUp did not scroll up"
+
+            await pilot.press("pagedown")
+            await pilot.pause()
+            assert log.scroll_offset.y == bottom, "PageDown did not return to bottom"
+
+            await pilot.press("home")
+            await pilot.pause()
+            assert log.scroll_offset.y == 0, "Home did not jump to the top"
+
+            await pilot.press("shift+down")
+            await pilot.pause()
+            assert log.scroll_offset.y == 1, "Shift+Down did not scroll one line"
+
+            await pilot.press("shift+up")
+            await pilot.pause()
+            assert log.scroll_offset.y == 0, "Shift+Up did not scroll back"
+
+            await pilot.press("end")
+            await pilot.pause()
+            assert log.scroll_offset.y == bottom, "End did not jump to the bottom"
+
+    asyncio.run(scenario())
+
+
+def test_tui_command_output_scrolls_into_view():
+    """Reproduces the 'command output is invisible until the next input' bug:
+    scroll to the top, run /status, and assert the log snapped to the bottom
+    so the RUNTIME block is inside the viewport."""
+    async def scenario():
+        app = await _boot_chat_app()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            _fill_log(app)
+            # Let pre-layout deferred writes replay (they auto-scroll to the
+            # bottom) BEFORE we scroll up, or the replay undoes scroll_home.
+            await pilot.pause()
+            log = app.screen.query_one("#chat-log")
+            log.scroll_home(animate=False)
+            await pilot.pause()
+            assert log.scroll_offset.y == 0
+
+            chat_input = app.screen.query_one("#chat-input")
+            chat_input.value = "/status"
+            await pilot.press("enter")
+            await pilot.pause()
+            await pilot.pause()
+
+            text = _chat_log_text(app)
+            assert "RUNTIME" in text, "/status produced no output"
+            # The log must now be at (or within the follow-tail band of)
+            # the bottom, i.e. the freshly written output is on screen.
+            assert log.scroll_offset.y >= log.max_scroll_y - 2, (
+                f"command output below the fold: offset={log.scroll_offset.y} "
+                f"max={log.max_scroll_y}"
+            )
+            # Fix 4: the internal perf-profile identifier must not be shown.
+            assert "profile" not in text.lower().split("performance")[0].split("runtime")[-1], \
+                "/status still shows the internal perf-profile name"
+
+    asyncio.run(scenario())
+
+
+def test_tui_ctrl_g_and_ctrl_v_attach_clipboard_image(monkeypatch):
+    """Ctrl+G (app binding) and Ctrl+V (TextArea key hook) both read the OS
+    clipboard and attach the image for the next message."""
+    fake_png = b"\x89PNG\r\n\x1a\n" + b"fake-image-bytes"
+
+    async def scenario():
+        import localcode.tui.clipboard_image as clip
+        monkeypatch.setattr(clip, "read_clipboard_png", lambda: fake_png)
+
+        app = await _boot_chat_app()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = app.screen
+
+            await pilot.press("ctrl+g")
+            await pilot.pause()
+            assert len(getattr(screen, "_pending_images", [])) == 1, \
+                "Ctrl+G did not attach the clipboard image"
+
+            await pilot.press("ctrl+v")
+            await pilot.pause()
+            assert len(screen._pending_images) == 2, \
+                "Ctrl+V did not attach the clipboard image"
+
+            text = _chat_log_text(app)
+            assert "image attached" in text
+
+    asyncio.run(scenario())
+
+
+def test_tui_ctrl_v_with_text_clipboard_pastes_text(monkeypatch):
+    """Ctrl+V with NO image on the clipboard falls back to pasting the
+    clipboard's text into the composer instead of doing nothing."""
+    async def scenario():
+        import subprocess as sp
+        import localcode.tui.clipboard_image as clip
+        monkeypatch.setattr(clip, "read_clipboard_png", lambda: None)
+
+        real_run = sp.run
+
+        def fake_run(cmd, *a, **kw):
+            if cmd and cmd[0] == "pbpaste":
+                class R:
+                    stdout = "pasted-from-clipboard"
+                return R()
+            return real_run(cmd, *a, **kw)
+
+        monkeypatch.setattr(sp, "run", fake_run)
+
+        app = await _boot_chat_app()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("ctrl+v")
+            await pilot.pause()
+            if sys.platform == "darwin":
+                chat_input = app.screen.query_one("#chat-input")
+                assert "pasted-from-clipboard" in chat_input.text, \
+                    "Ctrl+V text fallback did not paste clipboard text"
+
+    asyncio.run(scenario())
+
+
+def test_tui_attached_clipboard_image_reaches_model_payload(tmp_path, project, monkeypatch):
+    """END TO END: Ctrl+G attaches a clipboard image and the NEXT model call's
+    user message carries it as an OpenAI-style image_url part — proving the
+    image reaches the runtime payload, not just a log line."""
+    import base64
+
+    fake_png = b"\x89PNG\r\n\x1a\n" + b"payload-proof"
+    fake_b64 = base64.b64encode(fake_png).decode("ascii")
+
+    async def scenario():
+        import localcode.tui.clipboard_image as clip
+        monkeypatch.setattr(clip, "read_clipboard_png", lambda: fake_png)
+
+        from localcode.tui.app import LocalCodeTUI
+
+        os.environ["LOCALCODE_AUTONOMY"] = "full_auto"
+        app = LocalCodeTUI()
+        app._preview_screen = "chat"
+
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            backend = build_test_app(
+                tmp_path, script=[say("I can see it.")], cwd=project
+            )
+            app.engine = backend
+            backend.out.set_event_callback(app.bridge.on_event)
+            backend.out.set_approval_callback(app.bridge.request_approval)
+
+            # Attach via the guaranteed key.
+            await pilot.press("ctrl+g")
+            await pilot.pause()
+            assert len(app.screen._pending_images) == 1
+
+            chat_input = app.screen.query_one("#chat-input")
+            chat_input.value = "what is in this image?"
+            await pilot.press("enter")
+            for _ in range(200):
+                await pilot.pause(0.05)
+                if not getattr(app.screen, "_agent_busy", False):
+                    break
+
+            calls = backend.engine.calls
+            assert calls, "model was never called"
+            image_parts = [
+                part
+                for msg in calls[0]
+                if msg.get("role") == "user" and isinstance(msg.get("content"), list)
+                for part in msg["content"]
+                if part.get("type") == "image_url"
+            ]
+            assert image_parts, (
+                "attached image never reached the model payload: "
+                f"{[m.get('role') for m in calls[0]]}"
+            )
+            assert fake_b64 in image_parts[0]["image_url"]["url"]
+            # Attach queue cleared — the image sends exactly once.
+            assert app.screen._pending_images == []
+
+    asyncio.run(scenario())
