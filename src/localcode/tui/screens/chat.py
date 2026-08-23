@@ -1698,7 +1698,15 @@ class ChatScreen(Screen):
             return
 
         badge = _with_interrupt(timer)
-        pos = self._scan_pos
+        # A long tool label plus the interrupt badge can overrun the row on a
+        # mid-width terminal (~64-80 cols) - measured 81 cells into a 70-cell
+        # area - forcing a horizontal scroll. Cap the label with an ellipsis so
+        # label + badge always fit, then recompute the sweep position against
+        # the (possibly shorter) label.
+        max_label = max(8, width - (len(badge) + 4))
+        if len(label) > max_label:
+            label = label[: max(3, max_label - 1)] + "…"
+        pos = self._scan_pos % max(len(label), 1)
         bright = label[:pos + 1]
         dim = label[pos + 1:]
         # Escape markup characters in the text
