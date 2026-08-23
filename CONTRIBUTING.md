@@ -1,31 +1,17 @@
-# Contributing To LocalCode
+# Contributing to localcode
 
-## Scope
+Contributions are welcome. Good changes make the default local workflow better, setup easier, or behaviour more reliable. Avoid adding complexity without a clear user benefit.
 
-LocalCode is an alpha-stage local coding assistant. Contributions are welcome, but changes should keep the product pragmatic:
-
-- improve the default local workflow
-- reduce setup friction
-- improve reliability and clarity
-- avoid adding broad complexity without a clear user benefit
-
-## Development Setup
+## Development setup
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
-```
-
-Recommended extra tools:
-
-```bash
 pip install pytest ruff build
 ```
 
-## Before Opening a PR
-
-Run:
+## Before opening a PR
 
 ```bash
 ruff check src tests
@@ -33,15 +19,15 @@ pytest
 python -m build --no-isolation
 ```
 
-## Pull Request Guidelines
+## Pull requests
 
-- keep PRs focused
-- explain user-facing impact
-- include tests for behavior changes when practical
-- avoid mixing unrelated refactors with bug fixes
-- do not commit local caches, model files, or generated junk
+- Keep each PR to one change.
+- Say what the user will notice.
+- Add tests for behaviour changes when practical.
+- Do not mix refactors with bug fixes.
+- Do not commit caches, model files or build output.
 
-## Runtime Changes
+If a change touches the model or runtime setup, document the platform it supports, how it fails, and what happens when it fails.
 
 If a change affects model/runtime setup, document:
 
@@ -63,4 +49,4 @@ Full details, including how to add, rebase, and drop a patch: [docs/upstream-for
 
 ## Large Changes
 
-For architecture changes, open an issue first so the direction can be discussed before implementation.
+For architecture changes, open an issue first so the direction can be agreed before you write code.
