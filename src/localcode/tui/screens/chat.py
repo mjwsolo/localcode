@@ -2701,11 +2701,33 @@ class ChatScreen(Screen):
                 "into ~/.localcode/skills/ (global) or ./.localcode/skills/ (project)."
             )
             return
-        log.append_info(f"{len(skills)} skill(s) loaded (auto-activated or via the skill tool):")
+        # Aligned columns, no absolute paths: name | source | ~tokens | one-line
+        # description. Paths wrap horribly and tell the user nothing; the name
+        # and a short description are what they scan for. Widths are computed
+        # from the data so nothing ragged. Truncate the description to whatever
+        # room is left on the row.
+        try:
+            # Conservative width: _content_width can read wider than the real
+            # wrap point (padding, gutter, scrollbar), so cap it and leave slack
+            # - a full-width row must never spill to a second line.
+            avail = min(max(48, log._content_width() - 6), 100)
+        except Exception:
+            avail = 80
+        name_w = min(24, max(len(s.name) for s in skills))
+        src_w = max(len(s.origin) for s in skills)
+        rows = []
         for s in skills:
             tokens = max(1, (len(s.body) + len(s.description)) // 4)
-            where = "(bundled)" if s.origin == "bundled" else str(s.source_path)
-            log.append_info(f"  {s.name}  ·  {s.origin}  ·  ~{tokens} tok  ·  {where}")
+            tok = f"~{tokens} tok"
+            name = s.name if len(s.name) <= name_w else s.name[: name_w - 1] + "\u2026"
+            desc = " ".join((s.description or "").split())
+            prefix = f"  {name:<{name_w}}  {s.origin:<{src_w}}  {tok:>9}  "
+            room = max(8, avail - len(prefix))
+            if len(desc) > room:
+                desc = desc[: room - 1].rstrip() + "\u2026"
+            rows.append(prefix + desc)
+        log.append_info(f"{len(skills)} skills loaded:")
+        log.append_info("\n".join(rows))
 
     def _handle_mcp_command(self, text: str) -> None:
         """List + reload MCP servers configured in ~/.localcode/mcp.json.
