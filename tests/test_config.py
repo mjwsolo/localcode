@@ -110,12 +110,17 @@ class TestLoadConfig:
             os.environ.pop("LOCALCODE_HOME", None)
 
     def test_kv_cache_defaults(self, tmp_path: Path) -> None:
-        """Default TurboQuant KV cache types should be q8_0-K + turbo4-V."""
+        """Default KV cache is q8_0 for both K and V.
+
+        Measured on code text against an f16 reference: q8_0/q8_0 has 4x lower
+        mean and 99.9%-tail KLD than q8_0/turbo4 for 5% less speed. The tail is
+        the token that breaks a JSON key, so a coding agent takes the accuracy.
+        """
         os.environ["LOCALCODE_HOME"] = str(tmp_path / "gem_load3")
         try:
             cfg = load_config()
             assert cfg.runtime.kv_cache_type_k == "q8_0"
-            assert cfg.runtime.kv_cache_type_v == "turbo4"
+            assert cfg.runtime.kv_cache_type_v == "q8_0"
         finally:
             os.environ.pop("LOCALCODE_HOME", None)
 
