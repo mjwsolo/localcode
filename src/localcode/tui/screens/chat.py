@@ -2499,13 +2499,31 @@ class ChatScreen(Screen):
             else:
                 self.app.exit()
         elif text == "/clear":
-            log.clear()
+            # Wiping the whole conversation can't be undone, so route it through
+            # the one audited confirm dialog (like every other destructive
+            # action) - UNLESS there's nothing to lose, in which case a confirm
+            # would just be a speed bump.
+            msgs = 0
             if self.tui.engine:
-                self.tui.engine.session.messages.clear()
-            self._context_used = 0
-            self._last_round_prompt_tokens = 0
-            self._total_tokens = 0
-            self._update_status()
+                msgs = len(self.tui.engine.session.messages)
+            if msgs == 0:
+                self._do_clear()
+            else:
+                from .confirm import ConfirmScreen
+
+                def _on_confirm(ok: bool) -> None:
+                    if ok:
+                        self._do_clear()
+
+                self.app.push_screen(
+                    ConfirmScreen(
+                        "Clear the conversation?",
+                        f"{msgs} message{'s' if msgs != 1 else ''} will be removed. "
+                        "This can't be undone.",
+                        confirm_label="Clear",
+                    ),
+                    _on_confirm,
+                )
         elif text == "/copy":
             # Copy last assistant response to clipboard
             last_text = ""
@@ -3472,6 +3490,21 @@ class ChatScreen(Screen):
             return
 
         log.append_info("Usage: /vision  (toggle)  ·  /vision status")
+
+    def _do_clear(self) -> None:
+        """Wipe the conversation log and reset the token/context counters.
+
+        Extracted from the /clear branch so it can be invoked directly (empty
+        conversation) or from the ConfirmScreen callback (non-empty).
+        """
+        log = self.query_one("#chat-log", ChatLog)
+        log.clear()
+        if self.tui.engine:
+            self.tui.engine.session.messages.clear()
+        self._context_used = 0
+        self._last_round_prompt_tokens = 0
+        self._total_tokens = 0
+        self._update_status()
 
     def _handle_delete_command(self, text: str) -> None:
         """Handle /delete — free disk space by removing downloaded models.
