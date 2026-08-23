@@ -459,6 +459,25 @@ class ChatLog(RichLog):
         self._thinking_states[hist_idx] = not self._thinking_states.get(hist_idx, False)
         self._rerender()
 
+    def toggle_all_thinking(self) -> bool:
+        """Expand/collapse EVERY collapsed thinking block from the keyboard.
+
+        Mouse capture is OFF by default, so the click-to-expand ▶/▼ toggle
+        is unreachable for keyboard-only users — this is the keyboard path
+        (bound to Ctrl+O on the chat screen, mirroring Claude Code). If any
+        thinking block is currently collapsed, expand them all; otherwise
+        collapse them all. Returns True when at least one block was toggled
+        so the caller can report "no reasoning to show" on an empty turn.
+        """
+        idxs = [i for i, entry in enumerate(self._history) if entry and entry[0] == "thinking"]
+        if not idxs:
+            return False
+        any_collapsed = any(not self._thinking_states.get(i, False) for i in idxs)
+        for i in idxs:
+            self._thinking_states[i] = any_collapsed
+        self._rerender()
+        return True
+
     def _is_duplicate_thinking_click(self, y: int, x: int | None) -> bool:
         last = self._last_thinking_click
         now = time.monotonic()
