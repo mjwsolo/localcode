@@ -215,6 +215,16 @@ not product).
 - `diffusion-gemma-visual-server.cpp`: `chat.h` now takes `common_json`, not
   nlohmann; the request is parsed once more with `common_json::parse` for the
   chat-template calls.
+- `common/chat.cpp`: the Gemma 4 format's `preserved_tokens` gained `<|"|>`,
+  the string delimiter of the tool-call syntax (`call:f{path:<|"|>.<|"|>}`).
+  The server renders a CONTROL token into the generated text only if the
+  format preserves it. The official Gemma 4 GGUFs and our
+  `diffusiongemma-*-Q4_K_M` export it as USER_DEFINED (always rendered), but
+  `diffusiongemma-26B-A4B-it-BF16.gguf` exports it as CONTROL, so the text
+  handed to the parser read `{path:.}`, the PEG grammar rejected the call and
+  `/v1/chat/completions` returned empty content and null `tool_calls` for
+  every tool turn (the model's own output was correct; the loss happened in
+  token-to-text). Applies to the autoregressive path too. Suitable upstream.
 
 #### Verified (2026-08-23, M-series, `diffusiongemma-26B-A4B-it-Q4_K_M.gguf`)
 
