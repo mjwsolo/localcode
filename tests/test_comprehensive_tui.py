@@ -369,10 +369,58 @@ def _fill_log(app, n: int = 120) -> None:
         log.append_info(f"filler line {i}")
 
 
+def test_tui_rapid_identical_command_resubmit_both_dispatch():
+    """Submitting the SAME slash command twice in quick succession must run
+    it BOTH times. A post-submit `_double_clear` timer used to wipe the
+    input whenever it still held the just-submitted text — which also
+    matched a command the user re-typed within ~1.5s, swallowing the second
+    Enter. Guard: toggle /permissions three times fast and assert the
+    autonomy level flips each time (ON→OFF→ON)."""
+    async def scenario():
+        from localcode.tui.app import LocalCodeTUI
+        from localcode.autonomy import AutonomyLevel
+        os.environ["LOCALCODE_AUTONOMY"] = "full_auto"
+        import tempfile
+        tp = Path(tempfile.mkdtemp())
+        app = LocalCodeTUI()
+        app._preview_screen = "chat"
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            backend = build_test_app(tp, script=[say("x")], cwd=tp / "proj")
+            app.engine = backend
+            backend.out.set_event_callback(app.bridge.on_event)
+            scr = app.screen
+            seen = []
+            for _ in range(3):
+                inp = scr.query_one("#chat-input")
+                inp.focus()
+                await pilot.pause()
+                for ch in "/permissions":
+                    await pilot.press("slash" if ch == "/" else ch)
+                await pilot.pause(0.15)
+                await pilot.press("enter")
+                await pilot.pause(0.25)  # WELL inside the 1.5s clear window
+                seen.append(backend._autonomy)
+            # Each submit must have toggled: FULL_AUTO→AUTO_EDIT→FULL_AUTO→AUTO_EDIT
+            assert seen == [
+                AutonomyLevel.AUTO_EDIT,
+                AutonomyLevel.FULL_AUTO,
+                AutonomyLevel.AUTO_EDIT,
+            ], seen
+
+    asyncio.run(scenario())
+
+
 def test_tui_keyboard_scrolls_chat_log_while_input_focused():
-    """PageUp scrolls the log up, PageDown/End return to the bottom, Home
-    jumps to the top, Shift+Up/Down move a line — all while the chat input
-    (a TextArea that owns plain Up/Down) has focus."""
+    """Ctrl+U/Ctrl+D scroll the log half a page, Ctrl+Home/Ctrl+End jump to
+    top / bottom-and-re-follow, Shift+Up/Down move a line — all while the
+    chat input (a TextArea that owns plain Up/Down) has focus.
+
+    PageUp/PageDown are DELIBERATELY not chat-scroll keys: the multi-line
+    composer needs them for cursor navigation (see the companion test
+    below). This mirrors less/vim and the reference agents (Codex, Claude
+    Code), which avoid PageUp/PageDown for scroll to dodge the composer
+    collision."""
     async def scenario():
         app = await _boot_chat_app()
         async with app.run_test() as pilot:
@@ -384,18 +432,24 @@ def test_tui_keyboard_scrolls_chat_log_while_input_focused():
             bottom = log.scroll_offset.y
             assert bottom > 0, "log did not overflow — test setup broken"
 
-            await pilot.press("pageup")
+            await pilot.press("ctrl+u")
             await pilot.pause()
-            assert log.scroll_offset.y < bottom, "PageUp did not scroll up"
+            assert log.scroll_offset.y < bottom, "Ctrl+U did not scroll up"
 
-            await pilot.press("pagedown")
+            await pilot.press("ctrl+end")
             await pilot.pause()
-            assert log.scroll_offset.y == bottom, "PageDown did not return to bottom"
+            assert log.scroll_offset.y == bottom, "Ctrl+End did not return to bottom"
 
-            await pilot.press("home")
+            await pilot.press("ctrl+home")
             await pilot.pause()
-            assert log.scroll_offset.y == 0, "Home did not jump to the top"
+            assert log.scroll_offset.y == 0, "Ctrl+Home did not jump to the top"
 
+            await pilot.press("ctrl+d")
+            await pilot.pause()
+            assert log.scroll_offset.y > 0, "Ctrl+D did not scroll down"
+
+            await pilot.press("ctrl+home")
+            await pilot.pause()
             await pilot.press("shift+down")
             await pilot.pause()
             assert log.scroll_offset.y == 1, "Shift+Down did not scroll one line"
@@ -404,9 +458,94 @@ def test_tui_keyboard_scrolls_chat_log_while_input_focused():
             await pilot.pause()
             assert log.scroll_offset.y == 0, "Shift+Up did not scroll back"
 
-            await pilot.press("end")
+            await pilot.press("ctrl+end")
             await pilot.pause()
-            assert log.scroll_offset.y == bottom, "End did not jump to the bottom"
+            assert log.scroll_offset.y == bottom, "Ctrl+End did not jump to the bottom"
+
+    asyncio.run(scenario())
+
+
+def test_tui_pageup_moves_composer_cursor_not_scroll():
+    """PageUp/PageDown must move the CURSOR inside a multi-line draft, not
+    scroll the chat log. A prior binding routed them to chat scroll, which
+    silently stole cursor navigation from the composer (the cursor never
+    moved). Regression guard for that fix."""
+    async def scenario():
+        app = await _boot_chat_app()
+        async with app.run_test(size=(120, 16)) as pilot:
+            await pilot.pause()
+            inp = app.screen.query_one("#chat-input")
+            inp.focus()
+            await pilot.pause()
+            # Build a 5-line draft with Shift+Enter newlines.
+            for ln in range(5):
+                for ch in f"line{ln}":
+                    await pilot.press(ch)
+                if ln < 4:
+                    await pilot.press("shift+enter")
+            await pilot.pause()
+            assert inp.cursor_location[0] == 4, "cursor not on last draft line"
+            await pilot.press("pageup")
+            await pilot.pause()
+            assert inp.cursor_location[0] < 4, (
+                "PageUp did not move the composer cursor up — scroll binding "
+                "stole it again"
+            )
+
+    asyncio.run(scenario())
+
+
+def test_tui_ctrl_o_toggles_reasoning_from_keyboard():
+    """Mouse capture is OFF by default, so the ▶/▼ thinking toggle (a click
+    handler) is unreachable for keyboard-only users. Ctrl+O must expand a
+    collapsed reasoning block (and collapse it again) with the composer
+    focused."""
+    async def scenario():
+        reasoning = "\n".join(
+            f"reason line {i} planning the answer carefully" for i in range(10)
+        )
+        snap_app = {}
+
+        from localcode.tui.app import LocalCodeTUI
+        os.environ["LOCALCODE_AUTONOMY"] = "full_auto"
+        import tempfile
+        tp = Path(tempfile.mkdtemp())
+        app = LocalCodeTUI()
+        app._preview_screen = "chat"
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            backend = build_test_app(
+                tp, script=[say("The answer is 42.", thinking=reasoning)],
+                cwd=tp / "proj",
+            )
+            app.engine = backend
+            backend.out.set_event_callback(app.bridge.on_event)
+            backend.out.set_approval_callback(app.bridge.request_approval)
+            scr = app.screen
+            log = scr.query_one("#chat-log")
+            inp = scr.query_one("#chat-input")
+            inp.focus()
+            await pilot.pause()
+            for ch in "think":
+                await pilot.press(ch)
+            await pilot.press("enter")
+            for _ in range(80):
+                await pilot.pause(0.05)
+                if not getattr(scr, "_agent_busy", False):
+                    break
+
+            def visible():
+                return "reason line 5" in "\n".join(s.text for s in log.lines)
+
+            assert not visible(), "reasoning should start collapsed"
+            inp.focus()
+            await pilot.pause()
+            await pilot.press("ctrl+o")
+            await pilot.pause()
+            assert visible(), "Ctrl+O did not expand the reasoning block"
+            await pilot.press("ctrl+o")
+            await pilot.pause()
+            assert not visible(), "Ctrl+O did not collapse the reasoning block again"
 
     asyncio.run(scenario())
 
