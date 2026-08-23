@@ -11,23 +11,23 @@ Start a line with `!` to run a shell command yourself.
 | --- | --- |
 | `/status` | Server health, current model, performance settings |
 | `/model` | List or switch models, for example `/model qwen` |
-| `/delete` | Delete a downloaded model to free disk space (asks first) |
-| `/restart` | Restart the model server |
 | `/permissions` | Turn command approvals on or off |
-| `/undo` | Undo the last file change. `/undo all` undoes every change this session |
-| `/thinking` | Show or set hidden reasoning: `off` or `auto` |
-| `/vision` | Let the model see images |
-| `/paste` | Attach an image from the clipboard (or press `Ctrl+G`) |
+| `/status` | Show server health, the current model, and where files live |
+| `/restart` | Restart the model server. Use it when `/status` shows the server is unreachable |
+| `/model` | List models, or switch with `/model <name>` |
+| `/delete` | Delete a downloaded model to free disk space. Asks first |
 | `/mcp` | List MCP servers, or reload them after editing `mcp.json` |
 | `/skills` | List loaded skills and where they came from |
-| `/hooks` | Show this project's `hooks.toml` and trust it |
+| `/thinking` | Show or set the hidden-reasoning policy: `off` or `auto` |
+| `/vision` | Let the model see images |
 | `/voice` | Push-to-talk dictation into the input box |
-| `/audio` | Read replies aloud |
-| `/sounds` | Completion and approval sounds |
-| `/search` | Search the conversation (or press `Ctrl+F`) |
+| `/audio` | Read replies aloud with macOS `say` |
+| `/sounds` | Turn completion and approval sounds on or off |
+| `/undo` | Undo the agent's last file change. `/undo all` undoes every change this session |
+| `/search` | Search the conversation, like `Ctrl+F` |
 | `/clear` | Clear the conversation |
-| `/exit` | Quit |
+| `/exit` | Quit localcode |
 
-`/quit` is the same as `/exit`, and `/image` is the same as `/paste`.
+`/quit` is the same as `/exit`.
 
 `/thinking` has no effect on models without a hidden-reasoning channel; localcode tells you when that is the case.
