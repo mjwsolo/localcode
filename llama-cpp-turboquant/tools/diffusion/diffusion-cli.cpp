@@ -381,31 +381,9 @@ int main(int argc, char ** argv) {
                 eb_params.gpu_sampling ? "on" : "off", eb_params.gpu_sample_reduce ? "on" : "off");
     }
 
-    // Trim a denoised canvas: cut at the first end-of-generation token, or (checkpoints often emit no stop
-    // token) at the onset of a repetition loop (a token recurring at stride 1-2 for >= 6 steps).
+    // Trim a denoised canvas to the answer (EOG / repetition loop); shared with llama-server, see diffusion.h
     auto trim_canvas = [&](const llama_token * canvas, size_t n) -> size_t {
-        size_t cut = n;
-        for (size_t i = 0; i < n; i++) {
-            if (llama_vocab_is_eog(vocab, canvas[i])) {
-                cut = i;
-                break;
-            }
-        }
-        for (size_t i = 0; i + 1 < cut; i++) {
-            bool loop = false;
-            for (size_t stride = 1; stride <= 2 && !loop; stride++) {
-                size_t reps = 0;
-                for (size_t j = i; j + stride < n && canvas[j] == canvas[j + stride]; j += stride) {
-                    reps++;
-                }
-                loop = reps >= 6;
-            }
-            if (loop) {
-                cut = i;
-                break;
-            }
-        }
-        return cut;
+        return diffusion_trim_canvas(vocab, canvas, n);
     };
 
     // Generate one response for a chat-formatted prompt. Canvas models denoise a fixed canvas_length block

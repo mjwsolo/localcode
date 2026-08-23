@@ -16,6 +16,7 @@
 #include <cmath>
 #include <chrono>
 #include <cstdarg>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <filesystem>
@@ -1334,6 +1335,18 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
 
     if (model_only) {
         return;
+    }
+
+    // fork-local (DiffusionGemma, see PATCHES.md 0005): canvas diffusion models self-condition through a
+    // full-vocab soft-embedding in the graph. The flag must be on BEFORE the context is created so the
+    // graph reserve sizes the compute buffer for it (the denoiser supplies the real logits per step).
+    // No-op for every other architecture.
+    if (llama_model_is_diffusion(model)) {
+        char canvas_str[32];
+        if (llama_model_meta_val_str(model, "diffusion.canvas_length", canvas_str, sizeof(canvas_str)) >= 0 &&
+            strtol(canvas_str, nullptr, 10) > 0) {
+            llama_diffusion_set_sc(model, nullptr, /*use_sc*/ 0.0f, /*temp_inv*/ 1.0f, /*enabled*/ true);
+        }
     }
 
     const llama_vocab * vocab = llama_model_get_vocab(model);

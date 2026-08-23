@@ -681,3 +681,29 @@ void diffusion_generate_entropy_bound(llama_context *             ctx,
     llama_batch_free(batch);
     n_generated = params.max_length;
 }
+
+size_t diffusion_trim_canvas(const llama_vocab * vocab, const llama_token * canvas, size_t n) {
+    size_t cut = n;
+    for (size_t i = 0; i < n; i++) {
+        if (llama_vocab_is_eog(vocab, canvas[i])) {
+            cut = i;
+            break;
+        }
+    }
+    for (size_t i = 0; i + 1 < cut; i++) {
+        bool loop = false;
+        for (size_t period = 1; period <= 2 && !loop; period++) {
+            // length of the periodic run starting at i: canvas[j] == canvas[j + period] for every j in it
+            size_t matches = 0;
+            for (size_t j = i; j + period < n && canvas[j] == canvas[j + period]; j++) {
+                matches++;
+            }
+            loop = matches >= 6 * period;
+        }
+        if (loop) {
+            cut = i;
+            break;
+        }
+    }
+    return cut;
+}

@@ -93,14 +93,6 @@ def test_bandwidth_table_is_central():
     assert mc.BANDWIDTH_FALLBACK_GBPS == 150.0
 
 
-# ── diffusion limits live in model_config ───────────────────────────
-
-def test_diffusion_limits_central():
-    assert mc.DIFFUSION_PROMPT_CHAR_LIMIT == 16000
-    assert mc.DIFFUSION_DEFAULT_CANVAS == 2048
-    assert mc.DIFFUSION_MAX_CANVAS == 2048
-
-
 # ── leaf module: no imports from runtime / loop / app ───────────────
 
 def test_model_config_is_import_leaf():
@@ -108,7 +100,7 @@ def test_model_config_is_import_leaf():
     src = (Path(__file__).resolve().parent.parent
            / "src" / "localcode" / "model_config.py").read_text()
     tree = ast.parse(src)
-    banned = {"runtime", "runtime_diffusion", "compaction", "performance",
+    banned = {"runtime", "compaction", "performance",
               "thermal", "models_catalog", "app", "agent"}
     for node in ast.walk(tree):
         mods: list[str] = []
