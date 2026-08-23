@@ -61,6 +61,11 @@ public:
     // Get the next id for creating a new task
     int get_new_id();
 
+    // fork-local: true if a CANCEL for id_target is already waiting in the queue. Lets a long
+    // synchronous generation (the diffusion path) notice a client disconnect between denoise steps,
+    // since the cancel task itself is only processed once that generation returns.
+    bool has_pending_cancel(int id_target);
+
     // Call when the state of one slot is changed, it will move one task from deferred to main queue
     // prioritize tasks that use the specified slot (otherwise, pop the first deferred task)
     void pop_deferred_task(int id_slot);

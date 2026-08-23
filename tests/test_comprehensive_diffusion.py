@@ -1,408 +1,290 @@
-"""DiffusionGemma runner coverage.
+"""DiffusionGemma on the bundled llama-server.
 
-DiffusionGemma is a block-diffusion LM: llama-server cannot generate from
-it, so the runtime dispatches (on the catalog's ``architecture`` field) to
-the one-shot ``llama-diffusion-cli`` runner instead of HTTP. The real
-runner ships in the wheel (bootstrap.diffusion_cli_path); tests
-here use a stub executable so they run in milliseconds:
+DiffusionGemma is a block-diffusion LM: it denoises a whole 256-token canvas
+per step instead of sampling one token per decode. The fork hosts that
+denoiser INSIDE llama-server (llama-cpp-turboquant/PATCHES.md, patch 0005:
+``diffusion_process_slot`` in tools/server/server-context.cpp), so localcode
+serves it exactly like every other model: one bundled binary, one process that
+keeps the 16 GB of weights resident across turns, ``/v1/chat/completions`` for
+text, streaming and tool calls. There is no diffusion CLI, no second binary,
+no per-turn model reload, and no architecture dispatch in the gateway.
 
-  * prompt formatting — Gemma chat template applied by hand (system fold,
-    user/model roles, trailing model turn);
-  * stream dispatch — a diffusion-arch model never touches HTTP, yields
-    content events from the subprocess, strips <end_of_turn> and a
-    prompt echo, raises with stderr context on a non-zero exit;
-  * catalog — the picker group exists, and browsed quant filenames mint
-    choices that carry architecture="diffusion_gemma" (the dispatch key).
+These tests pin that contract from the Python side with a scripted SSE stream
+(the real server is exercised by dev/verify_models.sh and
+tests/test_real_models.py):
+
+  * the diffusion-arch model goes through the SAME HTTP streaming path as any
+    model, and its request body is the plain OpenAI chat-completions shape
+    (OpenAI-format ``tools``, no hand-built prompt, no ``enable_thinking``
+    kwarg -- the model has no thinking toggle and the server applies the
+    GGUF's chat template);
+  * block-sized chunks, reasoning_content and server-parsed tool_calls come
+    out as the usual content / thinking / tool_calls events;
+  * ``_restart_server`` launches the bundled llama-server for it (it used to
+    short-circuit because "diffusion has no server");
+  * the old side-channel (runtime_diffusion, diffusion_cli_path, the extra
+    binaries, the setup-screen skip) is gone and stays gone;
+  * catalog/picker wiring still mints the diffusion_gemma architecture.
 """
 from __future__ import annotations
 
 import json
-import os
-import platform
-import stat
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-# The DiffusionGemma runner is a macOS-only, cmake-built llama-diffusion-cli.
-# These tests exercise that subprocess path; on the Linux CI runner (no native
-# binary, 7 GB RAM) it hangs/OOMs and kills the runner (exit 143). The macOS CI
-# leg runs them in full. Skipping here keeps the multi-version Linux matrix green
-# without losing coverage.
-pytestmark = pytest.mark.skipif(
-    platform.system() != "Darwin",
-    reason="DiffusionGemma runner/subprocess path is macOS-only",
-)
-
-
-def _tool_args(call):
-    """Tool-call arguments are a JSON STRING (OpenAI/Ollama convention, what
-    the agent loop json.loads()es). Decode for assertions."""
-    return json.loads(call["function"]["arguments"])
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from localcode import bootstrap
 from localcode import models_catalog as catalog
 from localcode.config import RuntimeConfig
-from localcode.runtime import LocalCodeRuntimeGateway, RuntimeErrorWithContext
+from localcode.runtime import LocalCodeRuntimeGateway
 
+ROOT = Path(__file__).resolve().parent.parent
+SRC = ROOT / "src" / "localcode"
 DIFF_FILENAME = "diffusiongemma-26B-A4B-it-Q4_K_M.gguf"
 
 
-def _stub_cli(tmp_path: Path, script_body: str) -> Path:
-    p = tmp_path / "llama-diffusion-cli"
-    p.write_text("#!/bin/sh\n" + script_body)
-    p.chmod(p.stat().st_mode | stat.S_IEXEC)
-    return p
+# ── Scripted llama-server SSE stream ─────────────────────────────────
 
 
-def _gateway(tmp_path: Path, script_body: str) -> LocalCodeRuntimeGateway:
+class _FakeStreamResponse:
+    """Stand-in for httpx's streaming response: yields scripted SSE lines."""
+
+    def __init__(self, lines: list[str]) -> None:
+        self._lines = lines
+        self.status_code = 200
+
+    def __enter__(self) -> "_FakeStreamResponse":
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+    def iter_lines(self):
+        yield from self._lines
+
+
+def _chunk(delta: dict, finish: str | None = None, **extra) -> str:
+    body = {"choices": [{"delta": delta, "finish_reason": finish, "index": 0}]}
+    body.update(extra)
+    return "data: " + json.dumps(body)
+
+
+def _done(finish: str = "stop", completion_tokens: int = 300) -> list[str]:
+    return [
+        _chunk({}, finish, usage={"prompt_tokens": 40, "completion_tokens": completion_tokens,
+                                  "total_tokens": 40 + completion_tokens},
+               timings={"predicted_n": completion_tokens, "predicted_per_second": 55.0}),
+        "data: [DONE]",
+    ]
+
+
+def _block_stream() -> list[str]:
+    """What the in-server diffusion path emits: ONE chunk per committed
+    256-token block (the denoiser commits block by block), with the model's
+    `<|channel>thought ... <channel|>` preamble already split out by the
+    server's chat parser into reasoning_content."""
+    return [
+        _chunk({"reasoning_content": "The user wants a hash map definition. One sentence.\n"}),
+        _chunk({"reasoning_content": "Keep it precise.", "content": "A hash map stores key-value pairs "}),
+        _chunk({"content": "and uses a hash function to find them in constant time."}),
+        *_done("stop"),
+    ]
+
+
+def _tool_stream() -> list[str]:
+    """A server-parsed tool call (the GGUF's Gemma tool format, parsed by
+    llama-server; nothing is parsed on the Python side)."""
+    return [
+        _chunk({"reasoning_content": "Need the weather tool."}),
+        _chunk({"tool_calls": [{"index": 0, "id": "call_0", "type": "function",
+                                "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'}}]}),
+        *_done("tool_calls", 60),
+    ]
+
+
+def _gateway(tmp_path: Path) -> LocalCodeRuntimeGateway:
     cfg = RuntimeConfig()
     cfg.provider = "llama_cpp"
+    cfg.base_url = "http://localhost:8081"
     cfg.model = str(tmp_path / DIFF_FILENAME)
-    cfg.diffusion_cli_binary = str(_stub_cli(tmp_path, script_body))
+    turbo = tmp_path / "llama-server"
+    turbo.write_text("#!/bin/sh\n")
+    cfg.llama_cpp_binary = str(turbo)
     return LocalCodeRuntimeGateway(cfg)
 
 
-# ── Prompt formatting ────────────────────────────────────────────────
+def _drive(gw: LocalCodeRuntimeGateway, lines: list[str], **kw):
+    """Run one stream_chat_events turn against scripted SSE; return
+    (events, the JSON body that was POSTed)."""
+    fake_client = MagicMock()
+    fake_client.is_closed = False
+    fake_client.stream = MagicMock(return_value=_FakeStreamResponse(lines))
+    gw._client = fake_client
+    with patch.object(gw, "_quick_server_probe", return_value=True):
+        events = list(gw.stream_chat_events(
+            [{"role": "system", "content": "Be terse."}, {"role": "user", "content": "hi"}], **kw
+        ))
+    assert fake_client.stream.call_count == 1
+    method, url = fake_client.stream.call_args.args[:2]
+    assert method == "POST"
+    assert url.endswith("/v1/chat/completions")
+    return events, fake_client.stream.call_args.kwargs["json"]
 
 
-def test_prompt_format_basic():
-    msgs = [
-        {"role": "system", "content": "Be terse.\nWorking directory: /tmp/proj"},
-        {"role": "user", "content": "hi"},
-        {"role": "assistant", "content": "hello"},
-        {"role": "user", "content": "again"},
-    ]
-    p = LocalCodeRuntimeGateway._format_diffusion_prompt(msgs)
-    # UNIFIED: the SAME system prompt every model gets is folded in verbatim
-    # (no bespoke concise substitute) — the full system text is preserved.
-    assert "Be terse." in p
-    assert "Working directory: /tmp/proj" in p
-    # User / assistant turns are preserved with Gemma roles.
-    assert "<start_of_turn>model\nhello<end_of_turn>" in p
-    assert "<start_of_turn>user\nagain<end_of_turn>" in p
-    # Generation slot comes last.
-    assert p.endswith("<start_of_turn>model\n")
+TOOLS = [{"type": "function", "function": {
+    "name": "get_weather", "description": "Get weather",
+    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+}}]
 
 
-def test_prompt_format_includes_full_system_verbatim():
-    # The full system prompt is folded in as-is (the old "discard verbose
-    # system" workaround is gone — the empty-output bug was num_predict=-1,
-    # not prompt length, so diffusion now shares the unified prompt).
-    big = "UNIQUE_SYSTEM_MARKER " * 300
-    p = LocalCodeRuntimeGateway._format_diffusion_prompt(
-        [{"role": "system", "content": big}, {"role": "user", "content": "hi"}]
-    )
-    assert "UNIQUE_SYSTEM_MARKER" in p  # full system IS included now
-    assert "<start_of_turn>user\n" in p and p.endswith("<start_of_turn>model\n")
+# ── One HTTP path for everything ─────────────────────────────────────
 
 
-def test_diffusion_clean_strips_unused_collapse_soup():
-    # On a large prompt the entropy-bound-off retry can collapse into a stream
-    # of <unused42> tokens. They're non-empty, so they were surfaced as "text"
-    # (the `<unused26><unused27>…` soup in the chat). The cleaner must strip
-    # them: mixed content keeps the real words; a collapse-ONLY turn cleans to
-    # empty so _diffusion_turn_usable rejects it (-> honest E3107, not garbage).
-    G = LocalCodeRuntimeGateway
-    assert G._clean_diffusion_output("<unused26><unused27> hello <unused10>", "") == "hello"
-    assert G._clean_diffusion_output("<unused26><unused27><unused30>", "") == ""
-    assert G._diffusion_turn_usable(
-        G._clean_diffusion_output("<unused1><unused2>", ""), [], None
-    ) is False
-
-
-def test_diffusion_adaptive_retry_forces_eb_off(monkeypatch, tmp_path):
-    # The first attempt uses the fast entropy-bound `auto` decoder; a retry
-    # after an unusable turn must force `--diffusion-eb off` (verified to
-    # recover large-prompt turns the auto decoder denoises to empty). Re-running
-    # the identical command could never recover a deterministic empty.
-    G = LocalCodeRuntimeGateway
-    cfg = RuntimeConfig()
-    cfg.provider = "llama_cpp"
-    cfg.model = str(tmp_path / DIFF_FILENAME)
-    # Point at an EXISTING stub so the runtime uses it instead of trying to build
-    # the real llama-diffusion-cli (a slow cmake build that times out on clean CI).
-    cfg.diffusion_cli_binary = str(_stub_cli(tmp_path, "exit 0\n"))
-    gw = G(cfg)
-    seen_cmds: list[list] = []
-
-    def fake_run(cmd, timeout):
-        seen_cmds.append(cmd)
-        # First call (no eb flag) returns empty; second (eb off) returns text.
-        return "" if "--diffusion-eb" not in cmd else "recovered answer"
-
-    monkeypatch.setattr(gw, "_run_diffusion_cli", fake_run)
-    events = list(gw._stream_diffusion_events([{"role": "user", "content": "hi"}]))
-    text = "".join(e["content"] for e in events if e["type"] == "content")
-    assert text == "recovered answer"
-    assert "--diffusion-eb" not in seen_cmds[0], "first attempt is the fast auto path"
-    assert seen_cmds[1][-2:] == ["--diffusion-eb", "off"], "retry forces eb off"
-
-
-def test_prompt_format_renders_tool_call_turn_and_labeled_result():
-    # THE post-tool-result E3107 bug: an assistant turn that ONLY made tool
-    # calls has empty content. The old formatter skipped it, leaving the
-    # prompt as `user -> user -> model` (a tool result with no record the
-    # model asked for one). The entropy-bound decoder then denoised to EMPTY
-    # in ~2 steps -> E3107 on EVERY multi-step agentic task. The tool-call
-    # turn must be rendered as a `model` turn, and the tool result as a
-    # labeled `user` turn, so the conversation stays coherent.
-    import re
-    G = LocalCodeRuntimeGateway
-    msgs = [
-        {"role": "system", "content": "sys"},
-        {"role": "user", "content": "search for X"},
-        {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "c0", "type": "function",
-             "function": {"name": "web_search",
-                          "arguments": '{"query": "X"}'}}]},
-        {"role": "tool", "tool_call_id": "c0", "content": "result body"},
-    ]
-    p = G._format_diffusion_prompt(msgs, tools=None)
-    # Coherent alternation — NOT user,user,model.
-    assert re.findall(r"<start_of_turn>(\w+)", p) == ["user", "model", "user", "model"]
-    # The empty-content tool-call turn is rendered as the model's JSON call.
-    assert '{"tool": "web_search", "args": {"query": "X"}}' in p
-    # The result is labeled with the tool it came from.
-    assert "Tool result (web_search):" in p
-    assert "result body" in p
-
-
-# ── Stream dispatch through the stub runner ──────────────────────────
-
-
-def test_diffusion_stream_yields_content(tmp_path):
-    gw = _gateway(tmp_path, "printf 'Hello from diffusion!<end_of_turn>'\n")
-    events = list(gw.stream_chat_events([{"role": "user", "content": "hi"}]))
-    text = "".join(e["content"] for e in events if e["type"] == "content")
-    assert text == "Hello from diffusion!"
-    # Never went anywhere near HTTP / tool machinery.
-    assert all(e["type"] in ("content", "stage", "stream_done") for e in events)
-    # Terminal event is emitted so the UI can record token counts.
-    assert any(e["type"] == "stream_done" for e in events)
-
-
-def test_diffusion_strips_prompt_echo(tmp_path):
-    # argv: -m <model> -p <prompt> ... → "$4" is the prompt. Echo it (like
-    # a chatty runner) and then emit the generation.
-    gw = _gateway(tmp_path, 'printf "%s" "$4"; printf "GEN"\n')
-    events = list(gw.stream_chat_events([{"role": "user", "content": "hi"}]))
-    text = "".join(e["content"] for e in events if e["type"] == "content")
-    assert text == "GEN"
-
-
-def test_diffusion_nonzero_exit_raises_with_stderr(tmp_path):
-    gw = _gateway(tmp_path, "echo 'metal OOM' >&2; exit 3\n")
-    with pytest.raises(RuntimeErrorWithContext) as ei:
-        list(gw.stream_chat_events([{"role": "user", "content": "hi"}]))
-    assert "metal OOM" in str(ei.value)
-
-
-def test_chat_once_uses_diffusion_backend(tmp_path):
-    gw = _gateway(tmp_path, "printf 'oneshot'\n")
-    r = gw.chat_once([{"role": "user", "content": "hi"}])
-    assert r["message"]["content"] == "oneshot"
-    assert r["message"]["tool_calls"] == []
-
-
-def test_diffusion_emits_plain_json_tool_call(tmp_path):
-    # DiffusionGemma emits plain-JSON tool calls (wrapped in its channel/thought
-    # reasoning); the backend must parse them and strip the scaffolding.
-    # Quoted heredoc → literal output, identical under bash and dash (CI
-    # runs /bin/sh = dash, where escaped printf quotes behaved differently).
-    body = (
-        "cat <<'STUBEOF'\n"
-        '<|channel>thought\n'
-        'reason<channel|>{"tool":"list_files","args":{"path":"."}}<tool_call|>\n'
-        "STUBEOF\n"
-    )
-    gw = _gateway(tmp_path, body)
-    tools = [{"function": {"name": "list_files",
-                           "parameters": {"properties": {"path": {"type": "string"}}}}}]
-    events = list(gw.stream_chat_events([{"role": "user", "content": "ls"}], tools=tools))
-    tc = [e for e in events if e["type"] == "tool_calls"]
-    assert tc, "expected a tool_calls event"
-    fn = tc[0]["tool_calls"][0]["function"]
-    assert fn["name"] == "list_files"
-    assert _tool_args(tc[0]["tool_calls"][0]) == {"path": "."}
-    # The raw JSON / channel scaffolding must NOT leak into visible content.
+def test_diffusion_model_uses_the_plain_http_chat_path(tmp_path):
+    gw = _gateway(tmp_path)
+    events, body = _drive(gw, _block_stream())
     content = "".join(e["content"] for e in events if e["type"] == "content")
-    assert "<|channel>" not in content and '"tool"' not in content
+    assert content == ("A hash map stores key-value pairs and uses a hash function to find "
+                       "them in constant time.")
+    # The request is the ordinary OpenAI-compatible body: messages as given,
+    # no hand-applied Gemma template, no raw `prompt` field.
+    assert body["messages"][-1] == {"role": "user", "content": "hi"}
+    assert "prompt" not in body
+    assert body["stream"] is True
+    assert events[-1]["type"] == "stream_done"
 
 
-def test_diffusion_repairs_malformed_tool_json():
-    # DiffusionGemma is non-deterministic and often emits almost-valid JSON:
-    # a bare `.` value, an unquoted path, or a trailing comma. The parser must
-    # repair these and still surface the tool call (the real "ls" failure was
-    # {"path":.} — invalid JSON — silently dropping the call). Valid JSON with
-    # strings/numbers/booleans must pass through untouched.
-    G = LocalCodeRuntimeGateway
-    cases = {
-        '{"tool":"list_files","args":{"path":.}}': {"path": "."},
-        '{"tool":"read_file","args":{"path":src/main.py}}': {"path": "src/main.py"},
-        '{"tool":"list_files","args":{"path":".",}}': {"path": "."},
-        '{"tool":"bash","args":{"cmd":"ls -la","n":5}}': {"cmd": "ls -la", "n": 5},
-        '{"tool":"x","args":{"enabled":true,"count":-3}}': {"enabled": True, "count": -3},
-    }
-    for raw, expected_args in cases.items():
-        calls, _ = G._parse_diffusion_tool_calls(raw)
-        assert calls, f"dropped tool call for {raw!r}"
-        assert _tool_args(calls[0]) == expected_args, raw
+def test_diffusion_request_has_no_thinking_toggle(tmp_path):
+    """DiffusionGemma reasons visibly in every turn and has no thinking
+    switch; the Gemma-4 `enable_thinking` kwarg must NOT be sent (with
+    enable_thinking=false the model emits end-of-generation at position 0,
+    i.e. an empty reply -- verified on the real weights)."""
+    gw = _gateway(tmp_path)
+    for think in (True, False):
+        _, body = _drive(gw, _block_stream(), think=think)
+        assert "chat_template_kwargs" not in body
+        assert "reasoning_effort" not in body
 
 
-def test_diffusion_json_repair_is_string_aware():
-    # The repair must NOT corrupt string values that legitimately contain a
-    # `:` or `,}` (e.g. shell commands) — a blind regex did, dropping the
-    # call. It must also drop trailing commas and quote bare values, but only
-    # OUTSIDE of strings.
-    G = LocalCodeRuntimeGateway
-    calls, _ = G._parse_diffusion_tool_calls(
-        'Sure. {"tool":"run","args":{"cmd":"grep -n foo: bar","path":.}}'
-    )
-    assert calls and _tool_args(calls[0]) == {
-        "cmd": "grep -n foo: bar", "path": "."
-    }
-    calls, _ = G._parse_diffusion_tool_calls(
-        '{"tool":"x","args":{"k":"trailing comma here ,}","path":.}}'
-    )
-    assert calls and _tool_args(calls[0])["k"] == "trailing comma here ,}"
+def test_diffusion_reasoning_split_comes_from_the_server(tmp_path):
+    """The server keeps the `<|channel>thought ... <channel|>` markers in the
+    generated text and its chat parser splits them into reasoning_content;
+    localcode shows that as thinking when the policy is on and hides it when
+    off -- the reasoning never leaks into the visible content either way."""
+    gw = _gateway(tmp_path)
+    events, _ = _drive(gw, _block_stream(), think=True)
+    thinking = "".join(e["content"] for e in events if e["type"] == "thinking")
+    content = "".join(e["content"] for e in events if e["type"] == "content")
+    assert "hash map definition" in thinking
+    assert "hash map definition" not in content
+
+    events, _ = _drive(gw, _block_stream(), think=False)
+    assert not [e for e in events if e["type"] == "thinking"]
+    content = "".join(e["content"] for e in events if e["type"] == "content")
+    assert "hash map definition" not in content
+    assert content.startswith("A hash map")
 
 
-def test_diffusion_repairs_invalid_string_escapes():
-    # THE green-eggs-and-ham bug: DiffusionGemma emitted a perfect write_file
-    # tool call, but the `content` string contained `\ ` (a stray backslash
-    # before a space) — an INVALID JSON escape. json.loads rejected the whole
-    # blob, the call was dropped, the span was still stripped from visible
-    # text → empty turn → E3107 on EVERY prompt, even trivial ones. The repair
-    # must sanitize invalid escapes INSIDE strings while preserving valid ones
-    # (\n, \t, \", \uXXXX) so the tool call survives.
-    G = LocalCodeRuntimeGateway
-    raw = (
-        '{"tool":"write_file","args":{"path":"book.txt",'
-        r'"content":"line one.\nline two.\ stray backslash space.\nlast line."}}'
-    )
-    calls, text = G._parse_diffusion_tool_calls(raw)
-    assert calls, "invalid \\ escape must be repaired, not drop the tool call"
-    args = _tool_args(calls[0])
-    assert args["path"] == "book.txt"
-    # Valid \n escapes are preserved as real newlines; the stray backslash is
-    # kept as a literal backslash (escaping, not dropping — so a Windows path
-    # like C:\Users emitted as \U survives too).
-    assert "line one.\nline two." in args["content"]
-    assert "last line." in args["content"]
-    # The arguments string must itself be valid JSON the agent loop can reparse.
-    import json as _json
-    _json.loads(calls[0]["function"]["arguments"])
+def test_diffusion_tools_go_through_the_tools_key(tmp_path):
+    gw = _gateway(tmp_path)
+    events, body = _drive(gw, _tool_stream(), tools=TOOLS)
+    # OpenAI-format tools in the body, applied by the server's chat template --
+    # no plain-JSON tool block is appended to the prompt any more.
+    assert body["tools"] == TOOLS
+    assert "list_files(" not in json.dumps(body["messages"])
+    tool_events = [e for e in events if e["type"] == "tool_calls"]
+    assert tool_events, "server-parsed tool_calls must surface as a tool_calls event"
+    call = tool_events[0]["tool_calls"][0]
+    assert call["function"]["name"] == "get_weather"
+    assert json.loads(call["function"]["arguments"]) == {"city": "Paris"}
 
 
-def test_diffusion_repairs_invalid_escape_is_kept_not_dropped():
-    # A stray backslash before a non-escape char must be ESCAPED (kept as a
-    # literal backslash), not dropped — otherwise content/paths silently lose
-    # characters. (\b \f \n \r \t \" \\ \/ \uXXXX stay valid escapes; we can't
-    # disambiguate those from a literal-backslash intent, and don't try.)
-    G = LocalCodeRuntimeGateway
-    calls, _ = G._parse_diffusion_tool_calls(
-        r'{"tool":"read_file","args":{"path":"C:\Xenon\queue.txt"}}'
-    )
-    assert calls, "invalid escapes in a path must not drop the call"
-    assert _tool_args(calls[0])["path"] == r"C:\Xenon\queue.txt"
+def test_block_chunks_stream_progressively(tmp_path):
+    """Each committed block is one chunk; the consumer sees them as they
+    land, not as a single dump at the end."""
+    gw = _gateway(tmp_path)
+    events, _ = _drive(gw, _block_stream())
+    content_events = [e for e in events if e["type"] == "content"]
+    assert len(content_events) >= 2
+    assert content_events[0]["content"].startswith("A hash map")
 
 
-def test_diffusion_finds_all_brace_forms_in_order():
-    # An earlier spaced-form `{ "tool"` call must not be skipped in favor of a
-    # later compact `{"tool"` one.
-    G = LocalCodeRuntimeGateway
-    calls, _ = G._parse_diffusion_tool_calls(
-        '{ "tool":"a","args":{}} and {"tool":"b","args":{}}'
-    )
-    assert [c["function"]["name"] for c in calls] == ["a", "b"]
+def test_usage_comes_from_server_not_estimated(tmp_path):
+    gw = _gateway(tmp_path)
+    events, _ = _drive(gw, _block_stream())
+    done = events[-1]
+    assert done["type"] == "stream_done"
+    assert done.get("completion_tokens") == 300
+    assert not done.get("usage_estimated", False)
 
 
-def test_diffusion_tool_block_handles_none_parameters():
-    # An MCP tool with inputSchema: null surfaces as parameters=None; must not
-    # crash prompt formatting.
-    G = LocalCodeRuntimeGateway
-    block = G._diffusion_tool_block([{"function": {"name": "f", "parameters": None}}])
-    assert "f(" in block
+# ── Server lifecycle ─────────────────────────────────────────────────
 
 
-def test_diffusion_non_dict_args_coerced():
-    # A model emitting "args":"foo" (or a list) must not produce a tool call
-    # whose arguments crash the agent loop — coerce to {}.
-    G = LocalCodeRuntimeGateway
-    calls, _ = G._parse_diffusion_tool_calls('{"tool":"x","args":"oops"}')
-    assert calls and _tool_args(calls[0]) == {}
+def test_restart_server_launches_llama_server_for_diffusion(tmp_path, monkeypatch):
+    """`_restart_server` used to return True without starting anything
+    ("diffusion has no server"). Now it starts the bundled llama-server
+    like for any model, and the command is the normal one."""
+    gw = _gateway(tmp_path)
+    model = tmp_path / DIFF_FILENAME
+    model.write_bytes(b"GGUF")
+    monkeypatch.setattr("localcode.bootstrap.get_model_path", lambda preferred=None: model)
+
+    mgr = MagicMock()
+    mgr.is_running.return_value = False
+    mgr.restart.return_value = True
+    mgr.port = 8081
+    monkeypatch.setattr("localcode.server_manager.ServerManager.get", classmethod(lambda cls: mgr))
+
+    assert gw._restart_server() is True
+    mgr.restart.assert_called_once()
+    cmd, model_arg = mgr.restart.call_args.args[:2]
+    assert cmd[0] == gw.config.llama_cpp_binary and cmd[0].endswith("llama-server")
+    assert model_arg == str(model)
+    assert "--jinja" in cmd  # the GGUF's own chat template drives tools + reasoning
 
 
-def test_diffusion_canvas_clamps_nonpositive_num_predict(tmp_path):
-    # The agent loop passes num_predict = MAX_OUTPUT_TOKENS = -1. The CLI's -n
-    # is a CANVAS/token budget; `-n -1` yields an empty canvas ("no usable
-    # response"). Non-positive num_predict MUST become the default 2048 budget
-    # (room for a reasoning preamble AND a complete tool call across blocks);
-    # positive values are capped at 2048. (Regression for the "returned no
-    # usable response" / truncated-tool-call bugs.) Also: NO --diffusion-blocks
-    # flag — it caps output to one block regardless of -n. The stub writes its
-    # argv to a file (the prompt has <end_of_turn>, which the cleaner truncates).
-    argsfile = tmp_path / "argv.txt"
-    gw = _gateway(tmp_path, f'printf "%s\\n" "$@" > "{argsfile}"\nprintf "ok"\n')
-
-    def canvas_arg() -> str:
-        toks = argsfile.read_text().splitlines()
-        return toks[toks.index("-n") + 1]
-
-    for np_in, want in [(-1, "2048"), (0, "2048"), (None, "2048"), (128, "128"), (9999, "2048")]:
-        list(gw.stream_chat_events([{"role": "user", "content": "hi"}], num_predict=np_in))
-        assert "--diffusion-blocks" not in argsfile.read_text(), "must not cap blocks"
-        assert canvas_arg() == want, f"num_predict={np_in} → expected -n {want}"
+def test_server_command_for_diffusion_is_the_normal_one(tmp_path):
+    gw = _gateway(tmp_path)
+    cmd = gw.llama_server_command(gw.config.model)
+    assert cmd[0].endswith("llama-server")
+    assert "--model" in cmd and "--ctx-size" in cmd and "--jinja" in cmd
+    # no diffusion-specific flag or binary (the model path itself is the only place the word appears)
+    assert not any("diffusion" in c for c in cmd if c != gw.config.model)
 
 
-def test_diffusion_bf16_strips_unmarked_thought_reasoning():
-    # BF16 emits `thought\n<reasoning>.<answer>` with no channel markers and
-    # no space at the reasoning→answer join (reasoning's own sentences use
-    # ". "). The cleaner must keep only the answer. Real captured output.
-    G = LocalCodeRuntimeGateway
-    raw = (
-        '\nthought\nThe user said "hi". I am LocalCode, a coding agent. '
-        "I should greet briefly and wait for a task.Hello! How can I help you today?\n"
-        "total time: 2156ms\nthroughput: 118 tok/s\n"
-    )
-    assert G._clean_diffusion_output(raw, "") == "Hello! How can I help you today?"
+# ── The side-channel is gone ─────────────────────────────────────────
 
 
-def test_diffusion_repairs_stray_quote_in_bare_value():
-    # BF16 emitted {"path":."} (dropped the leading quote); the bare value `."`
-    # must repair to "." not `."`.
-    G = LocalCodeRuntimeGateway
-    calls, _ = G._parse_diffusion_tool_calls('{"tool":"list_files","args":{"path":."}}')
-    assert calls and _tool_args(calls[0]) == {"path": "."}
+def test_no_diffusion_side_channel_in_gateway(tmp_path):
+    gw = _gateway(tmp_path)
+    for name in ("_diffusion_choice", "_stream_diffusion_events", "_format_diffusion_prompt",
+                 "_run_diffusion_cli", "_parse_diffusion_tool_calls", "_clean_diffusion_output",
+                 "_diffusion_cli_binary"):
+        assert not hasattr(gw, name), f"{name} must not come back"
+    with pytest.raises(ImportError):
+        import localcode.runtime_diffusion  # noqa: F401
+    assert not hasattr(gw.config, "diffusion_cli_binary")
 
 
-def test_diffusion_clean_never_blanks_out():
-    # The cleaner must never empty a turn that contained real text, whatever
-    # shape DiffusionGemma's non-deterministic output takes (this was the
-    # BF16 "returned no usable response" bug).
-    G = LocalCodeRuntimeGateway
-    variants = [
-        "<|channel>thought\nreason<channel|>Hello!",          # answer after channel
-        "<|channel>thought\nuser said hi, I should greet",     # reasoning only, no answer
-        "<end_of_turn>Hi there!",                              # early end_of_turn
-        "Hello!<end_of_turn>Hello!Hello!",                     # answer then canvas padding
-    ]
-    for raw in variants:
-        out = G._clean_diffusion_output(raw, "")
-        assert out.strip(), f"cleaner blanked out: {raw!r}"
-        assert "<|channel>" not in out and "<end_of_turn>" not in out
+def test_one_shipped_binary():
+    names = sorted(p.name for p in (SRC / "bin").iterdir() if p.name != "__init__.py" and not p.name.startswith("."))
+    assert names == ["llama-server"], f"exactly one shipped binary expected, got {names}"
+    for text in ((ROOT / "MANIFEST.in").read_text(), (ROOT / "pyproject.toml").read_text()):
+        assert "llama-diffusion" not in text
 
 
-def test_non_diffusion_model_does_not_dispatch(tmp_path):
-    cfg = RuntimeConfig()
-    cfg.provider = "llama_cpp"
-    cfg.model = str(tmp_path / "gemma-4-12b-it-UD-Q4_K_XL.gguf")
-    gw = LocalCodeRuntimeGateway(cfg)
-    assert gw._diffusion_choice() is None
+def test_tui_has_no_diffusion_special_cases():
+    """Setup no longer skips the server launch for diffusion, and the status
+    bar no longer shows a separate "diffusion runner" state: the server is
+    probed for liveness like for every model."""
+    setup_src = (SRC / "tui" / "screens" / "setup.py").read_text()
+    assert "diffusion" not in setup_src.lower()
+    chat_src = (SRC / "tui" / "screens" / "chat.py").read_text()
+    assert "diffusion runner" not in chat_src
 
 
 # ── Catalog / picker wiring ──────────────────────────────────────────
@@ -417,8 +299,7 @@ def test_diffusion_group_in_picker():
 
 def test_browsed_quant_mints_diffusion_choice():
     # A quant the curated CHOICES list doesn't know, picked via the
-    # HF-style picker — must still resolve with the diffusion arch so the
-    # runtime dispatch works.
+    # HF-style picker -- must still resolve with the diffusion arch.
     c = catalog.by_filename("diffusiongemma-26B-A4B-it-UD-Q4_K_XL.gguf")
     assert c is not None
     assert c.architecture == "diffusion_gemma"
@@ -436,51 +317,8 @@ def test_curated_choices_still_win():
     assert c.key == "diffusiongemma"  # the curated entry, not a minted one
 
 
-# ── Bootstrap runner discovery ───────────────────────────────────────
-
-
-def test_diffusion_cli_path_prefers_config(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))  # no cached binary
-    fake = tmp_path / "bin" / "llama-diffusion-cli"
-    fake.parent.mkdir()
-    fake.write_text("#!/bin/sh\n")
-
-    class _RT:
-        diffusion_cli_binary = str(fake)
-
-    class _Cfg:
-        runtime = _RT()
-
-    assert bootstrap.diffusion_cli_path(_Cfg()) == fake
-
-
-def test_diffusion_preempts_oversized_prompt(tmp_path, monkeypatch):
-    # A prompt large enough to reliably collapse the small canvas must
-    # short-circuit to E3107 WITHOUT burning the 3 CLI retries (~75s).
-    gw = _gateway(tmp_path, "printf 'should not run'\n")
-    called = {"n": 0}
-
-    def _counting_cli(*_a, **_k):
-        called["n"] += 1
-        return ""
-    monkeypatch.setattr(gw, "_run_diffusion_cli", _counting_cli)
-
-    big = "x" * 20000  # > the 16000-char pre-empt limit
-    events = list(gw.stream_chat_events([{"role": "user", "content": big}]))
-    content = "".join(e["content"] for e in events if e["type"] == "content")
-    assert "E3107" in content
-    assert called["n"] == 0, "oversized prompt must not invoke the CLI retries"
-
-
-def test_diffusion_normal_prompt_still_runs_cli(tmp_path, monkeypatch):
-    # A normal-size prompt must NOT be pre-empted — the CLI still runs.
-    gw = _gateway(tmp_path, "printf 'hi there'\n")
-    called = {"n": 0}
-
-    def _counting_cli(*_a, **_k):
-        called["n"] += 1
-        return "hi there"
-    monkeypatch.setattr(gw, "_run_diffusion_cli", _counting_cli)
-
-    list(gw.stream_chat_events([{"role": "user", "content": "hello"}]))
-    assert called["n"] >= 1, "normal prompt must still run the CLI"
+def test_catalog_prose_describes_the_server_path():
+    c = catalog.by_key("diffusiongemma")
+    g = catalog.by_group("diffusiongemma-26b-a4b")
+    for notes in (c.notes, g.notes):
+        assert "llama-diffusion-cli" not in notes

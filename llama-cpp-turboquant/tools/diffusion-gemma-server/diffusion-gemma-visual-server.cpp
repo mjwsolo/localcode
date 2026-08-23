@@ -84,23 +84,9 @@ static bool vis_step_callback(int32_t step, int32_t total_steps, const llama_tok
     return true;
 }
 
-// Trim a denoised canvas like the CLI: cut at the first end-of-generation token, else at the onset of a
-// repetition loop (a token recurring at stride 1-2 for >= 6 steps).
+// Trim a denoised canvas to the answer (EOG / repetition loop); shared with llama-server, see diffusion.h
 static size_t trim_canvas(const llama_vocab * vocab, const llama_token * canvas, size_t n) {
-    size_t cut = n;
-    for (size_t i = 0; i < n; i++) {
-        if (llama_vocab_is_eog(vocab, canvas[i])) { cut = i; break; }
-    }
-    for (size_t i = 0; i + 1 < cut; i++) {
-        bool loop = false;
-        for (size_t stride = 1; stride <= 2 && !loop; stride++) {
-            size_t reps = 0;
-            for (size_t j = i; j + stride < n && canvas[j] == canvas[j + stride]; j += stride) { reps++; }
-            loop = reps >= 6;
-        }
-        if (loop) { cut = i; break; }
-    }
-    return cut;
+    return diffusion_trim_canvas(vocab, canvas, n);
 }
 
 static float meta_f(llama_model * m, const char * key, float def) {

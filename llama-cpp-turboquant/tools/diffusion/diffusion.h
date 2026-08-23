@@ -93,3 +93,10 @@ void diffusion_generate_entropy_bound(llama_context *             ctx,
                                       int32_t                     n_input,
                                       const diffusion_eb_params & params,
                                       int32_t &                   n_generated);
+
+// Trim a denoised canvas to the answer: cut at the first end-of-generation token, or (checkpoints often
+// emit no stop token) at the onset of a repetition loop. A loop is a run that is PERIODIC with period
+// 1 or 2 for at least 6 periods: "\n\n\n\n\n\n\n" or "a b a b a b a b a b a b a b". The check compares every
+// position of the run against the one a period later, so a list like ", tides, salt, blue, deep" (where
+// only the commas recur at stride 2) is NOT a loop. Returns the number of tokens to keep.
+size_t diffusion_trim_canvas(const llama_vocab * vocab, const llama_token * canvas, size_t n);

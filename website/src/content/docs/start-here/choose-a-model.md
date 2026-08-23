@@ -48,7 +48,7 @@ If you switch to a model you do not have, localcode downloads it first. You only
 
 ## Experimental models
 
-You can choose some models from the catalogue even though localcode never recommends them automatically. Their architecture needs a different runner from the bundled server. Examples include diffusion models and architectures that the bundled fork does not support. localcode builds a dedicated server the first time you use one. These models are experimental and are not the standard choice.
+You can choose some models from the catalogue even though localcode never recommends them automatically. They run on the same bundled server as every other model, but they are research architectures: DiffusionGemma, for example, denoises whole 256-token blocks instead of streaming tokens, and reasons visibly on every turn. These models are experimental and are not the standard choice.
 
 ## Choosing by hand
 

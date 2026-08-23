@@ -661,36 +661,6 @@ class SetupScreen(Screen):
             pass
         save_config(config)
 
-        # DiffusionGemma: there is no llama-server for block-diffusion
-        # models. Generation runs through the bundled one-shot
-        # llama-diffusion-cli runner (see runtime_diffusion), so skip the
-        # server launch + health gate entirely. Nothing is built or
-        # downloaded here: the runner ships in the wheel next to llama-server.
-        _arch_choice = None
-        try:
-            from ...models_catalog import by_filename as _by_fn
-            _arch_choice = _by_fn(Path(str(model_path)).name)
-        except Exception:
-            _arch_choice = None
-        if _arch_choice is not None and str(
-            getattr(_arch_choice, "architecture", "")
-        ).startswith("diffusion"):
-            from ...bootstrap import diffusion_cli_path
-
-            if diffusion_cli_path(config) is None:
-                self.app.call_from_thread(lambda: self._show_error(
-                    msg="The bundled diffusion runner is missing.",
-                    code="E1002",
-                    details="llama-diffusion-cli was not found in this install. Reinstall localcode.",
-                ))
-                return
-            self._current_step = 3
-            self._status_text = "Ready (diffusion runner)!"
-            import asyncio
-            await asyncio.sleep(0.5)
-            self.app.call_from_thread(self._finish)
-            return
-
         # Launch server
         gw = LocalCodeRuntimeGateway(config.runtime)
         from ...bootstrap import _turboquant_binary_path as _tbp
