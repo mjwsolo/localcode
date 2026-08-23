@@ -711,6 +711,7 @@ class _ChatTextArea(TextArea):
 
 from ..bridge import AgentEvent, ApprovalRequest
 from ..widgets.chat_log import ChatLog
+from .model_picker import ModelPickerScreen
 from ...autonomy import AutonomyLevel, apply_autonomy_to_permissions, get_policy
 
 _SLASH_COMMANDS = [
@@ -3290,6 +3291,20 @@ class ChatScreen(Screen):
         from ...model_delete import run_delete_command
         log = self.query_one("#chat-log", ChatLog)
         arg = text[len("/delete"):].strip()
+        # Bare /delete opens the visual picker (like /model). The picker already
+        # has a built-in delete: press `x` on a downloaded model to remove it,
+        # with the in-use model and in-flight downloads refused. That is what the
+        # user asked for - select the model in the UI and delete it - instead of
+        # typing a number. Keep `/delete <name> [confirm]` for muscle memory.
+        if not arg:
+            self.app.push_screen(
+                ModelPickerScreen(
+                    title="Select a model, press x to delete (frees disk space)",
+                    show_current=True,
+                ),
+                lambda _choice: None,
+            )
+            return
         try:
             lines = run_delete_command(arg, self.tui.config)
         except Exception as e:  # noqa: BLE001 — never let /delete crash the app
