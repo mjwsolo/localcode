@@ -282,3 +282,75 @@ class _FakeStubMgr:
     """ServerManager stand-in: knows what was requested and which port."""
     current_model = "/models/Muse-Glimmer-30B-UD-Q8_K_XL.gguf"
     port = 8081
+
+
+# ── /model switch must actually switch ──────────────────────────────────
+#
+# _restart_server has a guard that reuses a live, healthy server instead of
+# killing it (crash recovery: don't restart a 30B model that is 50 s into a
+# 60 s load). That guard is also on the /model switch path, and it could not
+# tell "alive, loading the right model" from "alive, serving the OLD model".
+# Observed live 2026-08-23: /model to Muse printed "Server ready with Muse",
+# no process was started, /props still said diffusiongemma, and the model
+# told the user it was Muse because the switch had put that name in the
+# prompt. These pin the distinction.
+
+
+def _gateway_with_running_server(monkeypatch, serving_basename):
+    from localcode import runtime as rt
+    from localcode.config import RuntimeConfig
+
+    cfg = RuntimeConfig()
+    cfg.model = "/models/Muse-Glimmer-30B-UD-Q8_K_XL.gguf"
+    cfg.base_url = "http://localhost:8081"
+    gw = rt.LocalCodeRuntimeGateway(cfg)
+
+    calls = {"restart": 0, "wait_healthy": 0}
+
+    class _Mgr:
+        port = 8081
+        verification_error = ""
+        verified_model = None
+
+        def is_running(self):
+            return True
+
+        def _wait_healthy(self, port, timeout_s=0):
+            calls["wait_healthy"] += 1
+            return True
+
+        def restart(self, cmd, model, **kw):
+            calls["restart"] += 1
+            return True
+
+    fake = _Mgr()
+    from localcode.server_manager import ServerManager as _SM
+    monkeypatch.setattr(_SM, "get", classmethod(lambda cls: fake))
+    monkeypatch.setattr(
+        "localcode.server_manager.probe_loaded_model",
+        lambda port, timeout=2.0: (f"/models/{serving_basename}" if serving_basename else None),
+    )
+    monkeypatch.setattr("localcode.bootstrap.get_model_path", lambda name: Path(cfg.model))
+    monkeypatch.setattr(gw, "llama_server_command", lambda m: ["llama-server", "-m", m])
+    return gw, calls
+
+
+def test_switch_to_a_different_model_really_restarts(monkeypatch):
+    gw, calls = _gateway_with_running_server(monkeypatch, "diffusiongemma-26B-A4B-it-BF16.gguf")
+    assert gw._restart_server() is True
+    assert calls["restart"] == 1, "a live server serving a DIFFERENT model must be replaced"
+
+
+def test_same_model_already_serving_is_reused_not_reloaded(monkeypatch):
+    gw, calls = _gateway_with_running_server(monkeypatch, "Muse-Glimmer-30B-UD-Q8_K_XL.gguf")
+    assert gw._restart_server() is True
+    assert calls["restart"] == 0, "the crash-recovery reuse must survive for the same model"
+    assert calls["wait_healthy"] == 1
+
+
+def test_server_still_loading_is_waited_for_not_killed(monkeypatch):
+    # /props answers nothing while a model is loading; that is the case the
+    # original guard was written for and it must keep waiting, not restart.
+    gw, calls = _gateway_with_running_server(monkeypatch, None)
+    assert gw._restart_server() is True
+    assert calls["restart"] == 0
