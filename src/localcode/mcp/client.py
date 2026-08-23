@@ -213,6 +213,12 @@ class MCPClient:
 # Registry of connected MCP clients (name → MCPClient).
 _clients: dict[str, MCPClient] = {}
 
+# Last connection error per server name, populated by connect_all(). Lets the
+# TUI show WHY a configured server isn't connected — the error text is otherwise
+# only returned transiently from connect_all() and then lost. Cleared for a
+# server the moment it connects successfully.
+_last_errors: dict[str, str] = {}
+
 
 def _client_from_config(name: str, cfg: dict) -> MCPClient:
     """Build an MCPClient from one server's config dict (transport-aware)."""
@@ -240,8 +246,10 @@ def connect_all() -> tuple[int, list[str]]:
             cli = _client_from_config(name, server_cfg or {})
             cli.connect()
             _clients[name] = cli
+            _last_errors.pop(name, None)  # cleared on a successful connect
         except Exception as e:
             errors.append(f"{name}: {e}")
+            _last_errors[name] = str(e)
     return len(_clients), errors
 
 
@@ -261,6 +269,56 @@ def list_connected() -> list[tuple[str, list[dict]]]:
     return out
 
 
+def server_status() -> list[dict]:
+    """Return one honest status row per CONFIGURED server, for the TUI.
+
+    Combines the config (every server the user wrote in mcp.json) with the live
+    registry (which of them actually connected) and `_last_errors` (why the
+    others didn't). Each row is a plain dict:
+
+        {
+          "name": str,
+          "transport": str,        # "stdio" | "http" | "sse"
+          "oauth": bool,           # http/sse auth flag from config (else False)
+          "connected": bool,       # is there a live, healthy session?
+          "tools": list[dict],     # the server's tools ([] unless connected)
+          "error": str | None,     # last connect error, if it failed
+        }
+
+    Only reports what the client can actually tell us — connected / failed /
+    not-connected. It does NOT invent auth states a stdio server has no way to
+    report; `oauth` is surfaced only because it comes straight from the config.
+    """
+    config = load_mcp_config()
+    rows: list[dict] = []
+    for name, cfg in config.items():
+        cfg = cfg or {}
+        cli = _clients.get(name)
+        connected = False
+        tools: list[dict] = []
+        if cli is not None:
+            ok, _ = cli.health()
+            connected = ok
+            if ok:
+                try:
+                    tools = cli.list_tools()
+                except Exception as e:  # noqa: BLE001
+                    connected = False
+                    _last_errors[name] = str(e)
+        error = None if connected else _last_errors.get(name)
+        rows.append(
+            {
+                "name": name,
+                "transport": (cfg.get("transport") or "stdio").lower(),
+                "oauth": bool(cfg.get("oauth", False)),
+                "connected": connected,
+                "tools": tools,
+                "error": error,
+            }
+        )
+    return rows
+
+
 def call(server: str, tool_name: str, arguments: dict) -> str:
     cli = _clients.get(server)
     if cli is None:
@@ -271,6 +329,24 @@ def call(server: str, tool_name: str, arguments: dict) -> str:
         return f"MCP call {server}.{tool_name} failed: {e}"
 
 
+def disconnect(name: str) -> bool:
+    """Tear down ONE connected server's session and drop it from the registry.
+
+    Returns True if a live client was closed, False if the server wasn't
+    connected. The server stays in mcp.json — `r` (connect_all) reconnects it —
+    so this is a runtime enable/disable, not a config edit. Reversible and
+    honest: it only does what the client can actually do.
+    """
+    cli = _clients.pop(name, None)
+    if cli is None:
+        return False
+    try:
+        cli.close()
+    except Exception:
+        pass
+    return True
+
+
 def shutdown_all() -> None:
     """Tear down all MCP connections on app exit."""
     for cli in _clients.values():
@@ -279,6 +355,9 @@ def shutdown_all() -> None:
         except Exception:
             pass
     _clients.clear()
+    # A fresh reload should re-derive every server's status from scratch, so a
+    # stale error from a prior config doesn't linger after shutdown.
+    _last_errors.clear()
 
 
 def mcp_tool_schemas() -> list[dict]:
