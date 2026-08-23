@@ -835,6 +835,29 @@ def _is_known_command(text: str) -> bool:
     head = text.split(None, 1)[0].lower()
     return head in _KNOWN_COMMANDS
 
+
+def _looks_like_mistyped_command(text: str) -> bool:
+    """True when `text` is a bare `/word` that meant to be a command but isn't.
+
+    A leading `/` is normally sent to the model so a pasted path
+    (`/Users/you/repo`, `/tmp`) still works. But a lone `/undo` or a typo'd
+    `/celar` is clearly a command attempt, not a message - sending those to the
+    model (which then apologises for having no such command) is a papercut. We
+    treat a single slash-token with no spaces or second slash as a command
+    attempt, EXCEPT when it names a real filesystem path (so `/tmp`, `/etc`
+    stay legitimate references).
+    """
+    import os
+    import re
+
+    if _is_known_command(text):
+        return False
+    if not re.fullmatch(r"/[A-Za-z][\w-]*", text):
+        return False
+    if os.path.exists(text):
+        return False
+    return True
+
 if TYPE_CHECKING:
     from ..app import LocalCodeTUI
     from ...telemetry import TurnTrace
@@ -1269,8 +1292,8 @@ class ChatScreen(Screen):
         # with mouse capture off (native text selection) the wheel cannot
         # scroll the chat — these keys are how, so they must be discoverable.
         log.append_info(
-            "PgUp/PgDn scroll · Shift+↑/↓ line · Home/End jump · "
-            "Shift+Enter newline · Ctrl+G attach image"
+            "Ctrl+U/D scroll · Shift+↑/↓ line · Home/End jump · "
+            "Shift+Enter newline · paste to attach an image"
         )
         # Warn if this repo ships hooks that shell out but haven't been trusted.
         # They are NOT loaded (see hooks.py) — this just tells the user they
@@ -2313,6 +2336,16 @@ class ChatScreen(Screen):
             return
 
         log = self.query_one("#chat-log", ChatLog)
+
+        # A bare `/word` that isn't a real command (removed like /undo, or a
+        # typo) should say so, not get sent to the model as a message. Pasted
+        # paths and normal text fall through untouched.
+        if _looks_like_mistyped_command(text):
+            from rich.markup import escape as _mesc
+            log.append_info(
+                f"Unknown command: {_mesc(text)}. Type / to see available commands."
+            )
+            return
 
         if self._agent_busy or self._server_restarting:
             # Fast-path: if the message is the user trying to bail out
