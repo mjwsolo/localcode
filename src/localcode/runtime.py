@@ -343,10 +343,34 @@ class LocalCodeRuntimeGateway:
         # silently re-discovers and persists the new path next time
         # `save_config` runs.
         configured = self.config.llama_cpp_binary or ""
-        if configured and _P(configured).is_file():
+        bundled = _turboquant_binary_path()
+        # A pinned path is honoured only if it is NOT a stale copy of our own
+        # package. Older versions wrote the absolute path of their bundled
+        # binary into config.toml; after a wheel upgrade that path still
+        # exists (the old install directory is not removed), so every
+        # upgraded user kept launching the previous release's llama-server
+        # and any model added since failed to load with no useful error.
+        # Seen live: config pinned .../uv/tools/localcode/.../bin/llama-server
+        # from a build that predated diffusion support. A pin that lives in
+        # any site-packages/localcode/bin/ other than the one we ship from is
+        # that exact case, and the bundled binary wins. A pin anywhere else
+        # (a user's own build) is respected as before.
+        def _is_stale_self_pin(path: str) -> bool:
+            try:
+                parts = _P(path).resolve().parts
+                return (
+                    "site-packages" in parts
+                    and parts[-3:-1] == ("localcode", "bin")
+                    and bundled is not None
+                    and _P(path).resolve() != _P(bundled).resolve()
+                )
+            except Exception:
+                return False
+
+        if configured and _P(configured).is_file() and not _is_stale_self_pin(configured):
             binary = configured
         else:
-            discovered = _turboquant_binary_path()
+            discovered = bundled
             binary = str(discovered) if discovered else "llama-server"
             # Update the in-memory config so the next save_config persists
             # the corrected path (no need to wait for the user to re-run
