@@ -1253,10 +1253,32 @@ class LocalCodeRuntimeGateway:
         # while the user just saw "crunching". If the process is alive, WAIT
         # for its health probe instead; only a genuinely dead or wedged
         # server gets kill+relaunch.
+        #
+        # BUT that reuse is only valid when the live server is serving the model
+        # we were asked for. This function is also the /model switch path, and
+        # the guard cannot tell "alive and loading the right model" from "alive
+        # and serving the OLD model". Observed live 2026-08-23: /model to Muse
+        # Glimmer printed "Server ready with Muse Glimmer", no new process was
+        # ever started, /props still said diffusiongemma, and the model told
+        # the user it was Muse because the switch had put that name in the
+        # prompt. The /props verification never ran because it lives inside
+        # mgr.restart(), which this early return skipped. So: keep the guard
+        # for a server that is loading THIS model; fall through to a real
+        # restart when it is serving a different one.
+        from pathlib import Path as _RP
+        _wanted = _RP(str(model)).name
+        _serving = None
         if mgr.is_running():
             try:
+                from .server_manager import probe_loaded_model as _probe
+                _serving = _probe(mgr.port, timeout=2.0)
+            except Exception:
+                _serving = None
+        _same_model = bool(_serving) and _RP(str(_serving)).name == _wanted
+        if mgr.is_running() and (_same_model or _serving is None):
+            try:
                 from .events import emit as _emit_wait
-                _emit_wait("server_warmup_wait", port=mgr.port)
+                _emit_wait("server_warmup_wait", port=mgr.port, serving=_serving, wanted=_wanted)
             except Exception:
                 pass
             if mgr._wait_healthy(mgr.port, timeout_s=HEALTH_TIMEOUT_S):
