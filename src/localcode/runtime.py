@@ -370,75 +370,6 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
         if mode == "context":
             threads = max(threads, 10)  # context mode benefits from all cores
 
-        # ── cohere2moe (North-Mini-Code) ──────────────────────────────
-        # The TurboQuant fork can't load cohere2moe; LocalCode builds a
-        # dedicated stock llama-server from llama.cpp PR #24260. It's a
-        # stock binary, so it only accepts STOCK flags — none of the
-        # TurboQuant extras (turbo4 KV, --spec-type, -fit, --ctx-checkpoints).
-        try:
-            from .models_catalog import by_filename as _bf
-            _choice = _bf(_P(model_path).name)
-            _arch = str(getattr(_choice, "architecture", "")) if _choice else ""
-        except Exception:
-            _arch = ""
-        if "cohere" in _arch:
-            from .bootstrap import cohere_server_path
-            cbin = (self.config.cohere_server_binary or "").strip()
-            if not (cbin and _P(cbin).is_file()):
-                found = cohere_server_path()
-                cbin = str(found) if found else ""
-            if cbin:
-                return [
-                    cbin,
-                    "--model", model_path,
-                    "--port", str(port),
-                    "--ctx-size", str(self._target_num_ctx(model_path=model_path)),
-                    "--threads", str(threads),
-                    "--flash-attn", "on",
-                    "--mmap", "-ngl", "999",
-                    "--jinja",
-                    "-b", "512", "-ub", "512",
-                ]
-            # No cohere binary yet — fall through; setup builds it on select,
-            # and _restart_server surfaces a clear error if it's truly missing.
-
-        # ── muse_glimmer (Meta Muse Glimmer 30B) ──────────────────────
-        # The TurboQuant fork doesn't have Meta's muse_glimmer arch; LocalCode
-        # builds a dedicated stock llama-server from llama.cpp master (PR
-        # #26841). Stock binary → STOCK flags only (no turbo4 KV / -fit /
-        # --ctx-checkpoints). The model card is explicit that `--jinja` is
-        # mandatory (its chat template drives tool calls and the <|eom|> stop
-        # handling). Multimodal: pass --mmproj when vision is on and the
-        # perception encoder is present on disk.
-        if "muse" in _arch:
-            from .bootstrap import muse_server_path
-            mbin = (self.config.muse_server_binary or "").strip()
-            if not (mbin and _P(mbin).is_file()):
-                found = muse_server_path()
-                mbin = str(found) if found else ""
-            if mbin:
-                cmd = [
-                    mbin,
-                    "--model", model_path,
-                    "--port", str(port),
-                    "--ctx-size", str(self._target_num_ctx(model_path=model_path)),
-                    "--threads", str(threads),
-                    "--flash-attn", "on",
-                    "--mmap", "-ngl", "999",
-                    "--jinja",
-                    "-b", "512", "-ub", "512",
-                ]
-                try:
-                    if getattr(self.config, "vision_enabled", False):
-                        from .models_catalog import by_filename as _bf_muse
-                        _mc = _bf_muse(_P(model_path).name)
-                        if _mc is not None and _mc.mmproj_path and _mc.mmproj_path.is_file():
-                            cmd.extend(["--mmproj", str(_mc.mmproj_path)])
-                except Exception:
-                    pass
-                return cmd
-            # No muse binary yet — fall through; setup builds it on select.
-
         # ── Vanilla / stock llama.cpp compatibility (Linux CI, no Metal) ──
         # The bundled server is a TurboQuant fork whose flags (turbo4 KV,
         # -fit, --ctx-checkpoints, --spec-type) stock llama.cpp rejects.
@@ -587,7 +518,9 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
         # re-evaluation. Measured 19× speedup on turn 2 vs cold turn 1
         # (5932 ms → 302 ms prompt eval at 2K ctx).
         # --ctx-checkpoints N      keep up to N rolling state snapshots
-        # --checkpoint-every-n-tokens 2048  snapshot every 2K tokens during prefill
+        # --checkpoint-min-step 2048  snapshot at most every 2K tokens during prefill
+        #   (upstream renamed --checkpoint-every-n-tokens to this in the
+        #   2026-08 bump; the bundled binary rejects the old spelling)
         # For pure-attention models these are no-ops; cheap to always set.
         # Note: --swa-full would additionally warm the attention SWA cache
         # but causes Metal OOM at our 14336 MiB sysctl on 16 GB Macs. Skip.
@@ -636,7 +569,7 @@ class LocalCodeRuntimeGateway(_DiffusionMixin):
         else:
             cmd.extend([
                 "--ctx-checkpoints", _ckpts,
-                "--checkpoint-every-n-tokens", "2048",
+                "--checkpoint-min-step", "2048",
             ])
         # Single slot, disable fit check (we manage memory via sysctl)
         cmd.extend(["-np", "1", "-fit", "off"])

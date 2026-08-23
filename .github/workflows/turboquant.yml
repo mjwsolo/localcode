@@ -1,0 +1,81 @@
+name: TurboQuant binaries
+
+# Builds the three binaries that ship in the wheel (src/localcode/bin/) from
+# the vendored llama-cpp-turboquant tree and proves each one is
+# self-contained: static, Metal library embedded, no Homebrew dylibs.
+#
+# The flag set below MUST stay identical to the one that produced the
+# verified binaries checked into src/localcode/bin/ (dev/verify_models.sh
+# gate). -DLLAMA_OPENSSL=OFF is mandatory: upstream defaults it ON and that
+# links libssl from /opt/homebrew, which users' Macs do not have.
+
+on:
+  push:
+    paths:
+      - "llama-cpp-turboquant/**"
+      - ".github/workflows/turboquant.yml"
+  pull_request:
+    paths:
+      - "llama-cpp-turboquant/**"
+      - ".github/workflows/turboquant.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build + self-containment check (macOS arm64)
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: |
+          cmake -S llama-cpp-turboquant -B llama-cpp-turboquant/build-ci \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DGGML_METAL=ON \
+            -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DLLAMA_BUILD_SERVER=ON \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_OPENSSL=OFF
+
+      - name: Build the three shipped binaries
+        # The diffusion binaries live under tools/diffusion* and build with
+        # EXAMPLES=OFF. llama-diffusion-gemma-server (raw logits) is an eval
+        # harness backend and is not shipped.
+        run: |
+          cmake --build llama-cpp-turboquant/build-ci --config Release \
+            -j"$(sysctl -n hw.ncpu)" \
+            --target llama-server llama-diffusion-cli llama-diffusion-gemma-visual-server
+
+      - name: Self-containment check
+        run: |
+          set -euo pipefail
+          cd llama-cpp-turboquant/build-ci/bin
+          fail=0
+          for b in llama-server llama-diffusion-cli llama-diffusion-gemma-visual-server; do
+            echo "== $b"
+            ls -l "$b"
+            file "$b" | grep -q "arm64" || { echo "not arm64"; fail=1; }
+            otool -L "$b"
+            # Only system frameworks and /usr/lib are allowed.
+            if otool -L "$b" | tail -n +2 | grep -vE '^\s+(/usr/lib/|/System/Library/)'; then
+              echo "$b links a non-system library (Homebrew?)"; fail=1
+            fi
+            # Metal library must be embedded, not loaded from a .metallib file.
+            if [ -f default.metallib ] || [ -f ggml-metal.metal ]; then
+              echo "Metal source/library sits next to $b: embedding is off"; fail=1
+            fi
+            "./$b" --help >/dev/null 2>&1 || "./$b" -h >/dev/null 2>&1 || true
+          done
+          exit $fail
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: turboquant-binaries-macos-arm64
+          path: |
+            llama-cpp-turboquant/build-ci/bin/llama-server
+            llama-cpp-turboquant/build-ci/bin/llama-diffusion-cli
+            llama-cpp-turboquant/build-ci/bin/llama-diffusion-gemma-visual-server

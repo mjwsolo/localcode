@@ -3,8 +3,8 @@
 Block-diffusion models denoise a whole block of tokens in parallel
 instead of decoding token-by-token, so llama-server (and its HTTP
 streaming API) can't drive them. Generation goes through the one-shot
-`llama-diffusion-cli` runner from llama.cpp PR #24423 (built once by
-`bootstrap.ensure_diffusion_cli`).
+`llama-diffusion-cli` runner (upstream llama.cpp PR #24423), which ships
+in the wheel next to llama-server (see `bootstrap.diffusion_cli_path`).
 
 This module hosts ``_DiffusionMixin`` — a behaviour-preserving extraction
 of the diffusion methods that previously lived on
@@ -30,8 +30,8 @@ class _DiffusionMixin:
     Block-diffusion models denoise a whole block of tokens in parallel
     instead of decoding token-by-token, so llama-server (and its HTTP
     streaming API) can't drive them. Generation goes through the
-    one-shot `llama-diffusion-cli` runner from llama.cpp PR #24423
-    (built once by `bootstrap.ensure_diffusion_cli`). Consequences:
+    one-shot `llama-diffusion-cli` runner (upstream llama.cpp PR #24423),
+    shipped in the wheel next to llama-server. Consequences:
       - the model weights are (re)mapped per turn — first turn is slow,
         later turns are faster via the OS page cache;
       - output arrives in coarse chunks (denoised blocks), not tokens;
@@ -616,20 +616,12 @@ class _DiffusionMixin:
 
         binary = self._diffusion_cli_binary()
         if binary is None:
-            # Setup normally builds the runner before the first turn; this
-            # is the headless / edge path. Build now (one-time, minutes).
-            yield {
-                "type": "stage",
-                "name": "diffusion_build",
-                "message": "Building the diffusion runner (one-time, a few minutes)...",
-            }
-            from .bootstrap import ensure_diffusion_cli
-            ok, result = ensure_diffusion_cli()
-            if not ok:
-                raise RuntimeErrorWithContext(
-                    f"DiffusionGemma needs the llama-diffusion-cli runner and the build failed: {result}"
-                )
-            binary = result
+            # The runner ships in the wheel next to llama-server; nothing is
+            # built or downloaded at runtime. Missing means a broken install.
+            raise RuntimeErrorWithContext(
+                "DiffusionGemma needs the bundled llama-diffusion-cli runner and it "
+                "is missing from this install. Reinstall localcode."
+            )
 
         model_path = str(_Path(self.config.model or "").expanduser())
         # DiffusionGemma chokes on the Gemma-4 special-token tool format

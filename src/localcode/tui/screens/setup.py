@@ -368,8 +368,7 @@ class SetupScreen(Screen):
         import time
         from ...config import load_config, save_config
         from ...bootstrap import (
-            _turboquant_binary_path, _find_turboquant_source,
-            build_turboquant, download_turboquant_binary,
+            _turboquant_binary_path, download_turboquant_binary,
             get_model_path,
             start_background_download, is_download_complete,
         )
@@ -407,10 +406,7 @@ class SetupScreen(Screen):
 
         if not binary_path:
             self._status_text = "Downloading server..."
-            if _find_turboquant_source():
-                ok, result = build_turboquant()
-            else:
-                ok, result = download_turboquant_binary(on_progress=lambda _: None)
+            ok, result = download_turboquant_binary(on_progress=lambda _: None)
             if not ok:
                 self.app.call_from_thread(lambda: self._show_error("Server download failed."))
                 return
@@ -666,11 +662,10 @@ class SetupScreen(Screen):
         save_config(config)
 
         # DiffusionGemma: there is no llama-server for block-diffusion
-        # models — generation runs through the one-shot
-        # llama-diffusion-cli runner (see runtime._stream_diffusion_events).
-        # Build the runner now (one-time, a few minutes; cached in
-        # ~/.local/share/localcode afterwards) and skip the server
-        # launch + health gate entirely.
+        # models. Generation runs through the bundled one-shot
+        # llama-diffusion-cli runner (see runtime_diffusion), so skip the
+        # server launch + health gate entirely. Nothing is built or
+        # downloaded here: the runner ships in the wheel next to llama-server.
         _arch_choice = None
         try:
             from ...models_catalog import by_filename as _by_fn
@@ -680,74 +675,21 @@ class SetupScreen(Screen):
         if _arch_choice is not None and str(
             getattr(_arch_choice, "architecture", "")
         ).startswith("diffusion"):
-            from ...bootstrap import ensure_diffusion_cli
+            from ...bootstrap import diffusion_cli_path
 
-            def _build_progress(msg: str) -> None:
-                self._status_text = msg
-
-            ok, result = ensure_diffusion_cli(on_progress=_build_progress)
-            if not ok:
-                self.app.call_from_thread(lambda e=result: self._show_error(
-                    msg="Couldn't build the diffusion runner.",
+            if diffusion_cli_path(config) is None:
+                self.app.call_from_thread(lambda: self._show_error(
+                    msg="The bundled diffusion runner is missing.",
                     code="E1002",
-                    details=e,
+                    details="llama-diffusion-cli was not found in this install. Reinstall localcode.",
                 ))
                 return
-            config.runtime.diffusion_cli_binary = result
-            save_config(config)
             self._current_step = 3
             self._status_text = "Ready (diffusion runner)!"
             import asyncio
             await asyncio.sleep(0.5)
             self.app.call_from_thread(self._finish)
             return
-
-        # cohere2moe (North-Mini-Code): the TurboQuant server can't load it,
-        # so build a dedicated llama-server from llama.cpp PR #24260 (one-time)
-        # before launching. After that it serves over the normal HTTP path.
-        if _arch_choice is not None and "cohere" in str(
-            getattr(_arch_choice, "architecture", "")
-        ):
-            from ...bootstrap import ensure_cohere_server
-
-            def _cohere_progress(msg: str) -> None:
-                self._status_text = msg
-
-            ok, result = ensure_cohere_server(on_progress=_cohere_progress)
-            if not ok:
-                self.app.call_from_thread(lambda e=result: self._show_error(
-                    msg="Couldn't build the cohere2moe server.",
-                    code="E1002",
-                    details=e,
-                ))
-                return
-            config.runtime.cohere_server_binary = result
-            # Don't touch llama_cpp_binary — that stays the TurboQuant binary
-            # for every other model; llama_server_command routes cohere2moe to
-            # the cohere binary on its own via cohere_server_path().
-            save_config(config)
-
-        # muse_glimmer (Meta Muse Glimmer): the TurboQuant server lacks the
-        # arch, so build a dedicated stock llama-server from llama.cpp master
-        # (PR #26841) one-time before launching. Serves over the normal HTTP path.
-        if _arch_choice is not None and "muse" in str(
-            getattr(_arch_choice, "architecture", "")
-        ):
-            from ...bootstrap import ensure_muse_server
-
-            def _muse_progress(msg: str) -> None:
-                self._status_text = msg
-
-            ok, result = ensure_muse_server(on_progress=_muse_progress)
-            if not ok:
-                self.app.call_from_thread(lambda e=result: self._show_error(
-                    msg="Couldn't build the Muse Glimmer server.",
-                    code="E1002",
-                    details=e,
-                ))
-                return
-            config.runtime.muse_server_binary = result
-            save_config(config)
 
         # Launch server
         gw = LocalCodeRuntimeGateway(config.runtime)

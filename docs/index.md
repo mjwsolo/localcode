@@ -33,7 +33,7 @@ cd your-project
 localcode
 ```
 
-That's it. First launch builds the inference server and downloads the model (~5 min, one time). After that, startup is ~15 seconds.
+That's it. The inference server ships inside the package, so the first launch only downloads the model (a few minutes, one time). Nothing is built, cloned or fetched when you pick a model. After that, startup is about 15 seconds.
 
 ## What it does
 
@@ -82,13 +82,15 @@ On launch, LocalCode recommends the best model for **your Mac's RAM** — there'
 | Gemma 4 12B | 7.4 GB (Q4) | 12B (dense) | 16 GB | gemma4-iswa |
 | Gemma 4 26B-A4B | 11.2 GB (Q3) | 3.8B (8/128 experts) | 24 GB | gemma4-iswa |
 | Qwen 3.6 35B-A3B | 10.7 GB (Q2) | 3.0B (8+1/256) | 24 GB | qwen35moe |
+| Qwen 3.8 27B | 17.9 GB (Q4) | 27B (dense) | 32 GB | qwen35 |
+| Muse Glimmer 30B | 15.9 GB (Q4) | 30B (dense, multimodal) | 32 GB | muse_glimmer |
 | DiffusionGemma 26B-A4B † | 15.7 GB (Q4) | 4B (diffusion MoE) | 32 GB | diffusion_gemma |
-| North-Mini-Code 30B-A3B † | 17.9 GB (Q4) | 3B (30B MoE) | 36 GB | cohere2_moe |
+| North-Mini-Code 30B-A3B | 17.9 GB (Q4) | 3B (30B MoE) | 36 GB | cohere2_moe |
 | Gemma 4 12B (full) | 23.8 GB (BF16) | 12B (dense) | 48 GB | gemma4-iswa |
 | Gemma 4 26B-A4B | 28 GB (Q8) | 3.8B (8/128 experts) | 64 GB | gemma4-iswa |
 | Qwen 3.6 35B-A3B | 38.5 GB (Q8) | 3.0B (8+1/256) | 96 GB | qwen35moe |
 
-*Min RAM* is the threshold for auto-recommendation (weights ≤ ~55% of unified memory, leaving room for KV cache + OS); you can still pick a heavier model manually. **†** experimental — pickable but **not** auto-recommended (DiffusionGemma needs a separate runner; `cohere2_moe` is unvalidated on this stack).
+*Min RAM* is the threshold for auto-recommendation (weights at or under about 55% of unified memory, leaving room for KV cache and macOS); you can still pick a heavier model manually. Every model runs on the bundled binaries. **†** research model: pickable but not auto-recommended. DiffusionGemma is a block-denoising model that runs through the bundled `llama-diffusion-cli` instead of the server, and is not the default coding experience.
 
 ## How LocalCode works
 

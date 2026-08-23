@@ -131,11 +131,8 @@ def _gateway_for(choice) -> LocalCodeRuntimeGateway:
     cfg = RuntimeConfig()
     cfg.provider = "llama_cpp"
     cfg.model = str(_model_path(choice))
-    # Wire the dedicated runners if present (so the right backend is used).
-    from localcode.bootstrap import cohere_server_path, diffusion_cli_path
-    cp = cohere_server_path()
-    if cp:
-        cfg.cohere_server_binary = str(cp)
+    # Wire the bundled diffusion runner if present (so the right backend is used).
+    from localcode.bootstrap import diffusion_cli_path
     dp = diffusion_cli_path()
     if dp:
         cfg.diffusion_cli_binary = str(dp)
