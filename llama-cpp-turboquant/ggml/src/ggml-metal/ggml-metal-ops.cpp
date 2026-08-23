@@ -2951,6 +2951,13 @@ static bool ggml_metal_op_flash_attn_ext_use_kv_f16(const ggml_tensor * op) {
         return false;
     }
 
+    // fork: the F16 dequant path reuses K's dequant kernel for V, so it only
+    // works when K and V share a type. Asymmetric TurboQuant caches (e.g. q8_0 K
+    // + turbo4 V) must take the native asymmetric kernels instead.
+    if (op->src[1]->type != op->src[2]->type) {
+        return false;
+    }
+
     switch (op->src[1]->type) {
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
