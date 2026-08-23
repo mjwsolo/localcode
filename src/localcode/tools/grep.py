@@ -37,7 +37,11 @@ def execute(ctx: ToolContext, args: dict) -> str:
     ]
     if include:
         cmd.append(f"--include={include}")
-    cmd.extend([pattern, search_path])
+    # `--` terminates option parsing: a model- or repo-suggested pattern
+    # starting with `-` (e.g. "-r --include=*", or worse an option that
+    # changes what grep touches) must be treated as the PATTERN, never as
+    # more grep options.
+    cmd.extend(["--", pattern, search_path])
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         result = r.stdout.strip()

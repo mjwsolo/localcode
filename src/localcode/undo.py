@@ -48,6 +48,15 @@ class ChangeLog:
         snapshot = self.snapshots.pop()
         abs_path = (self.repo_root / snapshot.path).resolve()
 
+        # Path safety (same guard as checkpoint.restore_files): snapshot.path
+        # is stored state — an absolute path or a `../..` component would
+        # write or UNLINK outside the repo (`Path("/repo") / "/etc/x"`
+        # resolves to /etc/x). Refuse anything that escapes the repo root.
+        try:
+            abs_path.relative_to(self.repo_root.resolve())
+        except ValueError:
+            return False, f"Refused to restore {snapshot.path}: path escapes repo root"
+
         if not snapshot.existed:
             # File was created — delete it
             if abs_path.exists():

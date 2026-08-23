@@ -40,8 +40,78 @@ class ProcessRecord:
 
 
 def registry_path(repo_root: Path | str) -> Path:
-    root = Path(repo_root)
-    return root / ".localcode" / "processes.json"
+    """Per-repo registry file under the USER's state dir, not the repo.
+
+    The registry used to live at `<repo>/.localcode/processes.json` — a file
+    that ships INSIDE a cloned repo, so any repo could pre-seed records with
+    attacker-chosen pid/pgid values that `stop_record` would then `killpg`.
+    Keyed by a hash of the resolved repo path so different checkouts never
+    collide.
+    """
+    root = Path(repo_root).resolve()
+    digest = hashlib.sha256(str(root).encode()).hexdigest()[:16]
+    try:
+        from .config import get_home_dir
+        home = get_home_dir()
+    except Exception:
+        home = Path(os.environ.get("LOCALCODE_HOME") or (Path.home() / ".localcode"))
+    return home / "processes" / f"{digest}.json"
+
+
+# Pids (process-group leaders) spawned by THIS LocalCode process. Signals are
+# only ever sent to members of this set: a registry record — however it got
+# on disk — is never sufficient authority to kill a pid this session did not
+# start.
+_SESSION_SPAWNED_PIDS: set[int] = set()
+
+
+def mark_spawned(pid: int) -> None:
+    """Record that this process spawned `pid` (call right after Popen)."""
+    try:
+        if int(pid) > 1:
+            _SESSION_SPAWNED_PIDS.add(int(pid))
+    except Exception:
+        pass
+
+
+def spawned_this_session(pid: int) -> bool:
+    try:
+        return int(pid) in _SESSION_SPAWNED_PIDS
+    except Exception:
+        return False
+
+
+def _coerce_record(item: dict) -> ProcessRecord | None:
+    """Validate one persisted registry entry. Returns None on any bad shape.
+
+    The file is durable state parsed with json — enforce field types instead
+    of trusting `ProcessRecord(**item)` with whatever was on disk. pid/pgid
+    are clamped to non-negative ints so a crafted record can never smuggle a
+    negative value into a kill target (killpg(-N) signals an arbitrary group).
+    """
+    try:
+        pid = int(item.get("pid", 0))
+        pgid = int(item.get("pgid", 0))
+        port = int(item.get("port", 0))
+        if pid < 0 or pgid < 0:
+            return None
+        return ProcessRecord(
+            pid=pid,
+            pgid=pgid,
+            port=max(0, min(port, 65535)),
+            url=str(item.get("url", "") or ""),
+            cwd=str(item.get("cwd", "") or ""),
+            kind=str(item.get("kind", "") or ""),
+            command=str(item.get("command", "") or ""),
+            log_path=str(item.get("log_path", "") or ""),
+            verified=bool(item.get("verified", False)),
+            started_at=float(item.get("started_at", 0.0)),
+            stopped_at=float(item.get("stopped_at", 0.0)),
+            process_id=str(item.get("process_id", "") or ""),
+            owner=str(item.get("owner", "localcode") or "localcode"),
+        )
+    except Exception:
+        return None
 
 
 def load_records(repo_root: Path | str) -> list[ProcessRecord]:
@@ -58,10 +128,9 @@ def load_records(repo_root: Path | str) -> list[ProcessRecord]:
     for item in raw:
         if not isinstance(item, dict):
             continue
-        try:
-            records.append(ProcessRecord(**item))
-        except Exception:
-            continue
+        record = _coerce_record(item)
+        if record is not None:
+            records.append(record)
     return records
 
 
@@ -132,6 +201,12 @@ def refresh_record(repo_root: Path | str, process_id: str) -> ProcessRecord | No
 def stop_record(repo_root: Path | str, record: ProcessRecord) -> bool:
     stopped = False
     target = record.pgid or record.pid
+    # Only signal pids THIS process spawned. The registry file is durable
+    # state — a crafted or stale record must never drive a killpg at an
+    # arbitrary (or reused) pid. target > 1 also blocks killpg(0), which
+    # would signal LocalCode's own process group.
+    if target <= 1 or not (spawned_this_session(record.pid) or spawned_this_session(target)):
+        return False
     try:
         os.killpg(target, signal.SIGTERM)
         stopped = True
