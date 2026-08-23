@@ -9,15 +9,15 @@ then run `python -m localcode.errors --emit-docs > docs/ERRORS.md`.
 
 ### `E1001` — Server failed to start
 - **Cause:** `system`
-- **Remediation:** Run `localcode setup` or check ~/.local/share/localcode/server.log
+- **Remediation:** Restart LocalCode (setup re-runs automatically) or check ~/.local/share/localcode/server.log
 
 ### `E1002` — Server didn't come up in time
 - **Cause:** `system`
-- **Remediation:** Try again. If it persists, re-run `localcode setup`.
+- **Remediation:** Try again. If it persists, restart LocalCode.
 
 ### `E1003` — Model file not found
 - **Cause:** `user`
-- **Remediation:** Run `localcode setup` to download the model, or pick another via /model.
+- **Remediation:** Pick a model via /model — it downloads automatically.
 
 ### `E1004` — Backend not initialized
 - **Cause:** `user`
@@ -59,25 +59,37 @@ then run `python -m localcode.errors --emit-docs > docs/ERRORS.md`.
 
 ## E3xxx — Runtime / model
 
-### `E3101` — Model returned an early end-of-text
+### `E3101` — The model stopped responding too early
 - **Cause:** `model`
-- **Remediation:** Quantization artifact — the model stopped before emitting useful output. Retry.
+- **Remediation:** Try again. If it keeps happening, switch model with /model.
 
-### `E3102` — HTTP stream disconnected mid-response
+### `E3102` — Lost connection to the model server
 - **Cause:** `system`
-- **Remediation:** Network or llama-server hiccup. Retry the turn.
+- **Remediation:** Send another message — the server auto-restarts. If it recurs on big builds, `/model` to a smaller quant.
 
-### `E3103` — Context window overflow
+### `E3103` — Conversation is too long for this model
 - **Cause:** `user`
-- **Remediation:** Conversation got too long. /clear to start fresh, or wait for compaction.
+- **Remediation:** Type /clear to start a fresh conversation.
 
-### `E3104` — Model server crashed
+### `E3104` — The GPU couldn't run the model
 - **Cause:** `system`
-- **Remediation:** Check ~/.local/share/localcode/server.log — usually a memory pressure kill.
+- **Remediation:** Quit big apps to free memory and try again. If it keeps failing, restart your Mac.
 
-### `E3105` — Model timed out
+### `E3105` — The model is still loading
 - **Cause:** `system`
-- **Remediation:** First-token latency exceeded threshold. Server may be loading the model still.
+- **Remediation:** Wait a few seconds and try again — the model takes a moment to warm up.
+
+### `E3106` — macOS paused your model server to protect the system from running out of memory
+- **Cause:** `system`
+- **Remediation:** We auto-restart on your next message — usually no action needed. To prevent it: close memory-heavy apps (browsers with many tabs, IDEs with large projects, video editors), or `/model` to a smaller quant. Your Mac was at critical memory pressure during your last request, so the safety monitor freed memory by killing the server before macOS itself would have force-killed it.
+
+### `E3107` — Diffusion model returned no usable output
+- **Cause:** `model`
+- **Remediation:** Auto-retried. For heavier agentic work, `/model` to a Gemma 26B-A4B or Qwen quant.
+
+### `E3108` — Model collapsed into repeated junk tokens
+- **Cause:** `model`
+- **Remediation:** Known Gemma-4 llama.cpp bug. `/model` to Gemma 4 12B, or rebuild the server binary.
 
 ## E4xxx — Filesystem / git
 
