@@ -10,7 +10,6 @@ Once a model is downloaded, localcode works without a network connection.
 - Generating code and answers
 - Reading, editing and searching files
 - Shell commands, tests, builds and lint
-- Session resume, `/undo` and the project event log
 
 ## Needs a network
 
