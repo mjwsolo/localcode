@@ -36,7 +36,6 @@ class _FakeApp:
         self._session_allow: set[str] = set()
         self.repo_root = Path(repo_root)
         self.plan_mode = False
-        self.hooks = None
 
 
 # ── 1. launch_app is gated on the resolved repo-controlled command ─────
@@ -273,12 +272,12 @@ def test_default_config_disables_telemetry():
 
 def test_save_config_persists_telemetry_section(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALCODE_HOME", str(tmp_path))
-    from localcode.config import AppConfig, RuntimeConfig, SearchConfig, UIConfig, save_config
+    from localcode.config import AppConfig, RuntimeConfig, UIConfig, save_config
     try:
         import tomllib
     except ModuleNotFoundError:  # pragma: no cover
         import tomli as tomllib
-    config = AppConfig(runtime=RuntimeConfig(), search=SearchConfig(), ui=UIConfig())
+    config = AppConfig(runtime=RuntimeConfig(), ui=UIConfig())
     path = save_config(config)
     data = tomllib.loads(path.read_text())
     assert data["telemetry"]["enabled"] is False
@@ -430,17 +429,17 @@ def test_grep_terminates_option_parsing_before_the_pattern(tmp_path, monkeypatch
 def test_save_config_escapes_quotes_and_reload_survives(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALCODE_HOME", str(tmp_path))
     from localcode.config import (
-        AppConfig, RuntimeConfig, SearchConfig, UIConfig, save_config,
+        AppConfig, RuntimeConfig, UIConfig, save_config,
     )
     try:
         import tomllib
     except ModuleNotFoundError:  # pragma: no cover
         import tomli as tomllib
-    config = AppConfig(runtime=RuntimeConfig(), search=SearchConfig(), ui=UIConfig())
-    config.search.brave_api_key = 'k"ey\\with "quotes"'
+    config = AppConfig(runtime=RuntimeConfig(), ui=UIConfig())
+    config.runtime.model_dir = 'k"ey\\with "quotes"'
     path = save_config(config)
     data = tomllib.loads(path.read_text())  # must not raise
-    assert data["search"]["brave_api_key"] == 'k"ey\\with "quotes"'
+    assert data["runtime"]["model_dir"] == 'k"ey\\with "quotes"'
 
 
 def test_load_config_survives_a_corrupt_file(tmp_path, monkeypatch):
@@ -448,7 +447,7 @@ def test_load_config_survives_a_corrupt_file(tmp_path, monkeypatch):
     from localcode.config import get_config_path, load_config
     path = get_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text('[search]\nbrave_api_key = "unterminated\n')
+    path.write_text('[runtime]\nmodel_dir = "unterminated\n')
     config = load_config()  # must not raise
     assert config.runtime.provider  # defaults applied
     assert config.telemetry.enabled is False

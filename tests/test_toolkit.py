@@ -8,7 +8,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from localcode.config import AppConfig, LoggingConfig, RuntimeConfig, SafetyConfig, SearchConfig, UIConfig
+from localcode.config import AppConfig, LoggingConfig, RuntimeConfig, SafetyConfig, UIConfig
 from localcode.toolkit import LocalCodeTool, LocalCodeToolkit
 
 
@@ -19,7 +19,6 @@ def _make_toolkit(repo_root: Path) -> LocalCodeToolkit:
             provider="ollama",
             model="test-model",
         ),
-        search=SearchConfig(),
         ui=UIConfig(),
         safety=SafetyConfig(),
         logging=LoggingConfig(),
