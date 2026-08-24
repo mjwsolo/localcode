@@ -47,9 +47,7 @@ Settings for the model server and text generation.
 
 ### `[search]`
 
-This section has `provider` (default `duckduckgo`), plus `google_api_key`, `google_cx`, `brave_api_key`, and `serpapi_api_key`.
-
-**None of these settings change the `web_search` tool used by the model.** That tool always searches DuckDuckGo through the `ddgs` package. The other providers are part of an older code path that the agent does not use. Adding a key does not change where searches go.
+The `web_search` tool always searches DuckDuckGo through the `ddgs` package. There is nothing to configure here.
 
 ### `[ui]` and `[logging]`
 

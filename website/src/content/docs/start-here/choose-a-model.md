@@ -46,9 +46,9 @@ localcode --model <tag>
 
 If you switch to a model you do not have, localcode downloads it first. You only need to download each model once. See [Network Boundary](/localcode/concepts/network-boundary).
 
-## Experimental models
+## Models not recommended by default
 
-You can choose some models from the catalogue even though localcode never recommends them automatically. Their architecture needs a different runner from the bundled server. Examples include diffusion models and architectures that the bundled fork does not support. localcode builds a dedicated server the first time you use one. These models are experimental and are not the standard choice.
+A few models in the catalogue are never recommended automatically, such as the DiffusionGemma research model. You can still choose them by hand. They run on the same bundled server as every other model.
 
 ## Choosing by hand
 
