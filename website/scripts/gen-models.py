@@ -82,26 +82,55 @@ def facets(choice):
             "active": active, "kind": kind, "detail": detail}
 
 
+# Reference-only rows: bigger quants that exist upstream and fit the largest
+# Macs, listed so the high-RAM tabs show what those machines can actually run.
+# These are NOT in the product catalogue (they are multi-file GGUF splits the
+# app does not download yet), so they carry no `recommended` weight — they are
+# here to inform, sized from the real upstream files.
+_qwen = m.by_key("qwen38")
+_qwen_maker = group_of(_qwen).maker if group_of(_qwen) else "—"
+_qwen_logo = logo_for(group_of(_qwen))
+REFERENCE_MODELS = [
+    {
+        "name": "Qwen 3.8 27B (BF16, full)",
+        "base": "Qwen 3.8 27B",
+        "quant": "BF16, full",
+        "total": "27B",
+        "active": "27B dense (hybrid attention + Mamba-2 SSM, 1 MTP layer)",
+        "kind": "Dense",
+        "detail": "full-precision weights",
+        "file": "Qwen3.8-27B-BF16-00001-of-00002.gguf",
+        "size": 54.7,
+        "maker": _qwen_maker,
+        "logo": _qwen_logo,
+        "experimental": False,
+    },
+]
+
 out = []
 for ram in TIERS:
     budget = round(ram * 0.55, 1)
     rec = m.recommend(ram)
     fits = sorted((c for c in m.CHOICES if c.size_gb <= budget), key=lambda c: c.size_gb)
+    models = [{
+        "name": c.name,
+        **facets(c),
+        "file": c.filename,
+        "size": c.size_gb,
+        "active": c.active_params,
+        "maker": (group_of(c).maker if group_of(c) else "—"),
+        "logo": logo_for(group_of(c)),
+        "experimental": c.architecture in NO_AUTO,
+    } for c in fits]
+    # Fold in any reference-only model that fits this tier's budget.
+    models += [dict(r) for r in REFERENCE_MODELS if r["size"] <= budget]
+    models.sort(key=lambda mm: mm["size"])
     out.append({
         "ram": ram,
         "label": f"{ram} GB" + ("+" if ram == TIERS[-1] else ""),
         "budget": budget,
         "recommended": rec.filename,
-        "models": [{
-            "name": c.name,
-            **facets(c),
-            "file": c.filename,
-            "size": c.size_gb,
-            "active": c.active_params,
-            "maker": (group_of(c).maker if group_of(c) else "—"),
-            "logo": logo_for(group_of(c)),
-            "experimental": c.architecture in NO_AUTO,
-        } for c in fits],
+        "models": models,
     })
 
 p = pathlib.Path(__file__).resolve().parents[1] / "src/data/models.json"
