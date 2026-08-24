@@ -391,6 +391,48 @@ def test_bang_bash_empty_shows_hint_runs_nothing(monkeypatch):
     assert ran["n"] == 0 and stub._log.infos, "bare ! shows a hint, runs nothing"
 
 
+class _FakeMenuWidget:
+    """Records .update() text and active/hidden class toggles."""
+    def __init__(self):
+        self.text = None
+        self.classes = set()
+    def update(self, t): self.text = t
+    def add_class(self, c): self.classes.add(c)
+    def remove_class(self, c): self.classes.discard(c)
+
+
+class _HintStub:
+    def __init__(self):
+        self.menu = _FakeMenuWidget()
+        self.status = _FakeMenuWidget()
+        self._slash_matches = []
+        self._slash_selected = 0
+        self._slash_window = 0
+        self._ptt_last_input_value = None
+    def query_one(self, sel, *_a, **_k):
+        return self.menu if sel == "#slash-menu" else self.status
+
+
+def test_bang_shows_shell_mode_hint_without_capturing_enter():
+    # Typing a leading `!` surfaces the shell-mode affordance below the input,
+    # but keeps _slash_matches empty so Enter runs the command (falls through
+    # to _submit_message) instead of the slash menu selecting a row.
+    stub = _HintStub()
+    ChatScreen._on_chat_text_changed(stub, "!git status")
+    assert "active" in stub.menu.classes, "shell hint must be visible"
+    assert "shell mode" in (stub.menu.text or ""), stub.menu.text
+    assert "hidden" in stub.status.classes, "status bar steps aside for the hint"
+    assert stub._slash_matches == [], "! must not populate slash matches"
+
+
+def test_normal_text_hides_the_hint():
+    stub = _HintStub()
+    ChatScreen._on_chat_text_changed(stub, "!ls")   # show it
+    ChatScreen._on_chat_text_changed(stub, "hello")  # then a normal message
+    assert "active" not in stub.menu.classes
+    assert "hidden" not in stub.status.classes
+
+
 def test_chat_textarea_autosize_grows_and_clamps():
     # The input must grow with content (Codex-style) up to the terminal-relative
     # cap, then stop (scrolls internally). TextArea doesn't auto-grow from CSS,
