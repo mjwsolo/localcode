@@ -21,29 +21,11 @@ Model weights must use about **55% of unified memory** or less. The rest is for 
 
 ## Switching models
 
-Inside the TUI:
+Type `/model` in the TUI to open the picker and choose another model. `/delete` removes a downloaded model to free disk (it asks first).
 
-```text
-/model              # list what's available
-/model qwen         # switch
-/delete             # remove a downloaded model to free disk (asks first)
-```
+If you switch to a model you do not have, localcode downloads it first. You only need to download each model once.
 
-From the command line:
 
-```sh
-localcode --model <tag>
-```
-
-If you switch to a model you do not have, localcode downloads it first. You only need to download each model once. See [Network Boundary](/localcode/concepts/network-boundary).
-
-## Models not recommended by default
-
-A few models in the catalogue are never recommended automatically, such as the DiffusionGemma research model. You can still choose them by hand. They run on the same bundled server as every other model.
-
-## Choosing by hand
-
-The picker also shows other quantisations for supported model families. A smaller quant uses less memory and allows a longer context. A larger quant uses more memory but gives better quality. You can still choose a model whose weights exceed your memory budget. The fit check is advice, not a lock.
 
 ## Next
 
