@@ -328,6 +328,37 @@ def _verify_download_integrity(choice, path: Path) -> tuple[bool, str]:
     return True, ""
 
 
+def resolve_model_arg(candidate: str | None) -> Path | None:
+    """Resolve a `--model` value (or a configured model) to a downloaded GGUF.
+
+    Accepts any of: a catalog key/tag (``"qwen38"``), a model display name
+    (``"Qwen 3.8 27B (Q4)"``), a bare GGUF filename, or a full path. Returns the
+    on-disk path, or None if it is not a known/downloaded model.
+
+    This exists because both headless entry points used to accept ONLY a value
+    ending in ``.gguf`` and silently ignored a tag like ``qwen38`` - falling
+    through to the configured default model instead of the one the user asked
+    for.
+    """
+    if not candidate:
+        return None
+    from .models_catalog import CHOICES, by_key
+
+    name = Path(candidate).name
+    if name.endswith(".gguf"):
+        return get_model_path(name)
+    choice = by_key(candidate)
+    if choice is None:
+        choice = next((c for c in CHOICES if candidate in (c.key, c.name)), None)
+    if choice is not None:
+        # Prefer the catalog->disk lookup (honors alternate model dirs); fall
+        # back to the choice's own path when it is present.
+        return get_model_path(choice.filename) or (
+            choice.local_path if choice.local_path.exists() else None
+        )
+    return None
+
+
 def get_model_path(preferred_filename: str | None = None) -> Path | None:
     """Return path to a usable GGUF model, checking multiple locations.
 

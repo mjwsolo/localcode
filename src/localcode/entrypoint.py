@@ -231,20 +231,19 @@ def _run_headless(config, args, console) -> int:
 
     from .app import LocalCodeApp
     from .server_manager import _probe_health
-    from .bootstrap import get_model_path
+    from .bootstrap import resolve_model_arg
     from .models_catalog import CHOICES
 
-    # Resolve the model to a concrete downloaded GGUF. The config often
-    # holds a TAG (e.g. "gemma26b-iq3"), not a filename, so the server's
-    # by-name lookup would miss. Order: explicit --model GGUF → configured
-    # filename → smallest downloaded catalog model (fastest to load).
+    # Resolve the model to a concrete downloaded GGUF. `--model` and the config
+    # may hold a TAG (e.g. "qwen38", "gemma26b-iq3"), a display name, a bare
+    # filename, or a path - resolve_model_arg handles them all, so an explicit
+    # --model is honored instead of being ignored for the config default. Order:
+    # explicit --model → configured model → smallest downloaded catalog model.
     resolved: _Path | None = None
     for candidate in (args.model, config.runtime.model):
-        name = _Path(candidate).name if candidate else None
-        if name and name.endswith(".gguf"):
-            resolved = get_model_path(name)
-            if resolved:
-                break
+        resolved = resolve_model_arg(candidate)
+        if resolved:
+            break
     if resolved is None:
         downloaded = [c for c in CHOICES if c.local_path.exists()]
         if downloaded:
