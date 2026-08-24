@@ -38,7 +38,6 @@ from .history import HistoryDB
 from .verification import guess_verify_command, run_verification
 from .auto_compact import compact_if_needed
 from .autonomy import AutonomyLevel, apply_autonomy_to_permissions, get_policy
-from .hooks import HookRunner
 from .snapshots import SnapshotStore, create_snapshot
 from .turn_diff import TurnDiffTracker, print_turn_diff
 from .agent.goal import infer_goal_state
@@ -219,15 +218,12 @@ class LocalCodeApp:
         self.history = HistoryDB()  # unified SQLite history
         self.embedding_search = EmbeddingSearch(str(self.repo_root))
         self.perms = PermissionManager()  # tool permissions
-        self.hooks = HookRunner(str(self.repo_root), self.session.session_id, self.runtime_model)
         self.snapshot_store = SnapshotStore()
         self.turn_tracker = TurnDiffTracker(self.repo_root)
         # Apply autonomy mode
         autonomy_level = os.environ.get("LOCALCODE_AUTONOMY", "auto_edit")
         self._autonomy = AutonomyLevel(autonomy_level) if autonomy_level in ("suggest", "auto_edit", "full_auto") else AutonomyLevel.AUTO_EDIT
         apply_autonomy_to_permissions(self.perms, get_policy(self._autonomy))
-        # Run session start hook
-        self.hooks.on_session_start()
         self._spec_executor = SpeculativeExecutor(self.toolkit.execute_tool_calls)
         self._memory = self._load_memory()
         # Per-session notebook directory — a disk-backed "working memory"
@@ -498,11 +494,6 @@ class LocalCodeApp:
             provider=self.config.runtime.provider,
         )
 
-        # Lifecycle hook: user prompt submit
-        hook_result = self.hooks.on_user_prompt_submit(user_text)
-        if hook_result.blocked:
-            self.console.print(f"[dim]  Hook blocked prompt: {hook_result.error or hook_result.output}[/]")
-            return
         # Start turn tracking
         self.turn_tracker.start_turn(watched_files=self.session.pinned_files)
         _turn_start = time.time()
