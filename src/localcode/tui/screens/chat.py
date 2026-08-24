@@ -18,6 +18,7 @@ _UNSET = object()
 
 
 import os
+import math
 import re
 import sys
 import time
@@ -882,6 +883,45 @@ _SPINNER_GERUNDS = [
 # frame glyph + timer animate quickly. ~2.4 s reads as "alive but calm".
 _SPINNER_WORD_PERIOD = 2.4
 
+# Shimmer sweep — the same look Codex/Claude Code use for the running-status
+# text. Ported from Codex's `shimmer_spans` (openai/codex tui/src/shimmer.rs):
+# a soft cosine-falloff highlight band that sweeps across the label on a 2 s
+# wall-clock cycle, with 10 chars of padding each side so it fully enters and
+# exits. The win over our old hard bright/dim boundary is graceful degradation:
+# a per-character COLOUR GRADIENT means a dropped/late animation frame shifts
+# the gradient a little instead of making a hard edge visibly jump, so it reads
+# smoothly even while a 30 GB model loads and the UI thread is starved.
+_SHIMMER_PERIOD = 2.0      # seconds per full sweep (Codex's cadence)
+_SHIMMER_PAD = 5           # lead-in/out padding; less than Codex's 10 because our
+                           # status labels are short — pad 10 left the band resting
+                           # off-text for most of the cycle, which reads as a stall
+_SHIMMER_BAND = 5.0        # half-width of the highlight band, in chars
+_SHIMMER_BASE = (98, 107, 128)    # resting slate
+_SHIMMER_HI = (168, 192, 255)     # localcode-blue shine at the band centre
+
+
+def _shimmer_spans(label: str, now: float) -> RichText:
+    """Render `label` with a cosine-falloff highlight band sweeping across it.
+
+    Time-derived (constant rate regardless of tick jitter) and gradient-based
+    (degrades gracefully under load). Rich down-samples the RGB to 256/16 colour
+    on terminals without true-colour, so this stays legible everywhere."""
+    n = len(label)
+    total = n + 2 * _SHIMMER_PAD
+    pos = ((now % _SHIMMER_PERIOD) / _SHIMMER_PERIOD) * total
+    out = RichText()
+    for i, ch in enumerate(label):
+        dist = abs(i + _SHIMMER_PAD - pos)
+        if dist <= _SHIMMER_BAND:
+            t = 0.5 * (1.0 + math.cos(math.pi * dist / _SHIMMER_BAND)) * 0.9
+        else:
+            t = 0.0
+        r = int(_SHIMMER_BASE[0] + (_SHIMMER_HI[0] - _SHIMMER_BASE[0]) * t)
+        g = int(_SHIMMER_BASE[1] + (_SHIMMER_HI[1] - _SHIMMER_BASE[1]) * t)
+        b = int(_SHIMMER_BASE[2] + (_SHIMMER_HI[2] - _SHIMMER_BASE[2]) * t)
+        out.append(ch, style=f"#{r:02x}{g:02x}{b:02x}")
+    return out
+
 
 def _spinner_label(tick: int = 0) -> str:
     """Return a generic playful gerund for the streaming spinner.
@@ -1671,7 +1711,8 @@ class ChatScreen(Screen):
                 return f"{badge[:-1]} · {hint})"
             return f"{badge} · {hint}"
 
-        # ● for tools (blue ball), ◆ for thinking
+        # ● for tools (blue ball), ◆ for thinking. The icon shimmers with the
+        # label — the whole run reads as one sweeping band, like Codex's status.
         icon = "●" if self._active_mode == "tool" else "◆"
         label = f"{icon} {text}..."
         try:
@@ -1679,17 +1720,11 @@ class ChatScreen(Screen):
         except Exception:
             width = 80
 
-        # Derive the sweep position from ELAPSED WALL-CLOCK TIME, not from a
-        # per-tick counter. The animation timer is 0.05 s best-effort, but the
-        # UI event loop is periodically saturated (token streaming, status
-        # polling, and for block-diffusion a multi-second silence then a burst).
-        # Textual then delivers the queued ticks bunched: a +1-per-tick counter
-        # races through several positions, pauses, races again - which reads as
-        # the spinner speeding up and slowing down. A time-derived position
-        # renders where the sweep should be *now*, so a late or bunched tick
-        # lands at the right spot and the visual rate stays constant.
-        _sweep_cells_per_s = 24.0  # steady left-to-right scan speed
-        self._scan_pos = int(time.time() * _sweep_cells_per_s) % max(len(label), 1)
+        # The sweep is a cosine-falloff colour band from `_shimmer_spans`, keyed
+        # to wall-clock time so its rate is constant regardless of when the
+        # 0.05 s tick actually fires, and gradient-based so a late/dropped tick
+        # shifts the band slightly instead of making a hard edge jump.
+        now = time.time()
 
         if width < 64:
             compact_text = "thinking" if self._active_mode == "thinking" else text
@@ -1702,11 +1737,9 @@ class ChatScreen(Screen):
             max_label = max(8, width - (len(badge) + 4 if width >= 28 else 2))
             if len(label) > max_label:
                 label = label[: max(3, max_label - 1)] + "…"
-            pos = self._scan_pos % max(len(label), 1)
             line = RichText()
             line.append("  ")
-            line.append(label[:pos + 1], style=f"bold {C.primary}")
-            line.append(label[pos + 1:], style="dim italic")
+            line.append_text(_shimmer_spans(label, now))
             if width >= 28:
                 line.append(f" {badge}", style="dim")
             self.query_one("#active-step", Static).update(line)
@@ -1714,23 +1747,16 @@ class ChatScreen(Screen):
 
         badge = _with_interrupt(timer)
         # A long tool label plus the interrupt badge can overrun the row on a
-        # mid-width terminal (~64-80 cols) - measured 81 cells into a 70-cell
-        # area - forcing a horizontal scroll. Cap the label with an ellipsis so
-        # label + badge always fit, then recompute the sweep position against
-        # the (possibly shorter) label.
+        # mid-width terminal (~64-80 cols), forcing a horizontal scroll. Cap the
+        # label with an ellipsis so label + badge always fit.
         max_label = max(8, width - (len(badge) + 4))
         if len(label) > max_label:
             label = label[: max(3, max_label - 1)] + "…"
-        pos = self._scan_pos % max(len(label), 1)
-        bright = label[:pos + 1]
-        dim = label[pos + 1:]
-        # Escape markup characters in the text
-        bright = bright.replace("[", "\\[")
-        dim = dim.replace("[", "\\[")
-        line = f"  [bold]{bright}[/][dim italic]{dim}[/]  [dim]{badge}[/]"
-
-        w = self.query_one("#active-step", Static)
-        w.update(line)
+        line = RichText()
+        line.append("  ")
+        line.append_text(_shimmer_spans(label, now))
+        line.append(f"  {badge}", style="dim")
+        self.query_one("#active-step", Static).update(line)
 
     # ── Status bar (bottom — model, mode, context remaining) ──
 

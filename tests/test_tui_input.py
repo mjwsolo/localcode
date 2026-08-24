@@ -413,6 +413,31 @@ class _HintStub:
         return self.menu if sel == "#slash-menu" else self.status
 
 
+def test_shimmer_sweep_is_per_char_and_time_derived():
+    # The running-status shimmer (Codex-style) must colour each character
+    # individually (a gradient band, not one flat style) and advance with
+    # wall-clock time so its rate is constant regardless of tick jitter.
+    from localcode.tui.screens.chat import _shimmer_spans
+
+    label = "◆ percolating..."
+    spans_a = _shimmer_spans(label, 0.30)
+    # One style span per character → a real gradient, not a hard 2-part split.
+    assert len(spans_a.spans) == len(label), spans_a.spans
+
+    def peak(now: float) -> int:
+        # Brightest char = highest blue channel in its RGB colour.
+        best_i, best_b = -1, -1
+        for sp in _shimmer_spans(label, now).spans:
+            col = str(sp.style)  # like "#a8c0ff"
+            b = int(col[5:7], 16)
+            if b > best_b:
+                best_b, best_i = b, sp.start
+        return best_i
+
+    # The highlight moves left→right across the cycle (not frozen).
+    assert peak(1.4) > peak(0.7), (peak(0.7), peak(1.4))
+
+
 def test_bang_shows_shell_mode_hint_without_capturing_enter():
     # Typing a leading `!` surfaces the shell-mode affordance below the input,
     # but keeps _slash_matches empty so Enter runs the command (falls through
