@@ -23,7 +23,6 @@ class _FakeApp:
         self._autonomy = getattr(AutonomyLevel, level_name)
         self._session_allow: set[str] = set()
         self.repo_root = Path(repo_root)
-        self.hooks = None
 
 
 class _FakeOut:

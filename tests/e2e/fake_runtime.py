@@ -158,7 +158,7 @@ def _test_config(home: Path):
     everything pointed at a throwaway LOCALCODE_HOME."""
     from localcode.config import (
         AppConfig, LoggingConfig, RuntimeConfig,
-        SafetyConfig, SearchConfig, UIConfig,
+        SafetyConfig, UIConfig,
     )
     os.environ["LOCALCODE_HOME"] = str(home)
     return AppConfig(
@@ -177,7 +177,6 @@ def _test_config(home: Path):
             kv_cache_type_v="turbo4",
             laptop_26b_runtime_mode="speed",
         ),
-        search=SearchConfig(),
         ui=UIConfig(),
         safety=SafetyConfig(),
         logging=LoggingConfig(),
