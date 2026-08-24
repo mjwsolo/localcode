@@ -148,19 +148,19 @@ def run_headless_json(config, args) -> int:
 
     from .app import LocalCodeApp
     from .server_manager import _probe_health
-    from .bootstrap import get_model_path
+    from .bootstrap import resolve_model_arg
     from .models_catalog import CHOICES
 
     # Resolve a GGUF on disk for the llama_cpp path (which needs a server
     # probe/start). Ollama pulls its own models, but headless run is the
-    # llama_cpp/CI harness path.
+    # llama_cpp/CI harness path. `--model` may be a catalog tag ("qwen38"), a
+    # display name, a filename, or a path - resolve_model_arg handles them all,
+    # so an explicit --model is never silently ignored for the config default.
     resolved: _Path | None = None
     for candidate in (args.model, config.runtime.model):
-        name = _Path(candidate).name if candidate else None
-        if name and name.endswith(".gguf"):
-            resolved = get_model_path(name)
-            if resolved:
-                break
+        resolved = resolve_model_arg(candidate)
+        if resolved:
+            break
     if resolved is None:
         downloaded = [c for c in CHOICES if c.local_path.exists()]
         if downloaded:
