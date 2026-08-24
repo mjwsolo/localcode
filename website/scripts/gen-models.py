@@ -13,7 +13,7 @@ import json, pathlib, re
 from localcode import models_catalog as m
 
 NO_AUTO = m._NO_AUTO_RECOMMEND_ARCHS
-TIERS = [16, 24, 32, 48, 64, 96]
+TIERS = [16, 24, 32, 36, 48, 64, 96, 128]  # real Apple Silicon unified-memory options (>=16 GB floor)
 
 def group_of(choice):
     for g in m.MODEL_GROUPS:
