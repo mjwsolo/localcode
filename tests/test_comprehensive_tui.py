@@ -129,7 +129,8 @@ def test_tui_collapses_reasoning_by_default(tmp_path, project):
         assert "Reasoning sentence number 11" not in snap["log_text"]
         # Exactly one collapsed, expandable thinking row landed instead.
         assert snap["log_text"].count("▶") == 1
-        assert "(+11 lines)" in snap["log_text"]
+        # Collapsed row names the keyboard toggle so it's discoverable without a mouse.
+        assert "(+11 lines · ctrl+o)" in snap["log_text"]
         # The final answer still renders normally.
         assert "The answer is 42." in snap["log_text"]
         # And the whole log stays SHORT: user line + collapsed row + answer
