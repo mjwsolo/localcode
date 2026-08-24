@@ -31,7 +31,7 @@ This is the default setup. The rest of this page describes it:
 localcode is designed specifically to enable high-performance agentic coding with local models on consumer hardware. The prompts, the agent loop, and the model server are all tuned for small quantised models rather than a frontier model:
 
 - **Prompts tuned for small models** - the system prompt runs a plan-then-execute loop: lay out the steps, keep exactly one in progress, and require evidence before a task counts as done, instead of assuming the model self-organises.
-- **Completion gate** - the loop keeps working until the goal is actually finished, with a todo backstop, so the model does not stop mid-task and declare it done.
+- **Finishes the whole task** - the loop keeps working until the goal is actually done, so the model does not stop mid-task and call it finished.
 - **Tool-call repair** - malformed JSON arguments and extra spaces in tool names are fixed instead of failing the round.
 - **Recovery modes** - separate paths handle cut-off tool calls and reasoning loops, each with its own exit reason in the event stream.
 - **Long context on 16 GB** - the llama.cpp fork compresses the KV cache with TurboQuant (about 3.8x smaller than f16), so long contexts fit on small machines.
