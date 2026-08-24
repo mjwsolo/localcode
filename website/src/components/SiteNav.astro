@@ -17,7 +17,7 @@ interface Props {
   linkLabel?: string;
   linkHref?: string;
 }
-const { search = false, linkLabel = 'Docs', linkHref = 'start-here/install' } = Astro.props;
+const { search = false, linkLabel = 'Docs', linkHref = 'start-here/first-change' } = Astro.props;
 
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 const href = (path: string) => `${base}/${path.replace(/^\//, '')}`;
