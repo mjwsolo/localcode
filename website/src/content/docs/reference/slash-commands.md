@@ -5,14 +5,14 @@ description: Commands available inside the localcode TUI.
 
 Type `/` in the chat box to open the command palette. Text that starts with `/` is only a command if the first word is a known command. A path like `/Users/you/project` is sent to the model as a normal message.
 
-Start a line with `!` to enter shell mode.
+Start a line with `!` to run a shell command, for example `!git status`. The output appears in the chat log and the model is not involved.
 
 | Command | What it does |
 | --- | --- |
 | `/permissions` | Turn command approvals on or off |
 | `/status` | Show the server health, current model, and performance settings |
 | `/restart` | Restart the model server when `/status` shows "unreachable" |
-| `/mcp` | List or reload MCP servers from `~/.localcode/mcp.json` |
+| `/mcp` | List MCP servers and their tools, add one, or reload after editing `~/.localcode/mcp.json` |
 | `/skills` | List loaded skills and their sources |
 | `/model` | List or switch models, for example `/model qwen` |
 | `/delete` | Delete a downloaded model to free disk space after asking first |
