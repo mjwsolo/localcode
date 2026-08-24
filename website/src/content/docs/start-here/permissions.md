@@ -32,14 +32,6 @@ Commands that are not on either list do not prompt at this level. Examples inclu
 
 Writes to the agent's per-session notebook scratch directory never prompt at any level.
 
-Set the session level with this environment variable:
-
-```sh
-LOCALCODE_AUTONOMY=suggest localcode
-```
-
-`localcode run` (headless) always uses `full_auto` because no person is present to answer an approval prompt.
-
 ## 3. Session approvals - ask once, remember
 
 When you confirm a command, you can approve its leading token for the rest of the session instead of approving only one call. Use `/permissions` inside the TUI to turn command approvals on or off.
