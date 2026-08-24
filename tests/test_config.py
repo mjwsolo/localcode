@@ -12,7 +12,6 @@ from localcode.config import (
     LoggingConfig,
     RuntimeConfig,
     SafetyConfig,
-    SearchConfig,
     UIConfig,
     ensure_home_dirs,
     get_config_path,
@@ -96,7 +95,6 @@ class TestLoadConfig:
             cfg = load_config()
             assert isinstance(cfg, AppConfig)
             assert isinstance(cfg.runtime, RuntimeConfig)
-            assert isinstance(cfg.search, SearchConfig)
             assert isinstance(cfg.safety, SafetyConfig)
         finally:
             os.environ.pop("LOCALCODE_HOME", None)
@@ -141,7 +139,6 @@ class TestSaveConfig:
                     kv_cache_type_k="q8_0",
                     kv_cache_type_v="turbo4",
                 ),
-                search=SearchConfig(provider="brave", brave_api_key="abc123"),
                 ui=UIConfig(show_debug=True, thinking_mode="full"),
                 safety=SafetyConfig(confirm_destructive=False, max_fix_retries=5),
                 logging=LoggingConfig(max_days=7),
@@ -152,8 +149,6 @@ class TestSaveConfig:
             assert reloaded.runtime.model == "my-model"
             assert reloaded.runtime.temperature == pytest.approx(0.42)
             assert reloaded.runtime.llama_cpp_gpu_layers == 12
-            assert reloaded.search.provider == "brave"
-            assert reloaded.search.brave_api_key == "abc123"
             # browser / voice assertions dropped — sections removed in T0.9 purge
             assert reloaded.ui.show_debug is True
             assert reloaded.ui.thinking_mode == "full"
@@ -224,7 +219,6 @@ class TestAppConfigPostInit:
     def test_safety_defaults_when_none(self) -> None:
         cfg = AppConfig(
             runtime=RuntimeConfig(),
-            search=SearchConfig(),
             ui=UIConfig(),
             safety=None,
             logging=None,

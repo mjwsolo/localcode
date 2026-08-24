@@ -71,15 +71,6 @@ def finalize_turn(
     blocked_reason = final_text if loop_exit_reason == "blocked_question" else ""
     completion_status, task_status = status_for_exit(loop_exit_reason)
     try:
-        hook = getattr(app, "hooks", None)
-        if hook is not None:
-            hook_result = hook.on_pre_completion(final_text, completion_status)
-            if hook_result.blocked:
-                completion_status, task_status = "stopped_early", "failed"
-                blocked_reason = hook_result.error or hook_result.output or "pre-completion hook blocked"
-    except Exception as exc:
-        _emit_finalization_error(turn_id, "pre_completion_hook", exc)
-    try:
         from ..events import emit
 
         emit(

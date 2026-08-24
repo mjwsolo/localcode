@@ -238,10 +238,9 @@ class LocalCodeTUI(App):
                 # Even if config load fails (truly fresh install),
                 # build a minimal default so the screen has SOMETHING
                 # to read.
-                from ..config import AppConfig, RuntimeConfig, SearchConfig, UIConfig, SafetyConfig, LoggingConfig
+                from ..config import AppConfig, RuntimeConfig, UIConfig, SafetyConfig, LoggingConfig
                 self.config = AppConfig(
                     runtime=RuntimeConfig(),
-                    search=SearchConfig(),
                     ui=UIConfig(),
                     safety=SafetyConfig(),
                     logging=LoggingConfig(),
