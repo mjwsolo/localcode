@@ -5,9 +5,9 @@ description: What the agent can do on its own, what it must ask about, and what 
 
 Permissions in localcode have three layers. The bottom layer cannot be turned off.
 
-## 1. What the gate checks
+## 1. What needs approval
 
-The gate only checks **tools that run shell commands** (`bash`, `background_process`) and **tools that write files** (`write_file`, `append_file`, `edit_file`, `multi_edit`, `edit_diff`).
+localcode asks for approval only before **tools that run shell commands** (`bash`, `background_process`) and **tools that write files** (`write_file`, `append_file`, `edit_file`, `multi_edit`, `edit_diff`).
 
 All other tools run without a prompt at every autonomy level. These include `read_file`, `grep`, and, importantly, **`web_search`, `web_fetch`, and all MCP tools**. `suggest` mode does not block network access. See [Network Boundary](/localcode/concepts/network-boundary).
 
