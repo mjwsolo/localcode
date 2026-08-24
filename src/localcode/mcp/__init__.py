@@ -51,13 +51,7 @@ is re-exported here so `from localcode.mcp import ...` is unchanged.
 from __future__ import annotations
 
 from ._bridge import _CONNECT_TIMEOUT, _DEFAULT_TIMEOUT, _EventLoopThread
-from ._config import (
-    MCP_CONFIG_PATH,
-    _config_path,
-    add_mcp_server,
-    load_mcp_config,
-    remove_mcp_server,
-)
+from ._config import MCP_CONFIG_PATH, _config_path, load_mcp_config
 from ._transports import _InMemoryTokenStorage, _build_oauth_provider
 from .client import (
     MCPClient,
@@ -78,8 +72,6 @@ __all__ = [
     # config
     "MCP_CONFIG_PATH",
     "load_mcp_config",
-    "add_mcp_server",
-    "remove_mcp_server",
     # client
     "MCPClient",
     # registry

@@ -12,7 +12,7 @@ Start a line with `!` to run a shell command, for example `!git status`. The out
 | `/permissions` | Turn command approvals on or off |
 | `/status` | Show the server health, current model, and performance settings |
 | `/restart` | Restart the model server when `/status` shows "unreachable" |
-| `/mcp` | List MCP servers and their tools, add one, or reload after editing `~/.localcode/mcp.json` |
+| `/mcp` | List MCP servers and their tools, or `/mcp reload` after editing `~/.localcode/mcp.json` |
 | `/skills` | List loaded skills and their sources |
 | `/model` | List or switch models, for example `/model qwen` |
 | `/delete` | Delete a downloaded model to free disk space after asking first |
