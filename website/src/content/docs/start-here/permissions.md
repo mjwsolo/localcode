@@ -9,7 +9,7 @@ Permissions in localcode have three layers. The bottom layer cannot be turned of
 
 The gate only checks **tools that run shell commands** (`bash`, `background_process`) and **tools that write files** (`write_file`, `append_file`, `edit_file`, `multi_edit`, `edit_diff`).
 
-All other tools run without a prompt at every autonomy level. These include `read_file`, `grep`, and, importantly, **`web_search`, `web_fetch`, and all MCP tools**. `suggest` mode does not block network access. See [Network Boundary](/localcode/concepts/network-boundary#approvals-the-network-tools-never-ask).
+All other tools run without a prompt at every autonomy level. These include `read_file`, `grep`, and, importantly, **`web_search`, `web_fetch`, and all MCP tools**. `suggest` mode does not block network access. See [Network Boundary](/localcode/concepts/network-boundary).
 
 ## 2. Autonomy levels
 
