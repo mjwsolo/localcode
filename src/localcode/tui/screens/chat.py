@@ -1293,7 +1293,7 @@ class ChatScreen(Screen):
         # scroll the chat — these keys are how, so they must be discoverable.
         log.append_info(
             "Ctrl+U/D scroll · Shift+↑/↓ line · Home/End jump · "
-            "Shift+Enter newline · paste to attach an image"
+            "Shift+Enter newline · paste to attach an image · ! runs a shell command"
         )
         # If the user launched with --resume, the TUI app stored prior
         # messages in `_pending_resume_messages`. Replay them into the
@@ -2096,6 +2096,21 @@ class ChatScreen(Screen):
                 self._slash_window = 0
                 menu.remove_class("active")
                 status_bar.remove_class("hidden")
+        elif text.startswith("!"):
+            # Shell-mode affordance, mirroring the leading CLI agents' "! for
+            # shell" hint. `!cmd` runs in the user's shell (_run_bash) and the
+            # output lands in the log. Keep _slash_matches empty so Enter falls
+            # through to _submit_message (which runs the command) instead of
+            # the slash menu trying to select a row.
+            self._slash_matches = []
+            self._slash_selected = 0
+            self._slash_window = 0
+            menu.update(
+                "[bold]!  shell mode[/]  "
+                "[dim]Enter runs this command in your shell[/]"
+            )
+            menu.add_class("active")
+            status_bar.add_class("hidden")
         else:
             self._slash_matches = []
             self._slash_selected = 0
