@@ -132,8 +132,8 @@ def test_empty_state():
                 await _wait_status(scr, pilot)
                 body = scr._render_body()
                 assert "None configured" in body, body
-                assert "mcpServers" in body, body
-                assert "server-filesystem" in body, body
+                # New empty state points at the in-TUI add flow, not raw JSON.
+                assert "Press" in body and "to add one" in body, body
     _run(scenario())
 
 
