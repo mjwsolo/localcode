@@ -958,6 +958,16 @@ def _redirect_note(result: str) -> str:
 
 def _brief_result(tool_name: str, result: str) -> str:
     """Short summary of a tool result for terminal display."""
+    # Tool output reaches here still wrapped in the injection-defense
+    # <UNTRUSTED_DATA source="..."> fence on some paths (notably a history
+    # re-render, which recomputes the summary from the raw stored result). This
+    # is a DISPLAY summary, so unwrap first - otherwise the user sees the raw
+    # fence as the tool's "output" (e.g. `<UNTRUSTED_DATA source="$ node -v…`).
+    try:
+        from ..injection_defense import strip_untrusted
+        result = strip_untrusted(result)
+    except Exception:
+        pass
     lines = result.strip().splitlines()
     # Dedup short-circuits across ALL deduped tools (read_file,
     # list_files, glob, grep) return a tiny "[DEDUP …]" stub. Counting
