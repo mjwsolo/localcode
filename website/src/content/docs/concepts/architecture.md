@@ -21,12 +21,10 @@ This is the default setup. The rest of this page describes it:
                   GGUF weights on disk
 ```
 
-The arrow labeled `runtime.base_url` is a setting, not a fixed connection. You can point it somewhere else with `LOCALCODE_BASE_URL` or the key in `config.toml`. The agent will then send completions to that address. It does not validate the address or change the UI. See [Network Boundary](/localcode/concepts/network-boundary#inference-endpoint).
-
 - **TUI** - the main product interface. Setup, mode choice, the model picker, and chat are all screens in one Textual app.
 - **Agent loop** - the model creates tool calls, the tools run, and the results go back to the model. Turn state, todos, and goal context continue across user messages.
 - **Tools** - file reading and editing, glob/grep, shell commands, project checks, syntax checks, code navigation and symbol inspection, notebook editing, app launching, the two network tools, and any MCP tools you have configured.
-- **Inference server** - by default, localcode starts a `llama-server` binary included in the wheel at `localhost:8081`. localcode binds *its own* server there. It does not limit `base_url` to loopback, so the client connects to any address set there. See [Network Boundary](/localcode/concepts/network-boundary).
+- **Inference server** - by default, localcode starts its own `llama-server` (the binary included in the wheel) at `localhost:8081`.
 
 ## Built specifically for small models
 
