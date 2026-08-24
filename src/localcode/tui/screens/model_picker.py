@@ -99,6 +99,7 @@ class ModelPickerScreen(Screen):
         Binding("h", "back", "Back", show=False),
         Binding("d", "edit_dir", "Change save directory", show=False),
         Binding("x", "begin_delete", "Delete a downloaded model", show=False),
+        Binding("c", "cancel_download", "Cancel download", show=False),
         Binding("y", "confirm_delete", "Confirm deletion", show=False),
         Binding("n", "cancel_delete", "Abort deletion", show=False),
         Binding("escape", "cancel", "Cancel", show=False),
@@ -266,10 +267,14 @@ class ModelPickerScreen(Screen):
             # so without this the user can't tell which model the quants are for.
             fam = self._open_group.display_name if self._open_group else ""
             fam_bit = f"[dim]·[/] [bold]{fam}[/] " if fam else ""
+            # Surface `c cancel` only while a download is in flight — no point
+            # advertising it on a fully-downloaded quant list.
+            from ... import bootstrap
+            cancel_bit = "c cancel · " if bootstrap.list_active_downloads() else ""
             return (
                 f"[{C.primary}]LocalCode[/] {fam_bit}"
                 "[dim]· ↑/↓ + Enter to select a quant · "
-                "Esc/← back to models[/]"
+                f"{cancel_bit}Esc/← back to models[/]"
             )
         return self._default_footer_markup()
 
@@ -688,13 +693,31 @@ class ModelPickerScreen(Screen):
             return
 
         # A model is already usable — download in the background and stay put so
-        # the user can keep working; the row reflects live progress.
-        bootstrap.start_background_download(choice)
-        self._ensure_progress_timer()
-        self._refresh()
-        self._flash_footer(
-            f"[dim]Downloading {q.label} in the background — pick it again when "
-            "it's ready.[/]"
+        # the user can keep working; the row reflects live progress. Confirm
+        # first: a multi-GB download shouldn't start on a stray Enter. (The
+        # first-run path above dismisses without a modal, since the app has
+        # nothing to run until something is downloaded.)
+        from .confirm import ConfirmScreen
+
+        def _on_confirm(ok: bool, q=q, choice=choice) -> None:
+            if not ok:
+                return
+            bootstrap.start_background_download(choice)
+            self._ensure_progress_timer()
+            self._refresh()
+            self._flash_footer(
+                f"[dim]Downloading {q.label} in the background, pick it again when "
+                "it's ready.[/]"
+            )
+
+        self.app.push_screen(
+            ConfirmScreen(
+                f"Download {q.label}?",
+                f"{q.size_gb:.1f} GB will be downloaded in the background.",
+                confirm_label="Download",
+                dangerous=False,
+            ),
+            _on_confirm,
         )
 
     def _has_usable_model(self) -> bool:
@@ -709,6 +732,33 @@ class ModelPickerScreen(Screen):
         except Exception:
             return False
         return cur is not None and bootstrap.is_download_complete(cur)
+
+    def action_cancel_download(self) -> None:
+        """c — cancel the focused quant's in-flight background download and
+        delete its partial file. No-op (with a hint) if it isn't downloading."""
+        inp = self.query_one("#dir-input", Input)
+        if inp.has_class("active"):
+            return
+        # Only meaningful at the quant level, where rows carry download state.
+        if self._level != self._LEVEL_QUANTS:
+            return
+        from ... import bootstrap
+        from ...models_catalog import model_dir
+        rows = self._visible_quants()
+        if not (0 <= self._focused_idx < len(rows)):
+            return
+        q = rows[self._focused_idx]
+        state = self._quant_state(bootstrap, q, model_dir())
+        # A downloading row reads "↓ NN%"; a queued one reads "queued". Anything
+        # else (downloaded / failed / none) has no in-flight download to stop.
+        if not (state.startswith("↓") or state == "queued"):
+            self._flash_footer(
+                "[dim]Nothing to cancel, this quant isn't downloading.[/]"
+            )
+            return
+        bootstrap.cancel_download(q.filename)
+        self._refresh()
+        self._flash_footer(f"[dim]Cancelled download of {q.label}.[/]")
 
     def action_back(self) -> None:
         """Left / h — back out of Level 2 to Level 1 (no-op at Level 1)."""
