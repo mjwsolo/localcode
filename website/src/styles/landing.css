@@ -303,18 +303,6 @@ code {
 .lc-section--alt {
   background: color-mix(in srgb, var(--lc-page-2) 45%, var(--lc-page));
 }
-.lc-section--dark {
-  background: var(--lc-ink);
-  color: var(--lc-bone);
-  border-color: #232a2d;
-  --lc-text: var(--lc-bone);
-  --lc-text-muted: var(--lc-muted-light);
-  --lc-line: #232a2d;
-  --lc-accent: var(--lc-accent-dark);
-  --lc-page: var(--lc-ink);
-  --lc-page-2: var(--lc-surface);
-}
-
 .lc-section__inner {
   max-width: var(--lc-maxw);
   margin: 0 auto;
@@ -736,78 +724,6 @@ code {
   border-top: 1px solid var(--lc-line);
   font-size: 0.88rem;
   color: var(--lc-text-muted);
-}
-
-/* ── Network boundary ────────────────────────────────── */
-
-.lc-boundary {
-  display: grid;
-  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
-  gap: 3rem;
-  align-items: start;
-}
-@media (max-width: 900px) {
-  .lc-boundary {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 2rem;
-  }
-}
-
-.lc-boundary__list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  border: 1px solid var(--lc-line);
-  border-radius: var(--lc-radius);
-}
-.lc-boundary__list li {
-  display: flex;
-  gap: 0.9rem;
-  align-items: baseline;
-  padding: 0.9rem 1.1rem;
-  border-bottom: 1px solid var(--lc-line);
-  font-size: 0.94rem;
-  color: var(--lc-text-muted);
-}
-.lc-boundary__list li:last-child {
-  border-bottom: 0;
-}
-.lc-boundary__list .txt {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.lc-boundary__list .tag {
-  flex: 0 0 5.5rem;
-  font-family: var(--lc-font-code);
-  font-size: 0.7rem;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  padding: 0.1rem 0.4rem;
-  text-align: center;
-  border: 1px solid currentColor;
-}
-/* Green is reserved for a check that passed, so it is NOT used here: "local"
-   is a category, not a pass. The network rows are the ones worth noticing, so
-   they take the accent and the local rows recede. */
-.lc-boundary__list .is-local .tag {
-  color: var(--lc-text-muted);
-}
-.lc-boundary__list .is-net .tag {
-  color: var(--lc-accent-dark);
-}
-
-/* Narrow screens: stack the label above the text so a long line with inline
-   code can't force the page into horizontal scroll. */
-@media (max-width: 560px) {
-  .lc-boundary__list li {
-    flex-direction: column;
-    gap: 0.45rem;
-  }
-  .lc-boundary__list .tag {
-    flex: 0 0 auto;
-    align-self: flex-start;
-    padding-inline: 0.5rem;
-  }
 }
 
 /* ── Final CTA + footer ──────────────────────────────── */
