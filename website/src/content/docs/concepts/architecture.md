@@ -1,33 +1,44 @@
 ---
 title: Architecture
-description: The pieces localcode is made of, from the chat screen down to the model.
+description: The pieces localcode is made of, from the TUI down to the inference server.
 ---
 
+## The stack
+
+This is the default setup. The rest of this page describes it:
+
 ```text
-  chat screen (TUI)  -->  agent loop  -->  tools (read / edit / bash / search / MCP)
-                             |
-                             v
-                 model server on your Mac (http://localhost:8081)
-                             |
-                             v
-                     GGUF weights on disk
+  Textual TUI  ──►  agent loop  ──►  tools (read/edit/bash/search/MCP)
+                        │
+                        ▼
+        runtime.base_url  (default http://localhost:8081)
+                        │
+                        ▼
+              llama-server started by localcode
+              (llama.cpp fork + TurboQuant KV compression)
+                        │
+                        ▼
+                  GGUF weights on disk
 ```
 
-- **Chat screen.** Setup, the model picker and chat are screens in one terminal app.
-- **Agent loop.** The model asks for a tool, the tool runs, the result goes back to the model. The task, its to-do list and its goal carry over between your messages.
-- **Tools.** Read and edit files, search with glob and grep, run shell commands, check syntax, navigate symbols, launch apps, fetch from the web, and anything an MCP server adds.
-- **Model server.** localcode starts a `llama-server` that ships inside the package and talks to it at `localhost:8081`. You can point `runtime.base_url` at a server on another machine instead; see [Network Boundary](/localcode/concepts/network-boundary).
+The arrow labeled `runtime.base_url` is a setting, not a fixed connection. You can point it somewhere else with `LOCALCODE_BASE_URL` or the key in `config.toml`. The agent will then send completions to that address. It does not validate the address or change the UI. See [Network Boundary](/localcode/concepts/network-boundary#inference-endpoint-the-one-that-moves-the-boundary).
 
-## Built for small models
+- **TUI** - the main product interface. Setup, mode choice, the model picker, and chat are all screens in one Textual app.
+- **Agent loop** - the model creates tool calls, the tools run, and the results go back to the model. Turn state, todos, and goal context continue across user messages.
+- **Tools** - file reading and editing, glob/grep, shell commands, project checks, syntax checks, code navigation and symbol inspection, notebook editing, app launching, the two network tools, and any MCP tools you have configured.
+- **Inference server** - by default, localcode starts a `llama-server` binary included in the wheel at `localhost:8081`. localcode binds *its own* server there. It does not limit `base_url` to loopback, so the client connects to any address set there. See [Network Boundary](/localcode/concepts/network-boundary).
 
-Local models make predictable mistakes, and the loop corrects for them:
+## Built specifically for small models
 
-- Malformed tool calls are repaired instead of failing the turn.
-- Cut-off tool calls and reasoning loops are detected and recovered from.
-- Hidden reasoning is off by default. Turn it on per model with `/thinking`.
-- Edits are syntax-checked before anything runs.
+Quantised local models often fail in predictable ways. The loop handles these problems directly instead of assuming it is using a frontier model:
 
-## Memory safety
+- **Tool-call repair** - the dispatcher fixes malformed JSON arguments and extra spaces in tool names instead of failing the round.
+- **Recovery modes** - separate recovery paths handle cut-off tool calls and reasoning loops. Each path has its own exit reason in the event stream.
+- **Hidden reasoning is off by default** - you can turn it on for each model with `/thinking`. Models without a reasoning channel say so instead of silently ignoring the setting.
+- **Syntax checks before shell runs** - tree-sitter finds broken edits in-process.
 
-- A memory-pressure monitor stops the model server before your Mac starts swapping. The event log records it.
+## Memory and process safety
+
+- A memory-pressure monitor watches the server. It can stop the server instead of letting the machine become unusable from swapping. The project event log records the stop.
+- A multi-region mmap patch in the fork fixes a Metal OOM caused when llama.cpp's loader mapped a whole GGUF into one Metal buffer.
 - `localcode unstick` recovers a stuck server without a reboot.
