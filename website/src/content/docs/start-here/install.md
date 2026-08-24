@@ -29,14 +29,7 @@ cd your-project
 localcode
 ```
 
-That is the whole command. First-run setup, model selection, configuration, and model management all happen inside the TUI. There is no `localcode setup` subcommand.
-
-There are only two other entry points:
-
-```sh
-localcode run --goal "..."   # headless, one goal, then exit
-localcode unstick            # recover a wedged model server
-```
+That is the whole command. First-run setup, model selection, configuration, and model management all happen inside the TUI.
 
 ## What happens on first launch
 
@@ -61,7 +54,6 @@ You can safely add everything under `<project>/.localcode/` to `.gitignore`.
 ## If something goes wrong
 
 - Every error shown to users has a stable `Eccc` code. See [Error Codes](/localcode/reference/error-codes).
-- If the model server gets stuck because a `llama-server` from an earlier session is still running, use `localcode unstick`. It runs `memory_pressure` and `purge` and needs admin rights.
 - Detailed information about the latest project error is saved in `<project>/.localcode/last_error.log`.
 
 :::caution[Alpha software]
