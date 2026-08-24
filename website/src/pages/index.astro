@@ -109,7 +109,7 @@ const proof = [
         <div class="lc-hero__inner">
           <div class="lc-hero__copy">
             <h1 class="lc-h1">
-              Agentic coding. Local models.<br /><span class="lc-h1__accent"
+              Agentic coding.<br />Local models.<br /><span class="lc-h1__accent"
                 >On your Mac.</span
               >
             </h1>
@@ -230,60 +230,6 @@ localcode</code></pre>
             the list.
           </p>
           <MemoryChooser />
-        </div>
-      </section>
-
-      <!-- Network boundary -->
-      <section class="lc-section lc-section--dark">
-        <div class="lc-section__inner lc-boundary">
-          <div>
-            <h2 class="lc-h2">Where the boundary is</h2>
-            <p class="lc-lede">
-              Inference runs locally by default. A few features reach the network
-              when you use them: model downloads, the web search and fetch tools,
-              and any MCP servers you add. The boundary page lists every outbound
-              path.
-            </p>
-            <a class="lc-btn lc-btn--primary" href={href('concepts/network-boundary')}>
-              Read the network boundary
-            </a>
-          </div>
-          <ul class="lc-boundary__list">
-            <li class="is-local">
-              <span class="tag">default</span>
-              <span class="txt">
-                Inference, by default a llama.cpp server on
-                <code>localhost:8081</code>
-              </span>
-            </li>
-            <li class="is-local">
-              <span class="tag">local</span>
-              <span class="txt">
-                Your files, prompts, edits, and the event log in <code>.localcode/</code>
-              </span>
-            </li>
-            <li class="is-net">
-              <span class="tag">config</span>
-              <span class="txt">
-                A custom <code>base_url</code> sends your prompts and code
-                context to that endpoint instead
-              </span>
-            </li>
-            <li class="is-net">
-              <span class="tag">network</span>
-              <span class="txt">
-                Model downloads, and a connectivity probe that carries no
-                application payload
-              </span>
-            </li>
-            <li class="is-net">
-              <span class="tag">no prompt</span>
-              <span class="txt">
-                <code>web_search</code>, <code>web_fetch</code> and MCP tools:
-                these never ask for confirmation, at any autonomy level
-              </span>
-            </li>
-          </ul>
         </div>
       </section>
 
