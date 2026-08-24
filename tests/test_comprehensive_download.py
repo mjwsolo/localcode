@@ -84,7 +84,7 @@ def test_already_downloaded_short_circuits(isolated_model_dir, monkeypatch):
 def test_fast_path_success(isolated_model_dir, monkeypatch):
     choice = _unpinned(catalog.by_key("gemma-12b"))
 
-    def _fake_hf(c, model_file, on_progress=None):
+    def _fake_hf(c, model_file, on_progress=None, cancel_event=None):
         Path(model_file).write_bytes(b"downloaded")
         return True
 
@@ -158,7 +158,7 @@ def test_partial_at_final_name_is_not_treated_as_done(isolated_model_dir, monkey
     choice.local_path.write_bytes(b"partial junk")
     completed = {"hub": False}
 
-    def _fake_hub(c, model_file, on_progress=None):
+    def _fake_hub(c, model_file, on_progress=None, cancel_event=None):
         # Simulate the hub finishing the download at full size.
         Path(model_file).write_bytes(b"x" * 1024)
         monkeypatch.setattr(bootstrap, "_is_complete_download", lambda p, e: True)

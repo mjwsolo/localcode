@@ -93,7 +93,7 @@ def test_start_registers_downloading_entry_and_returns_key(monkeypatch, not_on_d
     """
     release = threading.Event()
 
-    def _gated_download(choice, on_progress=None):
+    def _gated_download(choice, on_progress=None, cancel_event=None):
         release.wait(timeout=3.0)
         return True, str(choice.local_path)
 
@@ -118,7 +118,7 @@ def test_download_status_has_documented_shape(monkeypatch, not_on_disk):
     release = threading.Event()
     monkeypatch.setattr(
         bootstrap, "download_model",
-        lambda choice, on_progress=None: (release.wait(timeout=3.0), (True, str(choice.local_path)))[1],
+        lambda choice, on_progress=None, cancel_event=None: (release.wait(timeout=3.0), (True, str(choice.local_path)))[1],
     )
 
     choice = _choice()
@@ -153,7 +153,7 @@ def test_concurrency_cap_leaves_extras_queued(monkeypatch, not_on_disk):
 
     release = threading.Event()
 
-    def _gated_download(choice, on_progress=None):
+    def _gated_download(choice, on_progress=None, cancel_event=None):
         release.wait(timeout=5.0)
         return True, str(choice.local_path)
 
@@ -197,7 +197,7 @@ def test_completed_download_flips_to_done(monkeypatch, not_on_disk):
     with progress_pct pinned at 100 and no error."""
     monkeypatch.setattr(
         bootstrap, "download_model",
-        lambda choice, on_progress=None: (True, str(choice.local_path)),
+        lambda choice, on_progress=None, cancel_event=None: (True, str(choice.local_path)),
     )
 
     choice = _choice()
@@ -216,7 +216,7 @@ def test_failed_download_records_error(monkeypatch, not_on_disk):
     """A failing download_model leaves the entry 'failed' with the message."""
     monkeypatch.setattr(
         bootstrap, "download_model",
-        lambda choice, on_progress=None: (False, "boom: network down"),
+        lambda choice, on_progress=None, cancel_event=None: (False, "boom: network down"),
     )
 
     choice = _choice()
