@@ -5,6 +5,20 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
+## 0.3.62 — 2026-08-24
+
+### Added
+
+- **Confirm before starting a model download.** Picking a not-downloaded quant
+  in the model picker now asks "Download <name>? (N GB)" before it starts, so an
+  accidental Enter no longer kicks off a multi-GB download. The first-run case
+  (no usable model yet) still downloads without a prompt, since the app needs a
+  model to run.
+- **Cancel an in-flight download.** Press `c` in the picker to abort the focused
+  quant's download; the partial file is removed and any queued download is
+  promoted. A download can no longer only be stopped by quitting the app.
+
+
 ## 0.3.61 — 2026-08-24
 
 ### Fixed
