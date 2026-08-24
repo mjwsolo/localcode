@@ -35,9 +35,7 @@ That is the whole command. First-run setup, model selection, configuration, and 
 
 1. localcode checks your Mac's unified memory and recommends a model. See [Choose a Model](/localcode/start-here/choose-a-model).
 2. It downloads the model's GGUF from Hugging Face. This is the only step that needs the network. You only need to do it once for each model.
-3. By default, it starts the included `llama-server` at `http://localhost:8081` and connects the agent to it. If you set `runtime.base_url` or `LOCALCODE_BASE_URL` to another address, the agent connects to that address instead.
-
-After that, generation happens wherever `runtime.base_url` points. By default, this is the server on your Mac. If you change it or `LOCALCODE_BASE_URL`, your prompts and code context go to the address you set. The value is not checked. See [Network Boundary](/localcode/concepts/network-boundary) to learn what stays on your machine and what leaves it.
+3. By default, it starts the included `llama-server` at `http://localhost:8081` and connects the agent to it.
 
 ## Where localcode keeps things
 
