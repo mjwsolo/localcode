@@ -52,6 +52,7 @@ class MCPScreen(Screen):
         Binding("enter", "expand_focused", "Expand / collapse", show=False),
         Binding("left", "back", "Back", show=False),
         Binding("h", "back", "Back", show=False),
+        Binding("a", "add", "Add server", show=False),
         Binding("r", "reload", "Reload all", show=False),
         Binding("d", "disconnect", "Disconnect server", show=False),
         Binding("escape", "close", "Close", show=False),
@@ -117,6 +118,7 @@ class MCPScreen(Screen):
         # Rows from mcp.server_status(); None = still loading (connecting).
         self._status: list[dict] | None = None
         self._busy = False  # True while a connect / reload worker is in flight
+        self._pending_focus_name: str | None = None  # focus this server post-reload
 
     # ── compose ─────────────────────────────────────────────────────
 
@@ -163,8 +165,18 @@ class MCPScreen(Screen):
             self._focused_idx = 0
             self._level = self._LEVEL_SERVERS
             self._open_idx = None
+        elif self._pending_focus_name is not None:
+            # A just-added server: land focus on it if we can find it.
+            for i, s in enumerate(status):
+                if s.get("name") == self._pending_focus_name:
+                    self._focused_idx = i
+                    break
+            else:
+                if self._focused_idx >= n:
+                    self._focused_idx = n - 1
         elif self._focused_idx >= n:
             self._focused_idx = n - 1
+        self._pending_focus_name = None
         self._refresh()
 
     # ── render dispatch ─────────────────────────────────────────────
@@ -180,7 +192,7 @@ class MCPScreen(Screen):
 
     def _footer_markup(self) -> str:
         if self._status is None or not self._status:
-            return f"[{C.primary}]LocalCode[/] [dim]· r reload · Esc close[/]"
+            return f"[{C.primary}]LocalCode[/] [dim]· a add · r reload · Esc close[/]"
         if self._level == self._LEVEL_TOOLS:
             row = self._status[self._open_idx] if self._open_idx is not None else None
             name = row["name"] if row else ""
@@ -193,7 +205,7 @@ class MCPScreen(Screen):
         keys = "Enter to expand" if n == 1 else f"↑/↓ + Enter, or 1-{n}"
         return (
             f"[{C.primary}]LocalCode[/] "
-            f"[dim]· {keys} · r reload · d disconnect · Esc close[/]"
+            f"[dim]· {keys} · a add · r reload · d disconnect · Esc close[/]"
         )
 
     # ── Level 1: servers ────────────────────────────────────────────
@@ -218,7 +230,7 @@ class MCPScreen(Screen):
             lines.append(f"       [dim]" + " · ".join(bits) + "[/]")
 
         lines.append("")
-        lines.append("[dim]Enter → tools · r reload · d disconnect · Esc close[/]")
+        lines.append("[dim]Enter → tools · a add · r reload · d disconnect · Esc close[/]")
         return "\n".join(lines)
 
     def _status_glyph_label(self, s: dict) -> tuple[str, str]:
@@ -271,27 +283,13 @@ class MCPScreen(Screen):
     # ── empty state ─────────────────────────────────────────────────
 
     def _render_empty(self) -> str:
-        from ...mcp import MCP_CONFIG_PATH
         return (
             "[bold]MCP servers[/]\n"
             "\n"
             "[dim]None configured. MCP lets the model call tools from external\n"
-            "programs you trust.[/]\n"
+            "programs you trust: a remote server URL, or a local command.[/]\n"
             "\n"
-            f"[dim]Add one in[/] {MCP_CONFIG_PATH}[dim]:[/]\n"
-            "\n"
-            '[dim]{\n'
-            '  "mcpServers": {\n'
-            '    "files": {\n'
-            '      "command": "npx",\n'
-            '      "args": [\n'
-            '        "-y", "@modelcontextprotocol/server-filesystem", "/path"\n'
-            '      ]\n'
-            '    }\n'
-            '  }\n'
-            '}[/]\n'
-            "\n"
-            "[dim]Then press r to connect.[/]"
+            f"[dim]Press[/] [bold]a[/] [dim]to add one.[/]"
         )
 
     # ── refresh / scroll ────────────────────────────────────────────
@@ -384,6 +382,32 @@ class MCPScreen(Screen):
             self._collapse()
             return
         self.dismiss(None)
+
+    # ── add (Level 1 only) ──────────────────────────────────────────
+
+    def action_add(self) -> None:
+        """Open the add-server form; on save, write mcp.json and reconnect."""
+        if self._busy or self._level != self._LEVEL_SERVERS:
+            return
+        from .mcp_add import AddMCPServerScreen
+
+        def _after(result: dict | None) -> None:
+            if result:
+                self._save_and_reload(result["name"], result["entry"])
+
+        self.app.push_screen(AddMCPServerScreen(), _after)
+
+    def _save_and_reload(self, name: str, entry: dict) -> None:
+        from ...mcp import add_mcp_server
+        try:
+            add_mcp_server(name, entry)
+        except Exception as e:  # pragma: no cover - disk error path
+            self._flash_footer(f"[{C.error}]Could not save {name}: {e}[/]")
+            return
+        # Reconnect so the new server appears with honest status, then land
+        # focus on it.
+        self._pending_focus_name = name
+        self.action_reload()
 
     # ── reload ──────────────────────────────────────────────────────
 
