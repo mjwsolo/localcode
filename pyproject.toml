@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "localcode"
-version = "0.3.66"
+version = "0.3.67"
 description = "High-performance AI coding on consumer hardware."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -43,6 +43,14 @@ dependencies = [
   "tree-sitter>=0.23.0",              # in-process, offline syntax checking (Tier-1 verify)
   "tree-sitter-language-pack>=1.0.0", # bundled grammars, 100+ languages, no external tools
   "tomli>=2.0.0;python_version<'3.11'",
+  # Voice, bundled on macOS only (the product platform) so /voice and the
+  # piper neural voice work out of the box. The markers keep these heavy
+  # native wheels off Linux/Windows installs and CI, where voice can't run
+  # anyway. The `voice` extra below still lets any platform force-install them.
+  "pywhispercpp>=1.2.0; sys_platform=='darwin'",  # whisper.cpp Metal STT
+  "sounddevice>=0.4.6;  sys_platform=='darwin'",  # mic capture + audio out
+  "numpy>=1.26.0;       sys_platform=='darwin'",
+  "piper-tts>=1.2.0;    sys_platform=='darwin'",  # natural neural TTS
 ]
 
 [project.optional-dependencies]
