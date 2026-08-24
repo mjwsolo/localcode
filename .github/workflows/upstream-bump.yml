@@ -299,7 +299,7 @@ jobs:
             echo "- [ ] tool-calling returned a well-formed call on the models that support it"
             echo "- [ ] Qwen 3.8 27B loaded (the MTP-guard regression; source check is necessary, not sufficient)"
             echo "- [ ] the three dedicated-runner architectures were re-checked: any that upstream now"
-            echo "      supports can drop its separate source-built runner (\`.github/workflows/runners.yml\`)"
+            echo "      supports can drop its separate source-built binary"
             echo "- [ ] \`llama-cpp-turboquant/PATCHES.md\` still matches \`patches/\`"
             echo "- [ ] any patch upstream has now merged (e.g. PR #27475, the Muse thinking-tag fix) was deleted"
             echo
