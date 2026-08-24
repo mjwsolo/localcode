@@ -63,11 +63,6 @@ pass after it.</small>
 
 See the full list: [Slash Commands](/localcode/reference/slash-commands).
 
-## Two things to know
-
-**Approvals.** By default, localcode uses **auto_edit**. It allows file edits. It asks for confirmation before running commands on a fixed list. This list includes `pip install`, `npm install`, `python `, `git push`, `rm -r`, and `sudo `. It uses a simple substring match. So `python -m pytest` needs approval, but plain `pytest` does not. See [Permissions](/localcode/start-here/permissions).
-
-**The evidence gate.** If an edit turn changes code, localcode must see a successful build, typecheck, test, or lint check for the current files. Otherwise, it will not report success. It ends the turn by saying the task is incomplete. A fixed list of verbs marks a turn as an edit: `fix`, `change`, `edit`, `update`, `refactor`, `rename`, `remove`, and `add`. Requests without these verbs run as general tasks without this gate.
 
 ## Next
 

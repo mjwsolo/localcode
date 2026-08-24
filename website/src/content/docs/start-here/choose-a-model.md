@@ -18,15 +18,6 @@ Model weights must use about **55% of unified memory** or less. The rest is for 
 | 64 GB | Gemma 4 26B-A4B | Q8 | 28.0 GB |
 | 96 GB+ | Qwen 3.6 35B-A3B | UD-Q8_K_XL | 38.5 GB |
 
-These come straight from `localcode.models_catalog.recommend()`, not a hand-picked list. Reproduce any of them:
-
-```sh
-python -c "from localcode import models_catalog as m; c = m.recommend(32); print(c.name, c.size_gb)"
-```
-
-## Why the mid-range picks are Mixture-of-Experts
-
-The 24-96 GB recommendations use MoE models. Only a few billion parameters are active per token, even though the full model is much larger, and decode speed depends on those active parameters. You get the quality of a large model at the per-token cost of a small one, which is what makes these models practical on a laptop.
 
 ## Switching models
 
