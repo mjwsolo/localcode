@@ -47,6 +47,16 @@ _DOWNLOAD_QUEUE: list[str] = []
 # ModelChoice after waiting in the queue.
 _DOWNLOAD_CHOICES: dict[str, object] = {}
 
+# model_key -> cancel Event. Set by cancel_download; polled by the parallel
+# downloader (and the hub progress hook) so an in-flight transfer aborts
+# promptly instead of running to completion after the user backs out.
+_DOWNLOAD_CANCEL: dict[str, "threading.Event"] = {}
+
+
+class DownloadCancelled(Exception):
+    """Raised inside the download machinery when a cancel Event fires, so the
+    aborted transfer is not reported as a network failure."""
+
 # Max concurrent ACTIVE downloads (status == "downloading"). The rest sit
 # in _DOWNLOAD_QUEUE with status "queued" until a slot frees.
 _MAX_ACTIVE_DOWNLOADS = 2
@@ -418,7 +428,8 @@ def get_model_path(preferred_filename: str | None = None) -> Path | None:
 
 
 def _download_parallel(url: str, dest: Path, num_threads: int = 16,
-                       on_progress: Callable[[str], None] | None = None) -> None:
+                       on_progress: Callable[[str], None] | None = None,
+                       cancel_event: "threading.Event | None" = None) -> None:
     """Download a large file using parallel HTTP range requests.
 
     Falls back to single-threaded if the server doesn't support ranges.
@@ -466,13 +477,25 @@ def _download_parallel(url: str, dest: Path, num_threads: int = 16,
 
     part = dest.with_name(dest.name + ".part")
 
+    if cancel_event is not None and cancel_event.is_set():
+        part.unlink(missing_ok=True)
+        raise DownloadCancelled()
+
     if not total_size or not accepts_ranges:
-        # Fallback: single-threaded
+        # Fallback: single-threaded. The reporthook doubles as the cancel
+        # poll — urlretrieve calls it every block, so raising there stops the
+        # transfer promptly (urlretrieve cleans up its own temp on the raise).
         def _report(block_num, block_size, _total):
+            if cancel_event is not None and cancel_event.is_set():
+                raise DownloadCancelled()
             if on_progress and total_size > 0:
                 done = min(block_num * block_size, total_size)
                 on_progress(f"Downloading: {done // (1024*1024)}/{total_size // (1024*1024)} MB ({done * 100 // total_size}%)")
-        urllib.request.urlretrieve(url, str(part), reporthook=_report)  # no ssl_ctx for urlretrieve
+        try:
+            urllib.request.urlretrieve(url, str(part), reporthook=_report)  # no ssl_ctx for urlretrieve
+        except DownloadCancelled:
+            part.unlink(missing_ok=True)
+            raise
         part.replace(dest)
         return
 
@@ -499,6 +522,11 @@ def _download_parallel(url: str, dest: Path, num_threads: int = 16,
                 with open(part, "r+b") as f:
                     f.seek(start)
                     while True:
+                        # Poll the cancel Event between reads so a cancelled
+                        # download stops writing within one 8MB buffer instead
+                        # of running the chunk to completion.
+                        if cancel_event is not None and cancel_event.is_set():
+                            return
                         data = resp.read(buf_size)
                         if not data:
                             break
@@ -541,6 +569,13 @@ def _download_parallel(url: str, dest: Path, num_threads: int = 16,
     progress_stop.set()
     progress_thread.join(timeout=1)
 
+    # Cancelled mid-flight: the chunk threads have already returned, so just
+    # drop the pre-allocated partial and report the abort. Checked before the
+    # error list so a cancel never surfaces as a chunk RuntimeError.
+    if cancel_event is not None and cancel_event.is_set():
+        part.unlink(missing_ok=True)
+        raise DownloadCancelled()
+
     if errors:
         part.unlink(missing_ok=True)
         raise RuntimeError("; ".join(errors))
@@ -551,6 +586,7 @@ def _download_parallel(url: str, dest: Path, num_threads: int = 16,
 def download_model(
     choice=None,
     on_progress: Callable[[str], None] | None = None,
+    cancel_event: "threading.Event | None" = None,
 ) -> tuple[bool, str]:
     """Download a GGUF model selected from `models_catalog.CHOICES`.
 
@@ -621,6 +657,9 @@ def download_model(
     last_err_category = "unknown"
     backoffs = [0, 2, 5]  # seconds; 3 attempts total
     for attempt, delay in enumerate(backoffs, start=1):
+        # Bail before spending a retry (or its backoff sleep) if cancelled.
+        if cancel_event is not None and cancel_event.is_set():
+            return False, "cancelled"
         if delay:
             if on_progress:
                 on_progress(f"Retry {attempt}/{len(backoffs)} in {delay}s...")
@@ -629,11 +668,13 @@ def download_model(
         # Fast path: huggingface_hub (hf_xet Rust backend on Xet repos).
         # Resumes via the hub's built-in partial-download handling.
         try:
-            if _try_hub_download(choice, model_file, on_progress):
+            if _try_hub_download(choice, model_file, on_progress, cancel_event):
                 ok, reason = _verify_download_integrity(choice, model_file)
                 if not ok:
                     return False, reason
                 return True, str(model_file)
+        except DownloadCancelled:
+            return False, "cancelled"
         except Exception as e:
             last_err = e
             last_err_category = _classify_download_error(e)
@@ -646,11 +687,16 @@ def download_model(
                 )
         # Slow path: tuned urllib parallel downloader.
         try:
-            _download_parallel(url, model_file, num_threads=32, on_progress=on_progress)
+            _download_parallel(
+                url, model_file, num_threads=32,
+                on_progress=on_progress, cancel_event=cancel_event,
+            )
             ok, reason = _verify_download_integrity(choice, model_file)
             if not ok:
                 return False, reason
             return True, str(model_file)
+        except DownloadCancelled:
+            return False, "cancelled"
         except Exception as e:
             last_err = e
             last_err_category = _classify_download_error(e)
@@ -803,14 +849,22 @@ def _maybe_start_next() -> None:
 def _run_download(key: str, choice) -> None:
     """Daemon worker — runs download_model OUTSIDE the lock during I/O."""
     on_progress = lambda line: _apply_progress(key, line)
+    with _DOWNLOAD_LOCK:
+        cancel_event = _DOWNLOAD_CANCEL.get(key)
     try:
-        ok, result = download_model(choice, on_progress=on_progress)
+        ok, result = download_model(
+            choice, on_progress=on_progress, cancel_event=cancel_event
+        )
     except Exception as exc:  # pragma: no cover - defensive; download_model traps its own
         ok, result = False, str(exc)
     try:
         with _DOWNLOAD_LOCK:
             entry = _DOWNLOADS.get(key)
-            if entry is not None:
+            # A cancelled download has already had its entry dropped by
+            # cancel_download; don't resurrect it as "failed".
+            if entry is not None and not (
+                cancel_event is not None and cancel_event.is_set()
+            ):
                 if ok:
                     entry["status"] = "done"
                     entry["progress_pct"] = 100
@@ -859,9 +913,64 @@ def start_background_download(choice) -> str:
             "error": None,
         }
         _DOWNLOAD_CHOICES[key] = choice
+        # Fresh (cleared) cancel Event per download; cancel_download sets it.
+        _DOWNLOAD_CANCEL[key] = threading.Event()
         _DOWNLOAD_QUEUE.append(key)
         _maybe_start_next()
     return key
+
+
+def _delete_partial_files(choice) -> None:
+    """Remove any on-disk bytes for `choice` after a cancel: the final file and
+    the `.part` working file the parallel downloader pre-allocates. A half-
+    written .gguf at the final name would pass the size check on a later run and
+    then fail cryptically inside llama-server, so we delete it outright rather
+    than trust `_is_complete_download` to catch it."""
+    try:
+        dest = Path(choice.local_path)
+    except Exception:
+        return
+    for p in (dest, dest.with_name(dest.name + ".part")):
+        try:
+            p.unlink(missing_ok=True)
+        except Exception:
+            # Best effort — a locked/absent file must never crash the cancel.
+            pass
+
+
+def cancel_download(key: str) -> bool:
+    """Cancel an in-flight (or queued) background download and delete its
+    partial file. Returns True iff there was something to cancel.
+
+    Sets the download's cancel Event (so the worker thread aborts promptly),
+    drops the registry/queue entry so the row reverts to "not downloaded",
+    then removes the partial bytes from disk. Safe to call when nothing is
+    downloading (returns False) and safe to call twice.
+    """
+    with _DOWNLOAD_LOCK:
+        event = _DOWNLOAD_CANCEL.get(key)
+        entry = _DOWNLOADS.get(key)
+        choice = _DOWNLOAD_CHOICES.get(key)
+        # Only queued/downloading entries are cancellable; a done/failed entry
+        # (or no entry at all) means there's nothing in flight to stop.
+        active = entry is not None and entry["status"] in ("queued", "downloading")
+        if event is not None:
+            event.set()
+        if key in _DOWNLOAD_QUEUE:
+            _DOWNLOAD_QUEUE.remove(key)
+        _DOWNLOADS.pop(key, None)
+        _DOWNLOAD_CHOICES.pop(key, None)
+        _DOWNLOAD_CANCEL.pop(key, None)
+    if not active:
+        return False
+    # Disk I/O happens OUTSIDE the lock. Deleting only when the entry was
+    # actually in flight protects a just-completed file from being removed.
+    if choice is not None:
+        _delete_partial_files(choice)
+    # A freed slot may let a queued download start now.
+    with _DOWNLOAD_LOCK:
+        _maybe_start_next()
+    return True
 
 
 def download_status(key: str) -> dict | None:
@@ -956,7 +1065,7 @@ def _is_mmproj_complete(p: Path, choice) -> bool:
     return size >= int(expected * 0.9)
 
 
-def _make_progress_tqdm(on_progress: Callable[[str], None]):
+def _make_progress_tqdm(on_progress: Callable[[str], None], cancel_event=None):
     """Build a tqdm subclass that forwards download progress to the UI.
 
     huggingface_hub drives BOTH of its backends — hf_xet (Rust, parallel
@@ -978,6 +1087,11 @@ def _make_progress_tqdm(on_progress: Callable[[str], None]):
             self._lc_last_emit = 0.0
 
         def update(self, n=1):
+            # Cancelling raises out of the hub's write loop — update() is the
+            # one hook driven on every downloaded byte for both backends, so it
+            # is the promptest place to abort the hub path.
+            if cancel_event is not None and cancel_event.is_set():
+                raise DownloadCancelled()
             self._lc_done += int(n or 0)
             now = time.monotonic()
             if now - self._lc_last_emit >= 0.5:
@@ -1003,7 +1117,8 @@ def _make_progress_tqdm(on_progress: Callable[[str], None]):
     return _ProgressTqdm
 
 
-def _try_hub_download(choice, dest: Path, on_progress: Callable[[str], None] | None) -> bool:
+def _try_hub_download(choice, dest: Path, on_progress: Callable[[str], None] | None,
+                      cancel_event=None) -> bool:
     """Try to download via huggingface_hub's resumable HTTP downloader.
 
     The hf_xet backend is deliberately disabled (`HF_HUB_DISABLE_XET=1`
@@ -1020,8 +1135,12 @@ def _try_hub_download(choice, dest: Path, on_progress: Callable[[str], None] | N
         from huggingface_hub import hf_hub_download
     except ImportError:
         return False
+    if cancel_event is not None and cancel_event.is_set():
+        raise DownloadCancelled()
     if on_progress:
         on_progress(f"Downloading {choice.filename} (HuggingFace, accelerated)...")
+    # Always route through our tqdm so the cancel poll fires even when there is
+    # no on_progress sink (the update() hook is what aborts the hub stream).
     downloaded_path = hf_hub_download(
         repo_id=choice.hf_repo,
         filename=choice.filename,
@@ -1030,7 +1149,7 @@ def _try_hub_download(choice, dest: Path, on_progress: Callable[[str], None] | N
         # under the same filename visible instead of silent.
         revision=getattr(choice, "revision", None) or "main",
         local_dir=str(dest.parent),
-        tqdm_class=_make_progress_tqdm(on_progress) if on_progress else None,
+        tqdm_class=_make_progress_tqdm(on_progress or (lambda _l: None), cancel_event),
     )
     # huggingface_hub may write to a slightly different filename inside
     # local_dir; symlink/rename to our expected dest.
