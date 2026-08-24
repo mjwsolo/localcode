@@ -45,10 +45,6 @@ Settings for the model server and text generation.
 | `jail_to_project` | `true` |
 | `auto_approve_agent` | `false` |
 
-### `[search]`
-
-The `web_search` tool always searches DuckDuckGo through the `ddgs` package. There is nothing to configure here.
-
 ### `[ui]` and `[logging]`
 
 The settings are `ui.show_debug`, `ui.sounds_enabled`, `logging.enabled`, `logging.log_prompts`, `logging.log_responses`, and `logging.max_days` (30).

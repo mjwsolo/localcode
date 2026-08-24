@@ -9,7 +9,7 @@ localcode [--profile P] [--model TAG] [--resume SESSION_ID] [-c DIR]
 localcode run --goal "..." [options]
 ```
 
-Run `localcode` by itself to start the TUI. The TUI is the product. It includes first-run setup, configuration, and model management. **There is no `localcode setup` subcommand.** There is also no benchmark subcommand or screen. The speeds in the model picker are [calculated estimates](/localcode/models-and-performance#the-toks-numbers-in-the-model-picker), not measurements.
+Run `localcode` by itself to start the TUI. The TUI is the product. It includes first-run setup, configuration, and model management. **There is no `localcode setup` subcommand.** There is also no benchmark subcommand or screen. The speeds in the model picker are [calculated estimates](/localcode/start-here/choose-a-model#the-toks-numbers-in-the-model-picker), not measurements.
 
 ## Global options
 

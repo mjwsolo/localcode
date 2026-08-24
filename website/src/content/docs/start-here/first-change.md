@@ -1,5 +1,5 @@
 ---
-title: Getting Started
+title: Install
 description: Install localcode, open a repo, pick a model, make one change.
 ---
 
@@ -11,7 +11,14 @@ Five steps, each one a real recording from the app.
 pip install -U localcode
 ```
 
-Requires macOS on Apple Silicon and Python 3.10+.
+| | |
+| --- | --- |
+| Machine | Mac with Apple Silicon |
+| Unified memory | At least 16 GB |
+| Python | 3.10 or newer |
+| Disk | Space for one model - the smallest recommended GGUF is about 7.4 GB |
+
+Apple Silicon is the supported platform. Metal-accelerated inference works only on Mac. localcode also installs and runs on Linux in CI for development, but Linux is not the product platform.
 
 ## 2. Open your repo
 
@@ -24,11 +31,13 @@ Choose a project whose tests already pass. localcode uses your repo's own checks
 
 ## 3. Choose a model
 
-The model picker opens on your first launch. Use the arrow keys to choose a model. Then press Enter. The star shows the recommended model for your Mac.
+The model picker opens on first launch. localcode checks your Mac's unified memory and marks a recommended model with a star. Use the arrow keys to choose one, then press Enter.
 
 ![The localcode model picker: seven models, moving down the list and choosing one](/localcode/demo/step-2-choose-model.gif?v=a0c3cc9d)
 
-Learn more in [Choose a Model](/localcode/start-here/choose-a-model).
+localcode downloads the model's GGUF from Hugging Face - the only step that needs the network, and only once per model. Then it starts the included `llama-server` at `http://localhost:8081` and connects the agent to it.
+
+Learn more in [Models](/localcode/start-here/choose-a-model).
 
 ## 4. Start building
 
@@ -66,5 +75,5 @@ See the full list: [Slash Commands](/localcode/reference/slash-commands).
 
 ## Next
 
-- [Choose a Model](/localcode/start-here/choose-a-model) - find the best model that fits on your Mac.
+- [Models](/localcode/start-here/choose-a-model) - find the best model that fits on your Mac.
 - [Network Boundary](/localcode/concepts/network-boundary) - learn what leaves your machine and when.
