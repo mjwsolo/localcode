@@ -21,7 +21,7 @@ This is the default setup. The rest of this page describes it:
                   GGUF weights on disk
 ```
 
-The arrow labeled `runtime.base_url` is a setting, not a fixed connection. You can point it somewhere else with `LOCALCODE_BASE_URL` or the key in `config.toml`. The agent will then send completions to that address. It does not validate the address or change the UI. See [Network Boundary](/localcode/concepts/network-boundary#inference-endpoint-the-one-that-moves-the-boundary).
+The arrow labeled `runtime.base_url` is a setting, not a fixed connection. You can point it somewhere else with `LOCALCODE_BASE_URL` or the key in `config.toml`. The agent will then send completions to that address. It does not validate the address or change the UI. See [Network Boundary](/localcode/concepts/network-boundary#inference-endpoint).
 
 - **TUI** - the main product interface. Setup, mode choice, the model picker, and chat are all screens in one Textual app.
 - **Agent loop** - the model creates tool calls, the tools run, and the results go back to the model. Turn state, todos, and goal context continue across user messages.
