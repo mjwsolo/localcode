@@ -51,14 +51,6 @@ After that, generation happens wherever `runtime.base_url` points. By default, t
 
 You can safely add everything under `<project>/.localcode/` to `.gitignore`.
 
-## If something goes wrong
-
-- Every error shown to users has a stable `Eccc` code. See [Error Codes](/localcode/reference/error-codes).
-- Detailed information about the latest project error is saved in `<project>/.localcode/last_error.log`.
-
-:::caution[Alpha software]
-localcode is still being actively developed. Expect some problems and breaking changes between versions.
-:::
 
 ## Next
 

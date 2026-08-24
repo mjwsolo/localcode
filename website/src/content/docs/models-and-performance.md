@@ -3,13 +3,6 @@ title: Models & Performance
 description: The model catalogue, and how to think about speed on your Mac.
 ---
 
-## The catalogue
-
-localcode provides a curated catalogue, not a model zoo. Each entry lists its quantisation, download size, active parameter count, architecture, and the memory needed for automatic recommendation.
-
-See production-ready choices by memory size in [Choose a Model](/localcode/start-here/choose-a-model). See the full table, including experimental entries, in the [repository README](https://github.com/mjwsolo/localcode#models).
-
-You can also select models that localcode does not recommend by default, such as the DiffusionGemma research model. They run on the same bundled server as every other model.
 
 ## What determines speed
 
