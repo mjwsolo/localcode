@@ -28,7 +28,7 @@ This is the default setup. The rest of this page describes it:
 
 ## Built specifically for small models
 
-Quantised local models often fail in predictable ways. The loop handles these problems directly instead of assuming it is using a frontier model:
+localcode is designed specifically to enable high-performance agentic coding with local models on consumer hardware. The agent loop handles the ways small quantised models fail:
 
 - **Tool-call repair** - the dispatcher fixes malformed JSON arguments and extra spaces in tool names instead of failing the round.
 - **Recovery modes** - separate recovery paths handle cut-off tool calls and reasoning loops. Each path has its own exit reason in the event stream.
