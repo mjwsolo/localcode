@@ -739,7 +739,7 @@ class _ChatTextArea(TextArea):
                 # one clear line rather than doing a silent nothing.
                 try:
                     self.screen.query_one("#chat-log").append_info(
-                        "No image on the clipboard — copy or screenshot "
+                        "No image on the clipboard. Copy or screenshot "
                         "one first."
                     )
                 except Exception:
