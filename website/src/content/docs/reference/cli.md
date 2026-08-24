@@ -4,52 +4,52 @@ description: Every flag and subcommand localcode accepts.
 ---
 
 ```text
-localcode [--model TAG] [--resume SESSION_ID] [-c DIR]
+localcode [--profile P] [--model TAG] [--resume SESSION_ID] [-c DIR]
+          [--preview-screen SCREEN]
 localcode run --goal "..." [options]
 localcode unstick
 ```
 
-`localcode` on its own opens the app. `lc` is a shorter alias.
+Run `localcode` by itself to start the TUI. The TUI is the product. It includes first-run setup, configuration, and model management. **There is no `localcode setup` subcommand.** There is also no benchmark subcommand or screen. The speeds in the model picker are [calculated estimates](/localcode/models-and-performance#the-toks-numbers-in-the-model-picker), not measurements.
 
-## Options
+## Global options
 
 | Flag | Description |
 | --- | --- |
-| `--model TAG` | Start with a specific model |
-| `--resume SESSION_ID` | Continue an earlier session. `--resume last` picks the most recent. Session IDs are printed when you exit |
-| `-c`, `--cwd DIR` | Project directory. Defaults to the current directory |
 | `--profile P` | Gemma 4 profile: `e2b`, `e4b`, `26b-laptop`, `26b-moe`, `31b` |
-| `--preview-screen SCREEN` | Open one screen with mock data, without starting a model: `setup`, `mode-picker`, `model-picker`, `chat` |
+| `--model TAG` | Exact local runtime model tag |
+| `--resume SESSION_ID` | Continue an earlier session. Use `--resume last` for the most recent session. Session IDs appear when you exit |
+| `-c`, `--cwd DIR` | Project working directory. The default is the current directory |
+| `--preview-screen SCREEN` | Test one screen visually with mock data: `setup`, `mode-picker`, `model-picker`, `chat`. This does not start a server or model |
 
 ## `localcode run`
 
-Run one task without the UI, then exit. Useful for scripts and CI. Approvals are always off, so it never waits for you.
+Run one coding goal without the TUI, then exit. Use this for scripts, CI, and evaluation. Approvals always use full-auto because no person is available to answer prompts.
 
 | Flag | Description |
 | --- | --- |
-| `--goal TEXT` | Required. The task to do |
-| `--timeout N` | Stop after N seconds. `0` means no limit |
-| `--max-rounds N` | Maximum model/tool rounds. `0` means unlimited |
-| `--thinking off\|auto\|on` | Hidden reasoning for this run |
-| `--thinking-budget N` | Reasoning-token limit. `0` uses the model default; negative turns it off |
-| `--quiet` | Print only the final answer |
-| `--json` | Write the event stream to stdout as JSON Lines. See [JSONL Events](/localcode/reference/jsonl-events) |
-| `--binary PATH` | Use a different `llama-server` binary |
+| `--goal TEXT` | **Required.** The task the agent must complete |
+| `--binary PATH` | Path to a `llama-server` binary. For example, use stock llama.cpp on Linux CI with `LOCALCODE_SERVER_FLAVOR=vanilla` |
+| `--timeout N` | Stop after N seconds (`0` = no limit) |
+| `--max-rounds N` | Maximum number of model/tool rounds (`0` = unlimited) |
+| `--thinking off\|auto\|on` | Hidden-reasoning setting for this run |
+| `--thinking-budget N` | Reasoning-token limit (`0` = model default, negative disables) |
+| `--quiet` | Hide streamed output and print only the final answer |
+| `--json` | Write the event stream to stdout as JSON Lines |
 
-Exit codes: `0` done, `1` error or incomplete, `124` timeout, `130` interrupted.
+Exit codes: `0` ok · `1` error · `124` timeout · `130` interrupted.
+
+See [JSONL Events](/localcode/reference/jsonl-events).
 
 ## `localcode unstick`
 
-Recover a stuck model server without rebooting. Needs admin rights.
+Fix a stuck `llama-server` without restarting the computer. Runs `memory_pressure` and `purge`. Admin rights are required.
 
 ## Environment variables
 
 | Variable | Effect |
 | --- | --- |
-| `LOCALCODE_AUTONOMY` | `suggest`, `auto_edit` (default) or `full_auto`. See [Permissions](/localcode/start-here/permissions) |
-| `LOCALCODE_MODEL` | Model tag, same as `--model` |
-| `LOCALCODE_BASE_URL` | Send prompts to a different server. See [Network Boundary](/localcode/concepts/network-boundary) |
-| `LOCALCODE_HOME` | Use a directory other than `~/.localcode` |
-| `LOCALCODE_PORT` | Port for the local model server |
-| `LOCALCODE_TELEMETRY` | `0` leaves UI turn summaries out of the local event log |
-| `LOCALCODE_TRUST_REMOTE_CODE` | `1` lets the optional code-search embedding model run Python downloaded from its Hugging Face repo. Off by default |
+| `LOCALCODE_AUTONOMY` | `suggest`, `auto_edit` (default), or `full_auto` |
+| `LOCALCODE_HOME` | Use a location other than `~/.localcode` |
+| `LOCALCODE_SERVER_FLAVOR` | Use `vanilla` with a stock llama.cpp binary |
+| `LOCALCODE_ALLOW_DEBUGGER` | Set to `1` to skip macOS anti-debugger hardening |
