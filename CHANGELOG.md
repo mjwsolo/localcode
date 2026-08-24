@@ -5,6 +5,35 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
+## 0.3.61a1 — 2026-08-23
+
+### Fixed
+
+- **Terminal close no longer orphans the model server.** The app cleaned up its
+  `llama-server` on Ctrl+C and `kill`, but not on `SIGHUP` (closing the terminal
+  window or dropping an SSH session), which left a multi-GB server holding RAM
+  until reboot. SIGHUP now runs the same shutdown path.
+- **Info lines render their formatting instead of printing the tags.** Markup in
+  `append_info` (the approval hint shown on every prompt, the resumed-session
+  header, and others) was written literally, so users saw raw `[dim]...[/]`
+  tags. It now renders, with user/model text escaped and malformed markup
+  falling back to plain text.
+- **`/clear` asks before wiping a conversation.** Clearing the whole history
+  could not be undone yet skipped the confirm dialog every other destructive
+  action uses. It now confirms (and still no-ops instantly when there is nothing
+  to clear).
+- **A mistyped or removed slash command says so.** A bare `/undo` (or a typo)
+  was sent to the model as a message; it now reports "Unknown command" and
+  points at the `/` palette. Pasted paths and normal text still pass through.
+- **`todo_write` renders a clean tool line** instead of dumping its raw
+  `{'todos': [...]}` argument dict, and its summary drops an em-dash.
+- **The quant picker lands on a downloaded quant** when one exists, so a naive
+  Enter reuses local weights instead of starting a fresh multi-GB download.
+- **Corrected the keyboard-help hint** to the keys that actually scroll the chat
+  log, and fixed the active-step label so a long tool label cannot overflow a
+  mid-width terminal.
+
+
 ### Changed
 
 - **DiffusionGemma runs inside the bundled `llama-server`.** One binary, one
