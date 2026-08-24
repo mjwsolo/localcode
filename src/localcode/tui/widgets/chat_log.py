@@ -1635,16 +1635,22 @@ class ChatLog(RichLog):
             header = Text(no_wrap=True, overflow="ellipsis")
             header.append("  ▶ ", style="cyan")
             try:
-                max_preview = self._content_width() - 22
+                # Reserve room for the "(+N lines · ctrl+o)" affordance so the
+                # preview's ellipsis doesn't collide with it.
+                max_preview = self._content_width() - 34
             except Exception:
-                max_preview = 50
-            max_preview = max(max_preview, 30)
+                max_preview = 40
+            max_preview = max(max_preview, 24)
             preview = lines[0][:max_preview]
             if len(lines) > 1 or len(lines[0]) > max_preview:
                 preview = preview.rstrip() + "…"
             header.append(preview, style="dim italic")
+            # Mouse capture is off by default, so clicking the ▶ does nothing —
+            # name the keyboard toggle on the row itself so it's discoverable.
             if len(lines) > 1:
-                header.append(f"  (+{len(lines) - 1} lines)", style="dim cyan")
+                header.append(f"  (+{len(lines) - 1} lines · ctrl+o)", style="dim cyan")
+            else:
+                header.append("  (ctrl+o)", style="dim cyan")
         self.write(header)
         self._track_lines()
 
