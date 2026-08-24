@@ -5,6 +5,25 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
+## 0.3.63 — 2026-08-24
+
+### Removed
+
+- **The dead Google/Brave/SerpAPI web-search config keys.** `web_search`
+  searches DuckDuckGo; `google_api_key`, `google_cx`, `brave_api_key` and
+  `serpapi_api_key` were an unused older path that a user could set but that
+  changed nothing. The whole `[search]` section is gone.
+- **The lifecycle-hooks feature** (`.localcode/hooks.toml`, the
+  `session_start` / `user_prompt_submit` / `pre_tool_use` / `post_tool_use`
+  shell hooks, the project-hooks trust store, and the `E2111` error).
+
+### Changed
+
+- Site docs trimmed to be user-facing: dropped dev-only CLI notes, removed
+  commands (`/undo`, `/hooks`, `/paste`), the stale "builds a dedicated runner"
+  experimental-model claim, and the verbose privacy/offline framing.
+
+
 ## 0.3.62 — 2026-08-24
 
 ### Added
