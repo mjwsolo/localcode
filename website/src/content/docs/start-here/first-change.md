@@ -3,10 +3,6 @@ title: Install
 description: Install localcode, open a repo, pick a model, make one change.
 ---
 
-Five steps, each one a real recording from the app.
-
-## 1. Install
-
 ```sh
 pip install -U localcode
 ```
@@ -20,7 +16,7 @@ pip install -U localcode
 
 Apple Silicon is the supported platform. Metal-accelerated inference works only on Mac. localcode also installs and runs on Linux in CI for development, but Linux is not the product platform.
 
-## 2. Open your repo
+## Open your repo
 
 ```sh
 cd ~/work/some-project
@@ -29,7 +25,7 @@ localcode
 
 Choose a project whose tests already pass. localcode uses your repo's own checks as proof.
 
-## 3. Choose a model
+## Choose a model
 
 The model picker opens on first launch. localcode checks your Mac's unified memory and marks a recommended model with a star. Use the arrow keys to choose one, then press Enter.
 
@@ -39,7 +35,7 @@ localcode downloads the model's GGUF from Hugging Face - the only step that need
 
 Learn more in [Models](/localcode/start-here/choose-a-model).
 
-## 4. Start building
+## Start building
 
 Enter your request in the chat screen. Include the file name and the check to run.
 
@@ -50,7 +46,7 @@ Enter your request in the chat screen. Include the file name and the check to ru
   passes. Do not modify test_retry.py. Then run: pytest -q
 ```
 
-## 5. Watch it verify
+## Watch it verify
 
 The model reads the stub and tests. It writes the code, runs `pytest -q`, and reports what it checked.
 
