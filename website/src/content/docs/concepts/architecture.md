@@ -28,14 +28,14 @@ This is the default setup. The rest of this page describes it:
 
 ## Built specifically for small models
 
-localcode is designed specifically to enable high-performance agentic coding with local models on consumer hardware. The agent loop handles the ways small quantised models fail:
+localcode is designed specifically to enable high-performance agentic coding with local models on consumer hardware. The prompts, the agent loop, and the model server are all tuned for small quantised models rather than a frontier model:
 
-- **Tool-call repair** - the dispatcher fixes malformed JSON arguments and extra spaces in tool names instead of failing the round.
-- **Recovery modes** - separate recovery paths handle cut-off tool calls and reasoning loops. Each path has its own exit reason in the event stream.
-- **Hidden reasoning is off by default** - you can turn it on for each model with `/thinking`. Models without a reasoning channel say so instead of silently ignoring the setting.
-- **Syntax checks before shell runs** - tree-sitter finds broken edits in-process.
-
-## Memory and process safety
-
-- A memory-pressure monitor watches the server. It can stop the server instead of letting the machine become unusable from swapping. The project event log records the stop.
-- A multi-region mmap patch in the fork fixes a Metal OOM caused when llama.cpp's loader mapped a whole GGUF into one Metal buffer.
+- **Prompts tuned for small models** - the system prompt runs a plan-then-execute loop: lay out the steps, keep exactly one in progress, and require evidence before a task counts as done, instead of assuming the model self-organises.
+- **Completion gate** - the loop keeps working until the goal is actually finished, with a todo backstop, so the model does not stop mid-task and declare it done.
+- **Tool-call repair** - malformed JSON arguments and extra spaces in tool names are fixed instead of failing the round.
+- **Recovery modes** - separate paths handle cut-off tool calls and reasoning loops, each with its own exit reason in the event stream.
+- **Long context on 16 GB** - the llama.cpp fork compresses the KV cache with TurboQuant (about 3.8x smaller than f16), so long contexts fit on small machines.
+- **Fast multi-turn** - the server snapshots its state at turn boundaries, so the next turn reuses the prefix instead of re-reading it.
+- **Speculative decoding** - an optional draft model speeds up generation without changing the output.
+- **Hidden reasoning is off by default** - turn it on per model with `/thinking`; models without a reasoning channel say so instead of silently ignoring it.
+- **Syntax checks before shell runs** - tree-sitter catches broken edits before they run.
