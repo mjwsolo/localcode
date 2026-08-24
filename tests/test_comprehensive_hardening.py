@@ -94,9 +94,9 @@ def test_save_config_is_atomic(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg.os, "replace", _spy_replace)
     c = cfg.load_config_from_path(target) if hasattr(cfg, "load_config_from_path") else None
     # Build a default config object to save.
-    from localcode.config import AppConfig, RuntimeConfig, SearchConfig, UIConfig, SafetyConfig, LoggingConfig
+    from localcode.config import AppConfig, RuntimeConfig, UIConfig, SafetyConfig, LoggingConfig
     appcfg = AppConfig(
-        runtime=RuntimeConfig(), search=SearchConfig(), ui=UIConfig(),
+        runtime=RuntimeConfig(), ui=UIConfig(),
         safety=SafetyConfig(), logging=LoggingConfig(),
     )
     cfg.save_config(appcfg)

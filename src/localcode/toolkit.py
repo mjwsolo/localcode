@@ -940,14 +940,7 @@ class LocalCodeToolkit:
     # ── Web search implementations ───────────────────────────────────────
 
     def _web_search(self, query: str, max_results: int = 5) -> str:
-        provider = self.config.search.provider.lower()
-        if provider == "google":
-            return self._google_search(query, max_results)
-        if provider == "brave":
-            return self._brave_search(query, max_results)
-        if provider == "serpapi":
-            return self._serpapi_search(query, max_results)
-        # Default: try DuckDuckGo, fall back to scraping if needed
+        # Try DuckDuckGo, fall back to scraping if needed.
         result = self._duckduckgo_search(query, max_results)
         if result == "No results found." or "Search error" in result:
             # Fallback: try bash curl to get a quick answer
@@ -1015,46 +1008,6 @@ class LocalCodeToolkit:
                     results.append(f"{title}\n{body}\n{href}")
         except Exception as exc:
             return f"Search error: {exc}"
-        return "\n\n".join(results) if results else "No results found."
-
-    def _google_search(self, query: str, max_results: int = 5) -> str:
-        if not self.config.search.google_api_key or not self.config.search.google_cx:
-            return "Google search not configured. Set LOCALCODE_GOOGLE_API_KEY and LOCALCODE_GOOGLE_CX."
-        response = httpx.get(
-            "https://www.googleapis.com/customsearch/v1",
-            params={"key": self.config.search.google_api_key, "cx": self.config.search.google_cx, "q": query, "num": max_results},
-            timeout=20.0,
-        )
-        response.raise_for_status()
-        items = response.json().get("items", [])
-        results = [f"{item.get('title', '')}\n{item.get('snippet', '')}\n{item.get('link', '')}" for item in items]
-        return "\n\n".join(results) if results else "No results found."
-
-    def _brave_search(self, query: str, max_results: int = 5) -> str:
-        if not self.config.search.brave_api_key:
-            return "Brave search not configured. Set LOCALCODE_BRAVE_API_KEY."
-        response = httpx.get(
-            "https://api.search.brave.com/res/v1/web/search",
-            params={"q": query, "count": max_results},
-            headers={"X-Subscription-Token": self.config.search.brave_api_key},
-            timeout=20.0,
-        )
-        response.raise_for_status()
-        results_data = response.json().get("web", {}).get("results", [])
-        results = [f"{item.get('title', '')}\n{item.get('description', '')}\n{item.get('url', '')}" for item in results_data]
-        return "\n\n".join(results) if results else "No results found."
-
-    def _serpapi_search(self, query: str, max_results: int = 5) -> str:
-        if not self.config.search.serpapi_api_key:
-            return "SerpAPI not configured. Set LOCALCODE_SERPAPI_API_KEY."
-        response = httpx.get(
-            "https://serpapi.com/search.json",
-            params={"engine": "google", "q": query, "api_key": self.config.search.serpapi_api_key, "num": max_results},
-            timeout=20.0,
-        )
-        response.raise_for_status()
-        items = response.json().get("organic_results", [])
-        results = [f"{item.get('title', '')}\n{item.get('snippet', '')}\n{item.get('link', '')}" for item in items]
         return "\n\n".join(results) if results else "No results found."
 
     # ── Plugin & MCP ─────────────────────────────────────────────────────
@@ -1273,17 +1226,7 @@ class LocalCodeToolkit:
             client.close()
 
     def search_status(self) -> tuple[str, str]:
-        provider = self.config.search.provider.lower()
-        if provider == "google":
-            ok = bool(self.config.search.google_api_key and self.config.search.google_cx)
-            return provider, "configured" if ok else "missing_api_key_or_cx"
-        if provider == "brave":
-            ok = bool(self.config.search.brave_api_key)
-            return provider, "configured" if ok else "missing_api_key"
-        if provider == "serpapi":
-            ok = bool(self.config.search.serpapi_api_key)
-            return provider, "configured" if ok else "missing_api_key"
-        return provider, "configured"
+        return "duckduckgo", "configured"
 
     def diagnostics(self) -> list[str]:
         rows: list[str] = []

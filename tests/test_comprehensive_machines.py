@@ -100,12 +100,12 @@ def _machine(memory_gb, tier, *, system="darwin", gpu=True):
 def _blank_config():
     from localcode.config import (
         AppConfig, LoggingConfig, RuntimeConfig,
-        SafetyConfig, SearchConfig, UIConfig,
+        SafetyConfig, UIConfig,
     )
     # No explicit model/profile → eligible for auto-promotion.
     return AppConfig(
         runtime=RuntimeConfig(profile="", model=""),
-        search=SearchConfig(), ui=UIConfig(),
+        ui=UIConfig(),
         safety=SafetyConfig(), logging=LoggingConfig(),
     )
 
