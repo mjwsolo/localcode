@@ -213,9 +213,8 @@ def get_home_dir() -> Path:
 def ensure_home_dirs() -> Path:
     """Create `~/.localcode/` and its children, owner-only (0700).
 
-    This tree holds `config.toml` (google / brave / serpapi API keys),
-    `history.db` (every prompt and response), saved sessions and the
-    lexical index. None of it should be readable by other accounts on
+    This tree holds `config.toml`, `history.db` (every prompt and response),
+    saved sessions and the lexical index. None of it should be readable by other accounts on
     the machine, so both the root and each child are created 0700 and
     the root's mode is re-asserted on every call (cheap, and it repairs
     a directory created 0755 by an older version).
@@ -315,9 +314,9 @@ def save_config(config: AppConfig) -> Path:
     # final rename.
     with _SAVE_LOCK:
         tmp = path.with_name(f".{path.name}.tmp{os.getpid()}")
-        # config.toml carries google / brave / serpapi API keys. Write the
-        # temp file 0600 BEFORE the rename so the final file is never
-        # world-readable, not even for the instant between rename and chmod.
+        # config.toml can hold sensitive settings. Write the temp file 0600
+        # BEFORE the rename so the final file is never world-readable, not even
+        # for the instant between rename and chmod.
         write_private(tmp, content)
         os.replace(tmp, path)
         chmod_quiet(path, 0o600)
@@ -329,8 +328,8 @@ def load_config() -> AppConfig:
     path = get_config_path()
     if not path.exists():
         init_config_file()
-    # Repair an install from before config.toml was written 0600: this file
-    # holds google / brave / serpapi API keys and was created world-readable.
+    # Repair an install from before config.toml was written 0600: it may have
+    # been created world-readable.
     chmod_quiet(path, 0o600)
     # A config file that fails to parse (hand-edited, or written by an old
     # save_config that didn't escape string values) must not crash launch —
