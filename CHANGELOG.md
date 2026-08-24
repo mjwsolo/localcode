@@ -5,7 +5,7 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
-## 0.3.61a1 — 2026-08-23
+## 0.3.61 — 2026-08-24
 
 ### Fixed
 
