@@ -30,8 +30,3 @@ The official MCP SDK supports stdio, HTTP, and SSE connections.
 /mcp        # list configured servers, or reload them after editing mcp.json
 ```
 
-Servers also connect when you use headless `localcode run --json`. They are not limited to the TUI.
-
-## Trust
-
-An MCP server can run any program. A remote server can see all arguments that the model sends to its tools. Only configure a server if you trust it. The server is outside the local-only boundary explained in [Network Boundary](/localcode/concepts/network-boundary).
