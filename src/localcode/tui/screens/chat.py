@@ -1295,19 +1295,6 @@ class ChatScreen(Screen):
             "Ctrl+U/D scroll · Shift+↑/↓ line · Home/End jump · "
             "Shift+Enter newline · paste to attach an image"
         )
-        # Warn if this repo ships hooks that shell out but haven't been trusted.
-        # They are NOT loaded (see hooks.py) — this just tells the user they
-        # exist and how to enable them after review.
-        try:
-            if getattr(getattr(self.tui, "engine", None), "hooks", None) is not None and \
-                    getattr(self.tui.engine.hooks, "untrusted_project_hooks", False):
-                log.append_info(
-                    "⚠ This repo has .localcode/hooks.toml (runs shell commands). "
-                    "It is disabled. Review the file, then relaunch with "
-                    "LOCALCODE_TRUST_PROJECT_HOOKS=1 to enable it."
-                )
-        except Exception:
-            pass
         # If the user launched with --resume, the TUI app stored prior
         # messages in `_pending_resume_messages`. Replay them into the
         # chat log now so the conversation picks up visually where it

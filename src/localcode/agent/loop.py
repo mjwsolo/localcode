@@ -784,15 +784,9 @@ def run_agent_loop(
                     f"Compacting conversation (≈{estimate_tokens(messages)} tokens "
                     f"of {ctx_tokens} context → summary)..."
                 )
-                _before_compact_count = len(messages)
                 messages[:] = compact(
                     messages, app.engine, context_window=ctx_tokens, ram_gb=_ram_gb
                 )
-                try:
-                    if getattr(app, "hooks", None) is not None:
-                        app.hooks.on_post_compaction(_before_compact_count, len(messages))
-                except Exception:
-                    pass
         except Exception as _compact_err:
             # Never let compaction failure kill the agent loop — continue
             # with the unchanged messages and let the user see the error.

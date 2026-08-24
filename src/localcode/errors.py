@@ -97,9 +97,6 @@ _REGISTRY: list[ErrorCode] = [
               cause="model"),
     ErrorCode("E2110", "Tool denied by permission policy",
               "The user (or session policy) declined this tool call.", cause="user"),
-    ErrorCode("E2111", "Tool blocked by hook",
-              "A configured hook in ~/.localcode/hooks.toml refused the tool call.",
-              cause="user"),
 
     # E3xxx — Runtime / model
     ErrorCode("E3101", "The model stopped responding too early",
