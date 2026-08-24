@@ -18,7 +18,7 @@ import MemoryChooser from '../components/MemoryChooser.astro';
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 const href = (path: string) => `${base}/${path.replace(/^\//, '')}`;
 
-const title = 'localcode — Agentic coding. Local models. On your Mac.';
+const title = 'localcode: Agentic coding. Local models. On your Mac.';
 const description =
   'An open-source coding agent that runs local models on Apple Silicon. No API key. No costs.';
 
@@ -33,11 +33,11 @@ const badges = [
 
 const proof = [
   {
-    title: 'A list of local models',
-    body: `Choose from Qwen, Gemma, Cohere, and Meta families. The list includes
+    title: 'A suite of local models',
+    body: `Choose from Qwen, Gemma, Cohere, and Meta families. The suite includes
       dense and MoE models from 12B to 35B, with several quants for each.
-      localcode checks your Mac's unified memory. It shows every model that fits
-      and picks the most capable one. Switch at any time with /model.`,
+      localcode checks your Mac's unified memory, shows every model that fits,
+      and recommends the most capable one. Switch at any time with /model.`,
     link: { label: 'See what your Mac runs', href: href('start-here/choose-a-model') },
   },
   {
@@ -225,8 +225,9 @@ localcode</code></pre>
           <h2 class="lc-h2">Every model your Mac can run</h2>
           <p class="lc-lede">
             Unified memory sets the limit. Pick your Mac to see the full list of
-            models that fit. localcode automatically picks the most capable one.
-            You can switch to any other model on the list.
+            models that fit. localcode recommends the most capable one and marks
+            it with a star. You choose, and you can switch to any other model on
+            the list.
           </p>
           <MemoryChooser />
         </div>
@@ -238,10 +239,10 @@ localcode</code></pre>
           <div>
             <h2 class="lc-h2">Where the boundary is</h2>
             <p class="lc-lede">
-              localcode is honest about this rather than claiming to be
-              "fully offline". Inference is local in the default configuration
-              and configurable out of it; the boundary page names the outbound
-              paths, including the ones that never stop to ask you.
+              Inference runs locally by default. A few features reach the network
+              when you use them: model downloads, the web search and fetch tools,
+              and any MCP servers you add. The boundary page lists every outbound
+              path.
             </p>
             <a class="lc-btn lc-btn--primary" href={href('concepts/network-boundary')}>
               Read the network boundary
@@ -251,7 +252,7 @@ localcode</code></pre>
             <li class="is-local">
               <span class="tag">default</span>
               <span class="txt">
-                Inference — by default a llama.cpp server on
+                Inference, by default a llama.cpp server on
                 <code>localhost:8081</code>
               </span>
             </li>
@@ -278,7 +279,7 @@ localcode</code></pre>
             <li class="is-net">
               <span class="tag">no prompt</span>
               <span class="txt">
-                <code>web_search</code>, <code>web_fetch</code> and MCP tools —
+                <code>web_search</code>, <code>web_fetch</code> and MCP tools:
                 these never ask for confirmation, at any autonomy level
               </span>
             </li>
