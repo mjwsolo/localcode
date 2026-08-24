@@ -49,15 +49,9 @@ The model reads the stub and tests. It writes the code, runs `pytest -q`, and re
 
 <small>Qwen3.6-35B-A3B (IQ2_M) runs locally on `127.0.0.1:8081`. It uses four tool
 calls, takes 11.5&nbsp;s, and uses 276 tokens. The repository's tests fail before the turn and
-pass after it. The frames come directly from the running app.</small>
+pass after it.</small>
 
-Then check the diff yourself:
-
-```sh
-git diff
-```
-
-## Commands you'll use
+## Key commands
 
 | Command | What it does |
 | --- | --- |
