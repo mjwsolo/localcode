@@ -3411,8 +3411,13 @@ class ChatScreen(Screen):
             log.append_info("No model selected — pick one via /model first.")
             return
         if not choice.supports_vision:
+            from ...models_catalog import CHOICES
+            # List every vision-capable model in the catalogue, not a stale
+            # hardcoded pair — dedup on the base name (drop the "(quant)" tail).
+            vis = sorted({c.name.rsplit(" (", 1)[0] for c in CHOICES if c.supports_vision})
+            names = ", ".join(vis) if vis else "a Gemma or Qwen model"
             log.append_info(
-                f"{choice.name} doesn't support vision. Use a Gemma 4 or Qwen 3.6 model."
+                f"{choice.name} doesn't support vision. Models with vision: {names}."
             )
             return
         # Hardware capability gate
