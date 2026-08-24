@@ -41,4 +41,3 @@ Quantised local models often fail in predictable ways. The loop handles these pr
 
 - A memory-pressure monitor watches the server. It can stop the server instead of letting the machine become unusable from swapping. The project event log records the stop.
 - A multi-region mmap patch in the fork fixes a Metal OOM caused when llama.cpp's loader mapped a whole GGUF into one Metal buffer.
-- `localcode unstick` recovers a stuck server without a reboot.

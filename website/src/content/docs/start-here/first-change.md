@@ -57,8 +57,6 @@ Then check the diff yourself:
 git diff
 ```
 
-`/undo` reverses the last change. `/undo all` reverses the whole session.
-
 ## Commands you'll use
 
 | Command | What it does |
@@ -66,7 +64,6 @@ git diff
 | `/status` | Shows server health, the current model, and performance settings |
 | `/model` | Lists models or switches models (`/model qwen`) |
 | `/permissions` | Turns command approvals on or off |
-| `/undo` | Reverses the last file change (`/undo all` reverses every change) |
 | `/clear` | Clears the conversation history |
 | `/exit` | Quits |
 

@@ -67,10 +67,6 @@ Segment matching checks one path part at a time. This means only single-part ent
 
 These actions are refused, not confirmed. No autonomy level or session approval can turn the block off. It is a guard against dangerous mistakes, not a security boundary. The matching uses substrings and regular expressions, so a determined caller can work around it.
 
-## Hooks can also veto
-
-A repository's `.localcode/hooks.toml` can define a `pre_tool_use` hook. The hook can block a tool call by exiting with a non-zero status. Hooks run shell commands, so a project's hook file is not loaded until you explicitly trust it with `/hooks`. See [Skills & Hooks](/localcode/guides/skills-and-hooks).
-
 ## Related
 
 - [Getting Started](/localcode/start-here/first-change)

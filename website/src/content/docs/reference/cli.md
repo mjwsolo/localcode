@@ -7,7 +7,6 @@ description: Every flag and subcommand localcode accepts.
 localcode [--profile P] [--model TAG] [--resume SESSION_ID] [-c DIR]
           [--preview-screen SCREEN]
 localcode run --goal "..." [options]
-localcode unstick
 ```
 
 Run `localcode` by itself to start the TUI. The TUI is the product. It includes first-run setup, configuration, and model management. **There is no `localcode setup` subcommand.** There is also no benchmark subcommand or screen. The speeds in the model picker are [calculated estimates](/localcode/models-and-performance#the-toks-numbers-in-the-model-picker), not measurements.
@@ -40,10 +39,6 @@ Run one coding goal without the TUI, then exit. Use this for scripts, CI, and ev
 Exit codes: `0` ok · `1` error · `124` timeout · `130` interrupted.
 
 See [JSONL Events](/localcode/reference/jsonl-events).
-
-## `localcode unstick`
-
-Fix a stuck `llama-server` without restarting the computer. Runs `memory_pressure` and `purge`. Admin rights are required.
 
 ## Environment variables
 
