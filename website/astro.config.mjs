@@ -62,17 +62,16 @@ export default defineConfig({
       ],
       sidebar: [
         {
-          label: 'Start Here',
+          label: 'Getting Started',
           items: [
-            { label: 'Install', slug: 'start-here/install' },
-            { label: 'Getting Started', slug: 'start-here/first-change' },
-            { label: 'Choose a Model', slug: 'start-here/choose-a-model' },
-            { label: 'Permissions', slug: 'start-here/permissions' },
+            { label: 'Install', slug: 'start-here/first-change' },
           ],
         },
         {
           label: 'Guides',
           items: [
+            { label: 'Models', slug: 'start-here/choose-a-model' },
+            { label: 'Permissions', slug: 'start-here/permissions' },
             { label: 'Offline', slug: 'guides/offline' },
             { label: 'MCP', slug: 'guides/mcp' },
             { label: 'Skills & Hooks', slug: 'guides/skills-and-hooks' },
@@ -96,7 +95,6 @@ export default defineConfig({
             { label: 'Error Codes', slug: 'reference/error-codes' },
           ],
         },
-        { label: 'Models & Performance', slug: 'models-and-performance' },
         { label: 'Contributing', slug: 'contributing' },
       ],
     }),
