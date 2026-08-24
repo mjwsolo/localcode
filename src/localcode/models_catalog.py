@@ -391,6 +391,23 @@ CHOICES: list[ModelChoice] = [
         mmproj_size_gb=0.9,
         mmproj_hf_filename="mmproj-F16.gguf",
     ),
+    ModelChoice(
+        key="qwen38-q8",
+        sha256="af36ecb6b5db1407953345b746c14ac93f0657dda413910b4348683a2d990377",
+        size_bytes=31457991680,
+        name="Qwen 3.8 27B (Q8)",
+        hf_repo="unsloth/Qwen3.8-27B-GGUF",
+        filename="Qwen3.8-27B-UD-Q8_K_XL.gguf",
+        size_gb=31.5,
+        active_params="27B dense (hybrid attention + Mamba-2 SSM, 1 MTP layer)",
+        architecture="qwen35",
+        license="Apache 2.0",
+        humaneval_pass_at_1=None,
+        notes="Same dense 27B as the Q4 entry, at much higher fidelity: UD-Q8_K_XL keeps attention/embedding above 8-bit while the bulk stays Q8, ~99% of BF16 quality. Same 27B dense compute per token, so decode speed is in the same class as the Q4 while quality is far higher. The high-RAM pick for this model — fits ~96 GB unified memory with context, comfortable on 128 GB Apple Silicon. Pair with the F16 mmproj for image input.",
+        mmproj_filename="mmproj-Qwen3.8-27B-F16.gguf",
+        mmproj_size_gb=0.9,
+        mmproj_hf_filename="mmproj-F16.gguf",
+    ),
 ]
 
 

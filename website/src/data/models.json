@@ -145,7 +145,7 @@
         "size": 15.9,
         "maker": "Meta",
         "logo": "meta",
-        "experimental": true
+        "experimental": false
       }
     ]
   },
@@ -223,7 +223,7 @@
         "size": 15.9,
         "maker": "Meta",
         "logo": "meta",
-        "experimental": true
+        "experimental": false
       },
       {
         "name": "North Mini Code 30B-A3B (Q4)",
@@ -237,7 +237,7 @@
         "size": 17.9,
         "maker": "Cohere",
         "logo": "cohere",
-        "experimental": true
+        "experimental": false
       },
       {
         "name": "Qwen 3.8 27B (Q4)",
@@ -343,7 +343,7 @@
         "size": 15.9,
         "maker": "Meta",
         "logo": "meta",
-        "experimental": true
+        "experimental": false
       },
       {
         "name": "North Mini Code 30B-A3B (Q4)",
@@ -357,7 +357,7 @@
         "size": 17.9,
         "maker": "Cohere",
         "logo": "cohere",
-        "experimental": true
+        "experimental": false
       },
       {
         "name": "Qwen 3.8 27B (Q4)",
@@ -399,6 +399,20 @@
         "size": 28.0,
         "maker": "Google",
         "logo": "gemma",
+        "experimental": false
+      },
+      {
+        "name": "Qwen 3.8 27B (Q8)",
+        "base": "Qwen 3.8 27B",
+        "quant": "Q8",
+        "total": "27B",
+        "active": "27B dense (hybrid attention + Mamba-2 SSM, 1 MTP layer)",
+        "kind": "Dense",
+        "detail": "hybrid attention + Mamba-2 SSM, 1 MTP layer",
+        "file": "Qwen3.8-27B-UD-Q8_K_XL.gguf",
+        "size": 31.5,
+        "maker": "Alibaba",
+        "logo": "qwen",
         "experimental": false
       }
     ]
@@ -477,7 +491,7 @@
         "size": 15.9,
         "maker": "Meta",
         "logo": "meta",
-        "experimental": true
+        "experimental": false
       },
       {
         "name": "North Mini Code 30B-A3B (Q4)",
@@ -491,7 +505,7 @@
         "size": 17.9,
         "maker": "Cohere",
         "logo": "cohere",
-        "experimental": true
+        "experimental": false
       },
       {
         "name": "Qwen 3.8 27B (Q4)",
@@ -533,6 +547,20 @@
         "size": 28.0,
         "maker": "Google",
         "logo": "gemma",
+        "experimental": false
+      },
+      {
+        "name": "Qwen 3.8 27B (Q8)",
+        "base": "Qwen 3.8 27B",
+        "quant": "Q8",
+        "total": "27B",
+        "active": "27B dense (hybrid attention + Mamba-2 SSM, 1 MTP layer)",
+        "kind": "Dense",
+        "detail": "hybrid attention + Mamba-2 SSM, 1 MTP layer",
+        "file": "Qwen3.8-27B-UD-Q8_K_XL.gguf",
+        "size": 31.5,
+        "maker": "Alibaba",
+        "logo": "qwen",
         "experimental": false
       },
       {
