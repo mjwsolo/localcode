@@ -55,14 +55,7 @@ max_retries = 3
 max_rounds = 0
 thinking_budget_tokens = 0
 
-[search]
-provider = "duckduckgo"
-google_api_key = ""
-google_cx = ""
-brave_api_key = ""
-serpapi_api_key = ""
-
-# [browser] and [voice] sections removed during T0.9 purge.
+# [search], [browser] and [voice] sections removed during T0.9 purge.
 
 [ui]
 show_debug = false
@@ -149,13 +142,9 @@ class RuntimeConfig:
     max_retries: int = 3
 
 
-@dataclass
-class SearchConfig:
-    provider: str = "duckduckgo"
-    google_api_key: str = ""
-    google_cx: str = ""
-    brave_api_key: str = ""
-    serpapi_api_key: str = ""
+# SearchConfig removed — the Google/Brave/SerpAPI web-search path was dead
+# (the agent's web_search tool uses DuckDuckGo directly) and its config keys
+# did nothing.
 
 
 # BrowserConfig / VoiceConfig removed during T0.9 — no UI path fed the
@@ -200,7 +189,6 @@ class TelemetryConfig:
 @dataclass
 class AppConfig:
     runtime: RuntimeConfig
-    search: SearchConfig
     ui: UIConfig
     safety: SafetyConfig = None  # type: ignore[assignment]
     logging: LoggingConfig = None  # type: ignore[assignment]
@@ -299,13 +287,7 @@ def save_config(config: AppConfig) -> Path:
         f"max_context_chars = {config.runtime.max_context_chars}\n"
         f"request_timeout_seconds = {config.runtime.request_timeout_seconds}\n"
         f"max_retries = {config.runtime.max_retries}\n\n"
-        "[search]\n"
-        f'provider = {_toml_str(config.search.provider)}\n'
-        f'google_api_key = {_toml_str(config.search.google_api_key)}\n'
-        f'google_cx = {_toml_str(config.search.google_cx)}\n'
-        f'brave_api_key = {_toml_str(config.search.brave_api_key)}\n'
-        f'serpapi_api_key = "{config.search.serpapi_api_key}"\n\n'
-        # [browser] / [voice] sections removed during T0.9 purge.
+        # [search] / [browser] / [voice] sections removed during T0.9 purge.
         "[ui]\n"
         f"show_debug = {'true' if config.ui.show_debug else 'false'}\n"
         f'thinking_mode = {_toml_str(config.ui.thinking_mode)}\n'
@@ -361,8 +343,7 @@ def load_config() -> AppConfig:
         except Exception:
             data = {}
     runtime_data = data.get("runtime", {})
-    search_data = data.get("search", {})
-    # browser / voice sections removed during T0.9 purge
+    # search / browser / voice sections removed during T0.9 purge
     ui_data = data.get("ui", {})
     runtime = RuntimeConfig(
         provider=os.environ.get("LOCALCODE_PROVIDER", runtime_data.get("provider", "llama_cpp")),
@@ -425,14 +406,7 @@ def load_config() -> AppConfig:
         request_timeout_seconds=int(os.environ.get("LOCALCODE_REQUEST_TIMEOUT_SECONDS", runtime_data.get("request_timeout_seconds", 120))),
         max_retries=int(os.environ.get("LOCALCODE_MAX_RETRIES", runtime_data.get("max_retries", 2))),
     )
-    search = SearchConfig(
-        provider=os.environ.get("LOCALCODE_SEARCH_PROVIDER", search_data.get("provider", "duckduckgo")),
-        google_api_key=os.environ.get("LOCALCODE_GOOGLE_API_KEY", search_data.get("google_api_key", "")),
-        google_cx=os.environ.get("LOCALCODE_GOOGLE_CX", search_data.get("google_cx", "")),
-        brave_api_key=os.environ.get("LOCALCODE_BRAVE_API_KEY", search_data.get("brave_api_key", "")),
-        serpapi_api_key=os.environ.get("LOCALCODE_SERPAPI_API_KEY", search_data.get("serpapi_api_key", "")),
-    )
-    # browser / voice config loaders removed during T0.9 purge.
+    # search / browser / voice config loaders removed during T0.9 purge.
     ui = UIConfig(
         show_debug=str(os.environ.get("LOCALCODE_SHOW_DEBUG", ui_data.get("show_debug", False))).lower() in {"1", "true", "yes", "on"},
         thinking_mode=os.environ.get("LOCALCODE_THINKING_MODE", ui_data.get("thinking_mode", "summary")),
@@ -473,7 +447,7 @@ def load_config() -> AppConfig:
         if not runtime.base_url or "11434" in runtime.base_url:
             runtime.base_url = "http://localhost:8081"
 
-    config = AppConfig(runtime=runtime, search=search,
+    config = AppConfig(runtime=runtime,
                        ui=ui, safety=safety, logging=logging_cfg,
                        telemetry=telemetry_cfg)
 

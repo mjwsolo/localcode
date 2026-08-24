@@ -17,7 +17,6 @@ from localcode.config import (
     LoggingConfig,
     RuntimeConfig,
     SafetyConfig,
-    SearchConfig,
     UIConfig,
 )
 from localcode.runtime import LocalCodeRuntimeGateway
@@ -71,7 +70,6 @@ def mock_config(tmp_path: Path) -> AppConfig:
             kv_cache_type_v="turbo4",
             laptop_26b_runtime_mode="speed",
         ),
-        search=SearchConfig(),
         ui=UIConfig(),
         safety=SafetyConfig(),
         logging=LoggingConfig(),
