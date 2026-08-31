@@ -1,0 +1,10 @@
+{
+  "name": "localcode-agent",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "localcode's agent plane: a pinned Pi distribution + localcode extensions.",
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.84.4"
+  }
+}
