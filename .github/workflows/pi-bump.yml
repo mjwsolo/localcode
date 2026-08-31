@@ -1,0 +1,73 @@
+# Weekly pi upstream bump — the same contract as upstream-bump.yml carries for
+# llama.cpp, applied to the agent plane.
+#
+#   distribution = pinned pi release + agent-ts/extensions/*
+#
+# Tuesday, deliberately offset from Monday's llama.cpp bump so the two never
+# open colliding PRs against the same wheel.
+name: pi bump
+on:
+  schedule:
+    - cron: "0 9 * * 2"
+  workflow_dispatch:
+
+jobs:
+  bump:
+    runs-on: macos-15  # Apple Silicon: the only platform localcode ships
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+
+      - name: Resolve latest pi
+        id: latest
+        run: |
+          LATEST=$(npm view @earendil-works/pi-coding-agent version)
+          PINNED=$(cat agent-ts/PINNED_PI)
+          echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
+          echo "pinned=$PINNED" >> "$GITHUB_OUTPUT"
+          [ "$LATEST" = "$PINNED" ] && echo "uptodate=1" >> "$GITHUB_OUTPUT" || true
+
+      - name: Bump, build, contract-test
+        if: steps.latest.outputs.uptodate != '1'
+        run: |
+          cd agent-ts
+          npm pkg set "dependencies.@earendil-works/pi-coding-agent=${{ steps.latest.outputs.latest }}"
+          npm install
+          ./scripts/build.sh
+          npx vitest run            # extension contract tests — assert every hook we depend on
+          echo "${{ steps.latest.outputs.latest }}" > PINNED_PI
+
+      # The smoke needs model weights, so it runs on the self-hosted Mac only.
+      # Hosted runners stop at the contract tests, which is where API drift shows.
+      - name: Smoke (self-hosted only)
+        if: steps.latest.outputs.uptodate != '1' && runner.environment == 'self-hosted'
+        run: agent-ts/scripts/smoke.sh
+
+      - name: Open PR
+        if: steps.latest.outputs.uptodate != '1'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: bump/pi-${{ steps.latest.outputs.latest }}
+          title: "agent-ts: pi ${{ steps.latest.outputs.pinned }} → ${{ steps.latest.outputs.latest }}"
+          body: |
+            Automated weekly pi bump.
+
+            Contract tests passed, which means every extension hook localcode
+            depends on still exists and still fires. Read pi's CHANGELOG for
+            behavior changes the contract tests cannot see.
+
+            If this PR is red: a hook we depend on changed. Fix the extension,
+            do not pin backwards — a pin that never moves is how the llama.cpp
+            tree drifted four months.
+
+      - name: File an issue on failure
+        if: failure()
+        run: |
+          gh issue create \
+            --title "pi bump to ${{ steps.latest.outputs.latest }} failed" \
+            --body "The weekly pi bump failed against pinned ${{ steps.latest.outputs.pinned }}. This is the expected signal that an extension needs updating, not a malfunction. Run \`agent-ts/scripts/smoke.sh\` locally to reproduce." \
+            --label upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
