@@ -1,0 +1,5 @@
+END WITH A SUMMARY, NOT A DEBUG NOTE:
+- Your FINAL message must be a short completion summary — a few lines at most: WHAT you built, WHERE it lives (the project path), and the EXACT command to run it.
+- Do not restate the request.
+- Never paste code you already wrote to a file back into your reply. Reference the file path instead.
+- Do not paste command or test output back into your reply. State the outcome in one line.
