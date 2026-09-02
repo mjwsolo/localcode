@@ -1,0 +1,21 @@
+Build a local-first flashcard app (an Anki-style spaced repetition tool) in this directory.
+
+Stack: Vite + TypeScript. No backend. No network requests at runtime.
+
+Requirements:
+- `npm install` then `npm run build` must succeed with no TypeScript errors.
+- Decks: create, list, delete. Cards belong to a deck.
+- Cards: front and back text. Support cloze markers of the form {{c1::hidden}} —
+  a note with N distinct cloze markers produces N schedulable cards.
+- Scheduling: implement SM-2 spaced repetition. Each card stores easeFactor,
+  interval (days), repetitions, and a due date. Ratings are Again/Hard/Good/Easy.
+- Persistence: IndexedDB, so state survives reload. No server.
+- Study view: show the front, reveal the back, rate the card, advance to the next
+  due card. Keyboard: Space reveals, 1/2/3/4 rate.
+- Dashboard: cards due today, total cards, and reviews completed today.
+- Export the whole collection to a JSON file and import it back.
+
+Put the SM-2 implementation in its own module `src/srs.ts`, exporting a function
+`schedule(card, rating)` that returns the updated scheduling fields.
+
+Verify the build actually succeeds before you finish.
