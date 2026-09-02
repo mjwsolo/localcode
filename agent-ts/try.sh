@@ -15,7 +15,12 @@ ALL=0
 if [ "${1:-}" = "--all" ]; then ALL=1; shift; fi
 MODEL="${1:-Qwen3.8-27B-UD-Q4_K_XL}"
 PROJECT="${2:-$PWD}"
-PORT="${LOCALCODE_TRY_PORT:-8123}"
+PORT="${LOCALCODE_TRY_PORT:-}"
+if [ -z "$PORT" ]; then
+  for p in $(seq 8123 8199); do
+    curl -sf "http://127.0.0.1:$p/health" >/dev/null 2>&1 || { PORT=$p; break; }
+  done
+fi
 MODELS_DIR="${LOCALCODE_MODELS_DIR:-$HOME/.local/share/localcode/models}"
 SERVER="${LOCALCODE_LLAMA_SERVER:-$HERE/../../localcode/src/localcode/bin/llama-server}"
 GGUF="$MODELS_DIR/$MODEL.gguf"
