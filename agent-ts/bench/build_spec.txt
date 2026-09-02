@@ -1,0 +1,13 @@
+Build a Python command-line task manager in this directory.
+
+Requirements:
+- Runnable as: python3 -m taskcli
+- Subcommands: add <text>, list, done <id>, rm <id>
+- State persists to ./tasks.json in the current directory
+- `list` prints one line per task: "<id> [ ] <text>" for pending, "<id> [x] <text>" for done
+- ids are stable integers starting at 1
+- `add` prints nothing or a short confirmation; `done` and `rm` likewise
+- Handle an empty/missing tasks.json gracefully
+- Include a README.md documenting the commands
+
+Verify it actually runs before you finish.
