@@ -18,6 +18,15 @@ type RouterModel = {
 };
 
 export default async function (pi: ExtensionAPI) {
+  // Disable the model's thinking channel the way localcode's runtime.py does.
+  // pi's --thinking flag only sets pi's own notion of thinking; llama.cpp needs
+  // chat_template_kwargs.enable_thinking=false or the chat template's default
+  // (thinking ON for Qwen 3.x) applies and the model burns tokens reasoning.
+  pi.on("before_provider_request", (event) => ({
+    ...event.payload,
+    chat_template_kwargs: { enable_thinking: false },
+  }));
+
   let models: RouterModel[] = [];
   try {
     const res = await fetch(`${BASE}/models`, { signal: AbortSignal.timeout(10_000) });
