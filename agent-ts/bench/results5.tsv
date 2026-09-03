@@ -1,0 +1,5 @@
+lc	retry	1	90.6	PASS	4 7461 302
+pi	retry	1	53.1	PASS	4 1769 261
+lc	retry	2	74.1	PASS	4 1573 364
+pi	retry	2	50.0	PASS	4 687 269
+lc	retry	3	80.4	PASS	4 1574 391
