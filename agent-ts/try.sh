@@ -36,21 +36,12 @@ if [ "$ALL" = 1 ]; then
   echo "loading $MODEL ..."
   curl -sf -X POST "http://127.0.0.1:$PORT/models/load" -H 'Content-Type: application/json' \
     -d "{\"model\":\"$MODEL\"}" >/dev/null || echo "  (load failed; use /llama in the TUI)"
-  # Point pi's built-in llama.cpp provider at THIS router so /llama works
-  # without an interactive /login. Written fresh each run so it can never go stale.
-  python3 - "$PORT" <<'PYEOF'
-import json,pathlib,sys
-p=pathlib.Path.home()/".pi/agent/auth.json"; p.parent.mkdir(parents=True,exist_ok=True)
-d=json.loads(p.read_text()) if p.exists() and p.read_text().strip() else {}
-d["llama.cpp"]={"type":"api_key","key":"","env":{"LLAMA_BASE_URL":f"http://127.0.0.1:{sys.argv[1]}"}}
-p.write_text(json.dumps(d,indent=2))
-PYEOF
   echo "ready. /model switches models, /llama loads, unloads and downloads."
   echo
   cd "$PROJECT"
   LLAMA_BASE_URL="http://127.0.0.1:$PORT" \
     exec "$HERE/dist/localcode-agent" -a -e "$HERE/extensions/localcode.ts" -e "$HERE/extensions/localcode-brand.ts" -e "$HERE/extensions/localcode-safety.ts" \
-    --provider localcode --model "$MODEL" --thinking off
+    --provider localcode --model "$MODEL" --models "localcode/*" --thinking off
 fi
 
 [ -f "$GGUF" ] || { echo "No such model: $GGUF"; echo; echo "Available:"; ls "$MODELS_DIR" | grep '\.gguf$' | grep -v '^mmproj' | sed 's/\.gguf$//;s/^/  /'; exit 1; }
@@ -68,4 +59,4 @@ echo
 cd "$PROJECT"
 LLAMA_BASE_URL="http://127.0.0.1:$PORT" \
   "$HERE/dist/localcode-agent" -a -e "$HERE/extensions/localcode.ts" -e "$HERE/extensions/localcode-brand.ts" -e "$HERE/extensions/localcode-safety.ts" \
-  --provider localcode --model "$MODEL" --thinking off
+  --provider localcode --model "$MODEL" --models "localcode/*" --thinking off
