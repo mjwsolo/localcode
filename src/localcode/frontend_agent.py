@@ -54,7 +54,7 @@ def _extensions(agent: Path) -> list[str]:
     ext_dir = agent.parent.parent / "extensions"
     if not ext_dir.is_dir():
         return []
-    names = ["localcode.ts", "localcode-brand.ts", "localcode-safety.ts", "localcode-web.ts"]
+    names = ["localcode.ts", "localcode-brand.ts", "localcode-safety.ts", "localcode-web.ts", "localcode-app.ts"]
     return [str(ext_dir / n) for n in names if (ext_dir / n).is_file()]
 
 
