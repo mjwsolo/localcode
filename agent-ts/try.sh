@@ -40,7 +40,7 @@ if [ "$ALL" = 1 ]; then
   echo
   cd "$PROJECT"
   LLAMA_BASE_URL="http://127.0.0.1:$PORT" \
-    exec "$HERE/dist/localcode-agent" -a -e "$HERE/extensions/localcode.ts" -e "$HERE/extensions/localcode-brand.ts" -e "$HERE/extensions/localcode-safety.ts" \
+    exec "$HERE/dist/localcode-agent" -a -e "$HERE/extensions/localcode.ts" -e "$HERE/extensions/localcode-brand.ts" -e "$HERE/extensions/localcode-safety.ts" -e "$HERE/extensions/localcode-web.ts" \
     --provider localcode --model "$MODEL" --models "localcode/*" --thinking off
 fi
 
@@ -58,5 +58,5 @@ echo
 
 cd "$PROJECT"
 LLAMA_BASE_URL="http://127.0.0.1:$PORT" \
-  "$HERE/dist/localcode-agent" -a -e "$HERE/extensions/localcode.ts" -e "$HERE/extensions/localcode-brand.ts" -e "$HERE/extensions/localcode-safety.ts" \
+  "$HERE/dist/localcode-agent" -a -e "$HERE/extensions/localcode.ts" -e "$HERE/extensions/localcode-brand.ts" -e "$HERE/extensions/localcode-safety.ts" -e "$HERE/extensions/localcode-web.ts" \
   --provider localcode --model "$MODEL" --models "localcode/*" --thinking off
