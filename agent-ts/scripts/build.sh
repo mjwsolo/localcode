@@ -12,7 +12,7 @@ cd "$HERE"
 python3 - "$HERE/node_modules/@earendil-works" <<'PYEOF'
 import pathlib, sys
 root = pathlib.Path(sys.argv[1]); n = 0
-drops = ["login", "logout", "share", "update", "feedback", "scoped-models"]
+drops = ["login", "logout", "share", "update", "feedback", "scoped-models", "llama", "model", "thinking", "themes", "scoped-models", "export", "clone", "changelog"]
 for f in list(root.rglob("*.js")):
     try: t = f.read_text()
     except Exception: continue

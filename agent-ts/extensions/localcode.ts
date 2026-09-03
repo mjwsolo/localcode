@@ -9,7 +9,7 @@
  * Everything is built from native APIs: registerProvider, registerCommand,
  * ctx.ui.select / confirm / notify / setStatus. No UI code of our own.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, totalmem } from "node:os";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
@@ -19,7 +19,7 @@ type Quant = {
   revision: string; humaneval: number | null; recommended_at_ram_gb: number | null;
   mmproj_filename: string | null; mmproj_hf_filename: string | null;
 };
-type Group = { key: string; name: string; maker: string; architecture: string; license: string; notes: string; quants: Quant[] };
+type Group = { key: string; name: string; maker: string; architecture: string; license: string; notes: string; hf_repo: string; quants: Quant[] };
 
 const BASE = (process.env.LLAMA_BASE_URL ?? "http://127.0.0.1:8080").replace(/\/+$/, "");
 const MODELS_DIR = process.env.LOCALCODE_MODELS_DIR ?? join(homedir(), ".local/share/localcode/models");
@@ -38,6 +38,52 @@ const quantName = (q: Quant) => modelId(q).match(/((UD-)?(IQ|Q|BF)[0-9][^-]*(_[A
 const hfRef = (q: Quant) => `${q.hf_repo}:${quantName(q).replace(/^UD-/, "")}`;
 const groupOf = (q: Quant) => groups.find((g) => g.quants.some((x) => x.key === q.key))!;
 const pretty = (q: Quant) => `${groupOf(q).name} · ${quantName(q)}`;
+
+const QUANT_RE = /(UD-)?((?:IQ|Q|BF|F)\d+(?:_[A-Z0-9]+)*)\.gguf$/i;
+const CACHE_DIR = join(process.env.LOCALCODE_HOME ?? join(homedir(), ".localcode"), "cache", "hf_quants");
+
+type HfQuant = { label: string; filename: string; size_gb: number };
+
+/** Every .gguf the repo ships — the same live listing localcode's picker uses. */
+async function fetchQuants(repo: string): Promise<HfQuant[]> {
+  const cache = join(CACHE_DIR, `${repo.replace(/\//g, "__")}.json`);
+  try {
+    const st = statSync(cache);
+    if (Date.now() - st.mtimeMs < 24 * 3600 * 1000) return JSON.parse(readFileSync(cache, "utf8"));
+  } catch {}
+  try {
+    const r = await fetch(`https://huggingface.co/api/models/${repo}/tree/main?recursive=true`,
+                          { signal: AbortSignal.timeout(15_000) });
+    const tree = (await r.json()) as any[];
+    const out: HfQuant[] = [];
+    for (const e of tree) {
+      const path = String(e?.path ?? "");
+      if (!path.toLowerCase().endsWith(".gguf")) continue;
+      const base = path.split("/").pop()!;
+      if (/^mmproj/i.test(base)) continue;
+      const m = base.match(QUANT_RE);
+      if (!m) continue;
+      const bytes = Number(e?.lfs?.size ?? e?.size ?? 0);
+      out.push({ label: `${m[1] ?? ""}${m[2]}`.toUpperCase(), filename: base, size_gb: bytes / 1e9 });
+    }
+    const best = new Map<string, HfQuant>();
+    for (const q of out) {
+      const prev = best.get(q.label);
+      if (!prev || q.size_gb > prev.size_gb) best.set(q.label, q);
+    }
+    const deduped = [...best.values()].filter((q) => q.size_gb >= 0.8);
+    deduped.sort((a, b) => a.size_gb - b.size_gb);
+    out.length = 0; out.push(...deduped);
+    try { mkdirSync(CACHE_DIR, { recursive: true }); writeFileSync(cache, JSON.stringify(out)); } catch {}
+    return out;
+  } catch {
+    try { return JSON.parse(readFileSync(cache, "utf8")); } catch { return []; }
+  }
+}
+
+/** Same rule as models_catalog.recommend(): weights inside ~55% of unified RAM. */
+const fitBadge = (gb: number) => (gb <= 0.55 * RAM_GB ? "fits" : gb <= 0.65 * RAM_GB ? "tight" : "too big");
+const FIT_GLYPH: Record<string, string> = { fits: "✓", tight: "~", "too big": "✗" };
 
 async function serverModels(): Promise<{ id: string; status: string; ctx: number | null; vision: boolean }[]> {
   try {
@@ -142,19 +188,64 @@ async function browse(pi: ExtensionAPI, ctx: ExtensionCommandContext, firstRun =
     if (!g) return;
 
     const BACK = "← Back to all models";
-    const rows = [...g.quants.map(quantLine), BACK];
+    if (ctx.hasUI) ctx.ui.setStatus("localcode", `loading quants for ${g.name} …`);
+    const live = await fetchQuants(g.hf_repo);
+    if (ctx.hasUI) ctx.ui.setStatus("localcode", "");
+
+    const rows = live.map((h) => {
+      const downloaded = existsSync(join(MODELS_DIR, h.filename));
+      const fit = fitBadge(h.size_gb);
+      const star = RECOMMENDED && RECOMMENDED.filename === h.filename ? " ★" : "";
+      const mark = downloaded ? "✓ downloaded" : `${FIT_GLYPH[fit]} ${fit}`;
+      return `${h.label.padEnd(12)} ${h.size_gb.toFixed(1)} GB · ${mark}${star}`;
+    });
+    if (rows.length === 0) rows.push("(could not list quants — check your connection)");
+    rows.push(BACK);
+
     const chosen = await ctx.ui.select(`${g.name} — ${g.maker} · ${g.license}`, rows);
     if (chosen === undefined) return;
-    const row = typeof chosen === "number" ? rows[chosen] : String(chosen);
-    if (row === BACK) continue;          // back up a level
-    const q = pick(row, g.quants, quantLine);
-    if (!q) return;
-    await choose(pi, ctx, g, q);
+    const idx = typeof chosen === "number" ? chosen : rows.indexOf(String(chosen));
+    if (idx < 0 || rows[idx] === BACK) continue;
+    const h = live[idx];
+    if (!h) continue;
+    await chooseHf(pi, ctx, g, h);
     return;
   }
 }
 
-async function choose(pi: ExtensionAPI, ctx: ExtensionCommandContext, g: Group, q: Quant) {
+async function chooseHf(pi: ExtensionAPI, ctx: ExtensionCommandContext, g: Group, h: HfQuant) {
+  const id = h.filename.replace(/\.gguf$/, "");
+  const ref = `${g.hf_repo}:${h.label.replace(/^UD-/, "")}`;
+  if (!existsSync(join(MODELS_DIR, h.filename))) {
+    const ok = await ctx.ui.confirm(`Download ${g.name} ${h.label}?`,
+      `${h.size_gb.toFixed(1)} GB · one-time download, cached for future launches\nLicense: ${g.license}`);
+    if (!ok) return;
+    ctx.ui.setStatus("localcode", `downloading ${g.name} ${h.label} …`);
+    const started = await post("/models", { model: ref });
+    if (!started.ok) {
+      ctx.ui.setStatus("localcode", "");
+      ctx.ui.notify(`Download could not start: ${await started.text()}`, "error");
+      return;
+    }
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 1500));
+      if (existsSync(join(MODELS_DIR, h.filename))) break;
+      const e = (await serverModels()).find((m) => m.id === id || m.id === ref);
+      if (e && e.status !== "downloading") break;
+    }
+    ctx.ui.setStatus("localcode", "");
+  }
+  ctx.ui.setStatus("localcode", `loading ${g.name} ${h.label} …`);
+  await post("/models/load", { model: id }).catch(() => {});
+  await syncProvider(pi);
+  ctx.ui.setStatus("localcode", "");
+  const model = ctx.modelRegistry.find("localcode", id) ?? ctx.modelRegistry.find("localcode", ref);
+  if (!model) { ctx.ui.notify(`${g.name} ${h.label} is ready — pick it with /model.`, "warning"); return; }
+  await pi.setModel(model);
+  ctx.ui.notify(`Model: ${g.name} · ${h.label}`, "info");
+}
+
+async function chooseUnused(pi: ExtensionAPI, ctx: ExtensionCommandContext, g: Group, q: Quant) {
   if (!onDisk(q)) {
     const ok = await ctx.ui.confirm(`Download ${g.name} ${quantName(q)}?`,
       `${q.size_gb.toFixed(1)} GB · one-time download, cached for future launches\nLicense: ${g.license}`);
@@ -195,10 +286,12 @@ export default async function (pi: ExtensionAPI) {
     }
   });
 
-  pi.registerCommand("models", {
-    description: "Choose a model — browse by family, then quant",
-    handler: (_a, ctx) => browse(pi, ctx),
-  });
+  for (const name of ["model"]) {
+    pi.registerCommand(name, {
+      description: "Choose a model — browse by family, then quant",
+      handler: (_a, ctx) => browse(pi, ctx),
+    });
+  }
 
   pi.on("session_start", async (_e, ctx) => {
     await syncProvider(pi);

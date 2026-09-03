@@ -7,6 +7,7 @@
    "architecture": "gemma4-iswa",
    "license": "Gemma (Google) \u2014 research + commercial w/ attribution",
    "notes": "Google's sparse MoE \u2014 ~3.8B active (top-8 of 128 experts). Native multimodal: pair any quant with the F16 mmproj for image input. Tool calli",
+   "hf_repo": "unsloth/gemma-4-26B-A4B-it-GGUF",
    "quants": [
     {
      "key": "gemma",
@@ -41,6 +42,7 @@
    "architecture": "gemma4-iswa",
    "license": "Apache 2.0",
    "notes": "Mid-sized dense Gemma 4 \u2014 sits between E4B and the 26B MoE. Native multimodal (vision + audio per Google's Gemma 4 announcement); pair any q",
+   "hf_repo": "unsloth/gemma-4-12b-it-GGUF",
    "quants": [
     {
      "key": "gemma-12b",
@@ -75,6 +77,7 @@
    "architecture": "qwen35moe",
    "license": "Apache 2.0",
    "notes": "Alibaba's sparse MoE \u2014 ~3.0B active (top-8 + 1 shared of 256 experts). Hybrid attn + Mamba-2 SSM, native 262K context. Native multimodal: pa",
+   "hf_repo": "unsloth/Qwen3.6-35B-A3B-GGUF",
    "quants": [
     {
      "key": "qwen",
@@ -109,6 +112,7 @@
    "architecture": "qwen35",
    "license": "Apache 2.0",
    "notes": "Alibaba's dense 27B \u2014 all params active per token (no MoE routing). Hybrid attention + Mamba-2 SSM with a multi-token-prediction layer; the ",
+   "hf_repo": "unsloth/Qwen3.8-27B-GGUF",
    "quants": [
     {
      "key": "qwen38",
@@ -143,6 +147,7 @@
    "architecture": "cohere2_moe",
    "license": "Apache 2.0",
    "notes": "Cohere Labs' code-specialized sparse MoE \u2014 30B total / ~3B active. Its cohere2moe arch isn't in the TurboQuant server, so LocalCode builds a",
+   "hf_repo": "unsloth/North-Mini-Code-1.0-GGUF",
    "quants": [
     {
      "key": "north-mini-code",
@@ -165,6 +170,7 @@
    "architecture": "muse_glimmer",
    "license": "Apache 2.0",
    "notes": "Meta's multimodal agentic model for local deployment (Meta Superintelligence Lab, Aug 2026): multi-step reasoning, tool use, failure recover",
+   "hf_repo": "unsloth/Muse-Glimmer-30B-GGUF",
    "quants": [
     {
      "key": "muse-glimmer",
@@ -187,6 +193,7 @@
    "architecture": "diffusion_gemma",
    "license": "Apache 2.0",
    "notes": "EXPERIMENTAL block-diffusion model \u2014 denoises whole 256-token blocks in parallel instead of decoding token-by-token. Served by the bundled l",
+   "hf_repo": "unsloth/diffusiongemma-26B-A4B-it-GGUF",
    "quants": [
     {
      "key": "diffusiongemma",
