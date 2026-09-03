@@ -13,15 +13,23 @@ fallback-metadata warning that fires on every local model.
   at it, hand over. A user's `~/.codex` is never read or written.
 - `journeys.sh` — the critical user journeys, end to end, against a real model.
 
-## Journey results (gemma-4-12b-it-UD-Q4_K_XL, stock codex 0.151.0)
+## Journey results (stock codex 0.151.0)
+
+Two models. Every PASS verified by scripts the agent never sees.
 
 | journey | result |
 |---|---|
 | J1 respond | PASS |
 | J2 TDD — tests pass, verified by running pytest ourselves | PASS |
 | J3 build a working CLI app — acceptance script the agent never sees | PASS |
-| J4 sandbox — a file outside the workspace survives `rm` | PASS |
+| J4 sandbox — a `$HOME` file survives `rm` | PASS (both models) |
 | J5 no fallback-metadata warning | FAIL on stock; **verified fixed on the fork binary** |
+
+Qwen 3.8 27B: J1-J4 all PASS on a clean run. Two lessons from iteration:
+a first Qwen run failed J3 with an empty workdir because other model loads
+shared the GPU mid-run (rerun clean: PASS), and J4 originally placed its canary
+in `$TMPDIR`, which `workspace-write` legitimately allows — it now uses `$HOME`,
+which the sandbox really does protect.
 
 ## Fork binary (mjwsolo/codex, branch `localcode`)
 
