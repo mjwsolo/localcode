@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Try the pi front end against your local models, interactively.
+# Run localcode against your local models, interactively.
 #
 #   ./try.sh                         # one model, fastest path
 #   ./try.sh gemma-4-12b-it-UD-Q4_K_XL
@@ -53,7 +53,7 @@ SRV=$!
 trap 'kill $SRV 2>/dev/null || true' EXIT
 for i in $(seq 1 240); do curl -sf "http://127.0.0.1:$PORT/health" >/dev/null && break; sleep 1; done
 curl -sf "http://127.0.0.1:$PORT/health" >/dev/null || { echo "server failed to start; see $HERE/.run/try.log"; exit 1; }
-echo "ready. launching pi in $PROJECT"
+echo "ready. launching localcode in $PROJECT"
 echo
 
 cd "$PROJECT"
