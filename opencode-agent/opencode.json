@@ -1,0 +1,17 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "localcode": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "localcode",
+      "options": { "baseURL": "http://127.0.0.1:8123/v1", "apiKey": "local" },
+      "models": {
+        "Qwen3.8-27B-UD-Q4_K_XL": { "name": "Qwen 3.8 27B · UD-Q4_K_XL" },
+        "gemma-4-12b-it-UD-Q4_K_XL": { "name": "Gemma 4 12B · UD-Q4_K_XL" }
+      }
+    }
+  },
+  "model": "localcode/Qwen3.8-27B-UD-Q4_K_XL",
+  "share": "disabled",
+  "autoupdate": false
+}
