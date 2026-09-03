@@ -305,6 +305,12 @@ def _run_headless(config, args, console) -> int:
 
 
 def main(argv: list[str] | None = None) -> None:
+    # Opt-in agent-plane front end. Default behaviour is untouched.
+    import os as _os
+    import sys as _sys
+    if _os.environ.get("LOCALCODE_FRONTEND") == "agent":
+        from .frontend_agent import run as _run_agent
+        _sys.exit(_run_agent(argv))
     _harden_against_debugger_attach()
     # Snapshot the terminal while it's still sane — before the TUI enters
     # raw mode — so any exit path (crash, hang, kill) can restore it.
