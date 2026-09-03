@@ -1,178 +1,206 @@
-[
- {
-  "key": "gemma",
-  "name": "Gemma 4 26B-A4B (Q3)",
-  "hf_repo": "unsloth/gemma-4-26B-A4B-it-GGUF",
-  "filename": "gemma-4-26B-A4B-it-UD-IQ3_S.gguf",
-  "size_gb": 11.2,
-  "active_params": "3.8B (top-8 of 128 experts)",
-  "architecture": "gemma4-iswa",
-  "license": "Gemma (Google) \u2014 research + commercial w/ attribution",
-  "humaneval": 0.951,
-  "notes": "Comfortable fit on 16 GB Mac. Has Apr-11 chat template + Apr-8 tokenizer fixes. Tool calling via Gemma 4 native format. Measured 95.1% HumanEval pass@1 at IQ3_S",
-  "mmproj_filename": "mmproj-gemma-4-26B-A4B-F16.gguf",
-  "mmproj_hf_filename": "mmproj-F16.gguf",
-  "revision": "main",
-  "recommended_at_ram_gb": null
- },
- {
-  "key": "gemma-12b",
-  "name": "Gemma 4 12B (Q4)",
-  "hf_repo": "unsloth/gemma-4-12b-it-GGUF",
-  "filename": "gemma-4-12b-it-UD-Q4_K_XL.gguf",
-  "size_gb": 7.37,
-  "active_params": "12B (dense)",
-  "architecture": "gemma4-iswa",
-  "license": "Apache 2.0",
-  "humaneval": null,
-  "notes": "Mid-sized dense Gemma 4 \u2014 sits between E4B and the 26B MoE. UD-Q4_K_XL fits 16 GB unified memory (~7.4 GB weights + KV + mmproj). Native multimodal (vision + au",
-  "mmproj_filename": "mmproj-gemma-4-12b-F16.gguf",
-  "mmproj_hf_filename": "mmproj-F16.gguf",
-  "revision": "main",
-  "recommended_at_ram_gb": 16
- },
- {
-  "key": "gemma-12b-bf16",
-  "name": "Gemma 4 12B (BF16, full)",
-  "hf_repo": "unsloth/gemma-4-12b-it-GGUF",
-  "filename": "gemma-4-12b-it-BF16.gguf",
-  "size_gb": 23.8,
-  "active_params": "12B (dense)",
-  "architecture": "gemma4-iswa",
-  "license": "Apache 2.0",
-  "humaneval": null,
-  "notes": "Full-precision BF16 \u2014 reference quality, zero quantization loss (this is the 100% baseline every quant's '% of BF16' is measured against). ~24 GB weights \u2192 need",
-  "mmproj_filename": "mmproj-gemma-4-12b-F16.gguf",
-  "mmproj_hf_filename": "mmproj-F16.gguf",
-  "revision": "main",
-  "recommended_at_ram_gb": null
- },
- {
-  "key": "qwen",
-  "name": "Qwen 3.6 35B-A3B (Q2)",
-  "hf_repo": "unsloth/Qwen3.6-35B-A3B-GGUF",
-  "filename": "Qwen3.6-35B-A3B-UD-IQ2_M.gguf",
-  "size_gb": 10.7,
-  "active_params": "3.0B (top-8 + 1 shared of 256 experts)",
-  "architecture": "qwen35moe",
-  "license": "Apache 2.0",
-  "humaneval": 0.947,
-  "notes": "Full GPU offload on 16 GB M4. Hybrid attn + Mamba-2 SSM. Native 262K context. Requires the multi-region mmap patch (llama-cpp-turboquant commit 3d66675b8).",
-  "mmproj_filename": "mmproj-Qwen3.6-35B-A3B-F16.gguf",
-  "mmproj_hf_filename": "mmproj-F16.gguf",
-  "revision": "main",
-  "recommended_at_ram_gb": 24
- },
- {
-  "key": "diffusiongemma",
-  "name": "DiffusionGemma 26B-A4B (Q4)",
-  "hf_repo": "unsloth/diffusiongemma-26B-A4B-it-GGUF",
-  "filename": "diffusiongemma-26B-A4B-it-Q4_K_M.gguf",
-  "size_gb": 15.7,
-  "active_params": "4B (adaptive diffusion MoE)",
-  "architecture": "diffusion_gemma",
-  "license": "Apache 2.0",
-  "humaneval": null,
-  "notes": "Google DiffusionGemma 26B-A4B instruction model \u2014 experimental diffusion/denoising text generation that can generate blocks in parallel instead of strictly toke",
-  "mmproj_filename": null,
-  "mmproj_hf_filename": null,
-  "revision": "main",
-  "recommended_at_ram_gb": null
- },
- {
-  "key": "north-mini-code",
-  "name": "North Mini Code 30B-A3B (Q4)",
-  "hf_repo": "unsloth/North-Mini-Code-1.0-GGUF",
-  "filename": "North-Mini-Code-1.0-UD-Q4_K_M.gguf",
-  "size_gb": 17.9,
-  "active_params": "3B active (30B total MoE)",
-  "architecture": "cohere2_moe",
-  "license": "Apache 2.0",
-  "humaneval": null,
-  "notes": "Cohere North Mini Code 1.0 \u2014 agentic coding model; 30B total / ~3B active. Its cohere2moe arch isn't in the TurboQuant server, so LocalCode builds a dedicated l",
-  "mmproj_filename": null,
-  "mmproj_hf_filename": null,
-  "revision": "main",
-  "recommended_at_ram_gb": null
- },
- {
-  "key": "muse-glimmer",
-  "name": "Muse Glimmer 30B (Q4)",
-  "hf_repo": "unsloth/Muse-Glimmer-30B-GGUF",
-  "filename": "Muse-Glimmer-30B-UD-Q4_K_XL.gguf",
-  "size_gb": 15.9,
-  "active_params": "30B dense (+ perception encoder for vision)",
-  "architecture": "muse_glimmer",
-  "license": "Apache 2.0",
-  "humaneval": null,
-  "notes": "Meta's Muse Glimmer 30B (Meta Superintelligence Lab, Aug 2026) \u2014 a multimodal agentic model purpose-built for local deployment: multi-step reasoning, tool use, ",
-  "mmproj_filename": "mmproj-Muse-Glimmer-30B-BF16.gguf",
-  "mmproj_hf_filename": "mmproj-Muse-Glimmer-30B-BF16.gguf",
-  "revision": "main",
-  "recommended_at_ram_gb": null
- },
- {
-  "key": "gemma-q8",
-  "name": "Gemma 4 26B-A4B (Q8)",
-  "hf_repo": "unsloth/gemma-4-26B-A4B-it-GGUF",
-  "filename": "gemma-4-26B-A4B-it-UD-Q8_K_XL.gguf",
-  "size_gb": 28.0,
-  "active_params": "3.8B (top-8 of 128 experts)",
-  "architecture": "gemma4-iswa",
-  "license": "Gemma (Google) \u2014 research + commercial w/ attribution",
-  "humaneval": null,
-  "notes": "High-RAM workstation pick \u2014 same MoE architecture as the small Gemma entry, just near-lossless Q8 quant instead of IQ3_S. 3.8B active params = same decode speed",
-  "mmproj_filename": "mmproj-gemma-4-26B-A4B-F16.gguf",
-  "mmproj_hf_filename": "mmproj-F16.gguf",
-  "revision": "main",
-  "recommended_at_ram_gb": 64
- },
- {
-  "key": "qwen-q8",
-  "name": "Qwen 3.6 35B-A3B (Q8)",
-  "hf_repo": "unsloth/Qwen3.6-35B-A3B-GGUF",
-  "filename": "Qwen3.6-35B-A3B-UD-Q8_K_XL.gguf",
-  "size_gb": 38.5,
-  "active_params": "3.0B (top-8 + 1 shared of 256 experts)",
-  "architecture": "qwen35moe",
-  "license": "Apache 2.0",
-  "humaneval": null,
-  "notes": "High-RAM workstation pick (\u226564 GB unified memory; sweet spot on 128 GB Apple Silicon). UD-Q8_K_XL keeps attention/router/embedding layers above 8-bit while bulk",
-  "mmproj_filename": "mmproj-Qwen3.6-35B-A3B-F16.gguf",
-  "mmproj_hf_filename": "mmproj-F16.gguf",
-  "revision": "main",
-  "recommended_at_ram_gb": 96
- },
- {
-  "key": "qwen38",
-  "name": "Qwen 3.8 27B (Q4)",
-  "hf_repo": "unsloth/Qwen3.8-27B-GGUF",
-  "filename": "Qwen3.8-27B-UD-Q4_K_XL.gguf",
-  "size_gb": 17.9,
-  "active_params": "27B dense (hybrid attention + Mamba-2 SSM, 1 MTP layer)",
-  "architecture": "qwen35",
-  "license": "Apache 2.0",
-  "humaneval": null,
-  "notes": "Dense 27B \u2014 every parameter active each token (no MoE routing), so it's heavier per token than the 35B-A3B MoE but denser in capability. Hybrid attention + Mamb",
-  "mmproj_filename": "mmproj-Qwen3.8-27B-F16.gguf",
-  "mmproj_hf_filename": "mmproj-F16.gguf",
-  "revision": "main",
-  "recommended_at_ram_gb": null
- },
- {
-  "key": "qwen38-q8",
-  "name": "Qwen 3.8 27B (Q8)",
-  "hf_repo": "unsloth/Qwen3.8-27B-GGUF",
-  "filename": "Qwen3.8-27B-UD-Q8_K_XL.gguf",
-  "size_gb": 31.5,
-  "active_params": "27B dense (hybrid attention + Mamba-2 SSM, 1 MTP layer)",
-  "architecture": "qwen35",
-  "license": "Apache 2.0",
-  "humaneval": null,
-  "notes": "Same dense 27B as the Q4 entry, at much higher fidelity: UD-Q8_K_XL keeps attention/embedding above 8-bit while the bulk stays Q8, ~99% of BF16 quality. Same 27",
-  "mmproj_filename": "mmproj-Qwen3.8-27B-F16.gguf",
-  "mmproj_hf_filename": "mmproj-F16.gguf",
-  "revision": "main",
-  "recommended_at_ram_gb": null
- }
-]
+{
+ "groups": [
+  {
+   "key": "gemma-4-26b-a4b",
+   "name": "Gemma 4 26B-A4B",
+   "maker": "Google",
+   "architecture": "gemma4-iswa",
+   "license": "Gemma (Google) \u2014 research + commercial w/ attribution",
+   "notes": "Google's sparse MoE \u2014 ~3.8B active (top-8 of 128 experts). Native multimodal: pair any quant with the F16 mmproj for image input. Tool calli",
+   "quants": [
+    {
+     "key": "gemma",
+     "label": "Gemma 4 26B-A4B (Q3)",
+     "filename": "gemma-4-26B-A4B-it-UD-IQ3_S.gguf",
+     "hf_repo": "unsloth/gemma-4-26B-A4B-it-GGUF",
+     "size_gb": 11.2,
+     "revision": "main",
+     "humaneval": 0.951,
+     "recommended_at_ram_gb": null,
+     "mmproj_filename": "mmproj-gemma-4-26B-A4B-F16.gguf",
+     "mmproj_hf_filename": "mmproj-F16.gguf"
+    },
+    {
+     "key": "gemma-q8",
+     "label": "Gemma 4 26B-A4B (Q8)",
+     "filename": "gemma-4-26B-A4B-it-UD-Q8_K_XL.gguf",
+     "hf_repo": "unsloth/gemma-4-26B-A4B-it-GGUF",
+     "size_gb": 28.0,
+     "revision": "main",
+     "humaneval": null,
+     "recommended_at_ram_gb": 64,
+     "mmproj_filename": "mmproj-gemma-4-26B-A4B-F16.gguf",
+     "mmproj_hf_filename": "mmproj-F16.gguf"
+    }
+   ]
+  },
+  {
+   "key": "gemma-4-12b",
+   "name": "Gemma 4 12B",
+   "maker": "Google",
+   "architecture": "gemma4-iswa",
+   "license": "Apache 2.0",
+   "notes": "Mid-sized dense Gemma 4 \u2014 sits between E4B and the 26B MoE. Native multimodal (vision + audio per Google's Gemma 4 announcement); pair any q",
+   "quants": [
+    {
+     "key": "gemma-12b",
+     "label": "Gemma 4 12B (Q4)",
+     "filename": "gemma-4-12b-it-UD-Q4_K_XL.gguf",
+     "hf_repo": "unsloth/gemma-4-12b-it-GGUF",
+     "size_gb": 7.37,
+     "revision": "main",
+     "humaneval": null,
+     "recommended_at_ram_gb": 16,
+     "mmproj_filename": "mmproj-gemma-4-12b-F16.gguf",
+     "mmproj_hf_filename": "mmproj-F16.gguf"
+    },
+    {
+     "key": "gemma-12b-bf16",
+     "label": "Gemma 4 12B (BF16, full)",
+     "filename": "gemma-4-12b-it-BF16.gguf",
+     "hf_repo": "unsloth/gemma-4-12b-it-GGUF",
+     "size_gb": 23.8,
+     "revision": "main",
+     "humaneval": null,
+     "recommended_at_ram_gb": null,
+     "mmproj_filename": "mmproj-gemma-4-12b-F16.gguf",
+     "mmproj_hf_filename": "mmproj-F16.gguf"
+    }
+   ]
+  },
+  {
+   "key": "qwen-3.6-35b-a3b",
+   "name": "Qwen 3.6 35B-A3B",
+   "maker": "Alibaba",
+   "architecture": "qwen35moe",
+   "license": "Apache 2.0",
+   "notes": "Alibaba's sparse MoE \u2014 ~3.0B active (top-8 + 1 shared of 256 experts). Hybrid attn + Mamba-2 SSM, native 262K context. Native multimodal: pa",
+   "quants": [
+    {
+     "key": "qwen",
+     "label": "Qwen 3.6 35B-A3B (Q2)",
+     "filename": "Qwen3.6-35B-A3B-UD-IQ2_M.gguf",
+     "hf_repo": "unsloth/Qwen3.6-35B-A3B-GGUF",
+     "size_gb": 10.7,
+     "revision": "main",
+     "humaneval": 0.947,
+     "recommended_at_ram_gb": 24,
+     "mmproj_filename": "mmproj-Qwen3.6-35B-A3B-F16.gguf",
+     "mmproj_hf_filename": "mmproj-F16.gguf"
+    },
+    {
+     "key": "qwen-q8",
+     "label": "Qwen 3.6 35B-A3B (Q8)",
+     "filename": "Qwen3.6-35B-A3B-UD-Q8_K_XL.gguf",
+     "hf_repo": "unsloth/Qwen3.6-35B-A3B-GGUF",
+     "size_gb": 38.5,
+     "revision": "main",
+     "humaneval": null,
+     "recommended_at_ram_gb": 96,
+     "mmproj_filename": "mmproj-Qwen3.6-35B-A3B-F16.gguf",
+     "mmproj_hf_filename": "mmproj-F16.gguf"
+    }
+   ]
+  },
+  {
+   "key": "qwen-3.8-27b",
+   "name": "Qwen 3.8 27B",
+   "maker": "Alibaba",
+   "architecture": "qwen35",
+   "license": "Apache 2.0",
+   "notes": "Alibaba's dense 27B \u2014 all params active per token (no MoE routing). Hybrid attention + Mamba-2 SSM with a multi-token-prediction layer; the ",
+   "quants": [
+    {
+     "key": "qwen38",
+     "label": "Qwen 3.8 27B (Q4)",
+     "filename": "Qwen3.8-27B-UD-Q4_K_XL.gguf",
+     "hf_repo": "unsloth/Qwen3.8-27B-GGUF",
+     "size_gb": 17.9,
+     "revision": "main",
+     "humaneval": null,
+     "recommended_at_ram_gb": null,
+     "mmproj_filename": "mmproj-Qwen3.8-27B-F16.gguf",
+     "mmproj_hf_filename": "mmproj-F16.gguf"
+    },
+    {
+     "key": "qwen38-q8",
+     "label": "Qwen 3.8 27B (Q8)",
+     "filename": "Qwen3.8-27B-UD-Q8_K_XL.gguf",
+     "hf_repo": "unsloth/Qwen3.8-27B-GGUF",
+     "size_gb": 31.5,
+     "revision": "main",
+     "humaneval": null,
+     "recommended_at_ram_gb": null,
+     "mmproj_filename": "mmproj-Qwen3.8-27B-F16.gguf",
+     "mmproj_hf_filename": "mmproj-F16.gguf"
+    }
+   ]
+  },
+  {
+   "key": "north-mini-code-1.0",
+   "name": "North-Mini-Code 1.0 30B-A3B",
+   "maker": "Cohere",
+   "architecture": "cohere2_moe",
+   "license": "Apache 2.0",
+   "notes": "Cohere Labs' code-specialized sparse MoE \u2014 30B total / ~3B active. Its cohere2moe arch isn't in the TurboQuant server, so LocalCode builds a",
+   "quants": [
+    {
+     "key": "north-mini-code",
+     "label": "North Mini Code 30B-A3B (Q4)",
+     "filename": "North-Mini-Code-1.0-UD-Q4_K_M.gguf",
+     "hf_repo": "unsloth/North-Mini-Code-1.0-GGUF",
+     "size_gb": 17.9,
+     "revision": "main",
+     "humaneval": null,
+     "recommended_at_ram_gb": null,
+     "mmproj_filename": null,
+     "mmproj_hf_filename": null
+    }
+   ]
+  },
+  {
+   "key": "muse-glimmer-30b",
+   "name": "Muse Glimmer 30B",
+   "maker": "Meta",
+   "architecture": "muse_glimmer",
+   "license": "Apache 2.0",
+   "notes": "Meta's multimodal agentic model for local deployment (Meta Superintelligence Lab, Aug 2026): multi-step reasoning, tool use, failure recover",
+   "quants": [
+    {
+     "key": "muse-glimmer",
+     "label": "Muse Glimmer 30B (Q4)",
+     "filename": "Muse-Glimmer-30B-UD-Q4_K_XL.gguf",
+     "hf_repo": "unsloth/Muse-Glimmer-30B-GGUF",
+     "size_gb": 15.9,
+     "revision": "main",
+     "humaneval": null,
+     "recommended_at_ram_gb": null,
+     "mmproj_filename": "mmproj-Muse-Glimmer-30B-BF16.gguf",
+     "mmproj_hf_filename": "mmproj-Muse-Glimmer-30B-BF16.gguf"
+    }
+   ]
+  },
+  {
+   "key": "diffusiongemma-26b-a4b",
+   "name": "DiffusionGemma 26B-A4B",
+   "maker": "Google",
+   "architecture": "diffusion_gemma",
+   "license": "Apache 2.0",
+   "notes": "EXPERIMENTAL block-diffusion model \u2014 denoises whole 256-token blocks in parallel instead of decoding token-by-token. Served by the bundled l",
+   "quants": [
+    {
+     "key": "diffusiongemma",
+     "label": "DiffusionGemma 26B-A4B (Q4)",
+     "filename": "diffusiongemma-26B-A4B-it-Q4_K_M.gguf",
+     "hf_repo": "unsloth/diffusiongemma-26B-A4B-it-GGUF",
+     "size_gb": 15.7,
+     "revision": "main",
+     "humaneval": null,
+     "recommended_at_ram_gb": null,
+     "mmproj_filename": null,
+     "mmproj_hf_filename": null
+    }
+   ]
+  }
+ ]
+}

@@ -6,7 +6,22 @@
  * the documented async-factory pattern from pi's extensions.md, and it is what
  * lets localcode own model naming instead of inheriting pi's.
  */
+import { readFileSync } from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+
+// Friendly display names, so the picker never shows a raw HF id like
+// "unsloth/Muse-Glimmer-30B-GGUF:Q4_K_XL" next to a bare filename.
+const CAT = JSON.parse(readFileSync(new URL("./catalog.json", import.meta.url), "utf8")) as {
+  groups: { name: string; quants: { filename: string }[] }[];
+};
+const PRETTY = new Map<string, string>();
+for (const g of CAT.groups)
+  for (const q of g.quants) {
+    const id = q.filename.replace(/\.gguf$/, "");
+    const quant = id.match(/((UD-)?(IQ|Q|BF)[0-9][^-]*(_[A-Z0-9]+)*)$/)?.[1] ?? "";
+    PRETTY.set(id, quant ? `${g.name} · ${quant}` : g.name);
+  }
+const pretty = (id: string) => PRETTY.get(id) ?? PRETTY.get(id.split("/").pop() ?? id) ?? id;
 
 const BASE = (process.env.LLAMA_BASE_URL ?? "http://127.0.0.1:8080").replace(/\/+$/, "");
 
@@ -41,7 +56,7 @@ export default async function (pi: ExtensionAPI) {
     api: "openai-completions",
     models: models.map((m) => ({
       id: m.id,
-      name: m.id,
+      name: pretty(m.id),
       reasoning: false,
       input: m.architecture?.input_modalities?.includes("image") ? ["text", "image"] : ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
