@@ -38,7 +38,7 @@ export default async function (pi: ExtensionAPI) {
   // chat_template_kwargs.enable_thinking=false or the chat template's default
   // (thinking ON for Qwen 3.x) applies and the model burns tokens reasoning.
   pi.on("before_provider_request", (event) => ({
-    ...event.payload,
+    ...(event.payload as Record<string, unknown>),
     chat_template_kwargs: { enable_thinking: false },
   }));
 
