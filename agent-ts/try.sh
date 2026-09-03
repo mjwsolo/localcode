@@ -36,7 +36,7 @@ if [ "$ALL" = 1 ]; then
   echo "loading $MODEL ..."
   curl -sf -X POST "http://127.0.0.1:$PORT/models/load" -H 'Content-Type: application/json' \
     -d "{\"model\":\"$MODEL\"}" >/dev/null || echo "  (load failed; use /llama in the TUI)"
-  echo "ready. /model switches models, /llama loads, unloads and downloads."
+  echo "ready. Type /model to browse, switch or download models."
   echo
   cd "$PROJECT"
   LLAMA_BASE_URL="http://127.0.0.1:$PORT" \
