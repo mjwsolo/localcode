@@ -10,17 +10,24 @@ cd "$HERE"
 # (we ship via pip), feedback (upstream's channel), scoped-models (we scope
 # with --models). Renaming makes them unreachable and unlisted.
 python3 - "$HERE/node_modules/@earendil-works" <<'PYEOF'
-import pathlib, sys
+import pathlib, re, sys
 root = pathlib.Path(sys.argv[1]); n = 0
-drops = ["login", "logout", "share", "update", "feedback", "scoped-models", "llama", "model", "thinking", "themes", "scoped-models", "export", "clone", "changelog"]
+# Commands localcode does not want. Remove their entry from the command list
+# (so they are not shown or completed) AND break their dispatch name.
+drops = ["login", "logout", "share", "update", "feedback", "scoped-models",
+         "llama", "model", "thinking", "themes", "export", "clone", "changelog"]
 for f in list(root.rglob("*.js")):
     try: t = f.read_text()
     except Exception: continue
     o = t
     for c in drops:
-        t = t.replace(f'name: "{c}"', f'name: "_disabled_{c}"').replace(f'name:"{c}"', f'name:"_disabled_{c}"')
+        # 1. drop the {name:"cmd",description:...} object from any command array
+        t = re.sub(r'\{name:\s*"%s"\s*,[^{}]*\},?' % re.escape(c), "", t)
+        t = re.sub(r'\{\s*name:\s*"%s"\s*,[^{}]*\}\s*,?' % re.escape(c), "", t)
+        # 2. make any leftover registration unreachable
+        t = t.replace(f'name: "{c}"', f'name: "_x_{c}"').replace(f'name:"{c}"', f'name:"_x_{c}"')
     if t != o: f.write_text(t); n += 1
-print(f"disabled {len(drops)} commands across {n} files")
+print(f"removed {len(drops)} commands across {n} files")
 PYEOF
 
 # --- debrand: rewrite upstream product strings before compiling -------------
