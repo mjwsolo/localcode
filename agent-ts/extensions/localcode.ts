@@ -54,11 +54,20 @@ async function serverModels(): Promise<{ id: string; status: string; ctx: number
 /** (Re)register every model the server currently exposes, under friendly names. */
 async function syncProvider(pi: ExtensionAPI) {
   const live = await serverModels();
-  const known = new Map(allQuants.map((q) => [modelId(q), q]));
+  const known = new Map<string, Quant>();
+  for (const q of allQuants) {
+    known.set(modelId(q), q);                       // Qwen3.8-27B-UD-Q4_K_XL
+    known.set(hfRef(q), q);                         // unsloth/...-GGUF:Q4_K_XL
+    known.set(hfRef(q).toLowerCase(), q);
+  }
   pi.registerProvider("localcode", {
     baseUrl: `${BASE}/v1`, apiKey: "local", api: "openai-completions",
     models: live.map((m) => {
-      const q = known.get(m.id) ?? known.get(m.id.split("/").pop() ?? "");
+      const q =
+        known.get(m.id) ??
+        known.get(m.id.toLowerCase()) ??
+        known.get(m.id.split("/").pop() ?? "") ??
+        allQuants.find((x) => m.id.includes(quantName(x)) && m.id.toLowerCase().includes(groupOf(x).name.split(" ")[0].toLowerCase()));
       return {
         id: m.id, name: q ? pretty(q) : m.id, reasoning: false,
         input: m.vision ? ["text", "image"] : ["text"],
@@ -151,6 +160,27 @@ export default async function (pi: ExtensionAPI) {
     chat_template_kwargs: { enable_thinking: false },
   }));
 
+  // In router mode the server serves only loaded models, so selecting one from
+  // any picker (ours or the built-in /model) must load it first.
+  pi.on("model_select", async (event, ctx) => {
+    const m: any = (event as any).model ?? (event as any).next;
+    if (!m || m.provider !== "localcode") return;
+    try {
+      const live = await serverModels();
+      const entry = live.find((x) => x.id === m.id);
+      if (!entry || entry.status === "loaded" || entry.status === "sleeping") return;
+      if (ctx.hasUI) ctx.ui.setStatus("localcode", `loading ${m.name ?? m.id} …`);
+      await post("/models/load", { model: m.id });
+      for (let i = 0; i < 120; i++) {
+        const now = (await serverModels()).find((x) => x.id === m.id);
+        if (now && (now.status === "loaded" || now.status === "sleeping")) break;
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    } finally {
+      if (ctx.hasUI) ctx.ui.setStatus("localcode", "");
+    }
+  });
+
   pi.registerCommand("models", {
     description: "Choose a model — browse by family, then quant",
     handler: (_a, ctx) => browse(pi, ctx),
@@ -158,6 +188,21 @@ export default async function (pi: ExtensionAPI) {
 
   pi.on("session_start", async (_e, ctx) => {
     await syncProvider(pi);
+    // Router mode serves only loaded models; make sure the active one is up.
+    const active: any = ctx.model;
+    if (active?.provider === "localcode") {
+      const entry = (await serverModels()).find((m) => m.id === active.id);
+      if (entry && entry.status !== "loaded" && entry.status !== "sleeping") {
+        if (ctx.hasUI) ctx.ui.setStatus("localcode", `loading ${active.name ?? active.id} …`);
+        await post("/models/load", { model: active.id }).catch(() => {});
+        for (let i = 0; i < 120; i++) {
+          const now = (await serverModels()).find((m) => m.id === active.id);
+          if (now && (now.status === "loaded" || now.status === "sleeping")) break;
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+        if (ctx.hasUI) ctx.ui.setStatus("localcode", "");
+      }
+    }
     // First run: nothing downloaded yet → open the picker straight away.
     if (ctx.hasUI && ctx.mode === "tui" && !allQuants.some(onDisk)) {
       await browse(pi, ctx as ExtensionCommandContext, true);
