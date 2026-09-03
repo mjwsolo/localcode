@@ -1,0 +1,22 @@
+# localcode's Codex profile. Used via CODEX_HOME, never ~/.codex — a user's own
+# codex install is untouched.
+
+model = "Qwen3.8-27B-UD-Q4_K_XL"
+model_provider = "localcode"
+
+# Local inference only. The turboquant llama-server speaks the Responses API
+# (/v1/responses), which is the only wire codex supports since chat was removed.
+[model_providers.localcode]
+name = "localcode"
+base_url = "http://127.0.0.1:8123/v1"
+wire_api = "responses"
+env_key = "LOCALCODE_API_KEY"
+
+# localcode's promise: asks before anything risky. codex has a real approval
+# system built in — configure it rather than port ours.
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+
+# Model metadata so codex stops warning and sizes context correctly.
+model_context_window = 32768
+model_max_output_tokens = 8192
