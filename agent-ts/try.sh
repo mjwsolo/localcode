@@ -49,7 +49,7 @@ PYEOF
   echo
   cd "$PROJECT"
   LLAMA_BASE_URL="http://127.0.0.1:$PORT" \
-    exec "$HERE/dist/localcode-agent" -a -e "$HERE/extensions/localcode.ts" -e "$HERE/extensions/localcode-brand.ts" \
+    exec "$HERE/dist/localcode-agent" -a -e "$HERE/extensions/localcode.ts" -e "$HERE/extensions/localcode-brand.ts" -e "$HERE/extensions/localcode-safety.ts" \
     --provider localcode --model "$MODEL" --thinking off
 fi
 
@@ -67,5 +67,5 @@ echo
 
 cd "$PROJECT"
 LLAMA_BASE_URL="http://127.0.0.1:$PORT" \
-  "$HERE/dist/localcode-agent" -a -e "$HERE/extensions/localcode.ts" -e "$HERE/extensions/localcode-brand.ts" \
+  "$HERE/dist/localcode-agent" -a -e "$HERE/extensions/localcode.ts" -e "$HERE/extensions/localcode-brand.ts" -e "$HERE/extensions/localcode-safety.ts" \
   --provider localcode --model "$MODEL" --thinking off
