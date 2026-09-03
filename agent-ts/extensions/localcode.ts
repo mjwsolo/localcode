@@ -136,11 +136,25 @@ async function browse(pi: ExtensionAPI, ctx: ExtensionCommandContext, firstRun =
   const title = firstRun
     ? `Choose a model to get started — ${RAM_GB} GB Mac · ★ recommended for you`
     : `Models — ${RAM_GB} GB Mac · ✓ downloaded · ↓ downloadable · ★ recommended`;
-  const g = pick(await ctx.ui.select(title, ordered.map(groupLine)), ordered, groupLine);
-  if (!g) return;
-  const q = pick(await ctx.ui.select(`${g.name} — ${g.maker} · ${g.license}`, g.quants.map(quantLine)), g.quants, quantLine);
-  if (!q) return;
+  // family list → quant list, with a way back up
+  for (;;) {
+    const g = pick(await ctx.ui.select(title, ordered.map(groupLine)), ordered, groupLine);
+    if (!g) return;
 
+    const BACK = "← Back to all models";
+    const rows = [...g.quants.map(quantLine), BACK];
+    const chosen = await ctx.ui.select(`${g.name} — ${g.maker} · ${g.license}`, rows);
+    if (chosen === undefined) return;
+    const row = typeof chosen === "number" ? rows[chosen] : String(chosen);
+    if (row === BACK) continue;          // back up a level
+    const q = pick(row, g.quants, quantLine);
+    if (!q) return;
+    await choose(pi, ctx, g, q);
+    return;
+  }
+}
+
+async function choose(pi: ExtensionAPI, ctx: ExtensionCommandContext, g: Group, q: Quant) {
   if (!onDisk(q)) {
     const ok = await ctx.ui.confirm(`Download ${g.name} ${quantName(q)}?`,
       `${q.size_gb.toFixed(1)} GB · one-time download, cached for future launches\nLicense: ${g.license}`);
