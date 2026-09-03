@@ -31,7 +31,7 @@ export default function (pi: ExtensionAPI) {
       render(width: number): string[] {
         const left = BRAND;
         const bits: string[] = [];
-        const model = ctx.model?.id;
+        const model = (ctx.model as any)?.name ?? ctx.model?.id;
         if (model) bits.push(model);
         const branch = footerData.getGitBranch();
         if (branch) bits.push(branch);
