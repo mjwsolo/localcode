@@ -310,7 +310,8 @@ def main(argv: list[str] | None = None) -> None:
     import sys as _sys
     if _os.environ.get("LOCALCODE_FRONTEND") == "agent":
         from .frontend_agent import run as _run_agent
-        _sys.exit(_run_agent(argv))
+        # The console script calls main() with no argv; fall back to sys.argv.
+        _sys.exit(_run_agent(argv if argv is not None else _sys.argv[1:]))
     _harden_against_debugger_attach()
     # Snapshot the terminal while it's still sane — before the TUI enters
     # raw mode — so any exit path (crash, hang, kill) can restore it.

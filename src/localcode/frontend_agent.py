@@ -35,7 +35,7 @@ def _agent_binary() -> Path | None:
     override = os.environ.get("LOCALCODE_AGENT_BIN")
     if override and Path(override).is_file():
         return Path(override)
-    packaged = Path(__file__).parent / "bin" / "localcode-agent"
+    packaged = Path(__file__).parent / "bin" / "agent" / "localcode-agent"
     if packaged.is_file():
         return packaged
     dev = Path(__file__).resolve().parents[3] / "localcode-pi" / "agent-ts" / "dist" / "localcode-agent"
@@ -51,7 +51,9 @@ def _llama_server() -> Path | None:
 
 
 def _extensions(agent: Path) -> list[str]:
-    ext_dir = agent.parent.parent / "extensions"
+    ext_dir = agent.parent / "extensions"
+    if not ext_dir.is_dir():
+        ext_dir = agent.parent.parent / "extensions"
     if not ext_dir.is_dir():
         return []
     names = ["localcode.ts", "localcode-brand.ts", "localcode-safety.ts", "localcode-web.ts", "localcode-app.ts", "localcode-redact.ts"]
