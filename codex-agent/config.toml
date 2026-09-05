@@ -20,6 +20,13 @@ model_reasoning_effort = "none"
 model_context_window = 32768
 model_max_output_tokens = 8192
 
+# The workspace-write sandbox blocks ALL network by default, so npm install /
+# pip install / git fetch fail with ENOTFOUND (and headless runs can't approve
+# an escape). Local inference is the privacy promise; the agent's own tools
+# may use the network like any developer's shell would.
+[sandbox_workspace_write]
+network_access = true
+
 # Provider table LAST: any key after a [table] header belongs to that table,
 # which is how approval/sandbox/thinking settings silently went missing before.
 [model_providers.localcode]
