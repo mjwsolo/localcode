@@ -46,33 +46,46 @@ NEVER commit to main, never push tags (tags drive PyPI; live = v0.3.71).
   `model_reasoning_effort="none"` (14x measured); opencode → server-side
   `--chat-template-kwargs '{"enable_thinking":false}'`.
 
-## TODO — codex branch (`codex-agent/` + mjwsolo/codex fork)
+## Codex branch — state as of 2026-09-05 evening (Fable 5.1 session)
 
-1. **/model inside the codex TUI shows codex's GPT catalog.** THE open item.
-   Rust work in the fork: the TUI's model selector reads the bundled
-   models-manager catalog (`codex-rs/models-manager/models.json`,
-   `built_in_model_providers`). Make it localcode's picker: family → quant,
-   sourced from the active provider's `/models` endpoint + localcode catalog
-   (grep `codex-rs/tui/src` for the selector: "Select model (opens selector
-   UI)"). Interim launcher picker (`codex-agent/model_picker_cli.py`) already
-   does the flow pre-launch — the in-TUI one must match it.
-2. Debrand sweep was running when this doc was written: mechanical
-   `\bCodex\b` → `localcode` in `codex-rs/{tui,exec}/src` (commit pushed;
-   background build `bxjno6d53` may need finishing). After building:
-   `strings target/release/codex | grep -c "OpenAI Codex"` must be 0, then
-   `cp` to `codex-agent/.run/codex-localcode`. Sweep the OTHER crates'
-   user-visible strings the same way (onboarding/login/core prompts).
-   Watch for: doc-tests/tests comparing literals (we don't run them).
-3. Model download in-TUI: none. Launcher picker downloads pre-launch; in-TUI
-   there's nothing. Depends on (1).
-4. Codex update-check/login surfaces: with env-key auth we never saw login,
-   but audit `strings` for chatgpt.com / update URLs like we did for pi.dev
-   on the pi branch, and neutralize in the fork.
-5. No upstream tracking: add PINNED upstream sha + weekly rebase loop like
-   `upstream-bump.yml` / `pi-bump.yml`, or the fork rots (see the
-   llama.cpp 4-month-drift memory).
-6. Enter-submit is flaky under tmux (kitty keyboard protocol). Fine on real
-   keyboards; scripts must send Enter variants with delays.
+Fork source now lives at `~/Desktop/Github/codex-fork` (clone of
+mjwsolo/codex, branch `localcode`, commit 76383e78 + follow-ups). Build:
+`cd codex-rs && PATH=~/.cargo/bin:$PATH cargo build --release --bin codex`
+(~5-6 min incremental). Install: `cp target/release/codex .run/codex-localcode.new
+&& mv` into `localcode-codex/codex-agent/.run/` (never overwrite in place).
+
+DONE and verified in tmux on real models (gemma 12B ⇄ Qwen 3.8 27B):
+1. **/model inside the TUI is localcode's picker.** `codex-agent/localcode_supervisor.py`
+   owns llama-server and serves `/catalog`, `/quants`, `POST /select`, `/status`
+   on a control port (8323+); the launcher exports `LOCALCODE_CONTROL_URL`;
+   `tui/src/chatwidget/localcode_picker.rs` renders model → quant (★ from
+   recommend(), fit glyph, size, tok/s, downloaded) and polls the switch into
+   the status line. A real 14.3 GB download + switch on the same port +
+   "Model changed to …" + a 4-token "pong" turn (thinking off) all verified.
+2. Debrand: 200 → 35 branded strings in the binary (rest are multi-line
+   literals and skill-sample docs). Sweep script pattern is in memory
+   `full-debrand-no-prompts`. Welcome line, tips, placeholder, prompts,
+   models.json, login pages all read localcode.
+3. Nothing phones home: announcement fetch, GitHub/Homebrew update check,
+   analytics default, Statsig metrics exporter all off in the fork.
+4. HTTP 500 from llama-server now shows the server's own message (was the
+   fake "high demand" line — it appeared when gemma emitted malformed
+   tool-call JSON).
+5. Bugs fixed: supervisor used `signal.pause()` (exits on SIGCHLD from the
+   server it just stopped); `config.toml` had approval/sandbox/thinking keys
+   INSIDE `[model_providers.localcode]` (never applied) — provider table is
+   now last; launcher tested `-z ""` so the pre-launch picker always showed.
+
+STILL TODO — codex:
+- Picker level 2 initial row must follow `_default_quant_idx` (prefer a
+  downloaded quant so a naive Enter never starts a download) and the status
+  line must survive a chat turn (ensure_status_indicator) — both coded, in
+  the build after 76383e78; re-verify in tmux after installing.
+- 35 leftover "Codex" strings (multi-line literals, ext/ crates, skill samples).
+- `/app` (Desktop app) command still exists; description now says unavailable.
+- Upstream tracking loop (PINNED sha + weekly rebase) still missing.
+- Enter under tmux: number keys select immediately in codex list popups; an
+  Enter sent afterwards accepts the NEXT view's highlighted row.
 
 ## TODO — pi branch (`agent-ts/`)
 
@@ -93,8 +106,9 @@ NEVER commit to main, never push tags (tags drive PyPI; live = v0.3.71).
 
 1. Launcher picker updated to the real localcode picker (same
    `model_picker_cli.py`); not yet hand-tested.
-2. In-TUI model list uses opencode's own selector — same critique as codex
-   likely applies; check `/models` in its TUI against the localcode rule.
+2. In-TUI model list uses opencode's own selector: a flat 2-entry list from
+   `opencode.json` (confirmed 2026-09-05). Needs the same supervisor +
+   model→quant picker treatment as codex, in the opencode fork's TUI.
 3. No journeys rerun since thinking-off flag added to journeys server line.
 
 ## How to verify anything here (the protocol that caught 10+ shipped bugs)
