@@ -27,7 +27,7 @@ PORT=""
 for p in $(seq 8123 8199); do curl -sf "http://127.0.0.1:$p/health" >/dev/null 2>&1 || { PORT=$p; break; }; done
 mkdir -p "$HERE/.run"
 "$SERVER" --host 127.0.0.1 --port "$PORT" --jinja -ngl 999 -c 32768 \
-  --alias "$MODEL" --model "$GGUF" > "$HERE/.run/server.log" 2>&1 &
+  --alias "$MODEL" --model "$GGUF" --chat-template-kwargs '{"enable_thinking":false}' > "$HERE/.run/server.log" 2>&1 &
 SRV=$!; trap 'kill $SRV 2>/dev/null || true' EXIT
 for i in $(seq 1 240); do curl -sf "http://127.0.0.1:$PORT/health" >/dev/null && break; sleep 1; done
 
