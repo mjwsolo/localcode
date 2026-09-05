@@ -83,6 +83,7 @@ where = ["src"]
 "localcode" = [
     "**/*.tcss",
     "bin/llama-server",
+    "bin/agent/**",
     "skills/*.md",
 ]
 

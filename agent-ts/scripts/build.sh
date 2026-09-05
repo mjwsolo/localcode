@@ -78,7 +78,7 @@ cp "$HERE"/node_modules/@silvia-odwyer/photon-node/photon_rs_bg.wasm dist/ 2>/de
 python3 - <<'PYEOF'
 import json
 json.dump({"name":"localcode","version":"0.4.0","type":"module",
-           "piConfig":{"name":"localcode","configDir":".localcode"}},
+           "piConfig":{"name":"localcode","configDir":".localcode-agent"}},
           open("dist/package.json","w"), indent=2)
 PYEOF
 echo "built dist/localcode-agent ($(du -h dist/localcode-agent | cut -f1))"

@@ -1,0 +1,213 @@
+{
+ "groups": [
+  {
+   "key": "gemma-4-26b-a4b",
+   "name": "Gemma 4 26B-A4B",
+   "maker": "Google",
+   "architecture": "gemma4-iswa",
+   "license": "Gemma (Google) \u2014 research + commercial w/ attribution",
+   "notes": "Google's sparse MoE \u2014 ~3.8B active (top-8 of 128 experts). Native multimodal: pair any quant with the F16 mmproj for image input. Tool calli",
+   "hf_repo": "unsloth/gemma-4-26B-A4B-it-GGUF",
+   "quants": [
+    {
+     "key": "gemma",
+     "label": "Gemma 4 26B-A4B (Q3)",
+     "filename": "gemma-4-26B-A4B-it-UD-IQ3_S.gguf",
+     "hf_repo": "unsloth/gemma-4-26B-A4B-it-GGUF",
+     "size_gb": 11.2,
+     "revision": "main",
+     "humaneval": 0.951,
+     "recommended_at_ram_gb": null,
+     "mmproj_filename": "mmproj-gemma-4-26B-A4B-F16.gguf",
+     "mmproj_hf_filename": "mmproj-F16.gguf"
+    },
+    {
+     "key": "gemma-q8",
+     "label": "Gemma 4 26B-A4B (Q8)",
+     "filename": "gemma-4-26B-A4B-it-UD-Q8_K_XL.gguf",
+     "hf_repo": "unsloth/gemma-4-26B-A4B-it-GGUF",
+     "size_gb": 28.0,
+     "revision": "main",
+     "humaneval": null,
+     "recommended_at_ram_gb": 64,
+     "mmproj_filename": "mmproj-gemma-4-26B-A4B-F16.gguf",
+     "mmproj_hf_filename": "mmproj-F16.gguf"
+    }
+   ]
+  },
+  {
+   "key": "gemma-4-12b",
+   "name": "Gemma 4 12B",
+   "maker": "Google",
+   "architecture": "gemma4-iswa",
+   "license": "Apache 2.0",
+   "notes": "Mid-sized dense Gemma 4 \u2014 sits between E4B and the 26B MoE. Native multimodal (vision + audio per Google's Gemma 4 announcement); pair any q",
+   "hf_repo": "unsloth/gemma-4-12b-it-GGUF",
+   "quants": [
+    {
+     "key": "gemma-12b",
+     "label": "Gemma 4 12B (Q4)",
+     "filename": "gemma-4-12b-it-UD-Q4_K_XL.gguf",
+     "hf_repo": "unsloth/gemma-4-12b-it-GGUF",
+     "size_gb": 7.37,
+     "revision": "main",
+     "humaneval": null,
+     "recommended_at_ram_gb": 16,
+     "mmproj_filename": "mmproj-gemma-4-12b-F16.gguf",
+     "mmproj_hf_filename": "mmproj-F16.gguf"
+    },
+    {
+     "key": "gemma-12b-bf16",
+     "label": "Gemma 4 12B (BF16, full)",
+     "filename": "gemma-4-12b-it-BF16.gguf",
+     "hf_repo": "unsloth/gemma-4-12b-it-GGUF",
+     "size_gb": 23.8,
+     "revision": "main",
+     "humaneval": null,
+     "recommended_at_ram_gb": null,
+     "mmproj_filename": "mmproj-gemma-4-12b-F16.gguf",
+     "mmproj_hf_filename": "mmproj-F16.gguf"
+    }
+   ]
+  },
+  {
+   "key": "qwen-3.6-35b-a3b",
+   "name": "Qwen 3.6 35B-A3B",
+   "maker": "Alibaba",
+   "architecture": "qwen35moe",
+   "license": "Apache 2.0",
+   "notes": "Alibaba's sparse MoE \u2014 ~3.0B active (top-8 + 1 shared of 256 experts). Hybrid attn + Mamba-2 SSM, native 262K context. Native multimodal: pa",
+   "hf_repo": "unsloth/Qwen3.6-35B-A3B-GGUF",
+   "quants": [
+    {
+     "key": "qwen",
+     "label": "Qwen 3.6 35B-A3B (Q2)",
+     "filename": "Qwen3.6-35B-A3B-UD-IQ2_M.gguf",
+     "hf_repo": "unsloth/Qwen3.6-35B-A3B-GGUF",
+     "size_gb": 10.7,
+     "revision": "main",
+     "humaneval": 0.947,
+     "recommended_at_ram_gb": 24,
+     "mmproj_filename": "mmproj-Qwen3.6-35B-A3B-F16.gguf",
+     "mmproj_hf_filename": "mmproj-F16.gguf"
+    },
+    {
+     "key": "qwen-q8",
+     "label": "Qwen 3.6 35B-A3B (Q8)",
+     "filename": "Qwen3.6-35B-A3B-UD-Q8_K_XL.gguf",
+     "hf_repo": "unsloth/Qwen3.6-35B-A3B-GGUF",
+     "size_gb": 38.5,
+     "revision": "main",
+     "humaneval": null,
+     "recommended_at_ram_gb": 96,
+     "mmproj_filename": "mmproj-Qwen3.6-35B-A3B-F16.gguf",
+     "mmproj_hf_filename": "mmproj-F16.gguf"
+    }
+   ]
+  },
+  {
+   "key": "qwen-3.8-27b",
+   "name": "Qwen 3.8 27B",
+   "maker": "Alibaba",
+   "architecture": "qwen35",
+   "license": "Apache 2.0",
+   "notes": "Alibaba's dense 27B \u2014 all params active per token (no MoE routing). Hybrid attention + Mamba-2 SSM with a multi-token-prediction layer; the ",
+   "hf_repo": "unsloth/Qwen3.8-27B-GGUF",
+   "quants": [
+    {
+     "key": "qwen38",
+     "label": "Qwen 3.8 27B (Q4)",
+     "filename": "Qwen3.8-27B-UD-Q4_K_XL.gguf",
+     "hf_repo": "unsloth/Qwen3.8-27B-GGUF",
+     "size_gb": 17.9,
+     "revision": "main",
+     "humaneval": null,
+     "recommended_at_ram_gb": null,
+     "mmproj_filename": "mmproj-Qwen3.8-27B-F16.gguf",
+     "mmproj_hf_filename": "mmproj-F16.gguf"
+    },
+    {
+     "key": "qwen38-q8",
+     "label": "Qwen 3.8 27B (Q8)",
+     "filename": "Qwen3.8-27B-UD-Q8_K_XL.gguf",
+     "hf_repo": "unsloth/Qwen3.8-27B-GGUF",
+     "size_gb": 31.5,
+     "revision": "main",
+     "humaneval": null,
+     "recommended_at_ram_gb": null,
+     "mmproj_filename": "mmproj-Qwen3.8-27B-F16.gguf",
+     "mmproj_hf_filename": "mmproj-F16.gguf"
+    }
+   ]
+  },
+  {
+   "key": "north-mini-code-1.0",
+   "name": "North-Mini-Code 1.0 30B-A3B",
+   "maker": "Cohere",
+   "architecture": "cohere2_moe",
+   "license": "Apache 2.0",
+   "notes": "Cohere Labs' code-specialized sparse MoE \u2014 30B total / ~3B active. Its cohere2moe arch isn't in the TurboQuant server, so LocalCode builds a",
+   "hf_repo": "unsloth/North-Mini-Code-1.0-GGUF",
+   "quants": [
+    {
+     "key": "north-mini-code",
+     "label": "North Mini Code 30B-A3B (Q4)",
+     "filename": "North-Mini-Code-1.0-UD-Q4_K_M.gguf",
+     "hf_repo": "unsloth/North-Mini-Code-1.0-GGUF",
+     "size_gb": 17.9,
+     "revision": "main",
+     "humaneval": null,
+     "recommended_at_ram_gb": null,
+     "mmproj_filename": null,
+     "mmproj_hf_filename": null
+    }
+   ]
+  },
+  {
+   "key": "muse-glimmer-30b",
+   "name": "Muse Glimmer 30B",
+   "maker": "Meta",
+   "architecture": "muse_glimmer",
+   "license": "Apache 2.0",
+   "notes": "Meta's multimodal agentic model for local deployment (Meta Superintelligence Lab, Aug 2026): multi-step reasoning, tool use, failure recover",
+   "hf_repo": "unsloth/Muse-Glimmer-30B-GGUF",
+   "quants": [
+    {
+     "key": "muse-glimmer",
+     "label": "Muse Glimmer 30B (Q4)",
+     "filename": "Muse-Glimmer-30B-UD-Q4_K_XL.gguf",
+     "hf_repo": "unsloth/Muse-Glimmer-30B-GGUF",
+     "size_gb": 15.9,
+     "revision": "main",
+     "humaneval": null,
+     "recommended_at_ram_gb": null,
+     "mmproj_filename": "mmproj-Muse-Glimmer-30B-BF16.gguf",
+     "mmproj_hf_filename": "mmproj-Muse-Glimmer-30B-BF16.gguf"
+    }
+   ]
+  },
+  {
+   "key": "diffusiongemma-26b-a4b",
+   "name": "DiffusionGemma 26B-A4B",
+   "maker": "Google",
+   "architecture": "diffusion_gemma",
+   "license": "Apache 2.0",
+   "notes": "EXPERIMENTAL block-diffusion model \u2014 denoises whole 256-token blocks in parallel instead of decoding token-by-token. Served by the bundled l",
+   "hf_repo": "unsloth/diffusiongemma-26B-A4B-it-GGUF",
+   "quants": [
+    {
+     "key": "diffusiongemma",
+     "label": "DiffusionGemma 26B-A4B (Q4)",
+     "filename": "diffusiongemma-26B-A4B-it-Q4_K_M.gguf",
+     "hf_repo": "unsloth/diffusiongemma-26B-A4B-it-GGUF",
+     "size_gb": 15.7,
+     "revision": "main",
+     "humaneval": null,
+     "recommended_at_ram_gb": null,
+     "mmproj_filename": null,
+     "mmproj_hf_filename": null
+    }
+   ]
+  }
+ ]
+}
