@@ -15,9 +15,12 @@ if [ -z "$MODEL" ]; then
     printf "  %2d) %-40s %s GB
 " "$i" "$f" "$(du -g "$MODELS_DIR/$f.gguf" 2>/dev/null | cut -f1)"
   done < <(ls -S "$MODELS_DIR" | grep '\.gguf$' | grep -v '^mmproj' | sed 's/\.gguf$//')
-  printf "> "; read -r pick
-  MODEL="${MODELS[$((pick-1))]:-}"
-  [ -n "$MODEL" ] || { echo "no such choice"; exit 1; }
+  while [ -z "$MODEL" ]; do
+    printf "> "; read -r pick
+    case "$pick" in (*[!0-9]*|"") echo "  type a number 1-$i"; continue;; esac
+    MODEL="${MODELS[$((pick-1))]:-}"
+    [ -n "$MODEL" ] || echo "  type a number 1-$i"
+  done
 fi
 SERVER="${LOCALCODE_LLAMA_SERVER:-$HERE/../src/localcode/bin/llama-server}"
 GGUF="$MODELS_DIR/$MODEL.gguf"
