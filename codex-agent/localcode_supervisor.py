@@ -277,6 +277,9 @@ def main() -> int:
         sys.exit(0)
     signal.signal(signal.SIGTERM, bye)
     signal.signal(signal.SIGINT, bye)
+    signal.signal(signal.SIGHUP, bye)
+    import atexit
+    atexit.register(sup.stop)
 
     sup.state = {"state": "loading", "model": a.model, "detail": "", "pct": None}
     if not sup.start(a.model):
