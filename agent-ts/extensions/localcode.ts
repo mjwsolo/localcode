@@ -9,7 +9,7 @@
  * Everything is built from native APIs: registerProvider, registerCommand,
  * ctx.ui.select / confirm / notify / setStatus. No UI code of our own.
  */
-import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync } from "node:fs";
+import { createWriteStream, existsSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, totalmem } from "node:os";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
@@ -131,23 +131,50 @@ async function post(path: string, body: unknown) {
   });
 }
 
-/** Ask llama-server to pull a model from HF, reporting progress in the status line. */
-async function download(ctx: ExtensionCommandContext, q: Quant): Promise<boolean> {
-  ctx.ui.setStatus("localcode", `downloading ${pretty(q)} …`);
-  const started = await post("/models", { model: hfRef(q) });
-  if (!started.ok) {
-    ctx.ui.setStatus("localcode", "");
-    ctx.ui.notify(`Download could not start: ${await started.text()}`, "error");
+/** Download a file straight from Hugging Face into MODELS_DIR, with progress
+ *  and a .part temp file so an interrupted download never looks complete.
+ *  (The router's own POST /models download proved to be a silent no-op in
+ *  testing, so we do it ourselves, the way localcode's Python downloader does.) */
+export async function hfDownload(
+  ctx: ExtensionCommandContext, repo: string, revision: string, hfFile: string,
+  destName: string, label: string, sizeGb: number,
+): Promise<boolean> {
+  const url = `https://huggingface.co/${repo}/resolve/${revision || "main"}/${hfFile}`;
+  const dest = join(MODELS_DIR, destName);
+  const part = `${dest}.part`;
+  try {
+    const r = await fetch(url, { redirect: "follow" });
+    if (!r.ok || !r.body) { ctx.ui.notify(`Download failed: HTTP ${r.status} for ${hfFile}`, "error"); return false; }
+    const total = Number(r.headers.get("content-length") ?? 0) || sizeGb * 1e9;
+    const out = createWriteStream(part);
+    let done = 0, lastPct = -1;
+    for await (const chunk of r.body as any) {
+      out.write(chunk); done += chunk.length;
+      const pct = Math.floor((done / total) * 100);
+      if (pct !== lastPct) {
+        lastPct = pct;
+        ctx.ui.setStatus("localcode", `downloading ${label} … ${pct}% of ${(total / 1e9).toFixed(1)} GB`);
+      }
+    }
+    await new Promise((res, rej) => out.end((e: any) => (e ? rej(e) : res(null))));
+    renameSync(part, dest);
+    return true;
+  } catch (e) {
+    try { unlinkSync(part); } catch {}
+    ctx.ui.notify(`Download failed: ${e}`, "error");
     return false;
+  } finally {
+    ctx.ui.setStatus("localcode", "");
   }
-  for (;;) {
-    await new Promise((r) => setTimeout(r, 1500));
-    if (onDisk(q)) break;
-    const entry = (await serverModels()).find((m) => m.id === modelId(q) || m.id === hfRef(q));
-    if (entry && entry.status !== "downloading") break;
-    ctx.ui.setStatus("localcode", `downloading ${pretty(q)} … ${q.size_gb.toFixed(1)} GB`);
+}
+
+async function download(ctx: ExtensionCommandContext, q: Quant): Promise<boolean> {
+  if (!(await hfDownload(ctx, q.hf_repo, q.revision, q.filename, q.filename, pretty(q), q.size_gb))) return false;
+  // vision models need their mmproj sidecar next to the weights
+  if (q.mmproj_filename) {
+    await hfDownload(ctx, q.hf_repo, q.revision, q.mmproj_hf_filename ?? q.mmproj_filename,
+                     q.mmproj_filename, `${pretty(q)} (vision sidecar)`, 1);
   }
-  ctx.ui.setStatus("localcode", "");
   return true;
 }
 
@@ -227,20 +254,7 @@ async function chooseHf(pi: ExtensionAPI, ctx: ExtensionCommandContext, g: Group
     const ok = await ctx.ui.confirm(`Download ${g.name} ${h.label}?`,
       `${h.size_gb.toFixed(1)} GB · one-time download, cached for future launches\nLicense: ${g.license}`);
     if (!ok) return;
-    ctx.ui.setStatus("localcode", `downloading ${g.name} ${h.label} …`);
-    const started = await post("/models", { model: ref });
-    if (!started.ok) {
-      ctx.ui.setStatus("localcode", "");
-      ctx.ui.notify(`Download could not start: ${await started.text()}`, "error");
-      return;
-    }
-    for (;;) {
-      await new Promise((r) => setTimeout(r, 1500));
-      if (existsSync(join(MODELS_DIR, h.filename))) break;
-      const e = (await serverModels()).find((m) => m.id === id || m.id === ref);
-      if (e && e.status !== "downloading") break;
-    }
-    ctx.ui.setStatus("localcode", "");
+    if (!(await hfDownload(ctx, g.hf_repo, "main", h.filename, h.filename, `${g.name} ${h.label}`, h.size_gb))) return;
   }
   ctx.ui.setStatus("localcode", `loading ${g.name} ${h.label} …`);
   await post("/models/load", { model: id }).catch(() => {});

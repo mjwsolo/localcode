@@ -13,6 +13,7 @@
     "vitest": "^5.0.0"
   },
   "scripts": {
-    "test": "tsc --noEmit --skipLibCheck --module esnext --target es2022 --moduleResolution bundler --resolveJsonModule extensions/*.ts && vitest run"
+    "test": "tsc --noEmit --skipLibCheck --module esnext --target es2022 --moduleResolution bundler --resolveJsonModule extensions/*.ts && vitest run --exclude \"**/*.live.test.ts\"",
+    "test:live": "vitest run tests/download.live.test.ts"
   }
 }
