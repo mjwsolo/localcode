@@ -178,7 +178,14 @@ const pick = <T,>(c: unknown, list: T[], render: (t: T) => string): T | undefine
 
 async function browse(pi: ExtensionAPI, ctx: ExtensionCommandContext, firstRun = false) {
   if (!ctx.hasUI) return;
-  const ordered = [...groups].sort((a, b) => b.quants.filter(onDisk).length - a.quants.filter(onDisk).length || a.name.localeCompare(b.name));
+  // Downloaded families first, then the ★ recommended family, then the rest —
+  // so a first run's cursor rests on the model we actually recommend, never on
+  // a research model that happens to sort first alphabetically.
+  const recGroup = RECOMMENDED ? groupOf(RECOMMENDED).key : "";
+  const ordered = [...groups].sort((a, b) =>
+    b.quants.filter(onDisk).length - a.quants.filter(onDisk).length ||
+    Number(b.key === recGroup) - Number(a.key === recGroup) ||
+    a.name.localeCompare(b.name));
   const title = firstRun
     ? `Choose a model to get started — ${RAM_GB} GB Mac · ★ recommended for you`
     : `Models — ${RAM_GB} GB Mac · ✓ downloaded · ↓ downloadable · ★ recommended`;
