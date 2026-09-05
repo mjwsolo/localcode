@@ -5,7 +5,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 MODELS_DIR="${LOCALCODE_MODELS_DIR:-$HOME/.local/share/localcode/models}"
 MODEL="${1:-}"; shift 2>/dev/null || true
-if [ -z "" ]; then
+if [ -z "$MODEL" ]; then
 # Two-level picker, the localcode way: model first, then quant.
 # Reads MODELS_DIR; sets MODEL. Pure bash, no deps.
 
@@ -20,15 +20,21 @@ CODEX_BIN="${LOCALCODE_CODEX_BIN:-codex}"
 GGUF="$MODELS_DIR/$MODEL.gguf"
 [ -f "$GGUF" ] || { echo "No such model: $GGUF"; ls "$MODELS_DIR" | grep '\.gguf$' | grep -v mmproj | sed 's/\.gguf$//;s/^/  /'; exit 1; }
 
-PORT=""
+PORT=""; CTRL=""
 for p in $(seq 8123 8199); do curl -sf "http://127.0.0.1:$p/health" >/dev/null 2>&1 || { PORT=$p; break; }; done
+for p in $(seq 8323 8399); do curl -sf "http://127.0.0.1:$p/status" >/dev/null 2>&1 || { CTRL=$p; break; }; done
 mkdir -p "$HERE/.run"
-"$SERVER" --host 127.0.0.1 --port "$PORT" --jinja -ngl 999 -c 32768 \
-  --alias "$MODEL" --model "$GGUF" > "$HERE/.run/server.log" 2>&1 &
+PY_BIN="${LOCALCODE_PY:-$HOME/Desktop/Github/localcode/localcodevenv/bin/python}"
+[ -x "$PY_BIN" ] || PY_BIN=python3
+# The supervisor owns llama-server and serves the in-TUI /model picker
+# (catalog, quants, download, switch) on a localhost control port. The
+# inference port never changes across a switch.
+"$PY_BIN" "$HERE/localcode_supervisor.py" --model "$MODEL" --port "$PORT" --control-port "$CTRL" \
+  --server "$SERVER" --models-dir "$MODELS_DIR" > "$HERE/.run/supervisor.log" 2>&1 &
 SRV=$!; trap 'kill $SRV 2>/dev/null || true' EXIT
-for i in $(seq 1 240); do curl -sf "http://127.0.0.1:$PORT/health" >/dev/null && break; sleep 1; done
+for i in $(seq 1 240); do curl -sf "http://127.0.0.1:$PORT/health" >/dev/null && break; kill -0 $SRV 2>/dev/null || { echo "model failed to load (see $HERE/.run/server.log)"; exit 1; }; sleep 1; done
 
 CH="$HERE/.run/codex-home"; mkdir -p "$CH"
 sed "s|http://127.0.0.1:8123|http://127.0.0.1:$PORT|; s|^model = .*|model = \"$MODEL\"|" \
   "$HERE/config.toml" > "$CH/config.toml"
-CODEX_HOME="$CH" LOCALCODE_API_KEY=local exec "$CODEX_BIN" "$@"
+CODEX_HOME="$CH" LOCALCODE_API_KEY=local LOCALCODE_CONTROL_URL="http://127.0.0.1:$CTRL" exec "$CODEX_BIN" "$@"

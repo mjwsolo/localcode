@@ -6,6 +6,15 @@ fork (github.com/mjwsolo/codex, branch `localcode`) carries only three small
 commits: branding on the exec banner and welcome screen, and silencing the
 fallback-metadata warning that fires on every local model.
 
+- `localcode_supervisor.py` — owns the bundled llama-server and serves the
+  in-TUI `/model` picker over a localhost control port (`LOCALCODE_CONTROL_URL`):
+  `GET /catalog` (every catalog model, ★ from `recommend()`), `GET /quants`
+  (every quant the HF repo ships, size, fit badge, downloaded marker),
+  `POST /select` (download if needed, then restart the server on the SAME
+  port), `GET /status` (live progress). Not a reimplementation: it imports
+  localcode's `models_catalog`, `hf_quants` and `bootstrap.download_model`.
+- `model_picker_cli.py` — the same two-level picker, pre-launch, for a first run
+  with no model argument.
 - `config.toml` — the localcode profile: turboquant llama-server over the
   Responses API, static env-key auth (no ChatGPT login), codex's own approvals
   on (`on-request` + `workspace-write`).
