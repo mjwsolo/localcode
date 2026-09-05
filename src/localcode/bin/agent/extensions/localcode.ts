@@ -54,7 +54,9 @@ async function fetchQuants(repo: string): Promise<HfQuant[]> {
   try {
     const r = await fetch(`https://huggingface.co/api/models/${repo}/tree/main?recursive=true`,
                           { signal: AbortSignal.timeout(15_000) });
+    if (!r.ok) throw new Error(`HF tree HTTP ${r.status}`);
     const tree = (await r.json()) as any[];
+    if (!Array.isArray(tree)) throw new Error("HF tree: unexpected shape");
     const out: HfQuant[] = [];
     for (const e of tree) {
       const path = String(e?.path ?? "");
@@ -85,9 +87,9 @@ async function fetchQuants(repo: string): Promise<HfQuant[]> {
 const fitBadge = (gb: number) => (gb <= 0.55 * RAM_GB ? "fits" : gb <= 0.65 * RAM_GB ? "tight" : "too big");
 const FIT_GLYPH: Record<string, string> = { fits: "✓", tight: "~", "too big": "✗" };
 
-async function serverModels(): Promise<{ id: string; status: string; ctx: number | null; vision: boolean }[]> {
+async function serverModels(reload = false): Promise<{ id: string; status: string; ctx: number | null; vision: boolean }[]> {
   try {
-    const r = await fetch(`${BASE}/models`, { signal: AbortSignal.timeout(10_000) });
+    const r = await fetch(`${BASE}/models${reload ? "?reload=1" : ""}`, { signal: AbortSignal.timeout(10_000) });
     const d = (await r.json()) as any;
     return (d.data ?? []).map((m: any) => ({
       id: m.id, status: m.status?.value ?? "unknown",
@@ -180,6 +182,14 @@ async function download(ctx: ExtensionCommandContext, q: Quant): Promise<boolean
 
 async function useModel(pi: ExtensionAPI, ctx: ExtensionCommandContext, q: Quant) {
   ctx.ui.setStatus("localcode", `loading ${pretty(q)} …`);
+  // Rescan first: a just-downloaded file is invisible to the router until a
+  // reload, and loading an id it does not know can load the wrong model.
+  const seen = await serverModels(true);
+  if (!seen.some((m) => m.id === modelId(q))) {
+    ctx.ui.setStatus("localcode", "");
+    ctx.ui.notify(`${pretty(q)} is on disk but the server does not list it yet. Restart localcode to pick it up.`, "warning");
+    return;
+  }
   await post("/models/load", { model: modelId(q) }).catch(() => {});
   const live = await syncProvider(pi);
   ctx.ui.setStatus("localcode", "");
@@ -223,7 +233,12 @@ async function browse(pi: ExtensionAPI, ctx: ExtensionCommandContext, firstRun =
 
     const BACK = "← Back to all models";
     if (ctx.hasUI) ctx.ui.setStatus("localcode", `loading quants for ${g.name} …`);
-    const live = await fetchQuants(g.hf_repo);
+    let live = await fetchQuants(g.hf_repo);
+    if (live.length === 0) {
+      // Offline or rate-limited: fall back to the curated catalog quants so the
+      // user can still pick and download something, rather than hitting a wall.
+      live = g.quants.map((q) => ({ label: quantName(q), filename: q.filename, size_gb: q.size_gb }));
+    }
     if (ctx.hasUI) ctx.ui.setStatus("localcode", "");
 
     const rows = live.map((h) => {
@@ -257,6 +272,12 @@ async function chooseHf(pi: ExtensionAPI, ctx: ExtensionCommandContext, g: Group
     if (!(await hfDownload(ctx, g.hf_repo, "main", h.filename, h.filename, `${g.name} ${h.label}`, h.size_gb))) return;
   }
   ctx.ui.setStatus("localcode", `loading ${g.name} ${h.label} …`);
+  const seen = await serverModels(true);   // rescan: the file just appeared on disk
+  if (!seen.some((m) => m.id === id)) {
+    ctx.ui.setStatus("localcode", "");
+    ctx.ui.notify(`${g.name} ${h.label} is on disk but the server does not list it yet. Restart localcode to pick it up.`, "warning");
+    return;
+  }
   await post("/models/load", { model: id }).catch(() => {});
   await syncProvider(pi);
   ctx.ui.setStatus("localcode", "");
@@ -316,9 +337,12 @@ export default async function (pi: ExtensionAPI) {
 
   pi.on("session_start", async (_e, ctx) => {
     await syncProvider(pi);
-    // Router mode serves only loaded models; make sure the active one is up.
+    const firstRun = !allQuants.some(onDisk);
+    // Router mode serves only loaded models; make sure the active one is up —
+    // but never on first run, where nothing has been chosen yet and the router
+    // may list a multi-GB stray from the HF cache we must not auto-load.
     const active: any = ctx.model;
-    if (active?.provider === "localcode") {
+    if (!firstRun && active?.provider === "localcode") {
       const entry = (await serverModels()).find((m) => m.id === active.id);
       if (entry && entry.status !== "loaded" && entry.status !== "sleeping") {
         if (ctx.hasUI) ctx.ui.setStatus("localcode", `loading ${active.name ?? active.id} …`);
@@ -332,7 +356,7 @@ export default async function (pi: ExtensionAPI) {
       }
     }
     // First run: nothing downloaded yet → open the picker straight away.
-    if (ctx.hasUI && ctx.mode === "tui" && !allQuants.some(onDisk)) {
+    if (ctx.hasUI && ctx.mode === "tui" && firstRun) {
       await browse(pi, ctx as ExtensionCommandContext, true);
     }
   });
