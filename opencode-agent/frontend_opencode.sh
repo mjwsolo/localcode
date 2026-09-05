@@ -4,9 +4,21 @@
 set -euo pipefail
 export PATH="$HOME/.hermes/node/bin:$PATH"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-MODEL="${1:-Qwen3.8-27B-UD-Q4_K_XL}"; shift 2>/dev/null || true
-PROJECT="${1:-$PWD}"
 MODELS_DIR="${LOCALCODE_MODELS_DIR:-$HOME/.local/share/localcode/models}"
+MODEL="${1:-}"; shift 2>/dev/null || true
+PROJECT="${1:-$PWD}"
+if [ -z "$MODEL" ]; then
+  echo "Which model?"
+  i=0; MODELS=()
+  while IFS= read -r f; do
+    i=$((i+1)); MODELS+=("$f")
+    printf "  %2d) %-40s %s GB
+" "$i" "$f" "$(du -g "$MODELS_DIR/$f.gguf" 2>/dev/null | cut -f1)"
+  done < <(ls -S "$MODELS_DIR" | grep '\.gguf$' | grep -v '^mmproj' | sed 's/\.gguf$//')
+  printf "> "; read -r pick
+  MODEL="${MODELS[$((pick-1))]:-}"
+  [ -n "$MODEL" ] || { echo "no such choice"; exit 1; }
+fi
 SERVER="${LOCALCODE_LLAMA_SERVER:-$HERE/../src/localcode/bin/llama-server}"
 GGUF="$MODELS_DIR/$MODEL.gguf"
 [ -f "$GGUF" ] || { echo "No such model: $GGUF"; ls "$MODELS_DIR" | grep '\.gguf$' | grep -v mmproj | sed 's/\.gguf$//;s/^/  /'; exit 1; }
