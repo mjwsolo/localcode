@@ -100,3 +100,18 @@ describe("web + app tools", () => {
     }
   });
 });
+
+describe("localcode-nav.ts (structural search)", () => {
+  it("registers code_navigation and finds real symbols", async () => {
+    const m = (await import("vitest")).expect && (() => {
+      const handlers = new Map(); const tools = new Map<string, any>();
+      return { api: { on(){}, registerTool: (t: any) => tools.set(t.name, t) } as any, tools };
+    })();
+    (await import("../extensions/localcode-nav.ts")).default(m.api);
+    const tool = m.tools.get("code_navigation");
+    expect(tool).toBeTruthy();
+    const res = await tool.execute("t", { action: "definition", symbol: "scrub", path: "extensions" },
+      undefined, undefined, { cwd: process.cwd() } as any);
+    expect(res.content[0].text).toMatch(/localcode-redact\.ts:\d+: function scrub/);
+  });
+});

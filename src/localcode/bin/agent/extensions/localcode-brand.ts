@@ -15,17 +15,6 @@ export default function (pi: ExtensionAPI) {
 
     ctx.ui.setTitle(BRAND);
 
-    ctx.ui.setHeader((_tui, theme) => ({
-      invalidate() {},
-      render(_width: number): string[] {
-        return [
-          ` ${BRAND}`,
-          ` a coding agent running a local model on your Mac`,
-          "",
-        ];
-      },
-    }));
-
     ctx.ui.setFooter((tui, theme, footerData) => ({
       invalidate() {},
       render(width: number): string[] {

@@ -56,7 +56,7 @@ def _extensions(agent: Path) -> list[str]:
         ext_dir = agent.parent.parent / "extensions"
     if not ext_dir.is_dir():
         return []
-    names = ["localcode.ts", "localcode-brand.ts", "localcode-safety.ts", "localcode-web.ts", "localcode-app.ts", "localcode-redact.ts"]
+    names = ["localcode.ts", "localcode-brand.ts", "localcode-safety.ts", "localcode-web.ts", "localcode-app.ts", "localcode-redact.ts", "localcode-nav.ts"]
     return [str(ext_dir / n) for n in names if (ext_dir / n).is_file()]
 
 
@@ -98,7 +98,11 @@ def run(argv: list[str] | None = None) -> int:
             return 1
 
         env = dict(os.environ, LLAMA_BASE_URL=base, LOCALCODE_MODELS_DIR=str(models_dir))
-        cmd = [str(agent), "-a", "--models", "localcode/*", "--thinking", "off"]
+        cmd = [str(agent), "-a", "--thinking", "off"]
+        # Scope model lists to our provider — but not on a true first run,
+        # where zero models exist and the scope only produces a warning.
+        if any(models_dir.glob("*.gguf")):
+            cmd += ["--models", "localcode/*"]
         for ext in _extensions(agent):
             cmd += ["-e", ext]
         cmd += list(argv or [])
