@@ -40,8 +40,8 @@ if [ "$ALL" = 1 ]; then
   echo
   cd "$PROJECT"
   LLAMA_BASE_URL="http://127.0.0.1:$PORT" \
-    exec "$HERE/dist/localcode-agent" -a -e "$HERE/extensions/localcode.ts" -e "$HERE/extensions/localcode-brand.ts" -e "$HERE/extensions/localcode-safety.ts" -e "$HERE/extensions/localcode-web.ts" -e "$HERE/extensions/localcode-app.ts" -e "$HERE/extensions/localcode-redact.ts" \
-    --provider localcode --model "$MODEL" --models "localcode/*" --thinking off
+    exec "$HERE/dist/localcode-agent" -a -e "$HERE/extensions/localcode.ts" -e "$HERE/extensions/localcode-brand.ts" -e "$HERE/extensions/localcode-safety.ts" -e "$HERE/extensions/localcode-web.ts" -e "$HERE/extensions/localcode-app.ts" -e "$HERE/extensions/localcode-redact.ts" -e "$HERE/extensions/localcode-nav.ts" \
+    --provider localcode --model "$MODEL" $( ls "$MODELS_DIR"/*.gguf >/dev/null 2>&1 && echo --models "localcode/*" ) --thinking off
 fi
 
 [ -f "$GGUF" ] || { echo "No such model: $GGUF"; echo; echo "Available:"; ls "$MODELS_DIR" | grep '\.gguf$' | grep -v '^mmproj' | sed 's/\.gguf$//;s/^/  /'; exit 1; }
@@ -58,5 +58,5 @@ echo
 
 cd "$PROJECT"
 LLAMA_BASE_URL="http://127.0.0.1:$PORT" \
-  "$HERE/dist/localcode-agent" -a -e "$HERE/extensions/localcode.ts" -e "$HERE/extensions/localcode-brand.ts" -e "$HERE/extensions/localcode-safety.ts" -e "$HERE/extensions/localcode-web.ts" -e "$HERE/extensions/localcode-app.ts" -e "$HERE/extensions/localcode-redact.ts" \
-  --provider localcode --model "$MODEL" --models "localcode/*" --thinking off
+  "$HERE/dist/localcode-agent" -a -e "$HERE/extensions/localcode.ts" -e "$HERE/extensions/localcode-brand.ts" -e "$HERE/extensions/localcode-safety.ts" -e "$HERE/extensions/localcode-web.ts" -e "$HERE/extensions/localcode-app.ts" -e "$HERE/extensions/localcode-redact.ts" -e "$HERE/extensions/localcode-nav.ts" \
+  --provider localcode --model "$MODEL" $( ls "$MODELS_DIR"/*.gguf >/dev/null 2>&1 && echo --models "localcode/*" ) --thinking off
