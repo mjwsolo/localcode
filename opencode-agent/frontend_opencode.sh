@@ -10,46 +10,12 @@ PROJECT="${1:-$PWD}"
 if [ -z "" ]; then
 # Two-level picker, the localcode way: model first, then quant.
 # Reads MODELS_DIR; sets MODEL. Pure bash, no deps.
-pick_model() {
-  local files=() fams=() f fam q i pick
-  while IFS= read -r f; do files+=("$f"); done \
-    < <(ls -S "$MODELS_DIR" | grep '\.gguf$' | grep -v '^mmproj' | sed 's/\.gguf$//')
-  # family = filename minus the trailing quant tag
-  for f in "${files[@]}"; do
-    fam=$(echo "$f" | sed -E 's/-(UD-)?(IQ|Q|BF|F)[0-9][0-9A-Za-z_]*$//')
-    case " ${fams[*]-} " in (*" $fam "*) ;; (*) fams+=("$fam");; esac
-  done
-  while :; do
-    echo "Which model?"
-    i=0; for fam in "${fams[@]}"; do
-      i=$((i+1)); n=$(printf '%s
-' "${files[@]}" | grep -c "^${fam}-")
-      printf "  %2d) %-32s %s quant(s) downloaded
-" "$i" "$fam" "$n"
-    done
-    printf "> "; read -r pick
-    case "$pick" in (*[!0-9]*|"") echo "  type a number 1-$i"; continue;; esac
-    fam="${fams[$((pick-1))]:-}"; [ -n "$fam" ] || { echo "  type a number 1-$i"; continue; }
-    echo; echo "$fam — which quant?"
-    local quants=() 
-    while IFS= read -r q; do quants+=("$q"); done < <(printf '%s
-' "${files[@]}" | grep "^${fam}-")
-    i=0; for q in "${quants[@]}"; do
-      i=$((i+1)); tag=${q#"$fam"-}
-      printf "  %2d) %-16s %s GB
-" "$i" "$tag" "$(du -g "$MODELS_DIR/$q.gguf" 2>/dev/null | cut -f1)"
-    done
-    printf "   b) back
-> "; read -r pick
-    [ "$pick" = b ] && { echo; continue; }
-    case "$pick" in (*[!0-9]*|"") echo "  type a number"; continue;; esac
-    MODEL="${quants[$((pick-1))]:-}"
-    [ -n "$MODEL" ] && return 0
-    echo "  type a number 1-$i"
-  done
-}
 
-  pick_model
+  PY_BIN="${LOCALCODE_PY:-$HOME/Desktop/Github/localcode/localcodevenv/bin/python}"
+  [ -x "$PY_BIN" ] || PY_BIN=python3
+  HERE_PICKER="$(cd "$(dirname "$0")" && pwd)/model_picker_cli.py"
+  MODEL="$($PY_BIN "$HERE_PICKER")" || exit $?
+  [ -n "$MODEL" ] || { echo "no model chosen"; exit 1; }
 fi
 SERVER="${LOCALCODE_LLAMA_SERVER:-$HERE/../src/localcode/bin/llama-server}"
 GGUF="$MODELS_DIR/$MODEL.gguf"
