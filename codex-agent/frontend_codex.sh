@@ -3,8 +3,21 @@
 # isolated CODEX_HOME at it, hand over the terminal. ~/.codex is never touched.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-MODEL="${1:-Qwen3.8-27B-UD-Q4_K_XL}"; shift 2>/dev/null || true
 MODELS_DIR="${LOCALCODE_MODELS_DIR:-$HOME/.local/share/localcode/models}"
+MODEL="${1:-}"; shift 2>/dev/null || true
+if [ -z "$MODEL" ]; then
+  # No argument: pick from a menu of what's on disk, largest first.
+  echo "Which model?"
+  i=0; MODELS=()
+  while IFS= read -r f; do
+    i=$((i+1)); MODELS+=("$f")
+    printf "  %2d) %-40s %s GB
+" "$i" "$f" "$(du -g "$MODELS_DIR/$f.gguf" 2>/dev/null | cut -f1)"
+  done < <(ls -S "$MODELS_DIR" | grep '\.gguf$' | grep -v '^mmproj' | sed 's/\.gguf$//')
+  printf "> "; read -r pick
+  MODEL="${MODELS[$((pick-1))]:-}"
+  [ -n "$MODEL" ] || { echo "no such choice"; exit 1; }
+fi
 SERVER="${LOCALCODE_LLAMA_SERVER:-$HERE/../src/localcode/bin/llama-server}"
 CODEX_BIN="${LOCALCODE_CODEX_BIN:-codex}"
 GGUF="$MODELS_DIR/$MODEL.gguf"
