@@ -36,7 +36,7 @@ jobs:
           npm pkg set "dependencies.@earendil-works/pi-coding-agent=${{ steps.latest.outputs.latest }}"
           npm install
           ./scripts/build.sh
-          npx vitest run            # extension contract tests — assert every hook we depend on
+          npm test                   # typecheck against the new pi + contract tests
           echo "${{ steps.latest.outputs.latest }}" > PINNED_PI
 
       # The smoke needs model weights, so it runs on the self-hosted Mac only.
