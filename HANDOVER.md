@@ -77,10 +77,7 @@ DONE and verified in tmux on real models (gemma 12B ⇄ Qwen 3.8 27B):
    now last; launcher tested `-z ""` so the pre-launch picker always showed.
 
 STILL TODO — codex:
-- Picker level 2 initial row must follow `_default_quant_idx` (prefer a
-  downloaded quant so a naive Enter never starts a download) and the status
-  line must survive a chat turn (ensure_status_indicator) — both coded, in
-  the build after 76383e78; re-verify in tmux after installing.
+- (done) picker level 2 default row + status line fixed and re-verified on the final binary.
 - 35 leftover "Codex" strings (multi-line literals, ext/ crates, skill samples).
 - `/app` (Desktop app) command still exists; description now says unavailable.
 - Upstream tracking loop (PINNED sha + weekly rebase) still missing.
