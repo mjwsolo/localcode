@@ -11,10 +11,9 @@ model_provider = "localcode"
 approval_policy = "on-request"
 sandbox_mode = "workspace-write"
 
-# Thinking off, localcode's default. The Responses path thinks by DEFAULT:
-# measured 8,487 tokens vs 600 on the same prompt without/with this line.
-# codex sends reasoning.effort="none"; the server maps it to enable_thinking=false.
-model_reasoning_effort = "none"
+# Hidden thinking is switched off on the SERVER (server_cmd.py adds
+# --reasoning off --reasoning-budget 0), one switch for every wire and model.
+# No per-request reasoning effort here: it silently failed on Muse Glimmer.
 
 # Model metadata so codex stops warning and sizes context correctly.
 model_context_window = 32768
