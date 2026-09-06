@@ -13,10 +13,10 @@
 set -u
 MODEL=Qwen3.8-27B-UD-Q4_K_XL
 GGUF=$HOME/.local/share/localcode/models/$MODEL.gguf
-SRV=$HOME/Desktop/Github/localcode/src/localcode/bin/llama-server
-LC=$HOME/Desktop/Github/localcode/localcodevenv/bin/localcode
-PI=$HOME/Desktop/Github/localcode-pi/agent-ts/dist/localcode-agent
-EXT=$HOME/Desktop/Github/localcode-pi/agent-ts/extensions/localcode-provider.ts
+SRV=${LOCALCODE_ROOT:-$HOME/Desktop/Github/localcode}/src/localcode/bin/llama-server
+LC=${LOCALCODE_ROOT:-$HOME/Desktop/Github/localcode}/localcodevenv/bin/localcode
+PI=${LOCALCODE_PI_ROOT:-$HOME/Desktop/Github/localcode-pi}/agent-ts/dist/localcode-agent
+EXT=${LOCALCODE_PI_ROOT:-$HOME/Desktop/Github/localcode-pi}/agent-ts/extensions/localcode-provider.ts
 PORT=8082; LOG=$PWD/q-server.log; RESULTS=$PWD/results4.tsv
 export LLAMA_BASE_URL=http://127.0.0.1:$PORT
 N=${N:-3}
