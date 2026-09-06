@@ -110,6 +110,33 @@ const launchApp = defineTool({
   },
 });
 
+/**
+ * Commands that start a server and never exit. Run through the bash tool they
+ * hang the whole agent (a real run sat 19 minutes on `npm run dev`). The
+ * model gets a reason pointing at launch_app or an explicit background form.
+ */
+const SERVER_CMD =
+  /\b(npm|pnpm|yarn|bun)\s+(run\s+)?(dev|start|serve|preview)\b|\bvite\b(?!\s+build)|\bnext\s+(dev|start)\b|python3?\s+-m\s+http\.server|\buvicorn\b|\bflask\s+run\b|\bgunicorn\b|\bnodemon\b|\bng\s+serve\b|\bnode\s+\S*server\S*/i;
+const BACKGROUNDED = /&\s*$|\bnohup\b|\bsetsid\b|\bdisown\b|\btimeout\s+\d/;
+/** pi's bash tool has NO default timeout; localcode's shell always had one. */
+export const DEFAULT_BASH_TIMEOUT_S = 600;
+
 export default function (pi: ExtensionAPI) {
   pi.registerTool(launchApp);
+
+  pi.on("tool_call", async (event) => {
+    if (event.toolName !== "bash") return;
+    const input = event.input as Record<string, unknown>;
+    const cmd = String(input.command ?? "");
+    if (SERVER_CMD.test(cmd) && !BACKGROUNDED.test(cmd)) {
+      return {
+        block: true,
+        reason:
+          `That command starts a server that never exits, so the bash tool would hang. ` +
+          `Use the launch_app tool instead: it starts the app in the background, waits for the port ` +
+          `and returns the URL, PID and log path. Or run it as: nohup ${cmd} > app.log 2>&1 &`,
+      };
+    }
+    if (input.timeout === undefined) input.timeout = DEFAULT_BASH_TIMEOUT_S;
+  });
 }
