@@ -9,7 +9,7 @@ if [ -z "$MODEL" ]; then
 # Two-level picker, the localcode way: model first, then quant.
 # Reads MODELS_DIR; sets MODEL. Pure bash, no deps.
 
-  PY_BIN="${LOCALCODE_PY:-$HOME/Desktop/Github/localcode/localcodevenv/bin/python}"
+  PY_BIN="${LOCALCODE_PY:-$HERE/../localcodevenv/bin/python}"
   [ -x "$PY_BIN" ] || PY_BIN=python3
   HERE_PICKER="$(cd "$(dirname "$0")" && pwd)/model_picker_cli.py"
   MODEL="$($PY_BIN "$HERE_PICKER")" || exit $?
@@ -24,7 +24,7 @@ PORT=""; CTRL=""
 for p in $(seq 8123 8199); do curl -sf "http://127.0.0.1:$p/health" >/dev/null 2>&1 || { PORT=$p; break; }; done
 for p in $(seq 8323 8399); do curl -sf "http://127.0.0.1:$p/status" >/dev/null 2>&1 || { CTRL=$p; break; }; done
 mkdir -p "$HERE/.run"
-PY_BIN="${LOCALCODE_PY:-$HOME/Desktop/Github/localcode/localcodevenv/bin/python}"
+PY_BIN="${LOCALCODE_PY:-$HERE/../localcodevenv/bin/python}"
 [ -x "$PY_BIN" ] || PY_BIN=python3
 # The supervisor owns llama-server and serves the in-TUI /model picker
 # (catalog, quants, download, switch) on a localhost control port. The
