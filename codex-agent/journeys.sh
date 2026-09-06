@@ -16,8 +16,9 @@ ok(){ PASS=$((PASS+1)); say "$1" "PASS"; }
 no(){ FAIL=$((FAIL+1)); say "$1" "FAIL — $2"; }
 
 pkill -f "port $PORT" 2>/dev/null; sleep 1; mkdir -p "$HERE/.run"
-"$SERVER" --host 127.0.0.1 --port $PORT --jinja -ngl 999 -c 32768 \
-  --alias "$MODEL" --model "$MODELS_DIR/$MODEL.gguf" > "$HERE/.run/journeys-server.log" 2>&1 &
+PY_BIN="${LOCALCODE_PY:-$HERE/../localcodevenv/bin/python}"; [ -x "$PY_BIN" ] || PY_BIN=python3
+SRVCMD=(); while IFS= read -r a; do SRVCMD+=("$a"); done < <("$PY_BIN" "$HERE/server_cmd.py" "$MODELS_DIR/$MODEL.gguf" $PORT "$MODEL"); SRVCMD[0]="$SERVER"  # bash 3.2: no mapfile
+"${SRVCMD[@]}" > "$HERE/.run/journeys-server.log" 2>&1 &
 SRV=$!; trap 'kill $SRV 2>/dev/null || true' EXIT
 for i in $(seq 1 240); do curl -sf "http://127.0.0.1:$PORT/health" >/dev/null && break; sleep 1; done
 
