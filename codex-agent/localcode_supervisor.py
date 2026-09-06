@@ -69,8 +69,12 @@ class Supervisor:
     def start(self, alias: str, wait_s: int = 240) -> bool:
         gguf = self.models_dir / f"{alias}.gguf"
         self.stop()
-        cmd = [self.server_bin, "--host", "127.0.0.1", "--port", str(self.port), "--jinja",
-               "-ngl", "999", "-c", str(self.ctx), "--alias", alias, "--model", str(gguf)]
+        # localcode's own per-machine server command (RAM-tier context, KV
+        # compression, flash-attn, checkpoints) — nothing hardcoded here.
+        from server_cmd import server_command
+        cmd = server_command(str(gguf), self.port, alias)
+        cmd[0] = self.server_bin
+        self.ctx = int(cmd[cmd.index("--ctx-size") + 1])
         self.log.write(f"\n=== {time.ctime()} {' '.join(cmd)}\n".encode())
         self.proc = subprocess.Popen(cmd, stdout=self.log, stderr=subprocess.STDOUT,
                                      start_new_session=True)
@@ -234,7 +238,7 @@ def make_handler(sup: Supervisor):
                 key = parse_qs(u.query).get("group", [""])[0]
                 return self._json(sup.quants(key))
             if u.path == "/status":
-                return self._json(dict(sup.state, current=sup.current, port=sup.port))
+                return self._json(dict(sup.state, current=sup.current, port=sup.port, ctx=sup.ctx))
             self._json({"error": "not found"}, 404)
 
         def do_POST(self):
@@ -260,11 +264,10 @@ def main() -> int:
     ap.add_argument("--server", required=True)
     ap.add_argument("--models-dir", default=os.environ.get(
         "LOCALCODE_MODELS_DIR", str(Path.home() / ".local/share/localcode/models")))
-    ap.add_argument("--ctx", type=int, default=32768)
     a = ap.parse_args()
 
     (HERE / ".run").mkdir(exist_ok=True)
-    sup = Supervisor(a.server, a.port, Path(a.models_dir), a.ctx)
+    sup = Supervisor(a.server, a.port, Path(a.models_dir), 0)
     httpd = ThreadingHTTPServer(("127.0.0.1", a.control_port), make_handler(sup))
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
 

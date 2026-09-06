@@ -35,6 +35,9 @@ SRV=$!; trap 'kill $SRV 2>/dev/null || true' EXIT
 for i in $(seq 1 240); do curl -sf "http://127.0.0.1:$PORT/health" >/dev/null && break; kill -0 $SRV 2>/dev/null || { echo "model failed to load (see $HERE/.run/server.log)"; exit 1; }; sleep 1; done
 
 CH="$HERE/.run/codex-home"; mkdir -p "$CH"
-sed "s|http://127.0.0.1:8123|http://127.0.0.1:$PORT|; s|^model = .*|model = \"$MODEL\"|" \
+# Context window comes from the supervisor, which computed it for THIS machine
+# (RAM tier + KV compression) — never a hardcoded number.
+CTX=$(curl -s "http://127.0.0.1:$CTRL/status" | sed -n 's/.*"ctx": \([0-9]*\).*/\1/p'); CTX="${CTX:-32768}"
+sed "s|http://127.0.0.1:8123|http://127.0.0.1:$PORT|; s|^model = .*|model = \"$MODEL\"|; s|^model_context_window = .*|model_context_window = $CTX|" \
   "$HERE/config.toml" > "$CH/config.toml"
 CODEX_HOME="$CH" LOCALCODE_API_KEY=local LOCALCODE_CONTROL_URL="http://127.0.0.1:$CTRL" exec "$CODEX_BIN" "$@"
