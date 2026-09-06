@@ -5,9 +5,9 @@
 # objective acceptance script the agent never sees.
 set -u
 MODEL=Qwen3.8-27B-UD-Q4_K_XL
-LC=$HOME/Desktop/Github/localcode/localcodevenv/bin/localcode
-PI=$HOME/Desktop/Github/localcode-pi/agent-ts/dist/localcode-agent
-EXT=$HOME/Desktop/Github/localcode-pi/agent-ts/extensions/localcode-provider.ts
+LC=${LOCALCODE_ROOT:-$HOME/Desktop/Github/localcode}/localcodevenv/bin/localcode
+PI=${LOCALCODE_PI_ROOT:-$HOME/Desktop/Github/localcode-pi}/agent-ts/dist/localcode-agent
+EXT=${LOCALCODE_PI_ROOT:-$HOME/Desktop/Github/localcode-pi}/agent-ts/extensions/localcode-provider.ts
 PORT=8082; LOG=$PWD/q-server.log; RESULTS=$PWD/results-build.tsv
 export LLAMA_BASE_URL=http://127.0.0.1:$PORT
 N=${N:-3}
