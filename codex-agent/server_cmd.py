@@ -7,6 +7,7 @@ flash-attn, batch sizes, checkpoints. Nothing hardcoded in the front ends.
     server_cmd.py --ctx <gguf>             -> just the context size
 """
 from __future__ import annotations
+import os
 import sys
 from pathlib import Path
 
@@ -22,6 +23,13 @@ def server_command(gguf: str, port: int, alias: str | None = None) -> list[str]:
     cmd[1:1] = ["--host", "127.0.0.1"]
     if alias:
         cmd += ["--alias", alias]
+    # Hidden thinking is a SERVER property, one switch for every front end and
+    # every model. Per-wire hacks (chat_template_kwargs, reasoning effort
+    # "none", --chat-template-kwargs) silently failed on Muse Glimmer; the
+    # server flags worked on every wire. localcode's default is off.
+    mode = os.environ.get("LOCALCODE_INTERNAL_THINKING_MODE") or cfg.runtime.internal_thinking_mode or "off"
+    if str(mode).strip().lower() != "on":
+        cmd += ["--reasoning", "off", "--reasoning-budget", "0"]
     return cmd
 
 
