@@ -11,7 +11,7 @@ if [ -z "" ]; then
 # Two-level picker, the localcode way: model first, then quant.
 # Reads MODELS_DIR; sets MODEL. Pure bash, no deps.
 
-  PY_BIN="${LOCALCODE_PY:-$HOME/Desktop/Github/localcode/localcodevenv/bin/python}"
+  PY_BIN="${LOCALCODE_PY:-$HERE/../localcodevenv/bin/python}"
   [ -x "$PY_BIN" ] || PY_BIN=python3
   HERE_PICKER="$(cd "$(dirname "$0")" && pwd)/model_picker_cli.py"
   MODEL="$($PY_BIN "$HERE_PICKER")" || exit $?
