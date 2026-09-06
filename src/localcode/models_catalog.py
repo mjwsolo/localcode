@@ -297,7 +297,7 @@ CHOICES: list[ModelChoice] = [
             "Apache 2.0. GGUF Q4_K_M is ~15.7 GiB, so treat as a 32 GB+ unified-memory pick until "
             "this stack has measured load/runtime behavior. No LocalCode HumanEval number yet."
         ),
-        reasoning_control="none",
+        reasoning_control="chat_template",
         reasoning_budget_tokens=0,
     ),
     ModelChoice(
