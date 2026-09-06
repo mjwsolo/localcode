@@ -77,14 +77,34 @@ DONE and verified in tmux on real models (gemma 12B ⇄ Qwen 3.8 27B):
    now last; launcher tested `-z ""` so the pre-launch picker always showed.
 
 STILL TODO — codex:
-- (done) picker level 2 default row + status line fixed and re-verified on the final binary.
+- Loop breaker: with the plan gate on, a gemma run spent 70 iterations on ONE
+  TypeScript error (importExport.ts) until the 90-min cap. Port localcode's
+  identical-failing-call hard-stop nudge / investigation-spin detector into
+  the fork's turn loop next to the plan gate (core/src/session/turn.rs).
 - 35 leftover "Codex" strings (multi-line literals, ext/ crates, skill samples).
 - `/app` (Desktop app) command still exists; description now says unavailable.
 - Upstream tracking loop (PINNED sha + weekly rebase) still missing.
 - Enter under tmux: number keys select immediately in codex list popups; an
   Enter sent afterwards accepts the NEXT view's highlighted row.
 
+DONE 2026-09-06 (benchmark-driven, see localcode/dev/anki-benchmark-2026-09-06.md):
+- Per-machine server command in all three launchers (server_cmd.py →
+  localcode's llama_server_command): 131k ctx + q8_0 KV on this Mac, was a
+  hardcoded 32k with no KV compression.
+- codex fork 567f1309: plan-then-execute + open-todo completion gate ported
+  from localcode agent/loop.py; compaction keeps requirements + plan verbatim.
+  Profile enables [tools.update_plan] (codex ships it OFF) and disables
+  view_image (llama-server /v1/responses rejects image tool outputs, HTTP 400).
+- Sandbox network on (npm install failed ENOTFOUND headless).
+- pi e03967e: bash guard blocks foreground dev servers (19-min hang) and adds
+  a 600 s default timeout; approval prompts removed (fc93b60).
+
 ## TODO — pi branch (`agent-ts/`)
+
+0. Port localcode's todo_write + open-todo gate as a pi extension
+   (`localcode-todo.ts`): register the tool, add the plan-first rule to the
+   system prompt, inject open todos each turn, re-prompt on early stop. pi has
+   no plan state at all today; on the Anki task it stopped with a broken build.
 
 1. `pi-bump.yml` has never run in CI (workflow_dispatch needs default branch).
    First run happens at merge; steps pass locally via `npm test`.
