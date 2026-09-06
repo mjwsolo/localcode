@@ -34,3 +34,18 @@ name = "localcode"
 base_url = "http://127.0.0.1:8123/v1"
 wire_api = "responses"
 env_key = "LOCALCODE_API_KEY"
+
+# localcode planning discipline. codex ships update_plan DISABLED unless this
+# table is present: without it the tool is not offered and the planning
+# guidance is stripped from the system prompt (it made zero plan calls in a
+# 110-request run). With it, the fork's open-todo gate refuses to end a turn
+# while plan items are still open — the way localcode's own loop works.
+[tools.update_plan]
+enabled = true
+
+# view_image returns the picture as an image tool output. llama-server's
+# /v1/responses rejects that ("Output of tool call should be 'Input text'",
+# HTTP 400) and the whole turn dies — a 58-minute Qwen run ended that way
+# right after generating its PWA icons. Off until the server accepts it.
+[features]
+view_image = false
