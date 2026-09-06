@@ -614,20 +614,35 @@ def test_chat_log_output_is_selectable_and_copies_live():
 
 def test_thinking_command_disabled_for_non_reasoning_model_live():
     """BUG 4 regression: /thinking is greyed-out + non-selectable + a no-op
-    on models without a hidden-reasoning channel (diffusion), and fully works
-    on a reasoning model."""
+    on models without a hidden-reasoning channel, and fully works on a
+    reasoning model.
+
+    Every shipped catalog model measured on 2026-09-06 (dev/thinking_matrix.py)
+    HAS a reasoning channel — DiffusionGemma included — so the non-reasoning
+    case uses a synthetic catalog entry with reasoning_control="none"."""
 
     async def scenario():
+        import dataclasses
+        from unittest.mock import patch
+        from localcode import models_catalog
         from localcode.models_catalog import by_key, current
 
+        fake = dataclasses.replace(
+            by_key("diffusiongemma"),
+            key="fake-nonreasoning",
+            name="Fake non-reasoning",
+            filename="fake-nonreasoning.gguf",
+            reasoning_control="none",
+        )
         app = _new_app()
-        async with app.run_test(size=(80, 40)) as pilot:
+        with patch.object(models_catalog, "CHOICES", [*models_catalog.CHOICES, fake]):
+          async with app.run_test(size=(80, 40)) as pilot:
             await pilot.pause()
             scr = app.screen
 
-            # Diffusion model → no thinking channel.
-            app.config.runtime.model = by_key("diffusiongemma").filename
-            assert current(app.config).key == "diffusiongemma"
+            # Non-reasoning model → no thinking channel.
+            app.config.runtime.model = fake.filename
+            assert current(app.config).key == "fake-nonreasoning"
             assert scr._model_supports_thinking() is False
             assert scr._slash_cmd_disabled("/thinking") is True
             assert scr._slash_cmd_disabled("/model") is False

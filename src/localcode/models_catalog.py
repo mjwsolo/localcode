@@ -85,6 +85,15 @@ class ModelChoice:
     # while emitting <unused17> garbage instead of text. An exact size catches
     # that for free; sha256 above catches a same-size swap.
     size_bytes: int | None = None
+    # How hidden reasoning is controlled for this model. ONE switch, applied by
+    # the server command (server_cmd / runtime), never by per-wire request hints:
+    #   "server"        llama-server --reasoning off --reasoning-budget 0 silences it
+    #                   (gemma 4, Qwen 3.x: verified 4 tokens, empty reasoning channel)
+    #   "always"        the model always reasons and ships no off switch (Muse
+    #                   Glimmer: only "Reasoning strength: low|medium|high|xhigh" in the
+    #                   system prompt; Meta recommends high/xhigh for agentic work)
+    #   "none"          no reasoning channel at all (diffusion)
+    #   "chat_template" legacy name for "server" (kept for old configs)
     reasoning_control: str = "chat_template"
     reasoning_budget_tokens: int = 8192
     preserves_reasoning: bool = True
@@ -288,7 +297,7 @@ CHOICES: list[ModelChoice] = [
             "Apache 2.0. GGUF Q4_K_M is ~15.7 GiB, so treat as a 32 GB+ unified-memory pick until "
             "this stack has measured load/runtime behavior. No LocalCode HumanEval number yet."
         ),
-        reasoning_control="none",
+        reasoning_control="chat_template",
         reasoning_budget_tokens=0,
     ),
     ModelChoice(
@@ -338,6 +347,7 @@ CHOICES: list[ModelChoice] = [
         mmproj_filename="mmproj-Muse-Glimmer-30B-BF16.gguf",
         mmproj_size_gb=3.85,
         mmproj_hf_filename="mmproj-Muse-Glimmer-30B-BF16.gguf",
+        reasoning_control="always",
         reasoning_budget_tokens=0,
     ),
     ModelChoice(
@@ -763,6 +773,10 @@ def choice_for_quant(group: ModelGroup, filename: str, size_gb: float) -> ModelC
     filename + size come from the (live-fetched) repo listing.
     """
     label = _quant_label(filename)
+    # Reasoning policy is a property of the MODEL, not the quant: copy it from
+    # the group's canonical catalog entry so a browsed quant of Muse Glimmer is
+    # still "always" and a browsed Qwen quant is still "server".
+    canonical = next((c for c in CHOICES if c.hf_repo == group.hf_repo), None)
     return ModelChoice(
         key=f"{group.key}:{label}",
         name=f"{group.display_name} ({label})",
@@ -777,6 +791,9 @@ def choice_for_quant(group: ModelGroup, filename: str, size_gb: float) -> ModelC
         mmproj_filename=group.mmproj_filename,
         mmproj_size_gb=group.mmproj_size_gb,
         mmproj_hf_filename=group.mmproj_hf_filename,
+        reasoning_control=canonical.reasoning_control if canonical else "chat_template",
+        reasoning_budget_tokens=canonical.reasoning_budget_tokens if canonical else 8192,
+        preserves_reasoning=canonical.preserves_reasoning if canonical else True,
     )
 
 
