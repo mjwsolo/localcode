@@ -43,7 +43,7 @@ if [ "$ALL" = 1 ]; then
   echo
   cd "$PROJECT"
   LLAMA_BASE_URL="http://127.0.0.1:$PORT" \
-    exec "$HERE/dist/localcode-agent" -a -e "$HERE/extensions/localcode.ts" -e "$HERE/extensions/localcode-brand.ts" -e "$HERE/extensions/localcode-safety.ts" -e "$HERE/extensions/localcode-web.ts" -e "$HERE/extensions/localcode-app.ts" -e "$HERE/extensions/localcode-redact.ts" -e "$HERE/extensions/localcode-nav.ts" \
+    exec "$HERE/dist/localcode-agent" -a -e "$HERE/extensions/localcode.ts" -e "$HERE/extensions/localcode-brand.ts" -e "$HERE/extensions/localcode-safety.ts" -e "$HERE/extensions/localcode-web.ts" -e "$HERE/extensions/localcode-app.ts" -e "$HERE/extensions/localcode-redact.ts" -e "$HERE/extensions/localcode-nav.ts" -e "$HERE/extensions/localcode-todo.ts" \
     --provider localcode --model "$MODEL" $( ls "$MODELS_DIR"/*.gguf >/dev/null 2>&1 && echo --models "localcode/*" )
 fi
 
@@ -64,5 +64,5 @@ echo
 
 cd "$PROJECT"
 LLAMA_BASE_URL="http://127.0.0.1:$PORT" \
-  "$HERE/dist/localcode-agent" -a -e "$HERE/extensions/localcode.ts" -e "$HERE/extensions/localcode-brand.ts" -e "$HERE/extensions/localcode-safety.ts" -e "$HERE/extensions/localcode-web.ts" -e "$HERE/extensions/localcode-app.ts" -e "$HERE/extensions/localcode-redact.ts" -e "$HERE/extensions/localcode-nav.ts" \
+  "$HERE/dist/localcode-agent" -a -e "$HERE/extensions/localcode.ts" -e "$HERE/extensions/localcode-brand.ts" -e "$HERE/extensions/localcode-safety.ts" -e "$HERE/extensions/localcode-web.ts" -e "$HERE/extensions/localcode-app.ts" -e "$HERE/extensions/localcode-redact.ts" -e "$HERE/extensions/localcode-nav.ts" -e "$HERE/extensions/localcode-todo.ts" \
   --provider localcode --model "$MODEL" $( ls "$MODELS_DIR"/*.gguf >/dev/null 2>&1 && echo --models "localcode/*" )
