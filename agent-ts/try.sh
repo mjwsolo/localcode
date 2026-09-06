@@ -28,8 +28,11 @@ GGUF="$MODELS_DIR/$MODEL.gguf"
 [ -x "$HERE/dist/localcode-agent" ] || { echo "Not built yet. Run: npm install && ./scripts/build.sh"; exit 1; }
 if [ "$ALL" = 1 ]; then
   echo "starting llama-server in ROUTER mode on :$PORT (all models in $MODELS_DIR)"
-  "$SERVER" --models-dir "$MODELS_DIR" --no-models-autoload --jinja \
-    --host 127.0.0.1 --port "$PORT" -ngl 999 -c 32768 > "$HERE/.run/try.log" 2>&1 &
+  PY_BIN="${LOCALCODE_PY:-$HERE/../localcodevenv/bin/python}"; [ -x "$PY_BIN" ] || PY_BIN=python3
+  CTX=$("$PY_BIN" "$HERE/scripts/server_cmd.py" --ctx "$MODELS_DIR/$MODEL.gguf" 2>/dev/null || echo 32768)
+  "$SERVER" --models-dir "$MODELS_DIR" --no-models-autoload --jinja --flash-attn on \
+    --cache-type-k q8_0 --cache-type-v q8_0 \
+    --host 127.0.0.1 --port "$PORT" -ngl 999 -c "$CTX" > "$HERE/.run/try.log" 2>&1 &
   SRV=$!
   trap 'kill $SRV 2>/dev/null || true' EXIT
   for i in $(seq 1 240); do curl -sf "http://127.0.0.1:$PORT/health" >/dev/null && break; sleep 1; done
@@ -47,8 +50,11 @@ fi
 [ -f "$GGUF" ] || { echo "No such model: $GGUF"; echo; echo "Available:"; ls "$MODELS_DIR" | grep '\.gguf$' | grep -v '^mmproj' | sed 's/\.gguf$//;s/^/  /'; exit 1; }
 
 echo "starting llama-server on :$PORT with $MODEL ..."
-"$SERVER" --host 127.0.0.1 --port "$PORT" --jinja -ngl 999 -c 32768 \
-  --alias "$MODEL" --model "$GGUF" > "$HERE/.run/try.log" 2>&1 &
+# localcode's own per-machine server command (RAM-tier context, KV compression,
+# flash-attn, checkpoints) — never a hardcoded context size.
+PY_BIN="${LOCALCODE_PY:-$HERE/../localcodevenv/bin/python}"; [ -x "$PY_BIN" ] || PY_BIN=python3
+SRVCMD=(); while IFS= read -r a; do SRVCMD+=("$a"); done < <("$PY_BIN" "$HERE/scripts/server_cmd.py" "$GGUF" "$PORT" "$MODEL"); SRVCMD[0]="$SERVER"
+"${SRVCMD[@]}" > "$HERE/.run/try.log" 2>&1 &
 SRV=$!
 trap 'kill $SRV 2>/dev/null || true' EXIT
 for i in $(seq 1 240); do curl -sf "http://127.0.0.1:$PORT/health" >/dev/null && break; sleep 1; done

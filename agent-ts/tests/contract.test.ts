@@ -90,6 +90,28 @@ describe("localcode-redact.ts", () => {
   });
 });
 
+describe("localcode-app.ts bash guard (servers never hang the agent)", () => {
+  it("blocks foreground dev servers, allows backgrounded ones, adds a default timeout", async () => {
+    const m = mockPi();
+    (await import("../extensions/localcode-app.ts")).default(m.api);
+    const h = m.handlers.get("tool_call")![0];
+    for (const command of ["npm run dev", "npm install && npm start", "npx vite --port 5173", "python3 -m http.server 8000"]) {
+      const res = await h({ toolName: "bash", input: { command } }, {});
+      expect(res?.block, command).toBe(true);
+      expect(String(res?.reason)).toContain("launch_app");
+    }
+    for (const command of ["npm run build", "nohup npm run dev > app.log 2>&1 &", "npm test", "ls -la"]) {
+      const input: Record<string, unknown> = { command };
+      const res = await h({ toolName: "bash", input }, {});
+      expect(res?.block, command).not.toBe(true);
+      expect(input.timeout).toBe(600);
+    }
+    const kept: Record<string, unknown> = { command: "sleep 1", timeout: 5 };
+    await h({ toolName: "bash", input: kept }, {});
+    expect(kept.timeout).toBe(5);
+  });
+});
+
 describe("web + app tools", () => {
   it("register web_search, web_fetch and launch_app", async () => {
     const m = mockPi();
