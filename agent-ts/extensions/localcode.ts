@@ -301,11 +301,9 @@ export default async function (pi: ExtensionAPI) {
   // Register at startup so --list-models and --model work before any session.
   await syncProvider(pi);
 
-  // thinking off, exactly as localcode's runtime does it
-  pi.on("before_provider_request", (event) => ({
-    ...(event.payload as Record<string, unknown>),
-    chat_template_kwargs: { enable_thinking: false },
-  }));
+  // Hidden thinking is switched off on the SERVER (scripts/server_cmd.py adds
+  // --reasoning off --reasoning-budget 0). No per-request template kwargs: they
+  // silently failed on Muse Glimmer while the server switch worked everywhere.
 
   // In router mode the server serves only loaded models, so selecting one from
   // any picker (ours or the built-in /model) must load it first.
