@@ -52,7 +52,7 @@ describe("localcode.ts (provider + picker + first-run)", () => {
     const py = process.env.LOCALCODE_PY ?? `${process.env.HOME}/Desktop/Github/localcode/localcodevenv/bin/python`;
     const { readdirSync } = await import("node:fs");
     const dir = `${process.env.HOME}/.local/share/localcode/models`;
-    const gguf = (() => { try { return readdirSync(dir).find((f) => f.endsWith(".gguf") && !f.startsWith("mmproj")); } catch { return undefined; } })();
+    const gguf = (() => { try { return readdirSync(dir).find((f) => f.endsWith(".gguf") && /^(gemma|Qwen)/.test(f)); } catch { return undefined; } })();
     if (!gguf) return; // no local models on this machine: nothing to assert
     const out = execFileSync(py, ["scripts/server_cmd.py", `${dir}/${gguf}`, "8123", "x"], { encoding: "utf8" });
     expect(out).toContain("--reasoning\noff");
@@ -114,6 +114,39 @@ describe("localcode-app.ts bash guard (servers never hang the agent)", () => {
     const kept: Record<string, unknown> = { command: "sleep 1", timeout: 5 };
     await h({ toolName: "bash", input: kept }, {});
     expect(kept.timeout).toBe(5);
+  });
+});
+
+describe("localcode-todo.ts (plan + completion gates, ported from localcode's loop)", () => {
+  it("registers todo_write, injects the planning rule, and hooks agent_end", async () => {
+    const m = mockPi();
+    (await import("../extensions/localcode-todo.ts")).default(m.api);
+    expect(m.tools.has("todo_write")).toBe(true);
+    for (const hook of ["before_agent_start", "tool_call", "agent_end"]) expect(m.handlers.has(hook), hook).toBe(true);
+    const start = m.handlers.get("before_agent_start")![0];
+    const out = start({ prompt: "build me an app", systemPrompt: "BASE" }, {});
+    expect(out.systemPrompt).toContain("BASE");
+    expect(out.systemPrompt).toContain("todo_write FIRST");
+    expect(out.systemPrompt).toContain("no TODOs, stubs, placeholders");
+  });
+  it("pure gates: verify note, stub scan, project check detection", async () => {
+    const { verifyNote, stubLines, projectCheck } = await import("../extensions/localcode-todo.ts");
+    const done = (c: string) => ({ content: c, status: "completed" as const });
+    expect(verifyNote([done("a"), done("b"), done("c")])).toContain("verification step");
+    expect(verifyNote([done("a"), done("b"), done("run the tests")])).toBe("");
+    expect(verifyNote([done("a"), done("b")])).toBe("");
+    const { writeFileSync, mkdtempSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const d = mkdtempSync(join(tmpdir(), "lc-todo-"));
+    writeFileSync(join(d, "a.ts"), "export const x = 1; // TODO: implement for real\n");
+    writeFileSync(join(d, "b.ts"), "export const y = 2;\n");
+    const hits = stubLines([join(d, "a.ts"), join(d, "b.ts")]);
+    expect(hits.length).toBe(1);
+    expect(hits[0]).toContain("a.ts");
+    expect(projectCheck(d)).toBe(null);
+    writeFileSync(join(d, "package.json"), JSON.stringify({ scripts: { build: "vite build" } }));
+    expect(projectCheck(d)).toBe(null); // no node_modules yet: nothing runnable
   });
 });
 
