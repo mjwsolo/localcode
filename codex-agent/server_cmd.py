@@ -27,8 +27,20 @@ def server_command(gguf: str, port: int, alias: str | None = None) -> list[str]:
     # every model. Per-wire hacks (chat_template_kwargs, reasoning effort
     # "none", --chat-template-kwargs) silently failed on Muse Glimmer; the
     # server flags worked on every wire. localcode's default is off.
+    # Per-model policy from the catalog (models_catalog.ModelChoice.reasoning_control):
+    #   "server" / "chat_template" -> the flags below silence it (gemma 4, Qwen 3.x)
+    #   "always"                    -> no off switch exists (Muse Glimmer); don't send flags
+    #   "none"                      -> no reasoning channel at all
+    control = "server"
+    try:
+        from localcode.models_catalog import by_filename
+        choice = by_filename(Path(gguf).name)
+        if choice is not None:
+            control = choice.reasoning_control or "server"
+    except Exception:  # noqa: BLE001
+        pass
     mode = os.environ.get("LOCALCODE_INTERNAL_THINKING_MODE") or cfg.runtime.internal_thinking_mode or "off"
-    if str(mode).strip().lower() != "on":
+    if control in ("server", "chat_template") and str(mode).strip().lower() != "on":
         cmd += ["--reasoning", "off", "--reasoning-budget", "0"]
     return cmd
 
