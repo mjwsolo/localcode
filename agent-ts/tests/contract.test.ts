@@ -40,18 +40,23 @@ describe("localcode.ts (provider + picker + first-run)", () => {
     await mod.default(m.api);
     expect(m.providers.has("localcode")).toBe(true);
     expect(m.commands.has("model")).toBe(true);
-    for (const hook of ["before_provider_request", "model_select", "session_start"]) {
+    for (const hook of ["model_select", "session_start"]) {
       expect(m.handlers.has(hook), `hook ${hook}`).toBe(true);
     }
+    // thinking is a SERVER switch now (scripts/server_cmd.py); no per-request hook
+    expect(m.handlers.has("before_provider_request")).toBe(false);
   });
 
-  it("disables the thinking channel on every provider request", async () => {
-    const m = mockPi();
-    const mod = await import("../extensions/localcode.ts");
-    await mod.default(m.api);
-    const h = m.handlers.get("before_provider_request")![0];
-    const out = h({ payload: { model: "x" } }, {});
-    expect(out.chat_template_kwargs).toEqual({ enable_thinking: false });
+  it("server command switches hidden thinking off for every wire and model", async () => {
+    const { execFileSync } = await import("node:child_process");
+    const py = process.env.LOCALCODE_PY ?? `${process.env.HOME}/Desktop/Github/localcode/localcodevenv/bin/python`;
+    const { readdirSync } = await import("node:fs");
+    const dir = `${process.env.HOME}/.local/share/localcode/models`;
+    const gguf = (() => { try { return readdirSync(dir).find((f) => f.endsWith(".gguf") && !f.startsWith("mmproj")); } catch { return undefined; } })();
+    if (!gguf) return; // no local models on this machine: nothing to assert
+    const out = execFileSync(py, ["scripts/server_cmd.py", `${dir}/${gguf}`, "8123", "x"], { encoding: "utf8" });
+    expect(out).toContain("--reasoning\noff");
+    expect(out).toContain("--reasoning-budget\n0");
   });
 });
 
