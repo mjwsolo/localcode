@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Critical user journeys for the opencode front end, against a real local model.
+# Critical user journeys for the opencode-based (localcode fork) front end, against a real local model.
 # Same contract as codex-agent/journeys.sh.
 set -u
 export PATH="$HOME/.hermes/node/bin:$PATH"
@@ -13,13 +13,16 @@ ok(){ PASS=$((PASS+1)); say "$1" "PASS"; }
 no(){ FAIL=$((FAIL+1)); say "$1" "FAIL — $2"; }
 
 pkill -f "port $PORT" 2>/dev/null; sleep 1; mkdir -p "$HERE/.run"
-"$SERVER" --host 127.0.0.1 --port $PORT --jinja -ngl 999 -c 32768 \
-  --alias "$MODEL" --model "$MODELS_DIR/$MODEL.gguf" --chat-template-kwargs '{"enable_thinking":false}' > "$HERE/.run/journeys-server.log" 2>&1 &
+PY_BIN="${LOCALCODE_PY:-$HERE/../localcodevenv/bin/python}"; [ -x "$PY_BIN" ] || PY_BIN=python3
+SRVCMD=(); while IFS= read -r a; do SRVCMD+=("$a"); done < <("$PY_BIN" "$HERE/server_cmd.py" "$MODELS_DIR/$MODEL.gguf" $PORT "$MODEL"); SRVCMD[0]="$SERVER"
+"${SRVCMD[@]}" > "$HERE/.run/journeys-server.log" 2>&1 &
 SRV=$!; trap 'kill $SRV 2>/dev/null || true' EXIT
 for i in $(seq 1 240); do curl -sf "http://127.0.0.1:$PORT/health" >/dev/null && break; sleep 1; done
 
-mkw(){ local d; d=$(mktemp -d); sed "s|8123|$PORT|" "$HERE/opencode.json" > "$d/opencode.json"; echo "$d"; }
-run(){ local d=$1; shift; ( cd "$d" && timeout 900 opencode run --pure -m "localcode/$MODEL" "$@" < /dev/null 2>&1 ); }
+BIN="${LOCALCODE_OPENCODE_BIN:-$HERE/.run/localcode-opencode}"; [ -x "$BIN" ] || { echo "fork binary missing at $BIN (see README build section)"; exit 1; }
+# Workspace gets the project-local config the launcher writes (localcode.json) plus the plugin.
+mkw(){ local d; d=$(mktemp -d); sed "s|8123|$PORT|" "$HERE/opencode.json" > "$d/localcode.json"; mkdir -p "$d/.localcode-agent/plugins"; cp "$HERE/plugins/localcode.ts" "$d/.localcode-agent/plugins/"; echo "$d"; }
+run(){ local d=$1; shift; ( cd "$d" && timeout 900 "$BIN" run -m "localcode/$MODEL" "$@" < /dev/null 2>&1 ); }
 
 # J1 ------------------------------------------------------------------------
 W=$(mkw); OUT=$(run "$W" "Say exactly: journey-ok")
