@@ -496,6 +496,7 @@ def run_agent_loop(
     _last_round_signature: tuple[int, str] | None = None
     _same_round_signature_count = 0
     _same_round_synthetic_rejections = 0
+    _MAX_SAME_ROUND_REJECTIONS = 6  # 3 rejections earn a nudge; 6 (3 ignored nudges) end the turn
     _MUTATING_TOOLS = frozenset({
         "write_file",
         "append_file",
@@ -577,6 +578,7 @@ def run_agent_loop(
     # project can't spin forever; each retry RE-RUNS the check so the gate keeps
     # holding until the project is clean or the bound is hit.
     _build_verify_nudges = 0
+    _reverify_runs = 0  # auto re-runs of the model's own last verification command
     _MAX_BUILD_VERIFY_RETRIES = 2
     # The project checker ran but could NOT produce a verdict (timeout, failed to
     # execute, incomplete TypeScript coverage). Turn-level, not round-level: it
@@ -1355,6 +1357,34 @@ def run_agent_loop(
                         ),
                         "tool_call_id": _tc.get("id", ""),
                     })
+                if _same_round_synthetic_rejections >= _MAX_SAME_ROUND_REJECTIONS:
+                    # HARD STOP. Rejecting + nudging is bounded feedback, not a
+                    # loop breaker: observed 2026-09-08 a 27B model re-issued the
+                    # same bash call 26 times in a row, each rejected, each
+                    # followed by the strategy-change nudge, until the 20 min
+                    # task cap. Once the model has ignored several nudges the
+                    # turn has to END with an honest reason, not spin.
+                    _stuck_name = str(((tool_calls[0].get("function") or {}).get("name")) or _primary_round_tool or "tool")
+                    _stuck_args = (tool_calls[0].get("function") or {}).get("arguments") or ""
+                    _stuck_head = (_stuck_args if isinstance(_stuck_args, str) else json.dumps(_stuck_args))[:160]
+                    _stuck_msg = (
+                        "LocalCode stopped this turn: the model kept re-issuing the same "
+                        f"`{_stuck_name}` call after it was rejected {_same_round_synthetic_rejections} "
+                        "times and ignored every request to change approach. The task is "
+                        f"incomplete. Last attempted call: {_stuck_head}"
+                    )
+                    out.print_info("Stopping: the model repeated the same rejected action too many times.")
+                    _render_markdown(_stuck_msg, app.console if hasattr(app, 'console') else None)
+                    full_response.append(_stuck_msg)
+                    try:
+                        from ..events import emit as _emit_stuck
+                        _emit_stuck("loop_break", signal="same_round_rejections_exhausted",
+                                    rejections=_same_round_synthetic_rejections,
+                                    tool_name=_stuck_name, round_idx=round_num)
+                    except Exception:
+                        pass
+                    _loop_exit_reason = "repeat_loop_exhausted"
+                    break
                 if _same_round_synthetic_rejections >= 3:
                     messages.append({
                         "role": "user",
@@ -1699,7 +1729,8 @@ def run_agent_loop(
                     from ..tools.project_check import run_project_check_result
                     out.print_info("Verifying — running the project's typecheck…")
                     _check = run_project_check_result(
-                        str(app.repo_root), ctx_tokens=_ctx_tokens_turn)
+                        str(getattr(app, "check_root", None) or app.repo_root),
+                        ctx_tokens=_ctx_tokens_turn)
                     if _project_check_gate.observe(_check) == "red":
                         _proj_errors = _check.detail
                 except Exception as _check_exc:
@@ -1826,6 +1857,63 @@ def run_agent_loop(
                     kind="edit_verify_advise",
                 ):
                     continue
+            # ── Stale-evidence re-verification ──────────────────────────────
+            # The model DID run a relevant build/test earlier, then edited again
+            # and declared done without re-running it. The registry keys its
+            # evidence on the changed files' hashes, so that record is now stale
+            # and the turn would end as `completion_gate:unverified` (exit 1
+            # under --json) even when the work is right. Observed 3x in one
+            # HarnessBench night on runs the oracle scored 0.93-0.98. Rather than
+            # fail the user for the model's omission, re-run the model's OWN last
+            # verification command ourselves (same guards as a model bash call),
+            # record the fresh verdict, and only then decide. A failure is fed
+            # back and forces one more round; bounded so it cannot spin.
+            if (not _blocking_question
+                    and _goal_state.goal_type in {"build_app", "edit_existing"}
+                    and _changed_code_files(changed_files)
+                    and "relevant-verification" in _hook_state.verification_registry.requirements
+                    and not _hook_state.verification_registry.satisfied("relevant-verification", os.environ)
+                    and _reverify_runs < 2):
+                _reverify_runs += 1
+                _req = _hook_state.verification_registry.requirements["relevant-verification"]
+                _recmd = _req.command if isinstance(_req.command, str) else " ".join(_req.command)
+                out.print_info(f"Re-running your last verification after the final edits: {_recmd[:80]}")
+                try:
+                    _re_obj = _execute_tool_result(app, "bash", {"command": _recmd}, out)
+                    _re_text = str(_re_obj)
+                    _re_facts = dict(getattr(_re_obj, "facts", {}) or {})
+                    from ..execution_policy import assess_shell_execution as _assess_re
+                    _re_ok = bool(getattr(_re_obj, "ok", True))
+                    _re_exec = _assess_re(_recmd, _re_text, int(_re_facts.get("exit_code", 0 if _re_ok else 1)))
+                    from pathlib import Path as _ReP
+                    from ..evidence import EvidenceRequirement as _ReReq
+                    _hook_state.verification_registry.require(_ReReq(
+                        "relevant-verification",
+                        tuple(_ReP(f) if _ReP(f).is_absolute() else _ReP(app.repo_root) / f for f in changed_files),
+                        _recmd, ("PATH", "NODE_ENV", "PYTHONPATH"),
+                    ))
+                    _hook_state.verification_registry.record(
+                        "relevant-verification", environment=os.environ,
+                        passed=_re_exec.task_succeeded, output=_re_text,
+                    )
+                    bash_history.append((_recmd, _re_text))
+                    try:
+                        from ..events import emit as _emit_rv
+                        _emit_rv("auto_reverify", command=_recmd[:200], passed=_re_exec.task_succeeded,
+                                 attempt=_reverify_runs, round_idx=round_num)
+                    except Exception:
+                        pass
+                    if not _re_exec.task_succeeded:
+                        _snippet = _truncate_result(_re_text, "bash", ctx_tokens=_ctx_tokens_turn)
+                        if _append_nudge(
+                            "SYSTEM: Your last verification command was re-run after your final "
+                            f"edits and FAILED:\n$ {_recmd}\n{_snippet}\nFix the failure, re-run it, "
+                            "then finish. Do not claim it works while this fails.",
+                            kind="reverify_failed",
+                        ):
+                            continue
+                except Exception as _re_exc:
+                    out.print_info(f"Re-verification could not run: {type(_re_exc).__name__}")
             if (not _blocking_question
                     and _goal_state.goal_type in {"build_app", "edit_existing"}
                     and changed_files
