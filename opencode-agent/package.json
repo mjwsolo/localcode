@@ -1,0 +1,16 @@
+{
+  "name": "opencode-agent",
+  "version": "1.0.0",
+  "description": "Same shape as `agent-ts` (Pi) and `codex-agent` (Codex): a pinned upstream binary plus a thin localcode layer. The source fork (github.com/mjwsolo/opencode, branch `localcode`) carries the profile.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@opencode-ai/plugin": "^1.18.29",
+    "@opencode-ai/sdk": "^1.18.29"
+  }
+}
