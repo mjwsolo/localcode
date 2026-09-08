@@ -114,6 +114,9 @@ const webFetch = defineTool({
 });
 
 export default function (pi: ExtensionAPI) {
-  pi.registerTool(webSearch);
-  pi.registerTool(webFetch);
+  // LOCALCODE_DISABLE_TOOLS="web_search,web_fetch" — same switch as classic, so a
+  // benchmark can give every frontend an identical tool surface.
+  const disabled = new Set((process.env.LOCALCODE_DISABLE_TOOLS ?? "").split(",").map((t) => t.trim()).filter(Boolean));
+  if (!disabled.has("web_search")) pi.registerTool(webSearch);
+  if (!disabled.has("web_fetch")) pi.registerTool(webFetch);
 }
