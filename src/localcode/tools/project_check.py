@@ -160,6 +160,51 @@ def _load_jsonc(path: str) -> tuple[dict | None, str]:
     return data, ""
 
 
+_PACKAGE_MARKERS = ("package.json", "pyproject.toml", "go.mod", "Cargo.toml", "tsconfig.json")
+
+
+def check_root_for(launch_dir: str | os.PathLike, repo_root: str | os.PathLike) -> str:
+    """The directory the project checker is allowed to scan.
+
+    `repo_root` is the nearest `.git` ancestor and anchors the model's paths;
+    it is NOT the right scope for a typecheck. Observed 2026-09-08: a run
+    launched in a subdirectory of a benchmark clone had ruff sweep the WHOLE
+    clone, the "fix these NOW" nudge quoted findings from an unrelated task's
+    fixtures, and the model edited those files. In a monorepo the same shape
+    means lint noise from every sibling package.
+
+    Scope = the nearest directory at or above `launch_dir` (never above
+    `repo_root`) that carries a package marker; otherwise `launch_dir` itself.
+    Launching at the repo root therefore behaves exactly as before.
+    """
+    launch = os.path.abspath(str(launch_dir))
+    repo = os.path.abspath(str(repo_root))
+    if not launch.startswith(repo):
+        return launch
+    cur = launch
+    while True:
+        if any(os.path.exists(os.path.join(cur, m)) for m in _PACKAGE_MARKERS):
+            return cur
+        if cur == repo or os.path.dirname(cur) == cur:
+            return launch
+        cur = os.path.dirname(cur)
+
+
+def _confine_lines(lines: list[str], root: str) -> list[str]:
+    """Drop diagnostics that name an absolute path outside `root`. Checkers run
+    with cwd=root, so relative paths are inside by construction; an absolute
+    path elsewhere is a sibling package or an unrelated tree the model must not
+    be told to edit."""
+    root = os.path.abspath(root) + os.sep
+    kept = []
+    for l in lines:
+        abs_paths = re.findall(r"(?<![\w./])/[^\s:'\"]+", l)
+        if abs_paths and not any(os.path.abspath(a).startswith(root) or os.path.abspath(a) == root.rstrip(os.sep) for a in abs_paths):
+            continue
+        kept.append(l)
+    return kept
+
+
 def run_project_check(repo_root: str, ctx_tokens: int = 0) -> str | None:
     """Back-compat wrapper: bounded error text when the project is RED, else
     None. New callers should use `run_project_check_result`, which distinguishes
@@ -212,7 +257,7 @@ def run_project_check_result(repo_root: str, ctx_tokens: int = 0) -> CheckOutcom
             # small model's context with a wall of output. The line cap also
             # scales with the window (40 on a small machine → more on a big one).
             max_lines = 40 if not ctx_tokens else max(40, int(ctx_tokens / 4000))
-            lines = [l for l in out.splitlines() if l.strip()][:max_lines]
+            lines = _confine_lines([l for l in out.splitlines() if l.strip()], repo_root)[:max_lines]
             if any("TS6304" in l for l in lines):
                 # "Composite projects may not disable emit" — a toolchain
                 # limitation (older TypeScript), not a defect in the user's code.

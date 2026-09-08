@@ -150,7 +150,12 @@ class LocalCodeApp:
         if should_promote_legacy_default_to_laptop_26b(self.config, machine):
             _, preset = benchmark_report(self.config, self.config.runtime.mode)
             apply_preset(self.config, preset, model=self.config.runtime.model)
-        self.repo_root = find_repo_root(cwd or Path.cwd())
+        self.launch_dir = (cwd or Path.cwd()).resolve()
+        self.repo_root = find_repo_root(self.launch_dir)
+        # Typecheck/lint scope: the package the user launched in, not the whole
+        # git root (see tools.project_check.check_root_for).
+        from .tools.project_check import check_root_for
+        self.check_root = Path(check_root_for(self.launch_dir, self.repo_root))
         # Degenerate case: no .git and no project marker anywhere above the
         # launch dir, and that launch dir is $HOME (or shallower). We can't
         # invent a better root, but we MUST flag it — otherwise the model ends
