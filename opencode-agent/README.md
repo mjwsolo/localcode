@@ -10,8 +10,10 @@ fork binary plus a thin localcode layer. The source fork
   backed by `localcode_supervisor.py` (catalog / quants / download / switch
   on the same port);
 - cloud features removed from the binary: share, autoupdate, account/console,
-  GitHub app, cloud provider login, models.dev fetch, Exa/Parallel web search,
-  npm plugin auto-install;
+  GitHub app, cloud provider login, models.dev fetch, npm plugin auto-install.
+  Web search stays (it is a web tool the user turns on): set
+  `LOCALCODE_ENABLE_EXA=1` (+ `EXA_API_KEY`) or `LOCALCODE_ENABLE_PARALLEL=1`
+  (+ `PARALLEL_API_KEY`) before launching;
 - full debrand: binary `localcode`, config `localcode.json`, project dir
   `.localcode-agent/`, XDG dirs `~/.*/localcode-agent`, `LOCALCODE_*` env vars.
 
