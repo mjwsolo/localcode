@@ -363,7 +363,7 @@ def dispatch_result(name: str, ctx: ToolContext, args: dict) -> ToolResult:
         ):
             try:
                 from .project_check import diagnostics_after_edit
-                _diag = diagnostics_after_edit(str(ctx.repo))
+                _diag = diagnostics_after_edit(str(ctx.check_root))
                 if _diag:
                     result = ToolResult(text=result.text + _diag, ok=result.ok, facts=result.facts)
             except Exception:
