@@ -20,6 +20,8 @@ still lives there because it's cross-tool policy).
 """
 from __future__ import annotations
 
+import os
+
 from typing import Callable
 
 from . import (
@@ -147,6 +149,11 @@ def schemas_for_goal(
         # done/in-progress/remaining across rounds so it stops repeating work.
         "todo_write",
     }
+    # LOCALCODE_DISABLE_TOOLS="web_search,agent" removes tools from the surface for
+    # this process. Exists for controlled comparisons (every frontend must offer
+    # the same tools in a benchmark) and for users who want a tool gone.
+    _disabled = {t.strip() for t in os.environ.get("LOCALCODE_DISABLE_TOOLS", "").split(",") if t.strip()}
+    selected -= _disabled
     schemas = schemas_for_names(selected)
     # MCP tools — any tools exposed by user-configured MCP servers in
     # ~/.localcode/mcp.json. Names are prefixed `mcp_<server>_<tool>`
