@@ -43,6 +43,12 @@ refactor cannot silently break the front end between releases.
 | `localcode-provider.ts` | model discovery + naming | **working** — registers the whole catalog headlessly, no `/login` |
 | `localcode-runtime.ts` | `runtime.py` local-model behavior | Phase 1 |
 | `localcode-safety.ts` | `permissions_v2`, `execution_policy`, `injection_defense` | Phase 2 |
+| `localcode-todo.ts` | plan-first rule, `todo_write`, open-todo / build-verify gates | **working** |
+| `localcode-plateau.ts` | plateau detector: 6 no-progress tool rounds -> one "deliver and finish" steer; 12 -> run aborted with a summary (exit 1 in `-p`); identical failing call rejected on the 3rd repeat; BOUNDED WORK rule | **working** |
+
+Loaded by `try.sh` (dev) and `src/localcode/frontend_agent.py` (wheel) via
+`-e extensions/<file>.ts`; the wheel ships a copy under
+`src/localcode/bin/agent/extensions/`, keep both identical.
 
 Every extension gets a contract test asserting the pi hooks it depends on still
 exist and still fire. That test, not the pin, is what makes weekly bumps safe.
