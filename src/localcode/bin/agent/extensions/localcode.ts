@@ -92,7 +92,7 @@ async function serverModels(reload = false): Promise<{ id: string; status: strin
     const r = await fetch(`${BASE}/models${reload ? "?reload=1" : ""}`, { signal: AbortSignal.timeout(10_000) });
     const d = (await r.json()) as any;
     return (d.data ?? []).map((m: any) => ({
-      id: m.id, status: m.status?.value ?? "unknown",
+      id: m.id, status: m.status?.value ?? "loaded", // no status field = single-model server, already serving
       ctx: m.meta?.n_ctx ?? m.meta?.n_ctx_train ?? null,
       vision: !!m.architecture?.input_modalities?.includes("image"),
     }));
