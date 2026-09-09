@@ -150,6 +150,131 @@ describe("localcode-todo.ts (plan + completion gates, ported from localcode's lo
   });
 });
 
+describe("localcode-plateau.ts (plateau detector + identical-call breaker)", () => {
+  /** Drive the extension with fake tool events. One `round` = a turn that called tools. */
+  async function harness() {
+    const m = mockPi();
+    const sent: string[] = [];
+    m.api.sendUserMessage = (text: string, opts: any) => { sent.push(`${opts?.deliverAs}:${text}`); };
+    (await import("../extensions/localcode-plateau.ts")).default(m.api);
+    const ctx = { cwd: "/proj", hasUI: false, aborted: 0, abort() { this.aborted += 1; }, ui: { notify() {} } } as any;
+    const call = (toolName: string, input: any, id = "c") => Promise.all(m.handlers.get("tool_call")!.map((h) => h({ type: "tool_call", toolCallId: id, toolName, input }, ctx))).then((r) => r[0]);
+    const result = (toolName: string, input: any, isError: boolean, text: string, id = "c") =>
+      Promise.all(m.handlers.get("tool_result")!.map((h) => h({ type: "tool_result", toolCallId: id, toolName, input, content: [{ type: "text", text }], isError }, ctx)));
+    const endRound = (n = 1) => Promise.all(m.handlers.get("turn_end")!.map((h) => h({ type: "turn_end", turnIndex: 0, message: {}, toolResults: new Array(n).fill({}) }, ctx)));
+    const start = (prompt = "build me an app") => m.handlers.get("before_agent_start")![0]({ prompt, systemPrompt: "BASE" }, ctx);
+    let n = 0;
+    /** one round that only reads: never progress */
+    const readRound = async () => { n += 1; await call("read", { path: `src/a.ts` }, `r${n}`); await result("read", { path: "src/a.ts" }, false, `line ${n}`, `r${n}`); await endRound(); };
+    const editRound = async (path: string) => { n += 1; await call("edit", { path, oldText: "a", newText: `b${n}` }, `e${n}`); await result("edit", { path }, false, "ok", `e${n}`); await endRound(); };
+    /** re-edit the already-edited file, then run the check: only a pass-after-fail is progress */
+    const checkRound = async (pass: boolean) => {
+      n += 1; await call("edit", { path: "src/a.ts", oldText: "a", newText: `b${n}` }, `e${n}`); await result("edit", { path: "src/a.ts" }, false, "ok", `e${n}`);
+      const input = { command: "npm test" }; await call("bash", input, `b${n}`); await result("bash", input, !pass, pass ? "12 passed" : "FAIL 1 test", `b${n}`); await endRound(2);
+    };
+    return { m, sent, ctx, call, result, endRound, start, readRound, editRound, checkRound };
+  }
+
+  it("hooks the right events and injects the bounded-work rule (deduplicated against the todo rule)", async () => {
+    const h = await harness();
+    for (const hook of ["before_agent_start", "tool_call", "tool_result", "turn_end"]) expect(h.m.handlers.has(hook), hook).toBe(true);
+    expect(h.start().systemPrompt).toContain("Every deliverable the user named is its own plan item");
+    const both = h.m.handlers.get("before_agent_start")![0]({ prompt: "x", systemPrompt: "BASE ... verification, and it is BOUNDED: ..." }, h.ctx);
+    expect(both.systemPrompt).not.toContain("Every deliverable the user named");
+    expect(both.systemPrompt).toContain("after two attempts");
+  });
+
+  it("nudges ONCE after 6 no-progress rounds, with the deliver-and-finish message", async () => {
+    const { PLATEAU_NUDGE } = await import("../extensions/localcode-plateau.ts");
+    const h = await harness();
+    h.start();
+    await h.editRound("src/a.ts");            // progress
+    for (let i = 0; i < 5; i++) await h.editRound("src/a.ts");   // re-editing the same file: not progress
+    expect(h.sent.length).toBe(0);
+    await h.readRound();                       // 6th no-progress round
+    expect(h.sent.length).toBe(1);
+    expect(h.sent[0]).toBe(`steer:${PLATEAU_NUDGE}`);
+    expect(h.sent[0]).toContain("No new progress for 6 steps");
+    expect(h.sent[0]).toContain("run the project's own check ONCE");
+    await h.readRound();
+    expect(h.sent.length).toBe(1);             // counter was reset, no second nudge yet
+    expect(h.ctx.aborted).toBe(0);
+  });
+
+  it("never nudges when every round writes a new file", async () => {
+    const h = await harness();
+    h.start();
+    for (let i = 0; i < 20; i++) await h.editRound(`src/file${i}.ts`);
+    expect(h.sent.length).toBe(0);
+    expect(h.ctx.aborted).toBe(0);
+  });
+
+  it("a passing check after a failing one is progress and resets the counter; identical failing/passing runs are not", async () => {
+    const h = await harness();
+    h.start();
+    await h.editRound("src/a.ts");
+    for (let i = 0; i < 5; i++) await h.checkRound(false);       // 5 failing runs: no progress
+    expect(h.sent.length).toBe(0);
+    await h.checkRound(true);                                     // pass after fail: progress -> counter 0
+    expect(h.sent.length).toBe(0);
+    for (let i = 0; i < 5; i++) await h.checkRound(true);         // repeated identical passes: not progress
+    expect(h.sent.length).toBe(0);
+    await h.readRound();                                          // 6th no-progress round
+    expect(h.sent.length).toBe(1);
+  });
+
+  it("rejects the 3rd identical call after two failed/empty results; a different call resets", async () => {
+    const { REPEAT_REJECTED } = await import("../extensions/localcode-plateau.ts");
+    const h = await harness();
+    h.start();
+    const q = { query: "some obscure thing" };
+    expect((await h.call("web_search", q, "w1"))?.block).not.toBe(true);
+    await h.result("web_search", q, false, "No results found", "w1");
+    expect((await h.call("web_search", { ...q }, "w2"))?.block).not.toBe(true);
+    await h.result("web_search", q, false, "", "w2");
+    const third = await h.call("web_search", q, "w3");
+    expect(third?.block).toBe(true);
+    expect(third?.reason).toBe(REPEAT_REJECTED);
+    expect((await h.call("web_search", q, "w4"))?.block).toBe(true);   // 4th too
+    // materially different arguments go through
+    expect((await h.call("web_search", { query: "another topic" }, "w5"))?.block).not.toBe(true);
+    // identical SUCCESSFUL calls are never rejected
+    for (let i = 0; i < 4; i++) {
+      expect((await h.call("read", { path: "README.md" }, `p${i}`))?.block).not.toBe(true);
+      await h.result("read", { path: "README.md" }, false, "# hello", `p${i}`);
+    }
+  });
+
+  it("stops the run after 12 no-progress rounds: aborts, blocks further tools, prints a summary", async () => {
+    const h = await harness();
+    h.start();
+    const errs: string[] = [];
+    const orig = process.stderr.write;
+    (process.stderr as any).write = (s: string) => { errs.push(String(s)); return true; };
+    try {
+      await h.editRound("src/a.ts");
+      for (let i = 0; i < 6; i++) await h.readRound();
+      expect(h.sent.length).toBe(1);
+      expect(h.ctx.aborted).toBe(0);
+      for (let i = 0; i < 5; i++) await h.readRound();
+      expect(h.ctx.aborted).toBe(0);
+      await h.readRound();                                        // 12th
+      expect(h.ctx.aborted).toBe(1);
+      expect(h.sent.length).toBe(1);                               // no second nudge
+      const blocked = await h.call("read", { path: "x" }, "after");
+      expect(blocked?.block).toBe(true);
+      expect(blocked?.terminate).toBe(true);
+    } finally { (process.stderr as any).write = orig; }
+    const summary = errs.join("");
+    expect(summary).toContain("no new progress for 12 tool rounds");
+    expect(summary).toContain("src/a.ts");
+    expect(summary).toContain("never run");
+    // a genuine new user turn resets everything
+    h.start("another task");
+    expect((await h.call("read", { path: "x" }, "fresh"))?.block).not.toBe(true);
+  });
+});
+
 describe("web + app tools", () => {
   it("register web_search, web_fetch and launch_app", async () => {
     const m = mockPi();
