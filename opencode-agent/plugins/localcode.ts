@@ -38,7 +38,17 @@ const PLANNING_RULE = `FINISH THE WHOLE TASK (most important):
 - Only stop for one of two reasons: (a) every todo is completed and verified, or (b) you have ONE specific blocking question you cannot answer yourself. The harness sends you back to the next open item if you stop early.
 - Never run a foreground server (npm run dev, vite, http.server) through bash: start it in the background with nohup ... & and a log file, then curl it.`;
 
-const SERVER_CMD = /\b(npm|pnpm|yarn|bun)\s+(run\s+)?(dev|start|serve|preview)\b|\bvite\b(?!\s+build)|\bnext\s+(dev|start)\b|python3?\s+-m\s+http\.server|\buvicorn\b|\bflask\s+run\b|\bgunicorn\b|\bnodemon\b|\bng\s+serve\b/i;
+// A dev server is a PROGRAM being run, so only match in program position (start of
+// command or after ; && || | ( or npx/bunx). Round 5 of the Anki bench died in 2 min
+// because "\bvite\b" matched inside `npm create vite@latest`, `vite-plugin-pwa` and a
+// grep pattern, and the guard kept blocking installs.
+const PROG = String.raw`(?:^|[;&|(]\s*|\b(?:npx|bunx|pnpm\s+exec|yarn\s+exec)\s+)`;
+const SERVER_CMD = new RegExp(
+  PROG + String.raw`(?:(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:dev|start|serve|preview)\b` +
+  String.raw`|vite(?:\s+(?:dev|serve|preview))?(?:\s|$)(?![\s\S]*\bbuild\b)` +
+  String.raw`|next\s+(?:dev|start)\b|python3?\s+-m\s+http\.server|uvicorn\b|flask\s+run\b|gunicorn\b|nodemon\b|ng\s+serve\b)`,
+  "i",
+);
 const BACKGROUNDED = /&\s*$|\bnohup\b|\bsetsid\b|\bdisown\b|\btimeout\s+\d/;
 const STUB_RE = /(?:^|\W)(TODO:?|FIXME|placeholder|stub|not implemented|demo only|demo-only|coming soon)(?:\W|$)/i;
 const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", "target", ".venv", "venv", "__pycache__", ".opencode"]);
