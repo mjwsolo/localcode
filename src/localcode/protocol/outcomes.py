@@ -58,6 +58,7 @@ _EXACT: dict[str, str] = {
     "user_cancel": FailureCategory.AGENT_INCOMPLETE,
     "stream_interrupt": FailureCategory.AGENT_INCOMPLETE,
     "stall_exhausted": FailureCategory.AGENT_INCOMPLETE,
+    "plateau_exhausted": FailureCategory.AGENT_INCOMPLETE,
     "max_rounds": FailureCategory.AGENT_INCOMPLETE,
     "max_output_recovery_exhausted": FailureCategory.CONTEXT_EXHAUSTED,
     "context_exhausted": FailureCategory.CONTEXT_EXHAUSTED,
