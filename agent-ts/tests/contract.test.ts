@@ -172,7 +172,15 @@ describe("localcode-plateau.ts (plateau detector + identical-call breaker)", () 
       n += 1; await call("edit", { path: "src/a.ts", oldText: "a", newText: `b${n}` }, `e${n}`); await result("edit", { path: "src/a.ts" }, false, "ok", `e${n}`);
       const input = { command: "npm test" }; await call("bash", input, `b${n}`); await result("bash", input, !pass, pass ? "12 passed" : "FAIL 1 test", `b${n}`); await endRound(2);
     };
-    return { m, sent, ctx, call, result, endRound, start, readRound, editRound, checkRound };
+    /** re-edit the same file, then run a FAILING check with the given output */
+    const failRound = async (output: string) => {
+      n += 1; await call("edit", { path: "src/a.ts", oldText: "a", newText: `b${n}` }, `e${n}`); await result("edit", { path: "src/a.ts" }, false, "ok", `e${n}`);
+      const input = { command: "python -m pytest" }; await call("bash", input, `b${n}`); await result("bash", input, true, output, `b${n}`); await endRound(2);
+    };
+    const planRound = async (todos: { content: string; status: string }[]) => {
+      n += 1; await call("todo_write", { todos }, `t${n}`); await result("todo_write", { todos }, false, "ok", `t${n}`); await endRound();
+    };
+    return { m, sent, ctx, call, result, endRound, start, readRound, editRound, checkRound, failRound, planRound };
   }
 
   it("hooks the right events and injects the bounded-work rule (deduplicated against the todo rule)", async () => {
@@ -245,7 +253,74 @@ describe("localcode-plateau.ts (plateau detector + identical-call breaker)", () 
     }
   });
 
-  it("stops the run after 12 no-progress rounds: aborts, blocks further tools, prints a summary", async () => {
+  it("a debugging loop whose failure set shrinks or changes each run is progress: never nudged", async () => {
+    const h = await harness();
+    h.start();
+    await h.editRound("src/a.ts");
+    // task 087: same two files re-edited, pytest failures different each run (paths, durations, line numbers vary)
+    const fails = (names: string[], i: number) =>
+      `\x1b[31m${names.map((t) => `FAILED /work/run${i}/tests/test_${t}.py::test_${t} - AssertionError: assert ${i} == ${i + 1}`).join("\n")}\x1b[0m\n${names.length} failed, ${20 - names.length} passed in ${i}.${i}s`;
+    for (let i = 0; i < 6; i++) await h.failRound(fails(["a", "b", "c", "d"].slice(i % 4).concat([`new${i}`]), i));   // a never-seen failure each run
+    for (let i = 0; i < 6; i++) await h.failRound(fails(["x", "y", "z", "w", "v", "u"].slice(i), 100 + i));           // 6,5,4,3,2,1 failures
+    expect(h.sent.length).toBe(0);
+    expect(h.ctx.aborted).toBe(0);
+    // ...and the old failure coming back (already seen this task) is NOT progress
+    for (let i = 0; i < 6; i++) await h.failRound(fails(["u"], 200 + i));
+    expect(h.sent.length).toBe(1);
+  });
+
+  it("a check that fails identically every run is still nudged after 6 rounds", async () => {
+    const h = await harness();
+    h.start();
+    await h.editRound("src/a.ts");
+    // identical failure modulo directory, line number, duration and ANSI colour
+    for (let i = 0; i < 5; i++) await h.failRound(`\x1b[31mFAILED /tmp/w${i}/tests/test_db.py::test_fk - IntegrityError: FOREIGN KEY constraint failed\x1b[0m\n1 failed in 0.${i}s`);
+    expect(h.sent.length).toBe(0);
+    await h.failRound("FAILED tests/test_db.py::test_fk - IntegrityError: FOREIGN KEY constraint failed");
+    expect(h.sent.length).toBe(1);
+  });
+
+  it("the wrap-up steer names the open plan items; generic wording only without a plan", async () => {
+    const { PLATEAU_NUDGE } = await import("../extensions/localcode-plateau.ts");
+    const h = await harness();
+    h.start();
+    await h.planRound([
+      { content: "Scaffold the Flask app", status: "completed" },
+      { content: "Write the FK migration", status: "in_progress" },
+      { content: "Write README.md with setup steps", status: "pending" },
+    ]);
+    for (let i = 0; i < 6; i++) await h.readRound();
+    expect(h.sent.length).toBe(1);
+    expect(h.sent[0]).toContain("Open plan items you must deliver now:");
+    expect(h.sent[0]).toContain("- Write the FK migration");
+    expect(h.sent[0]).toContain("- Write README.md with setup steps");
+    expect(h.sent[0]).not.toContain("Scaffold the Flask app");
+    expect(h.sent[0]).not.toBe(`steer:${PLATEAU_NUDGE}`);
+  });
+
+  it("a check that passed within the last 2 rounds blocks the abort: finish-now steer, then 3 more rounds", async () => {
+    const { FINISH_NUDGE } = await import("../extensions/localcode-plateau.ts");
+    const h = await harness();
+    h.start();
+    await h.editRound("src/a.ts");
+    await h.checkRound(true);                                     // first pass: progress
+    for (let i = 0; i < 6; i++) await h.readRound();              // wrap-up steer
+    expect(h.sent.length).toBe(1);
+    for (let i = 0; i < 7; i++) await h.readRound();              // 7 more: one short of the abort
+    expect(h.ctx.aborted).toBe(0);
+    await h.checkRound(true);                                     // identical pass: not progress, 8th round -> would abort
+    expect(h.ctx.aborted).toBe(0);
+    expect(h.sent.length).toBe(2);
+    expect(h.sent[1]).toBe(`steer:${FINISH_NUDGE}`);
+    expect(h.sent[1]).toContain("Your check passed — finish now");
+    await h.readRound(); await h.readRound();
+    expect(h.ctx.aborted).toBe(0);
+    await h.readRound();                                          // 3rd grace round used up
+    expect(h.ctx.aborted).toBe(1);
+    expect(h.sent.length).toBe(2);
+  });
+
+  it("stops the run after 14 no-progress rounds (6 + 8 after the steer): aborts, blocks further tools, prints a summary", async () => {
     const h = await harness();
     h.start();
     const errs: string[] = [];
@@ -256,9 +331,9 @@ describe("localcode-plateau.ts (plateau detector + identical-call breaker)", () 
       for (let i = 0; i < 6; i++) await h.readRound();
       expect(h.sent.length).toBe(1);
       expect(h.ctx.aborted).toBe(0);
-      for (let i = 0; i < 5; i++) await h.readRound();
+      for (let i = 0; i < 7; i++) await h.readRound();
       expect(h.ctx.aborted).toBe(0);
-      await h.readRound();                                        // 12th
+      await h.readRound();                                        // 14th
       expect(h.ctx.aborted).toBe(1);
       expect(h.sent.length).toBe(1);                               // no second nudge
       const blocked = await h.call("read", { path: "x" }, "after");
@@ -266,7 +341,7 @@ describe("localcode-plateau.ts (plateau detector + identical-call breaker)", () 
       expect(blocked?.terminate).toBe(true);
     } finally { (process.stderr as any).write = orig; }
     const summary = errs.join("");
-    expect(summary).toContain("no new progress for 12 tool rounds");
+    expect(summary).toContain("no new progress for 14 tool rounds");
     expect(summary).toContain("src/a.ts");
     expect(summary).toContain("never run");
     // a genuine new user turn resets everything
