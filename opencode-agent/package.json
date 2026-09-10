@@ -4,7 +4,7 @@
   "description": "Same shape as `agent-ts` (Pi) and `codex-agent` (Codex): a pinned upstream binary plus a thin localcode layer. The source fork (github.com/mjwsolo/opencode, branch `localcode`) carries the profile.",
   "main": "index.js",
   "scripts": {
-    "test": "bun run tests/bash-guard.test.ts"
+    "test": "bun run tests/bash-guard.test.ts && bun test tests/plateau.test.ts"
   },
   "keywords": [],
   "author": "",
