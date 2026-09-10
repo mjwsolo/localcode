@@ -576,13 +576,25 @@ def run_agent_loop(
     # previously changed this turn, (b) turned a failing build/test into a
     # passing one (or produced the first pass), or (c) completed a todo item.
     # Re-edits of already-edited files, reads/greps, identical or failing test
-    # runs and /tmp experiments are NOT progress. 6 no-progress rounds → one
-    # wrap-up nudge; 6 more after that → end the turn honestly. Never fires in
-    # the first PLATEAU_GRACE_ROUNDS rounds. Bookkeeping lives in
-    # agent/plateau.py so this stays a few lines here.
+    # runs and /tmp experiments are NOT progress — but a failing check whose
+    # failure set SHRANK or CHANGED to something unseen this turn is (a real
+    # debugging loop). 6 no-progress rounds → one wrap-up nudge naming the open
+    # todo items; 8 more after that → end the turn honestly, unless a check
+    # passed in the last 2 rounds (then one "finish now" nudge + 3 rounds).
+    # Never fires in the first PLATEAU_GRACE_ROUNDS rounds. Bookkeeping lives
+    # in agent/plateau.py so this stays a few lines here.
     from .plateau import PlateauTracker as _PlateauTracker
     _plateau = _PlateauTracker()
     _round_build_outcomes: list[bool] = []
+    _round_build_outputs: list[str] = []
+
+    def _open_todo_labels() -> list[str]:
+        labels = [
+            str((t or {}).get("content") or "").strip()
+            for t in list(getattr(getattr(app, "session", None), "todos", []) or [])
+            if str((t or {}).get("status", "")).lower() != "completed"
+        ]
+        return [t for t in labels if t]
 
     def _todo_progress_snapshot() -> tuple[int, int]:
         todos = list(getattr(getattr(app, "session", None), "todos", []) or [])
@@ -843,6 +855,7 @@ def run_agent_loop(
         _bash_history_at_round_start = len(bash_history)
         _todos_at_round_start = _todo_progress_snapshot()
         _round_build_outcomes = []
+        _round_build_outputs = []
         round_task_stage = _current_task_stage_for_thinking()
         round_use_thinking = should_use_thinking(
             app.config.runtime.laptop_26b_runtime_mode,
@@ -2265,8 +2278,11 @@ def run_agent_loop(
                 bash_history.append((_bash_cmd, str(tool_result)))
                 from ..execution_policy import assess_shell_execution
                 _execution = assess_shell_execution(_bash_cmd, str(tool_result), int(_tool_facts.get("exit_code", 0 if _tool_succeeded else 1)))
-                if ran_build_or_test([(_bash_cmd, str(tool_result))]):
+                if ran_build_or_test([(_bash_cmd, str(tool_result))]) and not str(tool_result).startswith("REJECTED"):
+                    # A guard's synthetic REJECTED stub is not a check run: it
+                    # must neither reset nor advance the plateau failure history.
                     _round_build_outcomes.append(bool(_execution.task_succeeded))
+                    _round_build_outputs.append(str(tool_result))
                 if not _execution.task_succeeded:
                     app._last_failed_tool_name = tool_name
                 else:
@@ -2643,17 +2659,18 @@ def run_agent_loop(
         elif _round_had_reasoning and not _round_was_readonly:
             _planning_streak += 1
 
-        # ── Plateau detector: nudge at 6 no-progress rounds, stop at 12 ──
+        # ── Plateau detector: nudge at 6 no-progress rounds, stop 8 later ──
         if _is_enabled(Feature.AUTO_NUDGE_RECOVERY):
             _plateau_action = _plateau.observe_round(
                 round_idx=round_num,
                 changed_new_file=_round_changed_new_file,
                 build_outcomes=_round_build_outcomes,
+                build_outputs=_round_build_outputs,
                 todos_before=_todos_at_round_start,
                 todos_after=_todo_progress_snapshot(),
             )
             if _plateau_action == "wrap_up":
-                if _append_nudge(_plateau.wrap_up_nudge(), kind="plateau_wrap_up"):
+                if _append_nudge(_plateau.wrap_up_nudge(_open_todo_labels()), kind="plateau_wrap_up"):
                     out.print_info(
                         f"No new progress for {_plateau.nudge_after} steps — asking the "
                         "model to stop experimenting and finish the deliverables."
@@ -2666,15 +2683,23 @@ def run_agent_loop(
                                       changed_files=len(changed_files))
                     except Exception:
                         pass
+            elif _plateau_action == "finish_now":
+                if _append_nudge(_plateau.finish_now_nudge(), kind="plateau_finish_now"):
+                    out.print_info(
+                        "The model's check passed — asking it to finish now instead of stopping."
+                    )
+                    try:
+                        from ..events import emit as _emit_plateau_finish
+                        _emit_plateau_finish("auto_nudge", signal="plateau_finish_now",
+                                             no_progress_rounds=_plateau.total_no_progress,
+                                             round_idx=round_num,
+                                             changed_files=len(changed_files))
+                    except Exception:
+                        pass
             elif _plateau_action == "exhausted":
-                _open_todo_labels = [
-                    str((t or {}).get("content") or "").strip()
-                    for t in list(getattr(getattr(app, "session", None), "todos", []) or [])
-                    if str((t or {}).get("status", "")).lower() != "completed"
-                ]
                 _plateau_msg = _plateau.exhausted_summary(
                     changed_files=changed_files,
-                    open_todos=[t for t in _open_todo_labels if t],
+                    open_todos=_open_todo_labels(),
                 )
                 out.print_info("Stopping: the model stopped making progress and ignored the wrap-up request.")
                 _render_markdown(_plateau_msg, app.console if hasattr(app, 'console') else None)
