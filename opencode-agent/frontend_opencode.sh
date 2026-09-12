@@ -58,10 +58,16 @@ cat > ./localcode.json <<JSON
     "models": { "$ALIAS": { "name": "$ALIAS_NAME",
       "tool_call": true, "reasoning": false, "temperature": true, "attachment": false,
       "limit": { "context": $CTX, "output": 8192 } } } } },
-  "enabled_providers": ["localcode"],$( [ -n "$MODEL" ] && printf '\n  "model": "localcode/%s",' "$MODEL" )
+  "enabled_providers": ["localcode"],
+  "tools": { "task": false },
+  "lsp": true,$( [ -n "$MODEL" ] && printf '\n  "model": "localcode/%s",' "$MODEL" )
   "share": "disabled", "autoupdate": false }
 JSON
 # localcode's completion discipline (plan gate, build gate, stub audit, bash guard)
 mkdir -p ./.localcode-agent/plugins && cp "$HERE/plugins/localcode.ts" ./.localcode-agent/plugins/localcode.ts
+# Language servers are not bundled: the first file of a language fetches its
+# server (visible in the sidebar as "starting"). LOCALCODE_DISABLE_LSP_DOWNLOAD=1
+# keeps it to servers already on PATH.
+[ -n "${LOCALCODE_DISABLE_LSP_DOWNLOAD:-}" ] && export OPENCODE_DISABLE_LSP_DOWNLOAD=1
 if [ -n "$MODEL" ]; then LOCALCODE_CONTROL_URL="http://127.0.0.1:$CTRL" exec "$BIN" -m "localcode/$MODEL"
 else LOCALCODE_CONTROL_URL="http://127.0.0.1:$CTRL" exec "$BIN"; fi
