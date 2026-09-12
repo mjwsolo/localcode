@@ -18,14 +18,13 @@ PY_BIN="${LOCALCODE_PY:-$HERE/../localcodevenv/bin/python}"; [ -x "$PY_BIN" ] ||
 
 MODEL="${1:-}"; shift 2>/dev/null || true
 PROJECT="${1:-$PWD}"
-if [ -z "$MODEL" ]; then
-  # Two-level picker, the localcode way: model first, then quant.
-  MODEL="$("$PY_BIN" "$HERE/model_picker_cli.py")" || exit $?
-  [ -n "$MODEL" ] || { echo "no model chosen"; exit 1; }
-fi
 SERVER="${LOCALCODE_LLAMA_SERVER:-$HERE/../src/localcode/bin/llama-server}"
-GGUF="$MODELS_DIR/$MODEL.gguf"
-[ -f "$GGUF" ] || { echo "No such model: $GGUF"; ls "$MODELS_DIR" | grep '\.gguf$' | grep -v mmproj | sed 's/\.gguf$//;s/^/  /'; exit 1; }
+# One download journey: with no model argument the TUI opens first and its
+# /models picker (model → quant) downloads and loads the model in-app.
+if [ -n "$MODEL" ]; then
+  GGUF="$MODELS_DIR/$MODEL.gguf"
+  [ -f "$GGUF" ] || { echo "No such model: $GGUF"; ls "$MODELS_DIR" | grep '\.gguf$' | grep -v mmproj | sed 's/\.gguf$//;s/^/  /'; exit 1; }
+fi
 
 PORT=""; CTRL=""
 for p in $(seq 8123 8199); do curl -sf "http://127.0.0.1:$p/health" >/dev/null 2>&1 || { PORT=$p; break; }; done
@@ -37,13 +36,18 @@ mkdir -p "$HERE/.run"
   --server "$SERVER" --models-dir "$MODELS_DIR" > "$HERE/.run/supervisor.log" 2>&1 &
 SUP=$!; trap 'kill $SUP 2>/dev/null || true' EXIT
 for i in $(seq 1 240); do
-  curl -sf "http://127.0.0.1:$PORT/health" >/dev/null && break
+  if [ -n "$MODEL" ]; then curl -sf "http://127.0.0.1:$PORT/health" >/dev/null && break
+  else curl -sf "http://127.0.0.1:$CTRL/status" >/dev/null && break; fi
   kill -0 $SUP 2>/dev/null || { echo "model failed to load (see $HERE/.run/supervisor.log)"; exit 1; }
   sleep 1
 done
 
-# Context window comes from the supervisor, which computed it for THIS machine.
-CTX=$(curl -s "http://127.0.0.1:$CTRL/status" | sed -n 's/.*"ctx": \([0-9]*\).*/\1/p'); CTX="${CTX:-32768}"
+# Context window for THIS machine (RAM tier), from localcode's own server command.
+CTX=$(curl -s "http://127.0.0.1:$CTRL/status" | sed -n 's/.*"ctx": \([0-9]*\).*/\1/p')
+[ -n "$CTX" ] && [ "$CTX" != "0" ] || CTX=$("$PY_BIN" "$HERE/server_cmd.py" --ctx "$MODELS_DIR/x.gguf" 2>/dev/null || echo 32768)
+# With no model yet, a hidden template entry carries the wiring; the picker
+# synthesizes the real alias from it once a model is loaded.
+ALIAS="${MODEL:-__pending__}"; ALIAS_NAME="${MODEL:-no model loaded}"
 cd "$PROJECT"
 # Project-local config. enabled_providers keeps the picker and model list to
 # localcode only; capabilities are explicit so no cloud default leaks in.
@@ -51,12 +55,13 @@ cat > ./localcode.json <<JSON
 { "\$schema": "https://localcode.dev/schema/config.json",
   "provider": { "localcode": { "npm": "@ai-sdk/openai-compatible", "name": "localcode",
     "options": { "baseURL": "http://127.0.0.1:$PORT/v1", "apiKey": "local" },
-    "models": { "$MODEL": { "name": "$MODEL",
+    "models": { "$ALIAS": { "name": "$ALIAS_NAME",
       "tool_call": true, "reasoning": false, "temperature": true, "attachment": false,
       "limit": { "context": $CTX, "output": 8192 } } } } },
-  "enabled_providers": ["localcode"],
-  "model": "localcode/$MODEL", "share": "disabled", "autoupdate": false }
+  "enabled_providers": ["localcode"],$( [ -n "$MODEL" ] && printf '\n  "model": "localcode/%s",' "$MODEL" )
+  "share": "disabled", "autoupdate": false }
 JSON
 # localcode's completion discipline (plan gate, build gate, stub audit, bash guard)
 mkdir -p ./.localcode-agent/plugins && cp "$HERE/plugins/localcode.ts" ./.localcode-agent/plugins/localcode.ts
-LOCALCODE_CONTROL_URL="http://127.0.0.1:$CTRL" exec "$BIN" -m "localcode/$MODEL"
+if [ -n "$MODEL" ]; then LOCALCODE_CONTROL_URL="http://127.0.0.1:$CTRL" exec "$BIN" -m "localcode/$MODEL"
+else LOCALCODE_CONTROL_URL="http://127.0.0.1:$CTRL" exec "$BIN"; fi

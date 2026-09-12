@@ -321,7 +321,7 @@ def make_handler(sup: Supervisor):
 def main() -> int:
     import argparse
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", required=True, help="alias (gguf filename without .gguf)")
+    ap.add_argument("--model", default="", help="alias (gguf filename without .gguf); empty = start idle, the TUI picks")
     ap.add_argument("--port", type=int, required=True)
     ap.add_argument("--control-port", type=int, required=True)
     ap.add_argument("--server", required=True)
@@ -347,11 +347,15 @@ def main() -> int:
     import atexit
     atexit.register(sup.stop)
 
-    sup.state = {"state": "loading", "model": a.model, "detail": "", "pct": None}
-    if not sup.start(a.model):
-        print(f"llama-server failed to load {a.model}", file=sys.stderr)
-        return 1
-    sup.state = {"state": "ready", "model": a.model, "detail": "", "pct": None}
+    if a.model:
+        sup.state = {"state": "loading", "model": a.model, "detail": "", "pct": None}
+        if not sup.start(a.model):
+            print(f"llama-server failed to load {a.model}", file=sys.stderr)
+            return 1
+        sup.state = {"state": "ready", "model": a.model, "detail": "", "pct": None}
+    else:
+        # First-run journey: the TUI opens first and its /models picker loads a model.
+        sup.state = {"state": "idle", "model": None, "detail": "no model loaded", "pct": None}
     print("ready", flush=True)
     # NOT signal.pause(): it returns on ANY signal, including the SIGCHLD from
     # a llama-server we just stopped, which made the supervisor exit mid-switch.
