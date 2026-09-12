@@ -34,7 +34,65 @@ def ask(prompt: str) -> str:
     sys.stderr.write("> "); sys.stderr.flush()
     return (sys.stdin.readline() or "").strip()
 
+def _read_key() -> str:
+    """One keypress from a raw tty: 'up' / 'down' / 'enter' / the character."""
+    ch = sys.stdin.read(1)
+    if ch == "\x1b":
+        seq = sys.stdin.read(2)
+        return {"[A": "up", "[B": "down", "OA": "up", "OB": "down"}.get(seq, "esc")
+    if ch in ("\r", "\n"):
+        return "enter"
+    if ch == "\x03":
+        raise KeyboardInterrupt
+    return ch
+
+def _choose_tty(rows: list[str], title: str) -> int | None:
+    """Arrow keys / j k move, Enter picks, a number picks directly, b back, q quit."""
+    import termios
+    import tty
+    fd = sys.stdin.fileno()
+    saved = termios.tcgetattr(fd)
+    cur, drawn = 0, 0
+    hint = f"{DIM}↑↓ move · enter select · number · b back · q quit{RESET}"
+    def draw() -> None:
+        nonlocal drawn
+        if drawn:
+            sys.stderr.write(f"\033[{drawn}A")
+        lines = [f"{BOLD}{title}{RESET}"]
+        for i, r in enumerate(rows, 1):
+            mark = "❯" if i - 1 == cur else " "
+            lines.append(f"\033[2K{mark} {i:2d}) {r}")
+        lines.append(f"\033[2K{hint}")
+        sys.stderr.write("\r\n".join(lines) + "\r\n"); sys.stderr.flush()
+        drawn = len(lines)
+    say("")
+    try:
+        tty.setcbreak(fd)
+        draw()
+        while True:
+            k = _read_key()
+            if k in ("up", "k"):
+                cur = (cur - 1) % len(rows)
+            elif k in ("down", "j"):
+                cur = (cur + 1) % len(rows)
+            elif k == "enter":
+                return cur
+            elif k == "q":
+                sys.exit(130)
+            elif k in ("b", "esc"):
+                return None
+            elif k.isdigit() and 1 <= int(k) <= len(rows) and len(rows) < 10:
+                return int(k) - 1
+            elif k.isdigit():
+                # Two-digit lists: first digit moves the cursor, Enter confirms.
+                cur = min(int(k) - 1, len(rows) - 1) if int(k) else cur
+            draw()
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+
 def choose(rows: list[str], title: str) -> int | None:
+    if sys.stdin.isatty() and sys.stderr.isatty():
+        return _choose_tty(rows, title)
     while True:
         say("")
         say(f"{BOLD}{title}{RESET}")

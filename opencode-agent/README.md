@@ -11,9 +11,10 @@ fork binary plus a thin localcode layer. The source fork
   on the same port);
 - cloud features removed from the binary: share, autoupdate, account/console,
   GitHub app, cloud provider login, models.dev fetch, npm plugin auto-install.
-  Web search stays (it is a web tool the user turns on): set
+  Web search works out of the box (keyless DuckDuckGo backend). Set
   `LOCALCODE_ENABLE_EXA=1` (+ `EXA_API_KEY`) or `LOCALCODE_ENABLE_PARALLEL=1`
-  (+ `PARALLEL_API_KEY`) before launching;
+  (+ `PARALLEL_API_KEY`) before launching to upgrade it; fetched pages are
+  capped at 20k chars for the model (`LOCALCODE_WEBFETCH_MAX_CHARS`);
 - full debrand: binary `localcode`, config `localcode.json`, project dir
   `.localcode-agent/`, XDG dirs `~/.*/localcode-agent`, `LOCALCODE_*` env vars.
 
