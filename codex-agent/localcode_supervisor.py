@@ -499,7 +499,10 @@ with wave.open(path, 'wb') as w:
             return {"error": f"transcription failed: {e}"}
         if not out.get("ok"):
             return {"error": out.get("text") or "transcription failed"}
-        return {"ok": True, "text": out.get("text", "")}
+        # whisper labels non-speech ("[wind blowing]", "(music)", "[BLANK_AUDIO]"); drop them
+        import re
+        text = re.sub(r"\s*[\[(][^\])]{0,40}[\])]\s*", " ", out.get("text", "")).strip()
+        return {"ok": True, "text": text}
 
     @staticmethod
     def voice_speak(text: str) -> dict:
@@ -556,6 +559,7 @@ def make_handler(sup: Supervisor):
             self.send_response(code)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
+            self.send_header("Connection", "close")  # no keep-alive reuse against a closed socket
             self.end_headers()
             self.wfile.write(body)
 
