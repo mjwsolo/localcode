@@ -76,6 +76,68 @@ class Supervisor:
         self.log = open(HERE / ".run" / "server.log", "ab", buffering=0)
 
     # ---- llama-server lifecycle -------------------------------------------
+    def vision_info(self) -> dict:
+        """What the loaded model could see with, and whether it is on disk. Nothing
+        is downloaded here: the user asks via POST /vision/install (the TUI's /vision)."""
+        if not self.current:
+            return {"vision": False, "vision_available": False, "vision_size_gb": 0.0}
+        from server_cmd import catalog_choice, mmproj_for
+        choice = catalog_choice(str(self.models_dir / f"{self.current}.gguf"))
+        available = bool(choice is not None and getattr(choice, "supports_vision", False))
+        return {"vision": mmproj_for(str(self.models_dir / f"{self.current}.gguf")) is not None,
+                "vision_available": available,
+                "vision_size_gb": round(float(getattr(choice, "mmproj_size_gb", 0.0) or 0.0), 2) if available else 0.0}
+
+    def vision_install(self) -> dict:
+        """User-requested: download the projector for the loaded model, then restart
+        the server with it. Progress is in /status like any download."""
+        if not self.current:
+            return {"error": "no model loaded"}
+        if not self.lock.acquire(blocking=False):
+            return {"error": "a model switch is already in progress"}
+        alias = self.current
+        def work() -> None:
+            try:
+                self.active = {"group": None, "filename": None}
+                self.ensure_mmproj(alias)
+                self.state = {"state": "loading", "model": alias, "detail": "restarting with vision…", "pct": None}
+                if self.start(alias):
+                    self.state = {"state": "ready", "model": alias, "detail": "", "pct": None}
+                else:
+                    self.state = {"state": "error", "model": alias, "detail": "llama-server failed to restart", "pct": None}
+            finally:
+                self.active = {}
+                self.lock.release()
+        threading.Thread(target=work, daemon=True).start()
+        return {"ok": True}
+
+    def ensure_mmproj(self, alias: str) -> None:
+        """Fetch the model's vision projector (mmproj sidecar). Only called on an
+        explicit user request (vision_install); failure only means text-only."""
+        try:
+            from server_cmd import catalog_choice
+            choice = catalog_choice(str(self.models_dir / f"{alias}.gguf"))
+            if choice is None or not getattr(choice, "supports_vision", False):
+                return
+            dest = choice.mmproj_path
+            if dest is None:
+                return
+            if not dest.is_file():
+                def prog(msg: str) -> None:
+                    pct = None
+                    if "(" in msg and "%)" in msg:
+                        try: pct = int(msg.rsplit("(", 1)[1].split("%")[0])
+                        except ValueError: pct = None
+                    self.state = {"state": "downloading", "model": alias, "detail": f"vision projector: {msg}", "pct": pct}
+                self.state = {"state": "downloading", "model": alias, "detail": "downloading vision projector…", "pct": None}
+                ok, msg = bootstrap.download_mmproj(choice, on_progress=prog)
+                if not ok:
+                    print(f"supervisor: no vision projector for {alias}: {msg}", file=sys.stderr, flush=True)
+            if dest.is_file() and dest.parent != self.models_dir and not (self.models_dir / dest.name).exists():
+                os.symlink(dest, self.models_dir / dest.name)
+        except Exception as e:  # noqa: BLE001
+            print(f"supervisor: vision projector step failed: {e}", file=sys.stderr, flush=True)
+
     def start(self, alias: str, wait_s: int = 240) -> bool:
         gguf = self.models_dir / f"{alias}.gguf"
         self.stop()
@@ -163,7 +225,8 @@ class Supervisor:
                 "pct": self.state["pct"] if self.active.get("filename") == q.filename else None,
             })
         return {"group": g.key, "display_name": g.display_name, "maker": g.maker,
-                "license": g.license, "ram_gb": self.ram_gb, "quants": out}
+                "license": g.license, "ram_gb": self.ram_gb, "quants": out,
+                "vision_size_gb": round(float(getattr(g, "mmproj_size_gb", 0.0) or 0.0), 2) if getattr(g, "mmproj_filename", None) else 0.0}
 
     def _recommended_quant_idx(self, rows, name: str) -> int | None:
         if not rows:
@@ -225,22 +288,6 @@ class Supervisor:
                 if got.parent != self.models_dir and not (self.models_dir / filename).exists():
                     # download_model saved under localcode's model_dir(); link it here.
                     os.symlink(got, self.models_dir / filename)
-            # Vision projector (mmproj sidecar): small, one per family; without it the
-            # server cannot take images. Failure here only means text-only.
-            try:
-                from server_cmd import catalog_choice
-                choice = catalog_choice(str(self.models_dir / filename))
-                if choice is not None and getattr(choice, "supports_vision", False):
-                    dest = choice.mmproj_path
-                    if dest is None or not dest.is_file():
-                        self.state = {"state": "downloading", "model": alias, "detail": "downloading vision projector…", "pct": None}
-                        ok, msg = bootstrap.download_mmproj(choice, on_progress=lambda m: None)
-                        if not ok:
-                            print(f"supervisor: no vision projector for {alias}: {msg}", file=sys.stderr, flush=True)
-                    if dest is not None and dest.is_file() and not (self.models_dir / dest.name).exists() and dest.parent != self.models_dir:
-                        os.symlink(dest, self.models_dir / dest.name)
-            except Exception as e:  # noqa: BLE001
-                print(f"supervisor: vision projector step failed: {e}", file=sys.stderr, flush=True)
             self.state = {"state": "loading", "model": alias, "detail": "loading model…", "pct": None}
             if self.start(alias):
                 self.state = {"state": "ready", "model": alias, "detail": "", "pct": None}
@@ -288,7 +335,12 @@ class Supervisor:
         return stt_model_ready(VoiceState())
 
     def voice_status(self) -> dict:
-        return {"ready": self._voice_python() is not None and self._voice_model_ready(),
+        from localcode.voice import DEFAULT_STT_MODEL_SIZE_MB
+        runtime_ok = self._voice_python() is not None
+        model_ok = self._voice_model_ready()
+        return {"ready": runtime_ok and model_ok,
+                "setup_needed": not (runtime_ok and model_ok),
+                "needs": {"runtime_mb": 0 if runtime_ok else 60, "model_mb": 0 if model_ok else int(DEFAULT_STT_MODEL_SIZE_MB)},
                 "recording": self.voice_proc is not None and self.voice_proc.poll() is None,
                 "detail": self.voice_detail}
 
@@ -335,6 +387,8 @@ class Supervisor:
     def voice_start(self) -> dict:
         if self.voice_proc is not None and self.voice_proc.poll() is None:
             return {"error": "already recording"}
+        if self._voice_python() is None or not self._voice_model_ready():
+            return {"error": "setup_needed"}
         if not shutil.which("ffmpeg"):
             return {"error": "ffmpeg not found (brew install ffmpeg) — needed to record the microphone"}
         self.voice_wav.unlink(missing_ok=True)
@@ -366,9 +420,8 @@ class Supervisor:
         return self.voice_transcribe(self.voice_wav)
 
     def voice_transcribe(self, wav: Path) -> dict:
-        ok, msg = self.voice_setup()
-        if not ok:
-            return {"error": msg}
+        if self._voice_python() is None or not self._voice_model_ready():
+            return {"error": "setup_needed"}
         py = self._voice_python()
         script = (
             "import sys, json\n"
@@ -456,7 +509,7 @@ def make_handler(sup: Supervisor):
             if u.path == "/status":
                 return self._json(dict(sup.state, current=sup.current, port=sup.port, ctx=sup.ctx,
                                        group=sup.active.get("group"), filename=sup.active.get("filename"),
-                                       vision=sup.vision()))
+                                       **sup.vision_info()))
             if u.path == "/models_dir":
                 return self._json(sup.models_dir_info())
             if u.path == "/voice/status":
@@ -479,6 +532,12 @@ def make_handler(sup: Supervisor):
             if u.path == "/models_dir":
                 res = sup.set_models_dir(str(body.get("path", "")))
                 return self._json(res, 200 if "error" not in res else 400)
+            if u.path == "/vision/install":
+                res = sup.vision_install()
+                return self._json(res, 200 if "error" not in res else 409)
+            if u.path == "/voice/setup":
+                ok, msg = sup.voice_setup()
+                return self._json({"ok": True} if ok else {"error": msg}, 200 if ok else 500)
             if u.path == "/voice/start":
                 res = sup.voice_start()
                 return self._json(res, 200 if "error" not in res else 409)

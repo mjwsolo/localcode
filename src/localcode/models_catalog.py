@@ -225,7 +225,7 @@ CHOICES: list[ModelChoice] = [
             "re-download to pick up the fixes."
         ),
         mmproj_filename="mmproj-gemma-4-12b-F16.gguf",
-        mmproj_size_gb=0.86,
+        mmproj_size_gb=0.18,  # 175 MB on HF as of 2026-09 (repo re-exported the projector)
         mmproj_hf_filename="mmproj-F16.gguf",
     ),
     ModelChoice(
@@ -250,7 +250,7 @@ CHOICES: list[ModelChoice] = [
             "repo (2026-06-12), so the download resolves."
         ),
         mmproj_filename="mmproj-gemma-4-12b-F16.gguf",
-        mmproj_size_gb=0.86,  # 862 MB; repo offers BF16 + F16, both 862 MB
+        mmproj_size_gb=0.18,  # 175 MB on HF as of 2026-09
         mmproj_hf_filename="mmproj-F16.gguf",
     ),
     ModelChoice(
@@ -631,7 +631,7 @@ MODEL_GROUPS: list[ModelGroup] = [
             "any quant with the F16 mmproj for image input. Apache 2.0 licensed."
         ),
         mmproj_filename="mmproj-gemma-4-12b-F16.gguf",
-        mmproj_size_gb=0.86,
+        mmproj_size_gb=0.18,  # 175 MB on HF as of 2026-09 (repo re-exported the projector)
         mmproj_hf_filename="mmproj-F16.gguf",
     ),
     ModelGroup(
