@@ -20,9 +20,11 @@ fork binary plus a thin localcode layer. The source fork
 
 Files here:
 
-- `frontend_opencode.sh` — pick model → pick quant (or pass an alias), start
-  the supervisor (bundled llama-server + control API), write the project-local
-  `localcode.json`, exec the fork binary with `LOCALCODE_CONTROL_URL` set.
+- `frontend_opencode.sh` — start the supervisor (bundled llama-server + control
+  API), write the project-local `localcode.json`, exec the fork binary with
+  `LOCALCODE_CONTROL_URL` set. With no model argument the TUI opens first and
+  its `/models` picker (model → quant, download with progress, cancel, models
+  folder) loads the model in-app; pass an alias to skip the picker.
 - `localcode_supervisor.py` / `server_cmd.py` / `model_picker_cli.py` — shared
   with codex-agent verbatim.
 - `plugins/localcode.ts` — completion discipline (plan gate, build gate, stub
