@@ -14,6 +14,10 @@ through bootstrap.download_model — the same code the Textual picker uses.
     GET  /status             {"state": idle|downloading|loading|ready|error, ...}
     POST /cancel             stop the download in progress (the .part is discarded)
     GET  /models_dir         {"path", "free_gb"}
+    GET  /voice/status       {"ready", "recording", "detail"}   (whisper env + STT model)
+    POST /voice/start        start recording the default mic (ffmpeg, 16 kHz mono wav)
+    POST /voice/stop         stop, transcribe locally (whisper.cpp), {"text"}
+    POST /voice/speak {"text"}   read text aloud with macOS `say`
     POST /models_dir {"path"}   change where GGUFs download to (persisted in localcode's config)
 
 The inference port never changes across a switch, so the front end's
@@ -23,6 +27,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -258,6 +263,141 @@ class Supervisor:
         from server_cmd import mmproj_for
         return mmproj_for(str(self.models_dir / f"{self.current}.gguf")) is not None
 
+    # ---- voice: push-to-talk STT + read-aloud, all local ---------------------
+    voice_proc: "subprocess.Popen | None" = None
+    voice_wav = HERE / ".run" / "voice.wav"
+    voice_detail = ""
+    voice_setup_lock = threading.Lock()
+
+    @staticmethod
+    def _voice_venv() -> Path:
+        return HERE / ".run" / "voice-venv"
+
+    def _voice_python(self) -> Path | None:
+        py = self._voice_venv() / "bin" / "python"
+        if not py.exists():
+            return None
+        try:
+            subprocess.run([str(py), "-c", "import pywhispercpp"], check=True, capture_output=True, timeout=60)
+            return py
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _voice_model_ready(self) -> bool:
+        from localcode.voice import VoiceState, stt_model_ready
+        return stt_model_ready(VoiceState())
+
+    def voice_status(self) -> dict:
+        return {"ready": self._voice_python() is not None and self._voice_model_ready(),
+                "recording": self.voice_proc is not None and self.voice_proc.poll() is None,
+                "detail": self.voice_detail}
+
+    def voice_setup(self) -> tuple[bool, str]:
+        """One-time: whisper.cpp wheel into a private venv + the STT model. User-triggered (/voice)."""
+        with self.voice_setup_lock:
+            if self._voice_python() is None:
+                self.voice_detail = "installing whisper.cpp (pywhispercpp) into .run/voice-venv…"
+                venv = self._voice_venv()
+                try:
+                    subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True, capture_output=True, timeout=300)
+                    subprocess.run([str(venv / "bin" / "pip"), "install", "-q", "pywhispercpp"], check=True, capture_output=True, timeout=900)
+                except Exception as e:  # noqa: BLE001
+                    self.voice_detail = f"whisper install failed: {e}"
+                    return False, self.voice_detail
+            if not self._voice_model_ready():
+                from localcode.voice import VoiceState, ensure_stt_model
+                def prog(m: str) -> None:
+                    self.voice_detail = f"downloading speech model: {m}"
+                ok, msg = ensure_stt_model(VoiceState(), on_progress=prog)
+                if not ok:
+                    self.voice_detail = f"speech model download failed: {msg}"
+                    return False, self.voice_detail
+            self.voice_detail = ""
+            return True, "ready"
+
+    @staticmethod
+    def _mic_device() -> str:
+        """ffmpeg avfoundation audio device index: LOCALCODE_MIC, else the built-in mic, else 0."""
+        env = os.environ.get("LOCALCODE_MIC")
+        if env:
+            return env
+        try:
+            out = subprocess.run(["ffmpeg", "-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", ""],
+                                 capture_output=True, text=True, timeout=15).stderr
+            audio = out.split("audio devices:", 1)[1] if "audio devices:" in out else ""
+            for line in audio.splitlines():
+                if "[" in line and "]" in line and ("MacBook" in line or "Built-in" in line):
+                    return line.rsplit("[", 1)[1].split("]")[0]
+        except Exception:  # noqa: BLE001
+            pass
+        return "0"
+
+    def voice_start(self) -> dict:
+        if self.voice_proc is not None and self.voice_proc.poll() is None:
+            return {"error": "already recording"}
+        if not shutil.which("ffmpeg"):
+            return {"error": "ffmpeg not found (brew install ffmpeg) — needed to record the microphone"}
+        self.voice_wav.unlink(missing_ok=True)
+        cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "avfoundation", "-i", f":{self._mic_device()}",
+               "-ac", "1", "-ar", "16000", "-y", str(self.voice_wav)]
+        self.voice_proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        time.sleep(0.5)
+        if self.voice_proc.poll() is not None:
+            err = (self.voice_proc.stderr.read() if self.voice_proc.stderr else b"").decode(errors="replace").strip()
+            self.voice_proc = None
+            return {"error": f"could not open the microphone: {err or 'unknown error'} (grant microphone access to your terminal in System Settings → Privacy)"}
+        return {"ok": True}
+
+    def voice_stop(self) -> dict:
+        p = self.voice_proc
+        if p is None or p.poll() is not None:
+            return {"error": "not recording"}
+        try:
+            p.stdin.write(b"q"); p.stdin.flush()  # ffmpeg: graceful stop, flushes the wav header
+        except Exception:  # noqa: BLE001
+            p.terminate()
+        try:
+            p.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            p.kill()
+        self.voice_proc = None
+        if not self.voice_wav.exists() or self.voice_wav.stat().st_size < 1000:
+            return {"error": "no audio captured"}
+        return self.voice_transcribe(self.voice_wav)
+
+    def voice_transcribe(self, wav: Path) -> dict:
+        ok, msg = self.voice_setup()
+        if not ok:
+            return {"error": msg}
+        py = self._voice_python()
+        script = (
+            "import sys, json\n"
+            f"sys.path.insert(0, {str(HERE.parent / 'src')!r})\n"
+            "from pathlib import Path\n"
+            "from localcode.voice import VoiceState, transcribe\n"
+            f"ok, text = transcribe(VoiceState(), Path({str(wav)!r}))\n"
+            "print(json.dumps({'ok': ok, 'text': text}))\n"
+        )
+        try:
+            r = subprocess.run([str(py), "-c", script], capture_output=True, text=True, timeout=300)
+            line = [l for l in r.stdout.splitlines() if l.startswith("{")][-1]
+            out = json.loads(line)
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"transcription failed: {e}"}
+        if not out.get("ok"):
+            return {"error": out.get("text") or "transcription failed"}
+        return {"ok": True, "text": out.get("text", "")}
+
+    @staticmethod
+    def voice_speak(text: str) -> dict:
+        text = (text or "").strip()
+        if not text:
+            return {"error": "nothing to say"}
+        if not shutil.which("say"):
+            return {"error": "macOS `say` not available"}
+        subprocess.Popen(["say", text[:4000]], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return {"ok": True}
+
     def cancel_download(self) -> dict:
         if self.state["state"] != "downloading":
             return {"error": "no download in progress"}
@@ -319,6 +459,8 @@ def make_handler(sup: Supervisor):
                                        vision=sup.vision()))
             if u.path == "/models_dir":
                 return self._json(sup.models_dir_info())
+            if u.path == "/voice/status":
+                return self._json(sup.voice_status())
             self._json({"error": "not found"}, 404)
 
         def do_POST(self):
@@ -336,6 +478,18 @@ def make_handler(sup: Supervisor):
                 return self._json(res, 200 if "error" not in res else 409)
             if u.path == "/models_dir":
                 res = sup.set_models_dir(str(body.get("path", "")))
+                return self._json(res, 200 if "error" not in res else 400)
+            if u.path == "/voice/start":
+                res = sup.voice_start()
+                return self._json(res, 200 if "error" not in res else 409)
+            if u.path == "/voice/stop":
+                res = sup.voice_stop()
+                return self._json(res, 200 if "error" not in res else 409)
+            if u.path == "/voice/transcribe":
+                res = sup.voice_transcribe(Path(str(body.get("path", ""))))
+                return self._json(res, 200 if "error" not in res else 400)
+            if u.path == "/voice/speak":
+                res = sup.voice_speak(str(body.get("text", "")))
                 return self._json(res, 200 if "error" not in res else 400)
             self._json({"error": "not found"}, 404)
     return H
