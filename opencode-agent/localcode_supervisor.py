@@ -220,6 +220,22 @@ class Supervisor:
                 if got.parent != self.models_dir and not (self.models_dir / filename).exists():
                     # download_model saved under localcode's model_dir(); link it here.
                     os.symlink(got, self.models_dir / filename)
+            # Vision projector (mmproj sidecar): small, one per family; without it the
+            # server cannot take images. Failure here only means text-only.
+            try:
+                from server_cmd import catalog_choice
+                choice = catalog_choice(str(self.models_dir / filename))
+                if choice is not None and getattr(choice, "supports_vision", False):
+                    dest = choice.mmproj_path
+                    if dest is None or not dest.is_file():
+                        self.state = {"state": "downloading", "model": alias, "detail": "downloading vision projector…", "pct": None}
+                        ok, msg = bootstrap.download_mmproj(choice, on_progress=lambda m: None)
+                        if not ok:
+                            print(f"supervisor: no vision projector for {alias}: {msg}", file=sys.stderr, flush=True)
+                    if dest is not None and dest.is_file() and not (self.models_dir / dest.name).exists() and dest.parent != self.models_dir:
+                        os.symlink(dest, self.models_dir / dest.name)
+            except Exception as e:  # noqa: BLE001
+                print(f"supervisor: vision projector step failed: {e}", file=sys.stderr, flush=True)
             self.state = {"state": "loading", "model": alias, "detail": "loading model…", "pct": None}
             if self.start(alias):
                 self.state = {"state": "ready", "model": alias, "detail": "", "pct": None}
@@ -235,6 +251,12 @@ class Supervisor:
             self.active = {}
             print(f"supervisor: switch to {alias} -> {self.state['state']}", file=sys.stderr, flush=True)
             self.lock.release()
+
+    def vision(self) -> bool:
+        if not self.current:
+            return False
+        from server_cmd import mmproj_for
+        return mmproj_for(str(self.models_dir / f"{self.current}.gguf")) is not None
 
     def cancel_download(self) -> dict:
         if self.state["state"] != "downloading":
@@ -293,7 +315,8 @@ def make_handler(sup: Supervisor):
                 return self._json(sup.quants(key))
             if u.path == "/status":
                 return self._json(dict(sup.state, current=sup.current, port=sup.port, ctx=sup.ctx,
-                                       group=sup.active.get("group"), filename=sup.active.get("filename")))
+                                       group=sup.active.get("group"), filename=sup.active.get("filename"),
+                                       vision=sup.vision()))
             if u.path == "/models_dir":
                 return self._json(sup.models_dir_info())
             self._json({"error": "not found"}, 404)
