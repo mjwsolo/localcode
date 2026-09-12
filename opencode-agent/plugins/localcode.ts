@@ -1,8 +1,8 @@
 /**
- * localcode's completion discipline for OpenCode, as a plugin (no fork work).
+ * localcode's completion discipline for the localcode agent runtime, as a plugin.
  * Same rules as localcode's own loop and the pi/codex ports:
  *
- *  1. Plan first: the planning rule goes into the system prompt; OpenCode's
+ *  1. Plan first: the planning rule goes into the system prompt; localcode's
  *     built-in todowrite is the checklist, and open items are re-shown every turn.
  *  2. Open-todo gate: on session.idle with items still open, the session is
  *     prompted to continue with the next item (15 max, stops after 3 rounds
@@ -14,7 +14,7 @@
  *  5. Bash guard: foreground servers (npm run dev, vite, http.server...) are
  *     blocked with a reason; they hang the agent.
  *  6. Plateau breaker: a "round" is one LLM step that executed tools (closed by
- *     the `step-finish` part OpenCode publishes on message.part.updated; each
+ *     the `step-finish` part the runtime publishes on message.part.updated; each
  *     tool.execute.after is attributed to the open round; session.idle flushes
  *     a trailing round). Progress in a round = a write/edit to a path never
  *     changed this session, a project check that passes for the first time or
@@ -31,7 +31,7 @@
  * node_modules in the project.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Plugin } from "@opencode-ai/plugin";
@@ -133,38 +133,38 @@ function renderTodos(todos: Todo[]): string {
 // Plateau breaker: pure parts (exported for tests).
 // ---------------------------------------------------------------------------
 
-export const PLATEAU_MIN_ROUND = 4;        // never act before this many tool rounds
-export const PLATEAU_NUDGE_AFTER = 6;      // consecutive no-progress rounds -> nudge once
-export const PLATEAU_STOP_AFTER = 8;       // further no-progress rounds after the nudge -> stop
-export const PLATEAU_RECENT_PASS = 2;      // a check that passed within this many rounds blocks the stop...
-export const PLATEAU_PASS_GRACE = 3;       // ...and grants this many more rounds after a "finish now" nudge
+const PLATEAU_MIN_ROUND = 4;        // never act before this many tool rounds
+const PLATEAU_NUDGE_AFTER = 6;      // consecutive no-progress rounds -> nudge once
+const PLATEAU_STOP_AFTER = 8;       // further no-progress rounds after the nudge -> stop
+const PLATEAU_RECENT_PASS = 2;      // a check that passed within this many rounds blocks the stop...
+const PLATEAU_PASS_GRACE = 3;       // ...and grants this many more rounds after a "finish now" nudge
 
-export type ToolEvent = { tool: string; args: any; output?: string; metadata?: any };
-export type ProgressMemory = {
+type ToolEvent = { tool: string; args: any; output?: string; metadata?: any };
+type ProgressMemory = {
   changedPaths: Set<string>;
   failureSigs: Set<string>;
   lastFailureCount: number | null;
   lastCheckPassed: boolean | null; // null = no check run yet this session
   completedTodos: number;
 };
-export type PlateauDecision = "none" | "nudge" | "pass-nudge" | "stop";
+type PlateauDecision = "none" | "nudge" | "pass-nudge" | "stop";
 
-export function newProgressMemory(): ProgressMemory {
+function newProgressMemory(): ProgressMemory {
   return { changedPaths: new Set(), failureSigs: new Set(), lastFailureCount: null, lastCheckPassed: null, completedTodos: 0 };
 }
 
 // Same program-position idea as SERVER_CMD: a check is a PROGRAM being run.
-export const CHECK_CMD = new RegExp(
+const CHECK_CMD = new RegExp(
   PROG + String.raw`(?:(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|build|typecheck|type-check|lint|check)\b` +
   String.raw`|(?:npx\s+|bunx\s+)?(?:tsc|vitest|jest|pytest|pyright|mypy|eslint)\b` +
   String.raw`|python3?\s+-m\s+(?:pytest|mypy|pyright|unittest)\b` +
   String.raw`|cargo\s+(?:test|build|check|clippy)\b|go\s+(?:test|build|vet)\b)`,
   "i",
 );
-export function isCheckCommand(cmd: string): boolean { return CHECK_CMD.test(cmd); }
+function isCheckCommand(cmd: string): boolean { return CHECK_CMD.test(cmd); }
 
 const TEMP_RE = /(?:^|\/)(?:tmp|private\/tmp|var\/folders|node_modules|\.localcode-agent|\.opencode|\.git)(?:\/|$)|^\/dev\//;
-export function isTempPath(p: string): boolean {
+function isTempPath(p: string): boolean {
   const norm = p.replace(/\\/g, "/");
   if (TEMP_RE.test(norm)) return true;
   try { const t = tmpdir().replace(/\\/g, "/"); if (t && norm.startsWith(t)) return true; } catch {}
@@ -172,7 +172,7 @@ export function isTempPath(p: string): boolean {
 }
 
 const EDIT_TOOLS = new Set(["edit", "write", "multiedit", "apply_patch", "patch"]);
-export function editedPaths(ev: ToolEvent): string[] {
+function editedPaths(ev: ToolEvent): string[] {
   if (!EDIT_TOOLS.has(ev.tool)) return [];
   const out: string[] = [];
   const a = ev.args ?? {};
@@ -188,7 +188,7 @@ export function editedPaths(ev: ToolEvent): string[] {
 const ANSI_RE = /\[[0-9;]*[A-Za-z]/g;
 const FAIL_LINE_RE = /FAILED|--- FAIL|\bFAIL\b|AssertionError|error TS\d+|\bError\b|\berror\b|✕|✗|●|panicked|Traceback/;
 /** Order-independent, path/number-free failure signatures from a check's output. */
-export function failureSignatures(output: string): string[] {
+function failureSignatures(output: string): string[] {
   const sigs = new Set<string>();
   for (const raw of String(output ?? "").replace(ANSI_RE, "").split("\n")) {
     const line = raw.trim();
@@ -207,7 +207,7 @@ export function failureSignatures(output: string): string[] {
 }
 
 /** Pass/fail of a check from the bash tool result: metadata.exit when present, else output heuristics. */
-export function checkPassed(ev: ToolEvent): boolean {
+function checkPassed(ev: ToolEvent): boolean {
   const exit = ev.metadata?.exit;
   if (typeof exit === "number") return exit === 0;
   const out = String(ev.output ?? "");
@@ -221,7 +221,7 @@ export function checkPassed(ev: ToolEvent): boolean {
  * progress, null otherwise. Reads, greps, re-edits of known paths, checks that
  * pass again or fail identically are not progress.
  */
-export function progressOf(ev: ToolEvent, mem: ProgressMemory): string | null {
+function progressOf(ev: ToolEvent, mem: ProgressMemory): string | null {
   const paths = editedPaths(ev).filter((p) => !isTempPath(p));
   if (paths.length) {
     const fresh = paths.filter((p) => !mem.changedPaths.has(p));
@@ -255,7 +255,7 @@ export function progressOf(ev: ToolEvent, mem: ProgressMemory): string | null {
 }
 
 /** Round bookkeeping and thresholds. One instance per session; reset on a genuine user message. */
-export class PlateauTracker {
+class PlateauTracker {
   mem = newProgressMemory();
   round = 0;                 // completed tool rounds
   noProgress = 0;            // consecutive no-progress rounds since the last reset
@@ -301,13 +301,13 @@ export class PlateauTracker {
   }
 }
 
-export function plateauNudgeText(open: Todo[]): string {
+function plateauNudgeText(open: Todo[]): string {
   const items = open.length ? `\nOpen plan items you must deliver now:\n${open.map((t) => `- ${t.content}`).join("\n")}` : "";
   return `${NUDGE_PREFIX} No new progress for ${PLATEAU_NUDGE_AFTER} steps — you have reached the limit of this approach. Stop experimenting.${items}\nWhere a requirement cannot be met, say so explicitly in the deliverable instead of retrying; run the project's own check ONCE; then finish.`;
 }
-export const PLATEAU_PASS_TEXT = `${NUDGE_PREFIX} Your check passed — finish now. Do not start another experiment: write up what is delivered and what is not, then stop.`;
+const PLATEAU_PASS_TEXT = `${NUDGE_PREFIX} Your check passed — finish now. Do not start another experiment: write up what is delivered and what is not, then stop.`;
 
-export const LocalcodePlugin: Plugin = async ({ client, directory }) => {
+const LocalcodePlugin: Plugin = async ({ client, directory }) => {
   let todos: Todo[] = [];
   let continueCount = 0;
   let stuckCount = 0;
@@ -318,8 +318,17 @@ export const LocalcodePlugin: Plugin = async ({ client, directory }) => {
   let plateau = new PlateauTracker();
   let plateauStopped = false;
   const seenSteps = new Set<string>();
-  const log = (msg: string) => { try { process.stderr.write(`[localcode gate] ${msg}\n`); } catch {} };
-  const plog = (msg: string) => { try { process.stderr.write(`[localcode plateau] ${msg}\n`); } catch {} };
+  // The plugin runs inside the TUI's own process: anything written to stderr is
+  // painted over the screen ("rounds — nudging to deliver" leaked into the prompt).
+  // Log to a file in the project's state dir instead; LOCALCODE_PLUGIN_STDERR=1
+  // restores stderr for headless runs (benchmarks read it).
+  const logFile = join(directory, ".localcode-agent", "localcode-plugin.log");
+  const emit = (line: string) => {
+    if (process.env.LOCALCODE_PLUGIN_STDERR) { try { process.stderr.write(line + "\n"); } catch {} return; }
+    try { mkdirSync(join(directory, ".localcode-agent"), { recursive: true }); appendFileSync(logFile, `${new Date().toISOString()} ${line}\n`); } catch {}
+  };
+  const log = (msg: string) => emit(`[localcode gate] ${msg}`);
+  const plog = (msg: string) => emit(`[localcode plateau] ${msg}`);
 
   async function nudge(sessionID: string, text: string) {
     await client.session.prompt({ path: { id: sessionID }, body: { parts: [{ type: "text", text }] } });
@@ -394,8 +403,9 @@ export const LocalcodePlugin: Plugin = async ({ client, directory }) => {
         todos = (event.properties as any).todos ?? [];
         return;
       }
+      if (process.env.LOCALCODE_PLUGIN_DEBUG) emit(`[localcode debug] event ${event.type} ${(event as any).properties?.part?.type ?? ""}`);
       if (event.type === "message.part.updated") {
-        // Round boundary: OpenCode publishes one step-finish part per LLM step.
+        // Round boundary: the runtime publishes one step-finish part per LLM step.
         const part = (event.properties as any).part;
         if (part?.type === "step-finish" && part.sessionID && !seenSteps.has(part.id)) {
           seenSteps.add(part.id);
@@ -451,4 +461,10 @@ export const LocalcodePlugin: Plugin = async ({ client, directory }) => {
   };
 };
 
+
+// The runtime treats EVERY export of a plugin module as a plugin and refuses the file
+// if one is not a function ("Plugin export is not a function") — which silently
+// disabled this whole plugin once test helpers were exported. Expose the helpers
+// as properties on the plugin function instead; tests read them from `default`.
+Object.assign(LocalcodePlugin, { PLATEAU_MIN_ROUND, PLATEAU_NUDGE_AFTER, PLATEAU_STOP_AFTER, PLATEAU_RECENT_PASS, PLATEAU_PASS_GRACE, newProgressMemory, CHECK_CMD, isCheckCommand, isTempPath, editedPaths, failureSignatures, checkPassed, progressOf, PlateauTracker, plateauNudgeText, PLATEAU_PASS_TEXT });
 export default LocalcodePlugin;

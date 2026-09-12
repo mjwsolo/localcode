@@ -1,9 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import {
-  PLATEAU_MIN_ROUND, PLATEAU_NUDGE_AFTER, PLATEAU_STOP_AFTER, PLATEAU_PASS_GRACE,
-  PlateauTracker, checkPassed, editedPaths, failureSignatures, isCheckCommand, isTempPath,
-  newProgressMemory, plateauNudgeText, progressOf, type ToolEvent,
-} from "../plugins/localcode";
+import LocalcodePluginDefault from "../plugins/localcode";
+type ToolEvent = { tool: string; args: any; output?: string; metadata?: any };
+const { PLATEAU_MIN_ROUND, PLATEAU_NUDGE_AFTER, PLATEAU_STOP_AFTER, PLATEAU_PASS_GRACE, PlateauTracker, checkPassed, editedPaths, failureSignatures, isCheckCommand, isTempPath, newProgressMemory, plateauNudgeText, progressOf } = LocalcodePluginDefault as any;
 
 const edit = (filePath: string): ToolEvent => ({ tool: "edit", args: { filePath, oldString: "a", newString: "b" } });
 const write = (filePath: string): ToolEvent => ({ tool: "write", args: { filePath, content: "x" } });
@@ -226,7 +224,7 @@ describe("nudge wording", () => {
 // ---------------------------------------------------------------------------
 // Hook wiring: drive the plugin with a stub client and OpenCode-shaped events.
 // ---------------------------------------------------------------------------
-import { LocalcodePlugin } from "../plugins/localcode";
+const LocalcodePlugin = LocalcodePluginDefault as any;
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
