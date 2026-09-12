@@ -14,6 +14,7 @@ through bootstrap.download_model — the same code the Textual picker uses.
     GET  /status             {"state": idle|downloading|loading|ready|error, ...}
     POST /cancel             stop the download in progress (the .part is discarded)
     GET  /models_dir         {"path", "free_gb"}
+    GET  /progress           prompt-fill progress of the running request (from llama-server /slots)
     GET  /voice/status       {"ready", "recording", "detail"}   (whisper env + STT model)
     POST /voice/start        start recording the default mic (ffmpeg, 16 kHz mono wav)
     POST /voice/stop         stop, transcribe locally (whisper.cpp), {"text"}
@@ -76,6 +77,29 @@ class Supervisor:
         self.log = open(HERE / ".run" / "server.log", "ab", buffering=0)
 
     # ---- llama-server lifecycle -------------------------------------------
+    def progress(self) -> dict:
+        """What the server is doing right now: reading the prompt (with a fraction) or
+        generating. Lets the TUI show 'reading context 40%' instead of a bare spinner."""
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/slots", timeout=1) as r:
+                slots = json.loads(r.read().decode())
+        except Exception:  # noqa: BLE001
+            return {"phase": "unknown"}
+        slot = next((x for x in slots if x.get("is_processing")), None)
+        if slot is None:
+            return {"phase": "idle"}
+        total = int(slot.get("n_prompt_tokens") or 0)
+        cache = int(slot.get("n_prompt_tokens_cache") or 0)
+        done = int(slot.get("n_prompt_tokens_processed") or 0)
+        nt = slot.get("next_token") or []
+        decoded = int((nt[0] if isinstance(nt, list) and nt else nt or {}).get("n_decoded") or 0)
+        todo = max(total - cache, 0)
+        if decoded > 0 or (todo and done >= todo):
+            return {"phase": "generating", "decoded": decoded, "prompt_tokens": total}
+        if todo:
+            return {"phase": "reading", "done": done, "todo": todo, "cached": cache, "pct": int(100 * done / todo)}
+        return {"phase": "reading", "done": 0, "todo": 0, "cached": cache, "pct": 0}
+
     def vision_info(self) -> dict:
         """What the loaded model could see with, and whether it is on disk. Nothing
         is downloaded here: the user asks via POST /vision/install (the TUI's /vision)."""
@@ -312,6 +336,7 @@ class Supervisor:
 
     # ---- voice: push-to-talk STT + read-aloud, all local ---------------------
     voice_proc: "subprocess.Popen | None" = None
+    voice_recorder = ""  # "portaudio" (bundled) or "ffmpeg" (fallback) while recording
     voice_wav = HERE / ".run" / "voice.wav"
     voice_detail = ""
     voice_setup_lock = threading.Lock()
@@ -330,29 +355,42 @@ class Supervisor:
         except Exception:  # noqa: BLE001
             return None
 
+    def _voice_recorder_ok(self) -> bool:
+        """The bundled (PortAudio) recorder is installed in the venv. ffmpeg is only a
+        fallback at record time, never a reason to skip installing this."""
+        py = self._voice_venv() / "bin" / "python"
+        if not py.exists():
+            return False
+        try:
+            subprocess.run([str(py), "-c", "import sounddevice"], check=True, capture_output=True, timeout=30)
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
     def _voice_model_ready(self) -> bool:
         from localcode.voice import VoiceState, stt_model_ready
         return stt_model_ready(VoiceState())
 
     def voice_status(self) -> dict:
         from localcode.voice import DEFAULT_STT_MODEL_SIZE_MB
-        runtime_ok = self._voice_python() is not None
+        runtime_ok = self._voice_python() is not None and self._voice_recorder_ok()
         model_ok = self._voice_model_ready()
         return {"ready": runtime_ok and model_ok,
                 "setup_needed": not (runtime_ok and model_ok),
                 "needs": {"runtime_mb": 0 if runtime_ok else 60, "model_mb": 0 if model_ok else int(DEFAULT_STT_MODEL_SIZE_MB)},
                 "recording": self.voice_proc is not None and self.voice_proc.poll() is None,
+                "recorder": self.voice_recorder,
                 "detail": self.voice_detail}
 
     def voice_setup(self) -> tuple[bool, str]:
         """One-time: whisper.cpp wheel into a private venv + the STT model. User-triggered (/voice)."""
         with self.voice_setup_lock:
-            if self._voice_python() is None:
-                self.voice_detail = "installing whisper.cpp (pywhispercpp) into .run/voice-venv…"
+            if self._voice_python() is None or not self._voice_recorder_ok():
+                self.voice_detail = "installing whisper.cpp + microphone recorder into .run/voice-venv…"
                 venv = self._voice_venv()
                 try:
                     subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True, capture_output=True, timeout=300)
-                    subprocess.run([str(venv / "bin" / "pip"), "install", "-q", "pywhispercpp"], check=True, capture_output=True, timeout=900)
+                    subprocess.run([str(venv / "bin" / "pip"), "install", "-q", "pywhispercpp", "sounddevice"], check=True, capture_output=True, timeout=900)
                 except Exception as e:  # noqa: BLE001
                     self.voice_detail = f"whisper install failed: {e}"
                     return False, self.voice_detail
@@ -384,18 +422,40 @@ class Supervisor:
             pass
         return "0"
 
+    # Recorder that runs inside the voice venv: PortAudio ships in the sounddevice
+    # wheel, so no ffmpeg/Homebrew is needed. Records 16 kHz mono until stdin closes.
+    _RECORDER = """
+import sys, wave, sounddevice as sd
+path = sys.argv[1]
+frames = []
+def cb(indata, n, t, status):
+    frames.append(bytes(indata))
+with sd.RawInputStream(samplerate=16000, channels=1, dtype='int16', callback=cb):
+    sys.stdout.write('recording\\n'); sys.stdout.flush()
+    sys.stdin.read()
+with wave.open(path, 'wb') as w:
+    w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000); w.writeframes(b''.join(frames))
+"""
+
     def voice_start(self) -> dict:
         if self.voice_proc is not None and self.voice_proc.poll() is None:
             return {"error": "already recording"}
-        if self._voice_python() is None or not self._voice_model_ready():
+        py = self._voice_python()
+        if py is None or not self._voice_model_ready():
             return {"error": "setup_needed"}
-        if not shutil.which("ffmpeg"):
-            return {"error": "ffmpeg not found (brew install ffmpeg) — needed to record the microphone"}
         self.voice_wav.unlink(missing_ok=True)
-        cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "avfoundation", "-i", f":{self._mic_device()}",
-               "-ac", "1", "-ar", "16000", "-y", str(self.voice_wav)]
+        try:
+            subprocess.run([str(py), "-c", "import sounddevice"], check=True, capture_output=True, timeout=30)
+            cmd = [str(py), "-c", self._RECORDER, str(self.voice_wav)]
+            self.voice_recorder = "portaudio"
+        except Exception:  # noqa: BLE001
+            if not shutil.which("ffmpeg"):
+                return {"error": "no recorder available: run /voice setup again (installs the PortAudio recorder) or brew install ffmpeg"}
+            self.voice_recorder = "ffmpeg"
+            cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "avfoundation", "-i", f":{self._mic_device()}",
+                   "-ac", "1", "-ar", "16000", "-y", str(self.voice_wav)]
         self.voice_proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-        time.sleep(0.5)
+        time.sleep(0.8)
         if self.voice_proc.poll() is not None:
             err = (self.voice_proc.stderr.read() if self.voice_proc.stderr else b"").decode(errors="replace").strip()
             self.voice_proc = None
@@ -407,7 +467,7 @@ class Supervisor:
         if p is None or p.poll() is not None:
             return {"error": "not recording"}
         try:
-            p.stdin.write(b"q"); p.stdin.flush()  # ffmpeg: graceful stop, flushes the wav header
+            p.stdin.write(b"q"); p.stdin.flush(); p.stdin.close()  # ffmpeg: 'q' quits; recorder: stdin EOF stops
         except Exception:  # noqa: BLE001
             p.terminate()
         try:
@@ -514,6 +574,8 @@ def make_handler(sup: Supervisor):
                 return self._json(sup.models_dir_info())
             if u.path == "/voice/status":
                 return self._json(sup.voice_status())
+            if u.path == "/progress":
+                return self._json(sup.progress())
             self._json({"error": "not found"}, 404)
 
         def do_POST(self):
