@@ -42,7 +42,38 @@ def server_command(gguf: str, port: int, alias: str | None = None) -> list[str]:
     mode = os.environ.get("LOCALCODE_INTERNAL_THINKING_MODE") or cfg.runtime.internal_thinking_mode or "off"
     if control in ("server", "chat_template") and str(mode).strip().lower() != "on":
         cmd += ["--reasoning", "off", "--reasoning-budget", "0"]
+    # Vision: same rule as classic localcode (runtime.py) — pass --mmproj when the
+    # catalog says this model ships a projector and the sidecar is on disk.
+    mm = mmproj_for(gguf)
+    if mm is not None:
+        cmd += ["--mmproj", str(mm)]
     return cmd
+
+
+def catalog_choice(gguf: str):
+    """ModelChoice for a gguf: a curated entry, else one minted for a browsed quant."""
+    try:
+        from localcode.models_catalog import by_filename, choice_for_quant, group_for_filename
+        name = Path(gguf).name
+        choice = by_filename(name)
+        if choice is not None:
+            return choice
+        g = group_for_filename(name)
+        if g is not None:
+            return choice_for_quant(g, name, 0.0)
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def mmproj_for(gguf: str) -> Path | None:
+    choice = catalog_choice(gguf)
+    if choice is None or not getattr(choice, "supports_vision", False):
+        return None
+    for cand in (getattr(choice, "mmproj_path", None), Path(gguf).parent / (choice.mmproj_filename or "")):
+        if cand and Path(cand).is_file():
+            return Path(cand)
+    return None
 
 
 def context_size(gguf: str) -> int:
