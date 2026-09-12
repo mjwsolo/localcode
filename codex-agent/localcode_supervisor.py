@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""localcode's model supervisor for the codex-based front end.
+"""localcode's model supervisor for the fork-based front ends (codex, opencode).
 
 Owns the bundled llama-server and exposes a tiny localhost control API that
 the in-TUI `/model` picker talks to. The picker itself is NOT reimplemented
@@ -12,6 +12,9 @@ through bootstrap.download_model — the same code the Textual picker uses.
     POST /select {"group","filename"}   download if needed, then restart the
                                         server on the SAME port with that gguf
     GET  /status             {"state": idle|downloading|loading|ready|error, ...}
+    POST /cancel             stop the download in progress (the .part is discarded)
+    GET  /models_dir         {"path", "free_gb"}
+    POST /models_dir {"path"}   change where GGUFs download to (persisted in localcode's config)
 
 The inference port never changes across a switch, so the front end's
 base_url stays valid; only the model alias changes.
@@ -61,6 +64,8 @@ class Supervisor:
         self.current: str | None = None           # alias of the loaded model
         self.lock = threading.Lock()
         self.state = {"state": "idle", "model": None, "detail": "", "pct": None}
+        self.cancel = threading.Event()
+        self.active: dict = {}  # {"group": key, "filename": ..} while a download/switch runs
         self.ram_gb = _system_ram_gb()
         self.bandwidth = _bandwidth()
         self.log = open(HERE / ".run" / "server.log", "ab", buffering=0)
@@ -127,8 +132,11 @@ class Supervisor:
                 "key": g.key, "display_name": g.display_name, "maker": g.maker,
                 "license": g.license, "hf_repo": g.hf_repo,
                 "recommended": g.hf_repo == rec, "current": g.hf_repo == cur,
+                "downloading": self.state["state"] == "downloading" and self.active.get("group") == g.key,
+                "pct": self.state["pct"] if self.active.get("group") == g.key else None,
             })
-        return {"ram_gb": self.ram_gb, "current": self.current, "groups": groups}
+        return {"ram_gb": self.ram_gb, "current": self.current, "groups": groups,
+                "models_dir": str(self.models_dir)}
 
     def quants(self, key: str) -> dict:
         g = next((g for g in MODEL_GROUPS if g.key == key), None)
@@ -146,6 +154,8 @@ class Supervisor:
                 "tok_s": spd, "recommended": i == rec_idx,
                 "downloaded": (self.models_dir / q.filename).exists(),
                 "current": _alias(q.filename) == self.current,
+                "downloading": self.state["state"] == "downloading" and self.active.get("filename") == q.filename,
+                "pct": self.state["pct"] if self.active.get("filename") == q.filename else None,
             })
         return {"group": g.key, "display_name": g.display_name, "maker": g.maker,
                 "license": g.license, "ram_gb": self.ram_gb, "quants": out}
@@ -173,6 +183,8 @@ class Supervisor:
         if not self.lock.acquire(blocking=False):
             return {"error": "a model switch is already in progress"}
         alias = _alias(filename)
+        self.cancel.clear()
+        self.active = {"group": key, "filename": filename}
         self.state = {"state": "downloading" if not (self.models_dir / filename).exists() else "loading",
                       "model": alias, "detail": "", "pct": None}
         threading.Thread(target=self._select_worker, args=(g, filename, alias), daemon=True).start()
@@ -193,7 +205,14 @@ class Supervisor:
                             pct = None
                     self.state = {"state": "downloading", "model": alias, "detail": msg, "pct": pct}
 
-                ok, res = bootstrap.download_model(choice, on_progress=on_progress)
+                ok, res = bootstrap.download_model(choice, on_progress=on_progress, cancel_event=self.cancel)
+                if self.cancel.is_set():
+                    for part in (self.models_dir / filename, choice.local_path):
+                        for cand in (part.with_suffix(part.suffix + ".part"), Path(str(part) + ".part")):
+                            try: cand.unlink()
+                            except FileNotFoundError: pass
+                    self.state = {"state": "idle", "model": self.current, "detail": "download cancelled", "pct": None}
+                    return
                 if not ok:
                     self.state = {"state": "error", "model": alias, "detail": res, "pct": None}
                     return
@@ -213,8 +232,43 @@ class Supervisor:
             traceback.print_exc(file=sys.stderr)
             self.state = {"state": "error", "model": alias, "detail": str(e), "pct": None}
         finally:
+            self.active = {}
             print(f"supervisor: switch to {alias} -> {self.state['state']}", file=sys.stderr, flush=True)
             self.lock.release()
+
+    def cancel_download(self) -> dict:
+        if self.state["state"] != "downloading":
+            return {"error": "no download in progress"}
+        self.cancel.set()
+        return {"ok": True}
+
+    def models_dir_info(self) -> dict:
+        try:
+            st = os.statvfs(self.models_dir if self.models_dir.exists() else self.models_dir.parent)
+            free = round(st.f_bavail * st.f_frsize / 1e9, 1)
+        except OSError:
+            free = None
+        return {"path": str(self.models_dir), "free_gb": free}
+
+    def set_models_dir(self, raw: str) -> dict:
+        if self.state["state"] in ("downloading", "loading"):
+            return {"error": "wait for the current download/switch to finish"}
+        path = Path(os.path.expanduser(raw.strip())).resolve()
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            (path / ".localcode-write-test").touch(); (path / ".localcode-write-test").unlink()
+        except OSError as e:
+            return {"error": f"cannot use {path}: {e}"}
+        self.models_dir = path
+        # localcode's own download path reads model_dir() -> config runtime.model_dir /
+        # LOCALCODE_MODEL_DIR, so persist it where every front end will see it.
+        os.environ["LOCALCODE_MODEL_DIR"] = str(path)
+        try:
+            from localcode.config import load_config, save_config
+            cfg = load_config(); cfg.runtime.model_dir = str(path); save_config(cfg)
+        except Exception as e:  # noqa: BLE001
+            print(f"supervisor: could not persist model_dir: {e}", file=sys.stderr, flush=True)
+        return dict(self.models_dir_info(), ok=True)
 
 
 def make_handler(sup: Supervisor):
@@ -238,7 +292,10 @@ def make_handler(sup: Supervisor):
                 key = parse_qs(u.query).get("group", [""])[0]
                 return self._json(sup.quants(key))
             if u.path == "/status":
-                return self._json(dict(sup.state, current=sup.current, port=sup.port, ctx=sup.ctx))
+                return self._json(dict(sup.state, current=sup.current, port=sup.port, ctx=sup.ctx,
+                                       group=sup.active.get("group"), filename=sup.active.get("filename")))
+            if u.path == "/models_dir":
+                return self._json(sup.models_dir_info())
             self._json({"error": "not found"}, 404)
 
         def do_POST(self):
@@ -251,6 +308,12 @@ def make_handler(sup: Supervisor):
             if u.path == "/select":
                 res = sup.select(str(body.get("group", "")), str(body.get("filename", "")))
                 return self._json(res, 200 if "error" not in res else 409)
+            if u.path == "/cancel":
+                res = sup.cancel_download()
+                return self._json(res, 200 if "error" not in res else 409)
+            if u.path == "/models_dir":
+                res = sup.set_models_dir(str(body.get("path", "")))
+                return self._json(res, 200 if "error" not in res else 400)
             self._json({"error": "not found"}, 404)
     return H
 
