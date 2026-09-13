@@ -185,7 +185,7 @@ class Supervisor:
         self.ctx = int(cmd[cmd.index("--ctx-size") + 1])
         self.log.write(f"\n=== {time.ctime()} {' '.join(cmd)}\n".encode())
         self.proc = subprocess.Popen(cmd, stdout=self.log, stderr=subprocess.STDOUT,
-                                     start_new_session=True)
+                                     start_new_session=True, pass_fds=(self.lease_fd,) if getattr(self, "lease_fd", None) is not None else ())
         log(f"supervisor: started llama-server pid {self.proc.pid} for {alias}")
         for _ in range(wait_s):
             if self.proc.poll() is not None:
@@ -669,10 +669,23 @@ def main() -> int:
     ap.add_argument("--server", required=True)
     ap.add_argument("--models-dir", default=os.environ.get(
         "LOCALCODE_MODELS_DIR", str(Path.home() / ".local/share/localcode/models")))
+    ap.add_argument("--parent-pid", type=int, default=0, help="launcher PID; exit if it disappears")
     a = ap.parse_args()
 
     (HERE / ".run").mkdir(exist_ok=True)
+    # A per-user lock, shared across checkouts, closes the concurrent-launch race.
+    # The model inherits it so a killed supervisor cannot allow a second model.
+    import fcntl
+    lock_path = Path.home() / ".local/share/localcode-agent/supervisor.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lease = lock_path.open("a+")
+    try:
+        fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        log("localcode is already running; refusing a second model supervisor")
+        return 1
     sup = Supervisor(a.server, a.port, Path(a.models_dir), 0)
+    sup.lease_fd = lease.fileno()
     httpd = ThreadingHTTPServer(("127.0.0.1", a.control_port), make_handler(sup))
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
 
@@ -691,6 +704,13 @@ def main() -> int:
     signal.signal(signal.SIGHUP, bye)
     import atexit
     atexit.register(sup.stop)
+    if a.parent_pid:
+        def watch_launcher() -> None:
+            while os.getppid() == a.parent_pid:
+                time.sleep(0.5)
+            log("supervisor: launcher exited; shutting down its model")
+            os.kill(os.getpid(), signal.SIGTERM)
+        threading.Thread(target=watch_launcher, daemon=True).start()
 
     if a.model:
         sup.state = {"state": "loading", "model": a.model, "detail": "", "pct": None}
