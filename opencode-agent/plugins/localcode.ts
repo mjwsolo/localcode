@@ -23,7 +23,9 @@
  *     the open items, run the check once, finish"); 8 more stop the session via
  *     client.session.abort and log a partial summary. If the last check
  *     passed within 2 rounds the stop is replaced once by a "finish now" nudge
- *     and 3 more rounds. A stopped session also disables the idle gates.
+ *     and 3 more rounds. Repeated identical check failures are tracked separately:
+ *     3 request a focused diagnosis; 8 stop further churn, even after new edits.
+ *     A stopped session also disables the idle gates.
  *
  * Loaded from `.opencode/plugins/localcode.ts` in the project (the launcher and
  * the benchmark copy it there). Hooks only, no custom tools, so it needs no
@@ -161,7 +163,7 @@ type ProgressMemory = {
   lastCheckPassed: boolean | null; // null = no check run yet this session
   completedTodos: number;
 };
-type PlateauDecision = "none" | "nudge" | "pass-nudge" | "stop";
+type PlateauDecision = "none" | "nudge" | "repair-nudge" | "pass-nudge" | "stop";
 
 function newProgressMemory(): ProgressMemory {
   return { changedPaths: new Set(), revisions: new Set(), failureSigs: new Set(), lastFailureCount: null, lastCheckPassed: null, completedTodos: 0 };
@@ -170,7 +172,7 @@ function newProgressMemory(): ProgressMemory {
 // Same program-position idea as SERVER_CMD: a check is a PROGRAM being run.
 const CHECK_CMD = new RegExp(
   PROG + String.raw`(?:(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|build|typecheck|type-check|lint|check)\b` +
-  String.raw`|(?:npx\s+|bunx\s+)?(?:tsc|vitest|jest|pytest|pyright|mypy|eslint)\b` +
+  String.raw`|(?:npx\s+|bunx\s+)?(?:tsc|vitest|jest|pytest|pyright|mypy|eslint)\b|vite\s+build\b` +
   String.raw`|python3?\s+-m\s+(?:pytest|mypy|pyright|unittest)\b` +
   String.raw`|cargo\s+(?:test|build|check|clippy)\b|go\s+(?:test|build|vet)\b)`,
   "i",
@@ -207,7 +209,7 @@ function editedPaths(ev: ToolEvent): string[] {
 }
 
 const ANSI_RE = /\[[0-9;]*[A-Za-z]/g;
-const FAIL_LINE_RE = /FAILED|--- FAIL|\bFAIL\b|AssertionError|error TS\d+|\bError\b|\berror\b|✕|✗|●|panicked|Traceback/;
+const FAIL_LINE_RE = /FAILED|--- FAIL|\bFAIL\b|AssertionError|error TS\d+|\bError\b|\berror\b|Could not resolve|Cannot find module|Module not found|✕|✗|●|panicked|Traceback/;
 /** Order-independent, path/number-free failure signatures from a check's output. */
 function failureSignatures(output: string): string[] {
   const sigs = new Set<string>();
@@ -286,6 +288,32 @@ function progressOf(ev: ToolEvent, mem: ProgressMemory, directory?: string): str
   return null;
 }
 
+// File edits are activity, but repeated identical check failures are not repair
+// progress. Track each project/check separately so a passing lint or empty tsc
+// invocation cannot clear a failed production build.
+class RepeatedCheckTracker {
+  private checks = new Map<string, { signature: string; count: number }>();
+  evidence = "";
+  observe(ev: ToolEvent, directory = "."): PlateauDecision {
+    const command = String(ev.args?.command ?? "");
+    if (ev.tool !== "bash" || !isCheckCommand(command)) return "none";
+    const cwd = command.match(/(?:^|[;&])\s*cd\s+(?:"([^"\n]+)"|'([^'\n]+)'|([^\s;&]+))/);
+    const root = resolve(directory, cwd?.[1] ?? cwd?.[2] ?? cwd?.[3] ?? ev.args?.workdir ?? ".");
+    const kind = /\bbuild\b/.test(command) ? "build" : /\b(?:test|pytest|vitest|jest)\b/.test(command) ? "test" : /\b(?:lint|eslint)\b/.test(command) ? "lint" : "typecheck";
+    const key = `${root}:${kind}`;
+    if (checkPassed(ev)) { this.checks.delete(key); return "none"; }
+    const signatures = failureSignatures(ev.output ?? "");
+    const primary = signatures.filter((line) => /Could not resolve|Cannot find module|Module not found|error TS|TypeError|ReferenceError|SyntaxError|AssertionError/.test(line));
+    const signature = (primary.length ? primary : signatures).join("\n") || "check exited unsuccessfully";
+    const previous = this.checks.get(key);
+    const count = previous?.signature === signature ? previous.count + 1 : 1;
+    this.checks.set(key, { signature, count });
+    if (count !== 3 && count < 8) return "none";
+    this.evidence = `${kind} failed with the same diagnostics ${count} times despite intervening work.\nCommand: ${command.slice(0, 400)}\n${String(ev.output ?? "").replace(ANSI_RE, "").split("\n").filter((line) => FAIL_LINE_RE.test(line) || /^file:/i.test(line)).join("\n").slice(0, 1800)}`;
+    return count >= 8 ? "stop" : "repair-nudge";
+  }
+}
+
 /** Round bookkeeping and thresholds. One instance per session; reset on a genuine user message. */
 class PlateauTracker {
   constructor(private directory?: string) {}
@@ -295,13 +323,18 @@ class PlateauTracker {
   nudged = false;
   passNudged = false;
   stopped = false;
+  repairStopped = false;
   lastPassRound = -Infinity; // round number (1-based, the round it ran in) of the last passing check
   private open = false;      // a round is open once a tool ran in the current step
   private reasons: string[] = [];
+  readonly repeated = new RepeatedCheckTracker();
+  private repairDecision: PlateauDecision = "none";
 
   observe(ev: ToolEvent): void {
     if (this.stopped) return;
     this.open = true;
+    const repair = this.repeated.observe(ev, this.directory);
+    if (repair !== "none") this.repairDecision = repair;
     const r = progressOf(ev, this.mem, this.directory);
     if (r) this.reasons.push(r);
     if (ev.tool === "bash" && isCheckCommand(String(ev.args?.command ?? "")) && this.mem.lastCheckPassed) this.lastPassRound = this.round + 1;
@@ -312,6 +345,13 @@ class PlateauTracker {
     if (!this.open || this.stopped) return "none";
     this.open = false;
     this.round += 1;
+    if (this.repairDecision !== "none") {
+      const decision = this.repairDecision;
+      this.repairDecision = "none";
+      this.reasons = [];
+      if (decision === "stop") { this.stopped = true; this.repairStopped = true; }
+      return decision;
+    }
     const progressed = this.reasons.length > 0;
     this.reasons = [];
     if (progressed) { this.noProgress = 0; this.nudged = false; this.passNudged = false; return "none"; }
@@ -389,6 +429,11 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
     const decision = plateau.endRound();
     if (decision === "none" || planMode()) return "none";
     const open = openTodos();
+    if (decision === "repair-nudge") {
+      plog(`round ${plateau.round}: ${plateau.repeated.evidence}`);
+      nudgeAsync(sessionID, `${NUDGE_PREFIX} ${plateau.repeated.evidence}\nStop repeating this repair. Inspect the exact failing source and its configuration, then test one evidence-based fix. For a module-resolution error, resolve the import relative to the importing file and check that target first. Do not downgrade the toolchain, delete features, or replace components with stubs to make the error disappear. Run the same check unfiltered after the repair.`);
+      return decision;
+    }
     if (decision === "nudge") {
       plog(`round ${plateau.round}: ${PLATEAU_NUDGE_AFTER} no-progress rounds — nudging to deliver`);
       nudgeAsync(sessionID, plateauNudgeText(open));
@@ -402,6 +447,12 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
     // stop
     plateauStopped = true;
     const files = [...plateau.mem.changedPaths];
+    if (plateau.repairStopped) {
+      plog(plateau.repeated.evidence);
+      try {
+        await client.tui.showToast({ body: { title: "Repair stalled", message: "The same check keeps failing. Changes are preserved; this task is incomplete.", variant: "warning", duration: 12000 } });
+      } catch (e: any) { plog(`status notification failed: ${e?.message ?? e}`); }
+    }
     plog(`stopping session after ${plateau.round} tool rounds with no progress since the nudge; ` +
       `files delivered ${files.length}${files.length ? ` (${files.slice(0, 12).join(", ")}${files.length > 12 ? ", ..." : ""})` : ""}, ` +
       `open items ${open.length}${open.length ? `: ${open.map((t) => t.content).join("; ")}` : ""}, ` +
@@ -543,5 +594,5 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
 // if one is not a function ("Plugin export is not a function") — which silently
 // disabled this whole plugin once test helpers were exported. Expose the helpers
 // as properties on the plugin function instead; tests read them from `default`.
-Object.assign(LocalcodePlugin, { PLATEAU_MIN_ROUND, PLATEAU_NUDGE_AFTER, PLATEAU_STOP_AFTER, PLATEAU_RECENT_PASS, PLATEAU_PASS_GRACE, newProgressMemory, projectCheck, checkDirectory, CHECK_CMD, isCheckCommand, filteredCheck, isTempPath, editedPaths, failureSignatures, checkPassed, progressOf, PlateauTracker, plateauNudgeText, PLATEAU_PASS_TEXT });
+Object.assign(LocalcodePlugin, { PLATEAU_MIN_ROUND, PLATEAU_NUDGE_AFTER, PLATEAU_STOP_AFTER, PLATEAU_RECENT_PASS, PLATEAU_PASS_GRACE, newProgressMemory, projectCheck, checkDirectory, CHECK_CMD, isCheckCommand, filteredCheck, isTempPath, editedPaths, failureSignatures, checkPassed, progressOf, RepeatedCheckTracker, PlateauTracker, plateauNudgeText, PLATEAU_PASS_TEXT });
 export default LocalcodePlugin;
