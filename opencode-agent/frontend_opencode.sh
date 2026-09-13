@@ -7,8 +7,8 @@
 #   that server  →  run the fork binary.
 #
 # Nothing global is read or written: the fork's XDG dirs are ~/.*/localcode-agent,
-# the config is written next to the project, and no network is used except
-# model downloads the user asks for.
+# the config is written next to the project. Network use is limited to
+# user-requested features and language support needed by their project tasks.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 MODELS_DIR="${LOCALCODE_MODELS_DIR:-$HOME/.local/share/localcode/models}"
@@ -80,9 +80,9 @@ cat > ./localcode.json <<JSON
 JSON
 # localcode's completion discipline (plan gate, build gate, stub audit, bash guard)
 mkdir -p ./.localcode-agent/plugins && cp "$HERE/plugins/localcode.ts" ./.localcode-agent/plugins/localcode.ts
-# Reading a file must never install software. Use language servers already
-# available locally; installing another server is a separate user action.
-export OPENCODE_DISABLE_LSP_DOWNLOAD=1
+# Language support is provisioned when the user's task touches that language.
+# Keep the explicit offline override; first-run setup is shown in the sidebar.
+export OPENCODE_DISABLE_LSP_DOWNLOAD="${OPENCODE_DISABLE_LSP_DOWNLOAD:-0}"
 if [ -n "$MODEL" ]; then LOCALCODE_CONTROL_URL="http://127.0.0.1:$CTRL" "$BIN" -m "localcode/$MODEL" <&0 &
 else LOCALCODE_CONTROL_URL="http://127.0.0.1:$CTRL" "$BIN" <&0 & fi
 FRONTEND=$!
