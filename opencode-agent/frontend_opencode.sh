@@ -10,6 +10,12 @@
 # the config is written next to the project. Network use is limited to
 # user-requested features and language support needed by their project tasks.
 set -euo pipefail
+# Bash reads scripts incrementally. Run a memory snapshot so updating this file
+# while the TUI is open cannot corrupt parsing when wait returns on exit.
+if [ "${LOCALCODE_LAUNCHER_SNAPSHOT_PID:-}" != "$$" ]; then
+  export LOCALCODE_LAUNCHER_SNAPSHOT_PID="$$"
+  exec bash -c "$(cat -- "$0")" "$0" "$@"
+fi
 HERE="$(cd "$(dirname "$0")" && pwd)"
 MODELS_DIR="${LOCALCODE_MODELS_DIR:-$HOME/.local/share/localcode/models}"
 BIN="${LOCALCODE_OPENCODE_BIN:-$HERE/.run/localcode-opencode}"
