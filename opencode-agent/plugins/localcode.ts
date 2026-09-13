@@ -33,7 +33,7 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import type { Plugin } from "@opencode-ai/plugin";
 
 type Todo = { content: string; status: string };
@@ -71,9 +71,9 @@ const SRC_RE = /\.(ts|tsx|js|jsx|py|rs|go|java|kt|swift|rb|php|vue|svelte)$/;
 function projectCheck(cwd: string): string[] | null {
   const pkg = join(cwd, "package.json");
   if (existsSync(pkg)) {
-    if (!existsSync(join(cwd, "node_modules"))) return null;
-    if (existsSync(join(cwd, "tsconfig.json"))) return ["npx", "tsc", "--noEmit", "-p", "tsconfig.json"];
     try { if (JSON.parse(readFileSync(pkg, "utf8")).scripts?.build) return ["npm", "run", "build"]; } catch {}
+    const tsc = join(cwd, "node_modules", ".bin", "tsc");
+    if (existsSync(join(cwd, "tsconfig.json")) && existsSync(tsc)) return [tsc, "--noEmit", "-p", "tsconfig.json"];
     return null;
   }
   // Use the project's own interpreter when it made one; system python lacks its packages.
@@ -81,6 +81,16 @@ function projectCheck(cwd: string): string[] | null {
   if (existsSync(join(cwd, "tests"))) return [py, "-m", "pytest", "-q", "-x"];
   if (existsSync(join(cwd, "pyproject.toml")) || existsSync(join(cwd, "setup.py"))) return [py, "-m", "compileall", "-q", "."];
   return null;
+}
+
+function checkDirectory(file: string): string | null {
+  let dir = dirname(resolve(file));
+  while (true) {
+    if (["package.json", "pyproject.toml", "setup.py"].some((name) => existsSync(join(dir, name)))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
 }
 
 function runCheck(cwd: string, cmd: string[]): string | null {
@@ -496,7 +506,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
         }
       }
 
-      const changed = filesChangedSince(directory, turnStartedAt);
+      const changed = [...new Set([...filesChangedSince(directory, turnStartedAt), ...plateau.mem.changedPaths].map((file) => resolve(directory, file)))].filter((file) => existsSync(file));
       if (!changed.length) return;
 
       if (!stubNudgeDone) {
@@ -510,13 +520,17 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
       }
 
       if (buildVerifyNudges < MAX_BUILD_VERIFY) {
-        const cmd = projectCheck(directory);
-        if (cmd) {
-          const errors = runCheck(directory, cmd);
+        const roots = [...new Set(changed.map(checkDirectory).filter((root): root is string => Boolean(root)))];
+        if (!roots.length) roots.push(directory);
+        for (const root of roots) {
+          const cmd = projectCheck(root);
+          if (!cmd) continue;
+          const errors = runCheck(root, cmd);
           if (errors) {
             buildVerifyNudges += 1;
-            log(`${cmd.join(" ")} failed — sending errors back`);
-            await nudge(sessionID, `${NUDGE_PREFIX} the project's typecheck/build (\`${cmd.join(" ")}\`) was run for you and reported errors. FIX each one with targeted edits, then finish. Do not claim it works until these are gone:\n\n${errors}`);
+            log(`${cmd.join(" ")} failed in ${root} — sending errors back`);
+            await nudge(sessionID, `${NUDGE_PREFIX} the project's typecheck/build (\`${cmd.join(" ")}\`, in ${root}) was run for you and reported errors. FIX each one with targeted edits, then finish. Do not claim it works until these are gone:\n\n${errors}`);
+            return;
           }
         }
       }
@@ -529,5 +543,5 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
 // if one is not a function ("Plugin export is not a function") — which silently
 // disabled this whole plugin once test helpers were exported. Expose the helpers
 // as properties on the plugin function instead; tests read them from `default`.
-Object.assign(LocalcodePlugin, { PLATEAU_MIN_ROUND, PLATEAU_NUDGE_AFTER, PLATEAU_STOP_AFTER, PLATEAU_RECENT_PASS, PLATEAU_PASS_GRACE, newProgressMemory, CHECK_CMD, isCheckCommand, filteredCheck, isTempPath, editedPaths, failureSignatures, checkPassed, progressOf, PlateauTracker, plateauNudgeText, PLATEAU_PASS_TEXT });
+Object.assign(LocalcodePlugin, { PLATEAU_MIN_ROUND, PLATEAU_NUDGE_AFTER, PLATEAU_STOP_AFTER, PLATEAU_RECENT_PASS, PLATEAU_PASS_GRACE, newProgressMemory, projectCheck, checkDirectory, CHECK_CMD, isCheckCommand, filteredCheck, isTempPath, editedPaths, failureSignatures, checkPassed, progressOf, PlateauTracker, plateauNudgeText, PLATEAU_PASS_TEXT });
 export default LocalcodePlugin;
