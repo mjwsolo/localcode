@@ -46,7 +46,8 @@ const NUDGE_PREFIX = "SYSTEM:";
 const PLANNING_RULE = `FINISH THE WHOLE TASK (most important):
 - Keep going until the user's request is COMPLETELY done. Do not end your turn while any part of the work remains. A dev server that starts, a scaffold that installs, a single file written — none of these is "done" unless that was the entire request.
 - PLAN, THEN EXECUTE THE PLAN. For any real multi-step task, call todowrite FIRST to lay out every concrete step (one per requirement, and every deliverable the user named — a README is a plan item like any feature, not a closing flourish). Skip the plan for one/two-step tasks. Keep exactly ONE item in_progress.
-- The last plan item is verification, and it is BOUNDED: run the project's own build/typecheck once and one smoke check of the main flow. Do not install browsers, write test frameworks or build test rigs unless the task asks for tests.
+- Validate incrementally: get the minimal scaffold building before implementing the full app. After each coherent feature, run the relevant check and repair failures before adding more features. Do not defer all integration checks until the end.
+- The last plan item is final verification: run the project's own build/typecheck and one smoke check of the main flow. Do not repeat already-passing checks without new edits, or install browsers and test rigs unless requested.
 - Write complete, runnable code — no TODOs, stubs, placeholders, "demo only" or "you could add…". If a piece is too big for one call, split it across calls; never drop it.
 - Only stop for one of two reasons: (a) every todo is completed and verified, or (b) you have ONE specific blocking question you cannot answer yourself. The harness sends you back to the next open item if you stop early.
 - Never run a foreground server (npm run dev, vite, http.server) through bash: start it in the background with nohup ... & and a log file, then curl it.`;
