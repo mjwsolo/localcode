@@ -22,7 +22,7 @@
  *     signature, or a todowrite raising the completed count. From round 4 on,
  *     6 consecutive no-progress rounds nudge once ("stop experimenting, deliver
  *     the open items, run the check once, finish"); 8 more stop the session via
- *     client.session.abort and print a stderr partial summary. If the last check
+ *     client.session.abort and log a partial summary. If the last check
  *     passed within 2 rounds the stop is replaced once by a "finish now" nudge
  *     and 3 more rounds. A stopped session also disables the idle gates.
  *
@@ -320,11 +320,9 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
   const seenSteps = new Set<string>();
   // The plugin runs inside the TUI's own process: anything written to stderr is
   // painted over the screen ("rounds — nudging to deliver" leaked into the prompt).
-  // Log to a file in the project's state dir instead; LOCALCODE_PLUGIN_STDERR=1
-  // restores stderr for headless runs (benchmarks read it).
+  // Log to a file in the project's state dir, including headless runs.
   const logFile = join(directory, ".localcode-agent", "localcode-plugin.log");
   const emit = (line: string) => {
-    if (process.env.LOCALCODE_PLUGIN_STDERR) { try { process.stderr.write(line + "\n"); } catch {} return; }
     try { mkdirSync(join(directory, ".localcode-agent"), { recursive: true }); appendFileSync(logFile, `${new Date().toISOString()} ${line}\n`); } catch {}
   };
   const log = (msg: string) => emit(`[localcode gate] ${msg}`);

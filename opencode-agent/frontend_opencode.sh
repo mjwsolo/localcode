@@ -33,7 +33,7 @@ mkdir -p "$HERE/.run"
 # The supervisor owns llama-server (per-machine flags from server_cmd.py: RAM-tier
 # context, KV compression, per-model thinking switch) and serves the picker API.
 "$PY_BIN" "$HERE/localcode_supervisor.py" --model "$MODEL" --port "$PORT" --control-port "$CTRL" \
-  --server "$SERVER" --models-dir "$MODELS_DIR" > "$HERE/.run/supervisor.log" 2>&1 &
+  --server "$SERVER" --models-dir "$MODELS_DIR" >> "$HERE/.run/supervisor.log" 2>&1 &
 SUP=$!; trap 'kill $SUP 2>/dev/null || true' EXIT
 for i in $(seq 1 240); do
   if [ -n "$MODEL" ]; then curl -sf "http://127.0.0.1:$PORT/health" >/dev/null && break

@@ -16,7 +16,7 @@ through bootstrap.download_model — the same code the Textual picker uses.
     GET  /models_dir         {"path", "free_gb"}
     GET  /progress           prompt-fill progress of the running request (from llama-server /slots)
     GET  /voice/status       {"ready", "recording", "detail"}   (whisper env + STT model)
-    POST /voice/start        start recording the default mic (ffmpeg, 16 kHz mono wav)
+    POST /voice/start        start recording the default mic (PortAudio, 16 kHz mono wav)
     POST /voice/stop         stop, transcribe locally (whisper.cpp), {"text"}
     POST /voice/speak {"text"}   read text aloud with macOS `say`
     POST /models_dir {"path"}   change where GGUFs download to (persisted in localcode's config)
@@ -49,6 +49,16 @@ from localcode import bootstrap  # noqa: E402
 
 MIN_SPEED_FRACTION = 0.5  # same rule as tui/screens/model_picker.py
 HERE = Path(__file__).resolve().parent
+
+
+def log(message: str) -> None:
+    """Diagnostics must never paint over the terminal UI."""
+    try:
+        (HERE / ".run").mkdir(exist_ok=True)
+        with (HERE / ".run" / "supervisor.log").open("a") as stream:
+            stream.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {message}\n")
+    except OSError:
+        pass
 
 
 def _bandwidth() -> float:
@@ -156,11 +166,11 @@ class Supervisor:
                 self.state = {"state": "downloading", "model": alias, "detail": "downloading vision projector…", "pct": None}
                 ok, msg = bootstrap.download_mmproj(choice, on_progress=prog)
                 if not ok:
-                    print(f"supervisor: no vision projector for {alias}: {msg}", file=sys.stderr, flush=True)
+                    log(f"supervisor: no vision projector for {alias}: {msg}")
             if dest.is_file() and dest.parent != self.models_dir and not (self.models_dir / dest.name).exists():
                 os.symlink(dest, self.models_dir / dest.name)
         except Exception as e:  # noqa: BLE001
-            print(f"supervisor: vision projector step failed: {e}", file=sys.stderr, flush=True)
+            log(f"supervisor: vision projector step failed: {e}")
 
     def start(self, alias: str, wait_s: int = 240) -> bool:
         gguf = self.models_dir / f"{alias}.gguf"
@@ -174,7 +184,7 @@ class Supervisor:
         self.log.write(f"\n=== {time.ctime()} {' '.join(cmd)}\n".encode())
         self.proc = subprocess.Popen(cmd, stdout=self.log, stderr=subprocess.STDOUT,
                                      start_new_session=True)
-        print(f"supervisor: started llama-server pid {self.proc.pid} for {alias}", file=sys.stderr, flush=True)
+        log(f"supervisor: started llama-server pid {self.proc.pid} for {alias}")
         for _ in range(wait_s):
             if self.proc.poll() is not None:
                 return False
@@ -186,7 +196,7 @@ class Supervisor:
 
     def stop(self) -> None:
         if self.proc and self.proc.poll() is None:
-            print(f"supervisor: stopping llama-server pid {self.proc.pid}", file=sys.stderr, flush=True)
+            log(f"supervisor: stopping llama-server pid {self.proc.pid}")
             self.proc.terminate()
             try:
                 self.proc.wait(timeout=15)
@@ -321,11 +331,11 @@ class Supervisor:
                               "pct": None}
         except Exception as e:  # noqa: BLE001
             import traceback
-            traceback.print_exc(file=sys.stderr)
+            log(traceback.format_exc())
             self.state = {"state": "error", "model": alias, "detail": str(e), "pct": None}
         finally:
             self.active = {}
-            print(f"supervisor: switch to {alias} -> {self.state['state']}", file=sys.stderr, flush=True)
+            log(f"supervisor: switch to {alias} -> {self.state['state']}")
             self.lock.release()
 
     def vision(self) -> bool:
@@ -545,7 +555,7 @@ with wave.open(path, 'wb') as w:
             from localcode.config import load_config, save_config
             cfg = load_config(); cfg.runtime.model_dir = str(path); save_config(cfg)
         except Exception as e:  # noqa: BLE001
-            print(f"supervisor: could not persist model_dir: {e}", file=sys.stderr, flush=True)
+            log(f"supervisor: could not persist model_dir: {e}")
         return dict(self.models_dir_info(), ok=True)
 
 
@@ -638,8 +648,8 @@ def main() -> int:
 
     def bye(signum, frame):
         import traceback
-        print(f"supervisor: got signal {signum}, exiting", file=sys.stderr)
-        traceback.print_stack(frame, file=sys.stderr)
+        log(f"supervisor: got signal {signum}, exiting")
+        log("".join(traceback.format_stack(frame)))
         sup.stop()
         httpd.shutdown()
         sys.exit(0)
@@ -652,13 +662,13 @@ def main() -> int:
     if a.model:
         sup.state = {"state": "loading", "model": a.model, "detail": "", "pct": None}
         if not sup.start(a.model):
-            print(f"llama-server failed to load {a.model}", file=sys.stderr)
+            log(f"llama-server failed to load {a.model}")
             return 1
         sup.state = {"state": "ready", "model": a.model, "detail": "", "pct": None}
     else:
         # First-run journey: the TUI opens first and its /models picker loads a model.
         sup.state = {"state": "idle", "model": None, "detail": "no model loaded", "pct": None}
-    print("ready", flush=True)
+    log("ready")
     # NOT signal.pause(): it returns on ANY signal, including the SIGCHLD from
     # a llama-server we just stopped, which made the supervisor exit mid-switch.
     threading.Event().wait()
