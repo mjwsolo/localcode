@@ -57,3 +57,14 @@ Known residuals in the binary: third-party GitLab provider SDK strings that
 mention `opencode auth login` (only loaded if a GitLab provider is configured);
 absolute build paths from bundled deps (build from a neutral path before any
 distribution).
+
+
+Language support is set up automatically when a task reads or writes that language.
+JavaScript-based language servers use the runtime inside localcode, so a separate
+Node installation is not required for code intelligence. TypeScript uses the
+project's compiler when present and a cached compatible compiler otherwise.
+Setup appears in the sidebar; downloads are cached for later sessions. Optional
+ESLint, Oxlint, and Biome servers are selected only for projects with their config.
+For offline operation, set `OPENCODE_DISABLE_LSP_DOWNLOAD=1`; local servers remain
+available. This does not install the compiler toolchains needed to build every
+language; those are separate project dependencies.
