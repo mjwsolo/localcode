@@ -228,6 +228,14 @@ class Supervisor:
         return g.hf_repo if g else None
 
     def catalog(self) -> dict:
+        from localcode.models_catalog import group_for_filename
+        installed = {}
+        for file in self.models_dir.glob("*.gguf"):
+            if not file.is_file() or file.name.lower().startswith("mmproj"):
+                continue
+            group = group_for_filename(file.name)
+            if group:
+                installed[group.key] = installed.get(group.key, 0) + 1
         rec, cur = self._rec_repo(), self._current_repo()
         groups = []
         for g in MODEL_GROUPS:
@@ -235,6 +243,7 @@ class Supervisor:
                 "key": g.key, "display_name": g.display_name, "maker": g.maker,
                 "license": g.license, "hf_repo": g.hf_repo,
                 "recommended": g.hf_repo == rec, "current": g.hf_repo == cur,
+                "installed_count": installed.get(g.key, 0),
                 "downloading": self.state["state"] == "downloading" and self.active.get("group") == g.key,
                 "pct": self.state["pct"] if self.active.get("group") == g.key else None,
             })
