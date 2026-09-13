@@ -75,8 +75,10 @@ function projectCheck(cwd: string): string[] | null {
     try { if (JSON.parse(readFileSync(pkg, "utf8")).scripts?.build) return ["npm", "run", "build"]; } catch {}
     return null;
   }
-  if (existsSync(join(cwd, "tests"))) return ["python3", "-m", "pytest", "-q", "-x"];
-  if (existsSync(join(cwd, "pyproject.toml")) || existsSync(join(cwd, "setup.py"))) return ["python3", "-m", "compileall", "-q", "."];
+  // Use the project's own interpreter when it made one; system python lacks its packages.
+  const py = [".venv", "venv"].map((d) => join(cwd, d, "bin", "python")).find((p) => existsSync(p)) ?? "python3";
+  if (existsSync(join(cwd, "tests"))) return [py, "-m", "pytest", "-q", "-x"];
+  if (existsSync(join(cwd, "pyproject.toml")) || existsSync(join(cwd, "setup.py"))) return [py, "-m", "compileall", "-q", "."];
   return null;
 }
 
