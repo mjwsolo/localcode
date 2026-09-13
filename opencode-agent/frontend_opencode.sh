@@ -66,9 +66,8 @@ cat > ./localcode.json <<JSON
 JSON
 # localcode's completion discipline (plan gate, build gate, stub audit, bash guard)
 mkdir -p ./.localcode-agent/plugins && cp "$HERE/plugins/localcode.ts" ./.localcode-agent/plugins/localcode.ts
-# Language servers are not bundled: the first file of a language fetches its
-# server (visible in the sidebar as "starting"). LOCALCODE_DISABLE_LSP_DOWNLOAD=1
-# keeps it to servers already on PATH.
-[ -n "${LOCALCODE_DISABLE_LSP_DOWNLOAD:-}" ] && export OPENCODE_DISABLE_LSP_DOWNLOAD=1
+# Reading a file must never install software. Use language servers already
+# available locally; installing another server is a separate user action.
+export OPENCODE_DISABLE_LSP_DOWNLOAD=1
 if [ -n "$MODEL" ]; then LOCALCODE_CONTROL_URL="http://127.0.0.1:$CTRL" exec "$BIN" -m "localcode/$MODEL"
 else LOCALCODE_CONTROL_URL="http://127.0.0.1:$CTRL" exec "$BIN"; fi
