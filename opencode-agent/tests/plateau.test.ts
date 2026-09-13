@@ -275,7 +275,7 @@ describe("plugin wiring", () => {
     await h.idle();
     expect(h.prompts).toHaveLength(0);
   });
-  test("an explicit interruption pauses every gate until a real user message resumes it", async () => {
+  test("an interruption clears abandoned todos when a new user message arrives", async () => {
     const h = await boot();
     await h.userMessage("build the app");
     await h.setTodos([{ content: "Finish it", status: "pending" }]);
@@ -287,7 +287,14 @@ describe("plugin wiring", () => {
     await h.userMessage("SYSTEM: a late hidden nudge");
     await h.idle();
     expect(h.prompts).toHaveLength(0);
+    await h.userMessage("yo");
+    await h.idle();
+    expect(h.prompts).toHaveLength(0);
+    const output = { system: [] as string[] };
+    await h.hooks["experimental.chat.system.transform"]({}, output);
+    expect(output.system.join(" ")).not.toContain("Finish it");
     await h.userMessage("continue now");
+    await h.setTodos([{ content: "Resumed task", status: "pending" }]);
     await h.idle();
     expect(h.prompts).toHaveLength(1);
   });
