@@ -3,7 +3,7 @@
 # Tests SMEM vs baseline at multiple context depths
 #
 # BEFORE RUNNING:
-#   1. cd /Users/tom/local_llms/llama.cpp
+#   1. cd <llama.cpp-checkout>
 #   2. git checkout experiment/smem-pre-dequant
 #   3. Build WITHOUT SMEM first (baseline):
 #      cmake --build build -j12
@@ -17,9 +17,9 @@
 set -e
 
 LABEL="${1:-baseline}"
-LLAMA_BENCH="/Users/tom/local_llms/llama.cpp/build/bin/llama-bench"
-MODEL="/Users/tom/local_llms/models/Qwen3.5-35B-A3B-Q8_0.gguf"
-OUTFILE="/Users/tom/local_llms/llama.cpp/bench-smem-m5-${LABEL}.txt"
+LLAMA_BENCH="${LLAMA_BENCH:-./build/bin/llama-bench}"
+MODEL="${MODEL:-$HOME/.local/share/localcode/models/Qwen3.5-35B-A3B-Q8_0.gguf}"
+OUTFILE="${OUTFILE:-./bench-smem-m5-${LABEL}.txt}"
 
 CONTEXTS=(0 8192 16384 32768)
 KV_TYPES=("turbo3" "turbo4" "q8_0")
