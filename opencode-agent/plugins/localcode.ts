@@ -398,6 +398,14 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
     },
 
     "tool.execute.before": async (input, output) => {
+      if (["read", "write", "edit", "multiedit"].includes(input.tool)) {
+        for (const name of ["filePath", "file_path", "path"]) {
+          const value = output.args?.[name];
+          if (typeof value === "string" && /[\r\n]/.test(value)) {
+            throw new Error(`The ${name} contains a newline. Retry with a single-line file path: ${JSON.stringify(value.replace(/[\r\n]/g, ""))}`);
+          }
+        }
+      }
       if (input.tool !== "bash") return;
       const cmd = String(output.args?.command ?? "");
       if (SERVER_CMD.test(cmd) && !BACKGROUNDED.test(cmd)) {
