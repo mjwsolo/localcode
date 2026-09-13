@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import path from "node:path"
 
-test("an idle picker and an unhealthy listener both reserve their ports", () => {
+test("an existing picker prevents a second launch, while unrelated listeners reserve ports", () => {
   const result = Bun.spawnSync(["python3", "-c", `
 import json, socket, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -28,7 +28,12 @@ with socket.socket() as future, socket.socket() as busy, socket.socket() as free
         control.bind(('127.0.0.1', 0))
         next_control = control.getsockname()[1]
     try:
-        assert choose_ports([reserved, occupied, unused], [server.server_port, next_control]) == (unused, next_control)
+        try:
+            choose_ports([reserved, occupied, unused], [server.server_port, next_control])
+            raise AssertionError('second launch accepted')
+        except RuntimeError as error:
+            assert 'already running' in str(error)
+        assert choose_ports([occupied, unused], [next_control]) == (unused, next_control)
     finally:
         server.shutdown()
         server.server_close()

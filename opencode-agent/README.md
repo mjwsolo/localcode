@@ -68,3 +68,5 @@ ESLint, Oxlint, and Biome servers are selected only for projects with their conf
 For offline operation, set `OPENCODE_DISABLE_LSP_DOWNLOAD=1`; local servers remain
 available. This does not install the compiler toolchains needed to build every
 language; those are separate project dependencies.
+
+Only one localcode launcher may run per user, including across checkouts. A second launch exits with guidance to use the existing session. The background model process is stopped when its launcher exits or disappears; a shared process lock prevents concurrent starts.

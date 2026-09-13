@@ -28,13 +28,14 @@ fi
 
 # A picker reserves its future model port even before llama-server is running.
 # Probe socket availability as well: an unhealthy service still owns its port.
-read -r PORT CTRL <<< "$("$PY_BIN" "$HERE/ports.py")"
+PAIR=$("$PY_BIN" "$HERE/ports.py") || { echo "$PAIR"; exit 1; }
+read -r PORT CTRL <<< "$PAIR"
 [ -n "$PORT" ] && [ -n "$CTRL" ] || { echo "No free local ports"; exit 1; }
 mkdir -p "$HERE/.run"
 # The supervisor owns llama-server (per-machine flags from server_cmd.py: RAM-tier
 # context, KV compression, per-model thinking switch) and serves the picker API.
 "$PY_BIN" "$HERE/localcode_supervisor.py" --model "$MODEL" --port "$PORT" --control-port "$CTRL" \
-  --server "$SERVER" --models-dir "$MODELS_DIR" >> "$HERE/.run/supervisor.log" 2>&1 &
+  --server "$SERVER" --models-dir "$MODELS_DIR" --parent-pid "$$" >> "$HERE/.run/supervisor.log" 2>&1 &
 SUP=$!
 # Keep the launcher alive to reap both children, including when the terminal
 # closes or the frontend is terminated before its normal shutdown hook runs.
