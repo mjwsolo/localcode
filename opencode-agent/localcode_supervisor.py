@@ -79,6 +79,8 @@ class Supervisor:
         self.proc: subprocess.Popen | None = None
         self.current: str | None = None           # alias of the loaded model
         self.lock = threading.Lock()
+        self.speech_lock = threading.Lock()
+        self.speech_proc: subprocess.Popen | None = None
         self.state = {"state": "idle", "model": None, "detail": "", "pct": None}
         self.cancel = threading.Event()
         self.active: dict = {}  # {"group": key, "filename": ..} while a download/switch runs
@@ -514,15 +516,27 @@ with wave.open(path, 'wb') as w:
         text = re.sub(r"\s*[\[(][^\])]{0,40}[\])]\s*", " ", out.get("text", "")).strip()
         return {"ok": True, "text": text}
 
-    @staticmethod
-    def voice_speak(text: str) -> dict:
+    def voice_speak(self, text: str) -> dict:
+        with self.speech_lock:
+            if self.speech_proc and self.speech_proc.poll() is None:
+                self.speech_proc.terminate()
+                try:
+                    self.speech_proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    self.speech_proc.kill()
+                    self.speech_proc.wait()
+                self.speech_proc = None
+                return {"ok": True, "speaking": False}
+            return self._voice_speak(text)
+
+    def _voice_speak(self, text: str) -> dict:
         text = (text or "").strip()
         if not text:
             return {"error": "nothing to say"}
         if not shutil.which("say"):
             return {"error": "macOS `say` not available"}
-        subprocess.Popen(["say", text[:4000]], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return {"ok": True}
+        self.speech_proc = subprocess.Popen(["say", text[:4000]], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return {"ok": True, "speaking": True}
 
     def cancel_download(self) -> dict:
         if self.state["state"] != "downloading":
@@ -651,6 +665,9 @@ def main() -> int:
         log(f"supervisor: got signal {signum}, exiting")
         log("".join(traceback.format_stack(frame)))
         sup.stop()
+        with sup.speech_lock:
+            if sup.speech_proc and sup.speech_proc.poll() is None:
+                sup.speech_proc.terminate()
         httpd.shutdown()
         sys.exit(0)
     signal.signal(signal.SIGTERM, bye)
