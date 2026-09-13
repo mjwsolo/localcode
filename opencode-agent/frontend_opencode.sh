@@ -26,9 +26,10 @@ if [ -n "$MODEL" ]; then
   [ -f "$GGUF" ] || { echo "No such model: $GGUF"; ls "$MODELS_DIR" | grep '\.gguf$' | grep -v mmproj | sed 's/\.gguf$//;s/^/  /'; exit 1; }
 fi
 
-PORT=""; CTRL=""
-for p in $(seq 8123 8199); do curl -sf "http://127.0.0.1:$p/health" >/dev/null 2>&1 || { PORT=$p; break; }; done
-for p in $(seq 8323 8399); do curl -sf "http://127.0.0.1:$p/status" >/dev/null 2>&1 || { CTRL=$p; break; }; done
+# A picker reserves its future model port even before llama-server is running.
+# Probe socket availability as well: an unhealthy service still owns its port.
+read -r PORT CTRL <<< "$("$PY_BIN" "$HERE/ports.py")"
+[ -n "$PORT" ] && [ -n "$CTRL" ] || { echo "No free local ports"; exit 1; }
 mkdir -p "$HERE/.run"
 # The supervisor owns llama-server (per-machine flags from server_cmd.py: RAM-tier
 # context, KV compression, per-model thinking switch) and serves the picker API.
