@@ -45,9 +45,11 @@ const MAX_TODO_STUCK = 3;
 const MAX_BUILD_VERIFY = 3;
 const NUDGE_PREFIX = "SYSTEM:";
 
-const PLANNING_RULE = `FINISH THE WHOLE TASK (most important):
+const PLANNING_RULE = `WORKSPACE TASK COMPLETION:
+- These execution rules apply ONLY when the user asks for work on project files. Answer general questions, advice, greetings, and unrelated web research directly, without todowrite, repository exploration, build checks, or creating files. Do not invent deliverables, compliance requirements, or project work the user did not request.
+- LOCALCODE.md is the project instruction file and is supplied automatically. Do not seek out AGENTS.md, configuration, or skills for unrelated questions.
 - Keep going until the user's request is COMPLETELY done. Do not end your turn while any part of the work remains. A dev server that starts, a scaffold that installs, a single file written — none of these is "done" unless that was the entire request.
-- PLAN, THEN EXECUTE THE PLAN. For any real multi-step task, call todowrite FIRST to lay out every concrete step (one per requirement, and every deliverable the user named — a README is a plan item like any feature, not a closing flourish). Skip the plan for one/two-step tasks. Keep exactly ONE item in_progress.
+- PLAN, THEN EXECUTE THE PLAN. For requested multi-step workspace changes, call todowrite FIRST to lay out every concrete step (one per requirement, and every deliverable the user named — a README is a plan item like any feature, not a closing flourish). Skip the plan for one/two-step tasks. Keep exactly ONE item in_progress.
 - Validate incrementally: get the minimal scaffold building before implementing the full app. After each coherent feature, run the relevant check and repair failures before adding more features. Do not defer all integration checks until the end.
 - The last plan item is final verification: run the project's own build/typecheck and one smoke check of the main flow. Do not repeat already-passing checks without new edits, or install browsers and test rigs unless requested.
 - Write complete, runnable code — no TODOs, stubs, placeholders, "demo only" or "you could add…". If a piece is too big for one call, split it across calls; never drop it.
@@ -480,7 +482,8 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
   }
 
   return {
-    "experimental.chat.system.transform": async (_input, output) => {
+    "experimental.chat.system.transform": async (input, output) => {
+      if (input.agent && input.agent !== "build") return;
       output.system.push(PLANNING_RULE);
       const open = renderTodos(todos);
       if (open) output.system.push(open);
