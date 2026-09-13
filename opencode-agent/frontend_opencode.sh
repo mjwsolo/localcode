@@ -61,6 +61,7 @@ cat > ./localcode.json <<JSON
       "limit": { "context": $CTX, "output": 8192 } } } } },
   "enabled_providers": ["localcode"],
   "tools": { "task": false },
+  "agent": { "plan": { "disable": true } },
   "lsp": true,$( [ -n "$MODEL" ] && printf '\n  "model": "localcode/%s",' "$MODEL" )
   "share": "disabled", "autoupdate": false }
 JSON
