@@ -4,7 +4,7 @@
 #   pick model → pick quant (or pass an alias)  →  supervisor starts the bundled
 #   llama-server on a free port and serves the in-TUI /models picker on a
 #   localhost control port  →  project-local localcode.json points the fork at
-#   that server  →  exec the fork binary.
+#   that server  →  run the fork binary.
 #
 # Nothing global is read or written: the fork's XDG dirs are ~/.*/localcode-agent,
 # the config is written next to the project, and no network is used except
@@ -34,7 +34,19 @@ mkdir -p "$HERE/.run"
 # context, KV compression, per-model thinking switch) and serves the picker API.
 "$PY_BIN" "$HERE/localcode_supervisor.py" --model "$MODEL" --port "$PORT" --control-port "$CTRL" \
   --server "$SERVER" --models-dir "$MODELS_DIR" >> "$HERE/.run/supervisor.log" 2>&1 &
-SUP=$!; trap 'kill $SUP 2>/dev/null || true' EXIT
+SUP=$!
+# Keep the launcher alive to reap both children, including when the terminal
+# closes or the frontend is terminated before its normal shutdown hook runs.
+FRONTEND=""
+cleanup() {
+  [ -z "$FRONTEND" ] || kill "$FRONTEND" 2>/dev/null || true
+  kill "$SUP" 2>/dev/null || true
+  wait "$SUP" 2>/dev/null || true
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 for i in $(seq 1 240); do
   if [ -n "$MODEL" ]; then curl -sf "http://127.0.0.1:$PORT/health" >/dev/null && break
   else curl -sf "http://127.0.0.1:$CTRL/status" >/dev/null && break; fi
@@ -70,5 +82,7 @@ mkdir -p ./.localcode-agent/plugins && cp "$HERE/plugins/localcode.ts" ./.localc
 # Reading a file must never install software. Use language servers already
 # available locally; installing another server is a separate user action.
 export OPENCODE_DISABLE_LSP_DOWNLOAD=1
-if [ -n "$MODEL" ]; then LOCALCODE_CONTROL_URL="http://127.0.0.1:$CTRL" exec "$BIN" -m "localcode/$MODEL"
-else LOCALCODE_CONTROL_URL="http://127.0.0.1:$CTRL" exec "$BIN"; fi
+if [ -n "$MODEL" ]; then LOCALCODE_CONTROL_URL="http://127.0.0.1:$CTRL" "$BIN" -m "localcode/$MODEL" <&0 &
+else LOCALCODE_CONTROL_URL="http://127.0.0.1:$CTRL" "$BIN" <&0 & fi
+FRONTEND=$!
+wait "$FRONTEND"
