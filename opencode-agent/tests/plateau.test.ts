@@ -31,6 +31,13 @@ describe("isCheckCommand", () => {
 });
 
 describe("isTempPath / editedPaths", () => {
+  test("a project under tmp still has real deliverables", () => {
+    expect(isTempPath("/private/tmp/project/app.py", "/private/tmp/project")).toBe(false);
+    expect(isTempPath("app.py", "/private/tmp/project")).toBe(false);
+    expect(isTempPath("/private/tmp/project/node_modules/a.js", "/private/tmp/project")).toBe(true);
+    expect(isTempPath("/private/tmp/project-scratch/a.py", "/private/tmp/project")).toBe(true);
+    expect(progressOf(write("/private/tmp/project/app.py"), newProgressMemory(), "/private/tmp/project")).toBeTruthy();
+  });
   test("temp dirs are excluded", () => {
     expect(isTempPath("/tmp/scratch.ts")).toBe(true);
     expect(isTempPath("/private/tmp/x/y.ts")).toBe(true);
