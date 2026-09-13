@@ -393,3 +393,56 @@ test("verification finds the edited app outside the launcher and runs its build"
   await h.idle();
   expect(h.prompts.some((p: string) => p.includes("bundle fixture failed") && p.includes(root))).toBe(true);
 });
+
+describe("repeated check failures", () => {
+  const failure = (file = "Navbar.tsx") => check(`error during build:\nCould not resolve "./App" from "src/components/${file}"`, 1, "npm run build");
+  test("distinct edits do not erase repeated failed-build evidence", () => {
+    const tracker = new PlateauTracker("/project");
+    const decisions = [];
+    for (let i = 0; i < 8; i++) {
+      tracker.observe({ tool: "write", args: { filePath: "/project/src/App.tsx", content: `revision ${i}` } });
+      tracker.observe(failure());
+      decisions.push(tracker.endRound());
+    }
+    expect(decisions[2]).toBe("repair-nudge");
+    expect(decisions[7]).toBe("stop");
+    expect(tracker.repeated.evidence).toContain('Could not resolve "./App"');
+  });
+  test("fixing one failing import and exposing another is repair progress", () => {
+    const tracker = new PlateauTracker("/project");
+    for (let i = 0; i < 6; i++) {
+      tracker.observe(failure(`Component${String.fromCharCode(65 + i)}.tsx`));
+      expect(tracker.endRound()).not.toBe("repair-nudge");
+      expect(tracker.stopped).toBe(false);
+    }
+  });
+  test("a passing typecheck does not reset a failed production build", () => {
+    const tracker = new PlateauTracker("/project");
+    for (let i = 0; i < 3; i++) {
+      tracker.observe(failure());
+      tracker.observe(check("", 0, "npx tsc --noEmit"));
+      const decision = tracker.endRound();
+      if (i === 2) expect(decision).toBe("repair-nudge");
+    }
+  });
+  test("passing the same check resets the repeated-failure counter", () => {
+    const tracker = new PlateauTracker("/project");
+    for (let i = 0; i < 2; i++) { tracker.observe(failure()); tracker.endRound(); }
+    tracker.observe(check("built successfully", 0, "npm run build"));
+    tracker.endRound();
+    for (let i = 0; i < 2; i++) { tracker.observe(failure()); expect(tracker.endRound()).toBe("none"); }
+  });
+  test("bundler wrapper changes do not disguise the same import error", () => {
+    const tracker = new PlateauTracker("/project");
+    for (const wrapper of ["Error: plugin failed", "error during build:", "Error: different bundler wrapper"]) {
+      const event = failure();
+      event.output = wrapper + "\n" + event.output;
+      tracker.observe(event);
+    }
+    expect(tracker.endRound()).toBe("repair-nudge");
+  });
+  test("recognizes direct Vite builds and their hidden output", () => {
+    expect(isCheckCommand("npx vite build")).toBe(true);
+    expect(checkPassed(check("", 0, "npx vite build | head -100"))).toBe(false);
+  });
+});
