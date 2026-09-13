@@ -16,8 +16,7 @@
  *  6. Plateau breaker: a "round" is one LLM step that executed tools (closed by
  *     the `step-finish` part the runtime publishes on message.part.updated; each
  *     tool.execute.after is attributed to the open round; session.idle flushes
- *     a trailing round). Progress in a round = a write/edit to a path never
- *     changed this session, a project check that passes for the first time or
+ *     a trailing round). Progress in a round = a new write/edit revision (including repairs to existing files), a project check that passes for the first time or
  *     after failing, a check whose failure set shrinks or shows a new failure
  *     signature, or a todowrite raising the completed count. From round 4 on,
  *     6 consecutive no-progress rounds nudge once ("stop experimenting, deliver
@@ -30,6 +29,7 @@
  * the benchmark copy it there). Hooks only, no custom tools, so it needs no
  * node_modules in the project.
  */
+import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -144,6 +144,7 @@ const PLATEAU_PASS_GRACE = 3;       // ...and grants this many more rounds after
 type ToolEvent = { tool: string; args: any; output?: string; metadata?: any };
 type ProgressMemory = {
   changedPaths: Set<string>;
+  revisions: Set<string>;
   failureSigs: Set<string>;
   lastFailureCount: number | null;
   lastCheckPassed: boolean | null; // null = no check run yet this session
@@ -152,7 +153,7 @@ type ProgressMemory = {
 type PlateauDecision = "none" | "nudge" | "pass-nudge" | "stop";
 
 function newProgressMemory(): ProgressMemory {
-  return { changedPaths: new Set(), failureSigs: new Set(), lastFailureCount: null, lastCheckPassed: null, completedTodos: 0 };
+  return { changedPaths: new Set(), revisions: new Set(), failureSigs: new Set(), lastFailureCount: null, lastCheckPassed: null, completedTodos: 0 };
 }
 
 // Same program-position idea as SERVER_CMD: a check is a PROGRAM being run.
@@ -224,15 +225,21 @@ function checkPassed(ev: ToolEvent): boolean {
 
 /**
  * Classify one tool call. Mutates `mem`. Returns a short reason when the call is
- * progress, null otherwise. Reads, greps, re-edits of known paths, checks that
+ * progress, null otherwise. Reads, greps, repeated identical edits, checks that
  * pass again or fail identically are not progress.
  */
 function progressOf(ev: ToolEvent, mem: ProgressMemory, directory?: string): string | null {
   const paths = editedPaths(ev).filter((p) => !isTempPath(p, directory));
   if (paths.length) {
-    const fresh = paths.filter((p) => !mem.changedPaths.has(p));
+    // Repairs to existing files count; repeating the same edit does not.
+    const revision = createHash("sha256").update(JSON.stringify([
+      paths, ev.metadata?.diff ?? ev.metadata?.files ?? ev.args,
+    ])).digest("hex");
+    const fresh = !mem.revisions.has(revision);
     for (const p of paths) mem.changedPaths.add(p);
-    return fresh.length ? `new file(s): ${fresh.join(", ")}` : null;
+    mem.revisions.add(revision);
+    if (fresh) mem.lastCheckPassed = null;
+    return fresh ? `changed file(s): ${paths.join(", ")}` : null;
   }
   if (ev.tool === "todowrite") {
     const todos: Todo[] = Array.isArray(ev.args?.todos) ? ev.args.todos : [];
@@ -288,7 +295,7 @@ class PlateauTracker {
     this.round += 1;
     const progressed = this.reasons.length > 0;
     this.reasons = [];
-    if (progressed) { this.noProgress = 0; return "none"; }
+    if (progressed) { this.noProgress = 0; this.nudged = false; this.passNudged = false; return "none"; }
     this.noProgress += 1;
     if (this.round < PLATEAU_MIN_ROUND) return "none";
     if (!this.nudged) {
