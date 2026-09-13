@@ -317,6 +317,11 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
   let turnStartedAt = Date.now() - 1000;
   let plateau = new PlateauTracker();
   let plateauStopped = false;
+  // The agent the user is talking to. Nudges must keep it (a prompt without an
+  // agent defaults to build, which silently escalated Plan sessions to Build),
+  // and in Plan mode the model is conversing with the user, so no gate fires at all.
+  let currentAgent: string | undefined;
+  const planMode = () => currentAgent === "plan";
   const seenSteps = new Set<string>();
   // The plugin runs inside the TUI's own process: anything written to stderr is
   // painted over the screen ("rounds — nudging to deliver" leaked into the prompt).
@@ -329,7 +334,11 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
   const plog = (msg: string) => emit(`[localcode plateau] ${msg}`);
 
   async function nudge(sessionID: string, text: string) {
-    await client.session.prompt({ path: { id: sessionID }, body: { parts: [{ type: "text", text }] } });
+    // synthetic: the TUI hides it from the transcript; the model still sees it.
+    await client.session.prompt({
+      path: { id: sessionID },
+      body: { agent: currentAgent, parts: [{ type: "text", text, synthetic: true }] },
+    });
   }
   // Mid-loop nudge: the prompt is inserted into history and picked up at the next
   // step, but the call resolves only when the whole loop ends, so never await it.
@@ -341,7 +350,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
 
   async function onRoundEnd(sessionID: string): Promise<PlateauDecision> {
     const decision = plateau.endRound();
-    if (decision === "none") return decision;
+    if (decision === "none" || planMode()) return "none";
     const open = openTodos();
     if (decision === "nudge") {
       plog(`round ${plateau.round}: ${PLATEAU_NUDGE_AFTER} no-progress rounds — nudging to deliver`);
@@ -371,7 +380,8 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
       if (open) output.system.push(open);
     },
 
-    "chat.message": async (_input, output) => {
+    "chat.message": async (input, output) => {
+      if (input.agent) currentAgent = input.agent;
       const text = output.parts.map((p: any) => (p.type === "text" ? p.text : "")).join(" ");
       if (!text.startsWith(NUDGE_PREFIX)) {
         continueCount = 0; stuckCount = 0; lastRemaining = Number.MAX_SAFE_INTEGER;
@@ -417,6 +427,8 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
       // Flush a trailing round if a step-finish never arrived; then, if the
       // plateau breaker stopped this session, none of the gates may restart it.
       if ((await onRoundEnd(sessionID)) !== "none" || plateauStopped) return;
+      // Plan mode is a conversation with the user: never push the model onward.
+      if (planMode()) return;
 
       const open = openTodos();
       if (open.length && continueCount < MAX_TODO_CONTINUATIONS && stuckCount < MAX_TODO_STUCK) {
