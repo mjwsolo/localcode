@@ -83,11 +83,11 @@ describe("checkPassed", () => {
 });
 
 describe("progressOf", () => {
-  test("a new path is progress, re-editing it is not, temp paths never are", () => {
+  test("new edit revisions are progress, repeated revisions and temp paths are not", () => {
     const mem = newProgressMemory();
     expect(progressOf(edit("/p/a.ts"), mem)).toBeTruthy();
     expect(progressOf(edit("/p/a.ts"), mem)).toBeNull();
-    expect(progressOf(write("/p/a.ts"), mem)).toBeNull();
+    expect(progressOf(write("/p/a.ts"), mem)).toBeTruthy();
     expect(progressOf(write("/p/b.ts"), mem)).toBeTruthy();
     expect(progressOf(write("/tmp/x.ts"), mem)).toBeNull();
   });
@@ -169,6 +169,7 @@ describe("PlateauTracker thresholds", () => {
     expect(t.nudged).toBe(true);
     stall(t, 3);
     t.observe(write("/p/fresh.ts")); expect(t.endRound()).toBe("none");
+    expect(stall(t, PLATEAU_NUDGE_AFTER).at(-1)).toBe("nudge");
     const d = stall(t, PLATEAU_STOP_AFTER);
     expect(d.slice(0, -1).every((x) => x === "none")).toBe(true);
     expect(d.at(-1)).toBe("stop");
@@ -294,7 +295,7 @@ describe("plugin wiring", () => {
     const h = await boot();
     await h.userMessage("build me a thing");
     await h.setTodos([{ content: "Ship README", status: "pending" }, { content: "Done part", status: "completed" }]);
-    await h.toolRound(write("/p/app.ts"));            // progress
+    await h.toolRound(edit("/p/app.ts"));             // first edit is progress
     for (let i = 0; i < PLATEAU_NUDGE_AFTER; i++) await h.toolRound(edit("/p/app.ts"));
     await tick();
     expect(h.prompts).toHaveLength(1);
@@ -345,4 +346,21 @@ describe("plugin wiring", () => {
     for (let i = 0; i < PLATEAU_PASS_GRACE; i++) await h.toolRound(read("/p/a"));
     expect(h.aborts).toEqual([h.sid]);
   });
+});
+
+test("repairs to existing files survive the former false-stop sequence", () => {
+  const t = new PlateauTracker();
+  t.observe(write("/project/app.ts")); t.endRound();
+  for (let i = 0; i < 24; i++) {
+    t.observe({tool: "edit", args: {filePath: "/project/app.ts", oldString: `old${i}`, newString: `fixed${i}`}});
+    expect(t.endRound()).toBe("none");
+  }
+  expect(t.stopped).toBe(false);
+  expect(t.mem.changedPaths.size).toBe(1);
+});
+test("an edit invalidates a previous passing check", () => {
+  const mem = newProgressMemory();
+  progressOf(check("ok", 0), mem);
+  progressOf(edit("/project/app.ts"), mem);
+  expect(mem.lastCheckPassed).toBeNull();
 });
