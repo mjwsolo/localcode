@@ -165,6 +165,9 @@ const CHECK_CMD = new RegExp(
   "i",
 );
 function isCheckCommand(cmd: string): boolean { return CHECK_CMD.test(cmd); }
+function filteredCheck(cmd: string): boolean {
+  return isCheckCommand(cmd) && /(?:^|[^|])\|\s*(?:head|tail|tee|cat|grep|sed|awk|wc)\b/.test(cmd);
+}
 
 const TEMP_RE = /(?:^|\/)(?:tmp|private\/tmp|var\/folders|node_modules|\.localcode-agent|\.opencode|\.git)(?:\/|$)|^\/dev\//;
 function isTempPath(p: string, directory?: string): boolean {
@@ -200,6 +203,7 @@ function failureSignatures(output: string): string[] {
   for (const raw of String(output ?? "").replace(ANSI_RE, "").split("\n")) {
     const line = raw.trim();
     if (!line || !FAIL_LINE_RE.test(line)) continue;
+    if (/\b0 (?:errors?|fail(?:ed|ures?)?)\b/i.test(line) && !/\b[1-9]\d* (?:errors?|fail(?:ed|ures?)?)\b/i.test(line)) continue;
     if (/^\s*at\s|^\s*File\s"/.test(line)) continue;
     const norm = line
       .replace(/(?:[A-Za-z]:)?(?:\.{0,2}\/)?(?:[\w.@-]+\/)+/g, "")  // strip directories, keep basename
@@ -215,9 +219,13 @@ function failureSignatures(output: string): string[] {
 
 /** Pass/fail of a check from the bash tool result: metadata.exit when present, else output heuristics. */
 function checkPassed(ev: ToolEvent): boolean {
+  const out = String(ev.output ?? "");
+  // Pipelines can return tail/head's zero while the compiler failed upstream.
+  // An explicit diagnostic always overrides a successful shell exit.
+  if (failureSignatures(out).length || /build failed|tests? failed|command failed/i.test(out)) return false;
+  if (filteredCheck(String(ev.args?.command ?? ""))) return false;
   const exit = ev.metadata?.exit;
   if (typeof exit === "number") return exit === 0;
-  const out = String(ev.output ?? "");
   const m = out.match(/<shell_metadata>[\s\S]*?exit(?:\s*code)?[:=\s]+(\d+)/i);
   if (m) return m[1] === "0";
   return failureSignatures(out).length === 0;
@@ -429,6 +437,9 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
       }
       if (input.tool !== "bash") return;
       const cmd = String(output.args?.command ?? "");
+      if (filteredCheck(cmd)) {
+        throw new Error("Run the project check without piping it through head, tail, or other output filters. Those pipes hide the check's exit code and diagnostics. Run the check directly; the tool already limits displayed output.");
+      }
       if (SERVER_CMD.test(cmd) && !BACKGROUNDED.test(cmd)) {
         throw new Error(
           `That command starts a server that never exits, so the bash tool would hang. ` +
@@ -517,5 +528,5 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
 // if one is not a function ("Plugin export is not a function") — which silently
 // disabled this whole plugin once test helpers were exported. Expose the helpers
 // as properties on the plugin function instead; tests read them from `default`.
-Object.assign(LocalcodePlugin, { PLATEAU_MIN_ROUND, PLATEAU_NUDGE_AFTER, PLATEAU_STOP_AFTER, PLATEAU_RECENT_PASS, PLATEAU_PASS_GRACE, newProgressMemory, CHECK_CMD, isCheckCommand, isTempPath, editedPaths, failureSignatures, checkPassed, progressOf, PlateauTracker, plateauNudgeText, PLATEAU_PASS_TEXT });
+Object.assign(LocalcodePlugin, { PLATEAU_MIN_ROUND, PLATEAU_NUDGE_AFTER, PLATEAU_STOP_AFTER, PLATEAU_RECENT_PASS, PLATEAU_PASS_GRACE, newProgressMemory, CHECK_CMD, isCheckCommand, filteredCheck, isTempPath, editedPaths, failureSignatures, checkPassed, progressOf, PlateauTracker, plateauNudgeText, PLATEAU_PASS_TEXT });
 export default LocalcodePlugin;
