@@ -544,6 +544,13 @@ with wave.open(path, 'wb') as w:
             return {"error": "nothing to say"}
         if not shutil.which("say"):
             return {"error": "macOS `say` not available"}
+        try:
+            muted = subprocess.run(["osascript", "-e", "output muted of (get volume settings)"],
+                                   capture_output=True, text=True, timeout=2)
+            if muted.returncode == 0 and muted.stdout.strip() == "true":
+                return {"error": "Sound output is muted. Unmute your Mac, then run /speak again."}
+        except (OSError, subprocess.TimeoutExpired):
+            pass
         self.speech_proc = subprocess.Popen(["say", text[:4000]], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return {"ok": True, "speaking": True}
 
