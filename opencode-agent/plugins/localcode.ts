@@ -288,6 +288,25 @@ function progressOf(ev: ToolEvent, mem: ProgressMemory, directory?: string): str
   return null;
 }
 
+function commandRoot(command: string, directory = ".", workdir = "."): string {
+  const cd = command.match(/(?:^|[;&])\s*cd\s+(?:"([^"\n]+)"|'([^'\n]+)'|([^\s;&]+))/);
+  return resolve(directory, workdir, cd?.[1] ?? cd?.[2] ?? cd?.[3] ?? ".");
+}
+
+function referenceOnlyTypecheck(command: string, directory: string, workdir = "."): boolean {
+  const root = commandRoot(command, directory, workdir);
+  try {
+    const script = command.match(new RegExp(PROG + String.raw`(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(build|typecheck|type-check|check)\b`));
+    const source = script ? JSON.parse(readFileSync(join(root, "package.json"), "utf8")).scripts?.[script[1]] : command;
+    if (typeof source !== "string") return false;
+    const invocations = [...source.matchAll(new RegExp(PROG + String.raw`(?:npx\s+|bunx\s+)?tsc\b([^;&|\n]*)`, "g"))];
+    const noop = invocations.some((m) => !/(?:^|\s)(?:-b|--build|-p|--project)(?:\s|=|$)|--(?:init|version|help|showConfig|listFiles)|(?:^|\s)-[vh](?:\s|$)/.test(m[1]));
+    if (!noop) return false;
+    const cfg = JSON.parse(readFileSync(join(script ? commandRoot(source, root) : root, "tsconfig.json"), "utf8"));
+    return Array.isArray(cfg.files) && cfg.files.length === 0 && Array.isArray(cfg.references) && cfg.references.length > 0;
+  } catch { return false; }
+}
+
 // File edits are activity, but repeated identical check failures are not repair
 // progress. Track each project/check separately so a passing lint or empty tsc
 // invocation cannot clear a failed production build.
@@ -297,8 +316,7 @@ class RepeatedCheckTracker {
   observe(ev: ToolEvent, directory = "."): PlateauDecision {
     const command = String(ev.args?.command ?? "");
     if (ev.tool !== "bash" || !isCheckCommand(command)) return "none";
-    const cwd = command.match(/(?:^|[;&])\s*cd\s+(?:"([^"\n]+)"|'([^'\n]+)'|([^\s;&]+))/);
-    const root = resolve(directory, cwd?.[1] ?? cwd?.[2] ?? cwd?.[3] ?? ev.args?.workdir ?? ".");
+    const root = commandRoot(command, directory, ev.args?.workdir);
     const kind = /\bbuild\b/.test(command) ? "build" : /\b(?:test|pytest|vitest|jest)\b/.test(command) ? "test" : /\b(?:lint|eslint)\b/.test(command) ? "lint" : "typecheck";
     const key = `${root}:${kind}`;
     if (checkPassed(ev)) { this.checks.delete(key); return "none"; }
@@ -502,6 +520,9 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
       if (filteredCheck(cmd)) {
         throw new Error("Run the project check without piping it through head, tail, or other output filters. Those pipes hide the check's exit code and diagnostics. Run the check directly; the tool already limits displayed output.");
       }
+      if (referenceOnlyTypecheck(cmd, directory, output.args?.workdir)) {
+        throw new Error("This tsc invocation checks zero source files: the root tsconfig has an empty files list and project references. Fix the package script to use tsc -b instead of plain tsc, then rerun the same npm/pnpm/yarn/bun script. Package scripts use the project-local compiler; a missing global tsc does not mean TypeScript needs installing. For a direct command, use the existing node_modules/.bin/tsc -b or check a child project with node_modules/.bin/tsc -p. A zero-file check is not verification.");
+      }
       if (SERVER_CMD.test(cmd) && !BACKGROUNDED.test(cmd)) {
         throw new Error(
           `That command starts a server that never exits, so the bash tool would hang. ` +
@@ -594,5 +615,5 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
 // if one is not a function ("Plugin export is not a function") — which silently
 // disabled this whole plugin once test helpers were exported. Expose the helpers
 // as properties on the plugin function instead; tests read them from `default`.
-Object.assign(LocalcodePlugin, { PLATEAU_MIN_ROUND, PLATEAU_NUDGE_AFTER, PLATEAU_STOP_AFTER, PLATEAU_RECENT_PASS, PLATEAU_PASS_GRACE, newProgressMemory, projectCheck, checkDirectory, CHECK_CMD, isCheckCommand, filteredCheck, isTempPath, editedPaths, failureSignatures, checkPassed, progressOf, RepeatedCheckTracker, PlateauTracker, plateauNudgeText, PLATEAU_PASS_TEXT });
+Object.assign(LocalcodePlugin, { PLATEAU_MIN_ROUND, PLATEAU_NUDGE_AFTER, PLATEAU_STOP_AFTER, PLATEAU_RECENT_PASS, PLATEAU_PASS_GRACE, newProgressMemory, projectCheck, checkDirectory, CHECK_CMD, isCheckCommand, filteredCheck, isTempPath, editedPaths, failureSignatures, checkPassed, progressOf, referenceOnlyTypecheck, RepeatedCheckTracker, PlateauTracker, plateauNudgeText, PLATEAU_PASS_TEXT });
 export default LocalcodePlugin;
