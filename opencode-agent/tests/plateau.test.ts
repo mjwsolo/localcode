@@ -233,9 +233,9 @@ describe("nudge wording", () => {
 // Hook wiring: drive the plugin with a stub client and OpenCode-shaped events.
 // ---------------------------------------------------------------------------
 const LocalcodePlugin = LocalcodePluginDefault as any;
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 
 async function boot() {
   const prompts: string[] = [];
@@ -257,7 +257,7 @@ async function boot() {
   const userMessage = async (text: string) => hooks["chat.message"]({ sessionID: sid }, { message: {}, parts: [{ type: "text", text }] });
   const idle = async () => hooks.event({ event: { type: "session.idle", properties: { sessionID: sid } } });
   const setTodos = async (todos: any[]) => hooks.event({ event: { type: "todo.updated", properties: { todos } } });
-  return { hooks, prompts, aborts, sid, toolRound, userMessage, idle, setTodos };
+  return { dir, hooks, prompts, aborts, sid, toolRound, userMessage, idle, setTodos };
 }
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
@@ -375,4 +375,21 @@ test("check guard rejects output pipelines before they hide a failure", async ()
   const h = await boot();
   await expect(h.hooks["tool.execute.before"]({ tool: "bash", sessionID: h.sid }, {args: {command: "npm run build 2>&1 | tail -40"}})).rejects.toThrow("without piping");
   await h.hooks["tool.execute.before"]({tool: "bash",sessionID:h.sid}, {args:{command:"npm run build"}});
+});
+
+test("verification finds the edited app outside the launcher and runs its build", async () => {
+  const root = mkdtempSync(join(tmpdir(), "verify-app-"));
+  mkdirSync(join(root, "src"));
+  writeFileSync(join(root, "package.json"), JSON.stringify({scripts: {build: "node check.cjs"}}));
+  writeFileSync(join(root, "tsconfig.json"), "{}");
+  writeFileSync(join(root, "check.cjs"), "console.error('bundle fixture failed'); process.exit(1)");
+  const file = join(root, "src", "app.ts");
+  writeFileSync(file, "export const answer = 42");
+  expect((LocalcodePluginDefault as any).checkDirectory(file)).toBe(root);
+  expect((LocalcodePluginDefault as any).projectCheck(root)).toEqual(["npm", "run", "build"]);
+  const h = await boot();
+  await h.userMessage("fix app");
+  await h.toolRound(write(relative(h.dir, file)));
+  await h.idle();
+  expect(h.prompts.some((p: string) => p.includes("bundle fixture failed") && p.includes(root))).toBe(true);
 });
