@@ -33,7 +33,7 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative, resolve } from "node:path";
 import type { Plugin } from "@opencode-ai/plugin";
 
 type Todo = { content: string; status: string };
@@ -166,8 +166,12 @@ const CHECK_CMD = new RegExp(
 function isCheckCommand(cmd: string): boolean { return CHECK_CMD.test(cmd); }
 
 const TEMP_RE = /(?:^|\/)(?:tmp|private\/tmp|var\/folders|node_modules|\.localcode-agent|\.opencode|\.git)(?:\/|$)|^\/dev\//;
-function isTempPath(p: string): boolean {
+function isTempPath(p: string, directory?: string): boolean {
   const norm = p.replace(/\\/g, "/");
+  if (directory) {
+    const local = relative(resolve(directory), resolve(directory, p)).replace(/\\/g, "/");
+    if (local !== ".." && !local.startsWith("../") && !local.startsWith("/")) return TEMP_RE.test(local);
+  }
   if (TEMP_RE.test(norm)) return true;
   try { const t = tmpdir().replace(/\\/g, "/"); if (t && norm.startsWith(t)) return true; } catch {}
   return false;
@@ -223,8 +227,8 @@ function checkPassed(ev: ToolEvent): boolean {
  * progress, null otherwise. Reads, greps, re-edits of known paths, checks that
  * pass again or fail identically are not progress.
  */
-function progressOf(ev: ToolEvent, mem: ProgressMemory): string | null {
-  const paths = editedPaths(ev).filter((p) => !isTempPath(p));
+function progressOf(ev: ToolEvent, mem: ProgressMemory, directory?: string): string | null {
+  const paths = editedPaths(ev).filter((p) => !isTempPath(p, directory));
   if (paths.length) {
     const fresh = paths.filter((p) => !mem.changedPaths.has(p));
     for (const p of paths) mem.changedPaths.add(p);
@@ -258,6 +262,7 @@ function progressOf(ev: ToolEvent, mem: ProgressMemory): string | null {
 
 /** Round bookkeeping and thresholds. One instance per session; reset on a genuine user message. */
 class PlateauTracker {
+  constructor(private directory?: string) {}
   mem = newProgressMemory();
   round = 0;                 // completed tool rounds
   noProgress = 0;            // consecutive no-progress rounds since the last reset
@@ -271,7 +276,7 @@ class PlateauTracker {
   observe(ev: ToolEvent): void {
     if (this.stopped) return;
     this.open = true;
-    const r = progressOf(ev, this.mem);
+    const r = progressOf(ev, this.mem, this.directory);
     if (r) this.reasons.push(r);
     if (ev.tool === "bash" && isCheckCommand(String(ev.args?.command ?? "")) && this.mem.lastCheckPassed) this.lastPassRound = this.round + 1;
   }
@@ -317,7 +322,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
   let buildVerifyNudges = 0;
   let stubNudgeDone = false;
   let turnStartedAt = Date.now() - 1000;
-  let plateau = new PlateauTracker();
+  let plateau = new PlateauTracker(directory);
   let plateauStopped = false;
   // The agent the user is talking to. Nudges must keep it (a prompt without an
   // agent defaults to build, which silently escalated Plan sessions to Build),
@@ -389,12 +394,13 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
         continueCount = 0; stuckCount = 0; lastRemaining = Number.MAX_SAFE_INTEGER;
         buildVerifyNudges = 0; stubNudgeDone = false;
         turnStartedAt = Date.now() - 1000;
-        plateau = new PlateauTracker(); plateauStopped = false; seenSteps.clear();
+        plateau = new PlateauTracker(directory); plateauStopped = false; seenSteps.clear();
       }
     },
 
     "tool.execute.after": async (input, output) => {
       plateau.observe({ tool: input.tool, args: input.args, output: output?.output, metadata: output?.metadata });
+      if (process.env.LOCALCODE_PLUGIN_DEBUG) emit(`[localcode debug] progress: ${plateau.mem.changedPaths.size} delivered files, ${plateau.mem.completedTodos} completed todos`);
     },
 
     "tool.execute.before": async (input, output) => {
