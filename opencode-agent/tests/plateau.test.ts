@@ -295,6 +295,7 @@ describe("plugin wiring", () => {
     expect(output.system.join(" ")).not.toContain("Finish it");
     await h.userMessage("continue now");
     await h.setTodos([{ content: "Resumed task", status: "pending" }]);
+    await h.toolRound(read("/p/app.ts"));
     await h.idle();
     expect(h.prompts).toHaveLength(1);
   });
@@ -317,11 +318,15 @@ describe("plugin wiring", () => {
     await h.idle();
     await tick();
     expect(h.prompts).toHaveLength(1);
-    // a genuine new user message re-arms everything
+    // A new message alone must not restart the previous workspace task.
     await h.userMessage("thanks, now do X");
     await h.idle();
     await tick();
-    expect(h.prompts).toHaveLength(2); // todo gate active again
+    expect(h.prompts).toHaveLength(1);
+    await h.toolRound(read("/p/app.ts"));
+    await h.idle();
+    await tick();
+    expect(h.prompts).toHaveLength(2); // workspace tools re-enable completion checks
     expect(h.prompts[1]).toContain("unfinished todo");
   });
   test("duplicate step-finish events for the same part are one round; the SYSTEM nudge does not reset the tracker", async () => {

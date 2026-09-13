@@ -402,6 +402,7 @@ const PLATEAU_PASS_TEXT = `${NUDGE_PREFIX} Your check passed — finish now. Do 
 
 const LocalcodePlugin: Plugin = async ({ client, directory }) => {
   let todos: Todo[] = [];
+  let workspaceActive = false;
   let continueCount = 0;
   let stuckCount = 0;
   let lastRemaining = Number.MAX_SAFE_INTEGER;
@@ -445,7 +446,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
   const openTodos = () => todos.filter((t) => t.status !== "completed" && t.status !== "cancelled");
 
   async function onRoundEnd(sessionID: string): Promise<PlateauDecision> {
-    if (interrupted.has(sessionID) || (activeSession && sessionID !== activeSession)) return "none";
+    if (!workspaceActive || interrupted.has(sessionID) || (activeSession && sessionID !== activeSession)) return "none";
     const decision = plateau.endRound();
     if (decision === "none" || planMode()) return "none";
     const open = openTodos();
@@ -483,7 +484,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
 
   return {
     "experimental.chat.system.transform": async (input, output) => {
-      if (input.agent && input.agent !== "build") return;
+      if (!workspaceActive || (input.agent && input.agent !== "build")) return;
       output.system.push(PLANNING_RULE);
       const open = renderTodos(todos);
       if (open) output.system.push(open);
@@ -493,6 +494,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
       if (input.agent) currentAgent = input.agent;
       const text = output.parts.map((p: any) => (p.type === "text" ? p.text : "")).join(" ");
       if (!text.startsWith(NUDGE_PREFIX)) {
+        workspaceActive = false;
         if (activeSession !== input.sessionID || interrupted.has(input.sessionID)) todos = [];
         activeSession = input.sessionID;
         interrupted.delete(input.sessionID);
@@ -505,11 +507,13 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
 
     "tool.execute.after": async (input, output) => {
       if (activeSession && input.sessionID !== activeSession) return;
+      if (["read", "glob", "grep", "bash", "write", "edit", "multiedit", "apply_patch"].includes(input.tool)) workspaceActive = true;
       plateau.observe({ tool: input.tool, args: input.args, output: output?.output, metadata: output?.metadata });
       if (process.env.LOCALCODE_PLUGIN_DEBUG) emit(`[localcode debug] progress: ${plateau.mem.changedPaths.size} delivered files, ${plateau.mem.completedTodos} completed todos`);
     },
 
     "tool.execute.before": async (input, output) => {
+      if (["read", "glob", "grep", "bash", "write", "edit", "multiedit", "apply_patch"].includes(input.tool)) workspaceActive = true;
       if (["read", "write", "edit", "multiedit"].includes(input.tool)) {
         for (const name of ["filePath", "file_path", "path"]) {
           const value = output.args?.[name];
@@ -558,7 +562,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
         }
         return;
       }
-      if (event.type !== "session.idle") return;
+      if (event.type !== "session.idle" || !workspaceActive) return;
       const sessionID = (event.properties as any).sessionID as string;
       if (interrupted.has(sessionID) || (activeSession && sessionID !== activeSession)) return;
 
