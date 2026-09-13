@@ -490,7 +490,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
       if (input.agent) currentAgent = input.agent;
       const text = output.parts.map((p: any) => (p.type === "text" ? p.text : "")).join(" ");
       if (!text.startsWith(NUDGE_PREFIX)) {
-        if (activeSession !== input.sessionID) todos = [];
+        if (activeSession !== input.sessionID || interrupted.has(input.sessionID)) todos = [];
         activeSession = input.sessionID;
         interrupted.delete(input.sessionID);
         continueCount = 0; stuckCount = 0; lastRemaining = Number.MAX_SAFE_INTEGER;
