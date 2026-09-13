@@ -364,3 +364,15 @@ test("an edit invalidates a previous passing check", () => {
   progressOf(edit("/project/app.ts"), mem);
   expect(mem.lastCheckPassed).toBeNull();
 });
+
+test("compiler failures override a misleading successful pipeline exit", () => {
+  expect(checkPassed(check("src/app.ts(2): error TS2322: incompatible types", 0, "npx tsc -b 2>&1 | head -40"))).toBe(false);
+  expect(checkPassed(check("x Build failed in 1.08s\nerror during build: ENOTDIR", 0, "npm run build 2>&1 | tail -40"))).toBe(false);
+  expect(checkPassed(check("TSC OK", 0, "npx tsc -b | head -10 && echo TSC OK"))).toBe(false);
+  expect(checkPassed(check("Found 0 errors", 0, "npx tsc --noEmit"))).toBe(true);
+});
+test("check guard rejects output pipelines before they hide a failure", async () => {
+  const h = await boot();
+  await expect(h.hooks["tool.execute.before"]({ tool: "bash", sessionID: h.sid }, {args: {command: "npm run build 2>&1 | tail -40"}})).rejects.toThrow("without piping");
+  await h.hooks["tool.execute.before"]({tool: "bash",sessionID:h.sid}, {args:{command:"npm run build"}});
+});
