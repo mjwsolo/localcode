@@ -261,6 +261,35 @@ async function boot() {
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
 describe("plugin wiring", () => {
+  test("a new session does not inherit pending todos or late events from the previous one", async () => {
+    const h = await boot();
+    await h.userMessage("old task");
+    await h.setTodos([{ content: "Old unfinished item", status: "pending" }]);
+    await h.hooks["chat.message"]({ sessionID: "ses_2" }, { parts: [{ type: "text", text: "new task" }] });
+    await h.hooks.event({ event: { type: "todo.updated", properties: { sessionID: h.sid, todos: [{ content: "Late old item", status: "pending" }] } } });
+    const output = { system: [] as string[] };
+    await h.hooks["experimental.chat.system.transform"]({}, output);
+    expect(output.system.join(" ")).not.toContain("Old unfinished item");
+    expect(output.system.join(" ")).not.toContain("Late old item");
+    await h.idle();
+    expect(h.prompts).toHaveLength(0);
+  });
+  test("an explicit interruption pauses every gate until a real user message resumes it", async () => {
+    const h = await boot();
+    await h.userMessage("build the app");
+    await h.setTodos([{ content: "Finish it", status: "pending" }]);
+    await h.hooks.event({ event: { type: "session.error", properties: { sessionID: h.sid, error: { name: "MessageAbortedError", data: {} } } } });
+    for (let i = 0; i < 8; i++) await h.toolRound(read("/p/app.ts"));
+    await h.idle();
+    await h.idle();
+    expect(h.prompts).toHaveLength(0);
+    await h.userMessage("SYSTEM: a late hidden nudge");
+    await h.idle();
+    expect(h.prompts).toHaveLength(0);
+    await h.userMessage("continue now");
+    await h.idle();
+    expect(h.prompts).toHaveLength(1);
+  });
   test("nudges once mid-loop after 6 stalled rounds, with open items; then aborts after 8 more and silences the todo gate", async () => {
     const h = await boot();
     await h.userMessage("build me a thing");

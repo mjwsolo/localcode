@@ -324,6 +324,8 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
   let turnStartedAt = Date.now() - 1000;
   let plateau = new PlateauTracker(directory);
   let plateauStopped = false;
+  const interrupted = new Set<string>();
+  let activeSession: string | undefined;
   // The agent the user is talking to. Nudges must keep it (a prompt without an
   // agent defaults to build, which silently escalated Plan sessions to Build),
   // and in Plan mode the model is conversing with the user, so no gate fires at all.
@@ -341,6 +343,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
   const plog = (msg: string) => emit(`[localcode plateau] ${msg}`);
 
   async function nudge(sessionID: string, text: string) {
+    if (interrupted.has(sessionID)) return;
     // synthetic: the TUI hides it from the transcript; the model still sees it.
     await client.session.prompt({
       path: { id: sessionID },
@@ -356,6 +359,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
   const openTodos = () => todos.filter((t) => t.status !== "completed" && t.status !== "cancelled");
 
   async function onRoundEnd(sessionID: string): Promise<PlateauDecision> {
+    if (interrupted.has(sessionID) || (activeSession && sessionID !== activeSession)) return "none";
     const decision = plateau.endRound();
     if (decision === "none" || planMode()) return "none";
     const open = openTodos();
@@ -391,6 +395,9 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
       if (input.agent) currentAgent = input.agent;
       const text = output.parts.map((p: any) => (p.type === "text" ? p.text : "")).join(" ");
       if (!text.startsWith(NUDGE_PREFIX)) {
+        if (activeSession !== input.sessionID) todos = [];
+        activeSession = input.sessionID;
+        interrupted.delete(input.sessionID);
         continueCount = 0; stuckCount = 0; lastRemaining = Number.MAX_SAFE_INTEGER;
         buildVerifyNudges = 0; stubNudgeDone = false;
         turnStartedAt = Date.now() - 1000;
@@ -399,6 +406,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
     },
 
     "tool.execute.after": async (input, output) => {
+      if (activeSession && input.sessionID !== activeSession) return;
       plateau.observe({ tool: input.tool, args: input.args, output: output?.output, metadata: output?.metadata });
       if (process.env.LOCALCODE_PLUGIN_DEBUG) emit(`[localcode debug] progress: ${plateau.mem.changedPaths.size} delivered files, ${plateau.mem.completedTodos} completed todos`);
     },
@@ -423,7 +431,16 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
     },
 
     event: async ({ event }) => {
+      if (event.type === "session.error") {
+        const props = event.properties as any;
+        if (props.sessionID && props.error?.name === "MessageAbortedError") {
+          interrupted.add(props.sessionID);
+          log("task interrupted — automatic continuation is paused until the next user message");
+        }
+        return;
+      }
       if (event.type === "todo.updated") {
+        if (activeSession && (event.properties as any).sessionID && (event.properties as any).sessionID !== activeSession) return;
         todos = (event.properties as any).todos ?? [];
         return;
       }
@@ -439,6 +456,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
       }
       if (event.type !== "session.idle") return;
       const sessionID = (event.properties as any).sessionID as string;
+      if (interrupted.has(sessionID) || (activeSession && sessionID !== activeSession)) return;
 
       // Flush a trailing round if a step-finish never arrived; then, if the
       // plateau breaker stopped this session, none of the gates may restart it.
