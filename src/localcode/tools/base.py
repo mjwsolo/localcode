@@ -41,6 +41,11 @@ class ToolContext:
     def repo(self) -> Path:
         return self.app.repo_root
 
+    @property
+    def check_root(self) -> Path:
+        """Where project checks (ruff/tsc/...) may scan — see app.check_root."""
+        return getattr(self.app, "check_root", None) or self.app.repo_root
+
     def resolve_path(self, raw: str) -> Path:
         """Resolve a tool `path` argument, healing corrupted repo prefixes.
 
