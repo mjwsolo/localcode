@@ -81,27 +81,33 @@ def test_bundled_binary_targets_macos_13(binary: Path):
     )
 
 
+# Paths that upstream toolchains bake into their artifacts (bun's own CI,
+# cargo registries, zig's libcxx, GitHub's hosted tool cache). Not ours.
 TOOLCHAIN_PATH_MARKERS = (
     "/.cargo/", "/.rustup/", "/_work/", "/work/_temp/", "buildkite", "/webkit-release/",
-    "/opentui/", "/bun/bun/", "/target/aarch64-apple-darwin/",
+    "/opentui/", "/bun/bun/", "/target/aarch64-apple-darwin/", "/hostedtoolcache/",
 )
+CI_USER_NAMES = {"runner"}
+_HOME_PATH = re.compile(r"/(?:Users|home)/([^/\s\"']+)/")
 
 
 def test_bundled_binary_embeds_no_developer_path(binary: Path):
     """A build from a developer checkout leaks the developer's home path into
     the binary (__FILE__ in asserts; bundled JS keeps __dirname). Build with
     -ffile-prefix-map (llama-server) and from a neutral path
-    (scripts/build_ui_binary.sh). Paths from upstream toolchains (bun's own
-    CI, cargo registries) are not ours and are ignored: on a GitHub runner
-    the home dir is /Users/runner, which is also what bun's CI used."""
+    (scripts/build_ui_binary.sh). A leak is a home path of a real user: the
+    CI user name and upstream toolchain paths are ignored."""
     out = subprocess.run(["strings", "-n", "12", str(binary)], capture_output=True, text=True, timeout=120, check=False).stdout
-    home = str(Path.home())
-    leaks = sorted({
-        ln.strip()[:160] for ln in out.splitlines()
-        if (home in ln or "/Desktop/" in ln or "/Github/" in ln or "/Documents/" in ln)
-        and not any(m in ln for m in TOOLCHAIN_PATH_MARKERS)
-    })
-    assert not leaks, "developer paths embedded:\n" + "\n".join(leaks[:5])
+    placeholders = {"X", "you", "me", "user", "name", "username"}
+    leaks = set()
+    for ln in out.splitlines():
+        if any(m in ln for m in TOOLCHAIN_PATH_MARKERS):
+            continue
+        for name in _HOME_PATH.findall(ln):
+            if name in CI_USER_NAMES or name in placeholders or len(name) < 2:
+                continue
+            leaks.add(ln.strip()[:160])
+    assert not leaks, "developer paths embedded:\n" + "\n".join(sorted(leaks)[:5])
 
 
 def test_bundled_binary_loads_and_runs(binary: Path):
