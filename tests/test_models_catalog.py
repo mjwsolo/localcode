@@ -136,25 +136,30 @@ class TestCapabilitySurface:
         )
 
     def test_text_only_entry_capability_set(self) -> None:
-        # diffusiongemma is text-only AND can't do hidden reasoning;
-        # north-mini-code is text-only but DOES support thinking.
+        # diffusiongemma is text-only. Measured 2026-09-06 (dev/thinking_matrix.py
+        # on the bundled server): it DOES emit a hidden-reasoning channel
+        # (52-90 tokens of reasoning_content on a one-line probe) and the
+        # standard server switch (--reasoning off --reasoning-budget 0) silences
+        # it to 4 tokens — so its policy is the server switch, like every other
+        # model, and "thinking" is a real capability. north-mini-code is
+        # text-only and supports thinking too.
         diff = by_key("diffusiongemma")
         assert diff is not None
-        assert diff.capabilities == frozenset({"audio_in", "audio_out"})
+        assert diff.capabilities == frozenset({"thinking", "audio_in", "audio_out"})
         assert "vision" not in diff.capabilities
-        assert "thinking" not in diff.capabilities
 
         nmc = by_key("north-mini-code")
         assert nmc is not None
         assert nmc.capabilities == frozenset({"thinking", "audio_in", "audio_out"})
         assert "vision" not in nmc.capabilities
 
-    def test_thinking_support_gated_by_architecture(self) -> None:
-        # Only diffusion architectures lack a toggleable hidden-reasoning
-        # channel; every other catalog entry supports /thinking.
+    def test_thinking_support_gated_by_reasoning_control(self) -> None:
+        # Measured 2026-09-06 (dev/thinking_matrix.py): every shipped catalog
+        # model, DiffusionGemma included, has a hidden-reasoning channel that
+        # the standard server switch controls. Only an explicit
+        # reasoning_control="none" entry lacks /thinking.
         for choice in CHOICES:
-            is_diffusion = str(choice.architecture).lower().startswith("diffusion")
-            assert choice.supports_thinking is (not is_diffusion), (
+            assert choice.supports_thinking is (choice.reasoning_control != "none"), (
                 f"{choice.key} ({choice.architecture}) "
                 f"supports_thinking={choice.supports_thinking}"
             )
