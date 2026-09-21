@@ -81,15 +81,26 @@ def test_bundled_binary_targets_macos_13(binary: Path):
     )
 
 
+TOOLCHAIN_PATH_MARKERS = (
+    "/.cargo/", "/.rustup/", "/_work/", "/work/_temp/", "buildkite", "/webkit-release/",
+    "/opentui/", "/bun/bun/", "/target/aarch64-apple-darwin/",
+)
+
+
 def test_bundled_binary_embeds_no_developer_path(binary: Path):
     """A build from a developer checkout leaks the developer's home path into
     the binary (__FILE__ in asserts; bundled JS keeps __dirname). Build with
     -ffile-prefix-map (llama-server) and from a neutral path
-    (scripts/build_ui_binary.sh). Upstream toolchain CI paths are fine."""
+    (scripts/build_ui_binary.sh). Paths from upstream toolchains (bun's own
+    CI, cargo registries) are not ours and are ignored: on a GitHub runner
+    the home dir is /Users/runner, which is also what bun's CI used."""
     out = subprocess.run(["strings", "-n", "12", str(binary)], capture_output=True, text=True, timeout=120, check=False).stdout
     home = str(Path.home())
-    leaks = sorted({ln.strip()[:160] for ln in out.splitlines()
-                    if home in ln or "/Desktop/" in ln or "/Github/" in ln or "/Documents/" in ln})
+    leaks = sorted({
+        ln.strip()[:160] for ln in out.splitlines()
+        if (home in ln or "/Desktop/" in ln or "/Github/" in ln or "/Documents/" in ln)
+        and not any(m in ln for m in TOOLCHAIN_PATH_MARKERS)
+    })
     assert not leaks, "developer paths embedded:\n" + "\n".join(leaks[:5])
 
 
