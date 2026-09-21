@@ -1287,7 +1287,7 @@ class LocalCodeRuntimeGateway:
                 try:
                     actual_port = mgr.port
                     new_base = f"http://localhost:{actual_port}"
-                    if self.config.base_url != new_base:
+                    if self.config.base_url != new_base and not os.environ.get("LOCALCODE_BASE_URL"):
                         self.config.base_url = new_base
                         self.endpoint = f"{new_base}/v1/chat/completions"
                 except Exception:
@@ -1315,7 +1315,9 @@ class LocalCodeRuntimeGateway:
         try:
             actual_port = mgr.port
             new_base = f"http://localhost:{actual_port}"
-            if self.config.base_url != new_base:
+            # An explicit LOCALCODE_BASE_URL (proxy, remote host) is the operator's
+            # choice; only adopt the live port when the URL was not pinned.
+            if self.config.base_url != new_base and not os.environ.get("LOCALCODE_BASE_URL"):
                 self.config.base_url = new_base
                 # Endpoint URLs are derived from base_url at __init__;
                 # rebuild them here so the rest of the gateway uses
