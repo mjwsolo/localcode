@@ -165,13 +165,15 @@ def test_concurrency_cap_leaves_extras_queued(monkeypatch, not_on_disk):
     assert len(set(keys)) == 4
 
     # Two should reach 'downloading'; the cap holds the other two 'queued'.
+    # Wait for BOTH counts in one predicate: the extras become 'queued' a
+    # moment after the first two start, and slow runners exposed that gap.
+    def _statuses():
+        return [(bootstrap.download_status(k) or {}).get("status") for k in keys]
+
     assert _wait_until(
-        lambda: sum(
-            1 for k in keys
-            if (bootstrap.download_status(k) or {}).get("status") == "downloading"
-        ) == 2
-    )
-    statuses = [bootstrap.download_status(k)["status"] for k in keys]
+        lambda: _statuses().count("downloading") == 2 and _statuses().count("queued") == 2
+    ), _statuses()
+    statuses = _statuses()
     assert statuses.count("downloading") == 2
     assert statuses.count("queued") == 2
 
