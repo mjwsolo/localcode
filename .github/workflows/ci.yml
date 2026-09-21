@@ -55,13 +55,20 @@ jobs:
   # since that's cheap and catches Mac-specific packaging gaps. The
   # real-whisper test stays gated (needs a 540 MB model download).
   comprehensive-macos:
-    name: comprehensive (macos-arm64)
-    runs-on: macos-14            # macos-14 runners are Apple Silicon (M1)
+    name: comprehensive (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Apple Silicon runners across macOS versions; oldest and newest
+        # supported Python. Both shipped binaries must exec on every row.
+        os: [macos-14, macos-15]
+        python-version: ["3.10", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python-version }}
       - name: Install package and test tools
         run: |
           python -m pip install --upgrade pip
@@ -79,6 +86,23 @@ jobs:
             tests/test_execution_policies.py \
             tests/test_code_navigation_and_processes.py
 
+  # ── The default interface's plugin + supervisor contract (bun tests) ──
+  ui-tests:
+    name: ui plugin + supervisor (bun)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: oven-sh/setup-bun@v2
+      - run: python -m pip install -e .
+      - name: bun tests
+        working-directory: tests/ui
+        env:
+          LOCALCODE_PY: python
+        run: bun test .
+
   # ── Packaging must always build ──
   packaging:
     name: build
@@ -90,6 +114,17 @@ jobs:
           python-version: "3.13"
       - run: python -m pip install --upgrade pip build cython wheel setuptools
       - run: python -m build
+      - name: Wheel carries both binaries and is tagged for macOS arm64
+        run: |
+          ls dist/
+          ls dist/*macosx_13_0_arm64.whl
+          python - <<'PY'
+          import glob, zipfile
+          names = zipfile.ZipFile(glob.glob("dist/*.whl")[0]).namelist()
+          for n in ("localcode/bin/llama-server", "localcode/bin/localcode-ui", "localcode/ui/plugin/localcode.ts", "localcode/ui/FORK_COMMIT"):
+              assert n in names, n
+          print("ok")
+          PY
 
   # NOTE: the old "legacy suite (non-blocking)" job was removed — even with
   # continue-on-error it surfaced a red ✗ in the checks list (noise). The 8

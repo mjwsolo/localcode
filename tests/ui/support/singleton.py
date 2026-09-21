@@ -30,7 +30,7 @@ with tempfile.TemporaryDirectory() as directory:
     control = port()
     worker = root / 'worker.py'
     worker.write_text('''import os, pathlib, subprocess, sys, time
-import localcode_supervisor as module
+from localcode.ui import supervisor as module
 module.Path.home = staticmethod(lambda: pathlib.Path(os.environ['QA_ROOT']))
 def start(self, alias, wait_s=240):
     self.proc = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'],
@@ -41,7 +41,7 @@ def start(self, alias, wait_s=240):
 module.Supervisor.start = start
 raise SystemExit(module.main())
 ''')
-    env = dict(os.environ, QA_ROOT=directory, PYTHONPATH=str(Path.cwd()))
+    env = dict(os.environ, QA_ROOT=directory)
     args = [sys.executable, str(worker), '--server', sys.executable, '--model', 'test',
             '--port', str(port()), '--control-port', str(control), '--models-dir', directory]
     parent = subprocess.Popen([sys.executable, '-c',

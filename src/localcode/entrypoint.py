@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 import sys
 
@@ -94,6 +95,12 @@ def _reset_terminal_state() -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="localcode", description="LocalCode — AI coding assistant running entirely on your machine")
+    parser.add_argument("--version", action="store_true", help="Print the version and exit")
+    parser.add_argument(
+        "--classic", action="store_true",
+        help="Use the previous (0.3) interface instead of the default one. "
+             "LOCALCODE_FRONTEND=classic does the same.",
+    )
     parser.add_argument("--profile", help="Gemma 4 profile: e2b, e4b, 26b-laptop, 26b-moe, 31b")
     parser.add_argument("--model", help="Explicit local runtime model tag")
     parser.add_argument(
@@ -304,6 +311,19 @@ def _run_headless(config, args, console) -> int:
     return 0
 
 
+def _frontend_choice(args) -> str:
+    """'ui' (default) or 'classic'. Flags win over the environment; the
+    classic-only options (--resume, --preview-screen) imply classic."""
+    if getattr(args, "classic", False):
+        return "classic"
+    if getattr(args, "preview_screen", None) or getattr(args, "resume", None):
+        return "classic"
+    env = os.environ.get("LOCALCODE_FRONTEND", "").strip().lower()
+    if env in ("classic", "tui", "textual"):
+        return "classic"
+    return "ui"
+
+
 def main(argv: list[str] | None = None) -> None:
     _harden_against_debugger_attach()
     # Snapshot the terminal while it's still sane — before the TUI enters
@@ -365,6 +385,22 @@ def main(argv: list[str] | None = None) -> None:
         if args.thinking_budget is not None:
             config.runtime.thinking_budget_tokens = args.thinking_budget
         sys.exit(_run_headless(config, args, console))
+
+    if getattr(args, "version", False):
+        from . import __version__
+        print(__version__)
+        return
+
+    # Default interface: the localcode agent runtime (src/localcode/ui). The
+    # previous Textual interface stays behind --classic / LOCALCODE_FRONTEND=classic,
+    # and is the fallback when this install carries no UI binary (source
+    # installs on other platforms).
+    if _frontend_choice(args) == "ui":
+        from .ui import platform_supported, ui_binary_path
+        if ui_binary_path() is not None and platform_supported():
+            from .ui.launch import main as ui_main
+            sys.exit(ui_main(getattr(args, "model", None)))
+        console.print("[dim]localcode: UI binary not available in this install; using the classic interface.[/]")
 
     # --preview-screen: visual-test a screen in isolation. Mocks the
     # minimal app state each screen needs and pushes only that one.

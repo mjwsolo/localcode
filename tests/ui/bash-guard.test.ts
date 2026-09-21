@@ -1,4 +1,4 @@
-const src = await Bun.file(new URL("../plugins/localcode.ts", import.meta.url).pathname).text();
+const src = await Bun.file(new URL("../../src/localcode/ui/plugin/localcode.ts", import.meta.url).pathname).text();
 const m = src.match(/const PROG = ([\s\S]*?);\nconst SERVER_CMD = new RegExp\(([\s\S]*?)\n\);/);
 if (!m) throw new Error("regex block not found");
 const PROG = eval(m[1]); const SERVER_CMD = eval(`new RegExp(${m[2]})`);

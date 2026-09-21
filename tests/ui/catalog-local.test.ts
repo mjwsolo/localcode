@@ -4,7 +4,7 @@ import path from "node:path"
 test("catalog groups installed model files without counting projectors or broken links", () => {
   const result = Bun.spawnSync([process.env.LOCALCODE_PY ?? "python3", "-c", `
 import pathlib, tempfile
-from localcode_supervisor import Supervisor, MODEL_GROUPS
+from localcode.ui.supervisor import Supervisor, MODEL_GROUPS
 with tempfile.TemporaryDirectory() as directory:
     root = pathlib.Path(directory)
     group = MODEL_GROUPS[0]

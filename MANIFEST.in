@@ -1,4 +1,7 @@
 include src/localcode/bin/llama-server
+include src/localcode/bin/localcode-ui
+include src/localcode/ui/FORK_COMMIT
+recursive-include src/localcode/ui/plugin *.ts
 recursive-include src/localcode/tui/styles *.tcss
 recursive-include llama-cpp-turboquant/cmake *
 recursive-include llama-cpp-turboquant/common *.cpp *.h *.hpp

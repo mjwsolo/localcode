@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import LocalcodePlugin from "../plugins/localcode"
+import LocalcodePlugin from "../../src/localcode/ui/plugin/localcode"
 
 test("newline paths are rejected before a file tool can create an invisible filename", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "localcode-path-"))

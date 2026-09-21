@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import Plugin from "../plugins/localcode";
+import Plugin from "../../src/localcode/ui/plugin/localcode";
 
 test("completion rules stay out of compaction and other helper prompts", async () => {
   const directory = mkdtempSync(join(tmpdir(), "prompt-scope-"));

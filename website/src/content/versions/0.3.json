@@ -1,0 +1,85 @@
+{
+  "sidebar": [
+    {
+      "label": "Getting Started",
+      "items": [
+        {
+          "label": "Install",
+          "slug": "start-here/first-change"
+        }
+      ]
+    },
+    {
+      "label": "Guides",
+      "items": [
+        {
+          "label": "Models",
+          "slug": "start-here/choose-a-model"
+        },
+        {
+          "label": "Permissions",
+          "slug": "start-here/permissions"
+        },
+        {
+          "label": "Offline",
+          "slug": "guides/offline"
+        },
+        {
+          "label": "MCP",
+          "slug": "guides/mcp"
+        },
+        {
+          "label": "Skills & Hooks",
+          "slug": "guides/skills-and-hooks"
+        }
+      ]
+    },
+    {
+      "label": "Concepts",
+      "items": [
+        {
+          "label": "Architecture",
+          "slug": "concepts/architecture"
+        },
+        {
+          "label": "Unified Memory",
+          "slug": "concepts/unified-memory"
+        },
+        {
+          "label": "Network Boundary",
+          "slug": "concepts/network-boundary"
+        }
+      ]
+    },
+    {
+      "label": "Reference",
+      "items": [
+        {
+          "label": "CLI",
+          "slug": "reference/cli"
+        },
+        {
+          "label": "Slash Commands",
+          "slug": "reference/slash-commands"
+        },
+        {
+          "label": "Configuration",
+          "slug": "reference/configuration"
+        },
+        {
+          "label": "JSONL Events",
+          "slug": "reference/jsonl-events"
+        },
+        {
+          "label": "Error Codes",
+          "slug": "reference/error-codes"
+        }
+      ]
+    },
+    {
+      "label": "Contributing",
+      "slug": "contributing"
+    }
+  ],
+  "excluded": []
+}
