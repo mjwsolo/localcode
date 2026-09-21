@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import Plugin from "../plugins/localcode";
+import Plugin from "../../src/localcode/ui/plugin/localcode";
 
 test("blocks a nested solution-only typecheck and accepts build mode or a child project", async () => {
   const dir = mkdtempSync(join(tmpdir(), "reference-check-"));

@@ -7,26 +7,18 @@ localcode is an MCP client. The servers you add give the agent access to their t
 
 ## Add a server
 
-Add servers to the `mcpServers` key in `~/.localcode/mcp.json`, then run `/mcp reload` in the TUI. This is the same file format other MCP clients use:
+Declare servers under the `mcp` key of `localcode.json` in the project root. A local server is a command to run; a remote server is a URL:
 
 ```json
 {
-  "mcpServers": {
+  "$schema": "https://localcode.dev/schema/config.json",
+  "mcp": {
     "filesystem": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/Users/you/work"]
-    }
-  }
-}
-```
-
-A remote server that needs a token takes it as a header:
-
-```json
-{
-  "mcpServers": {
+      "type": "local",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "."]
+    },
     "github": {
-      "transport": "http",
+      "type": "remote",
       "url": "https://api.githubcopilot.com/mcp/",
       "headers": { "Authorization": "Bearer YOUR_TOKEN" }
     }
@@ -34,11 +26,10 @@ A remote server that needs a token takes it as a header:
 }
 ```
 
-Set `LOCALCODE_HOME` to read the file from another location. The MCP SDK supports stdio, HTTP, and SSE connections.
+Add `"enabled": false` to a server to keep it configured but off. Local servers can take an `"environment"` object for variables the command needs. The file follows the opencode config schema; see [Configuration](/localcode/reference/configuration).
 
-## From the TUI
+## From the interface
 
-```text
-/mcp          # list configured servers and their tools
-/mcp reload   # re-read mcp.json and reconnect after an edit
-```
+`/mcps` lists the configured servers and toggles each one on or off for the session. The tools of every enabled server appear to the model next to the built-in tools.
+
+MCP tools run without a permission prompt when the model calls them. A remote server is a network path; see [Network Boundary](/localcode/concepts/network-boundary).

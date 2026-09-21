@@ -1,32 +1,53 @@
 ---
 title: Slash Commands
-description: Commands available inside the localcode TUI.
+description: Commands and keys available inside the localcode interface.
 ---
 
-Type `/` in the chat box to open the command palette. Text that starts with `/` is only a command if the first word is a known command. A path like `/Users/you/project` is sent to the model as a normal message.
-
-Start a line with `!` to run a shell command, for example `!git status`. The output appears in the chat log and the model is not involved.
+Type `/` in the prompt to open the command palette. Text that starts with `/` is only a command if the first word is a known command. A path like `/opt/project` is sent to the model as a normal message.
 
 | Command | What it does |
 | --- | --- |
-| `/permissions` | Turn command approvals on or off |
-| `/status` | Show the server health, current model, and performance settings |
-| `/restart` | Restart the model server when `/status` shows "unreachable" |
-| `/mcp` | List MCP servers and their tools, or `/mcp reload` after editing `~/.localcode/mcp.json` |
-| `/skills` | List loaded skills and their sources |
-| `/model` | List or switch models, for example `/model qwen` |
-| `/delete` | Delete a downloaded model to free disk space after asking first |
-| `/thinking` | Show or set the hidden-reasoning policy to `off` or `auto` |
-| `/sounds` | Turn completion and approval sounds on or off |
-| `/voice` | Turn voice mode on or off for push-to-talk dictation in the input box |
-| `/audio` | Turn audio output on or off so macOS `say` can read replies aloud |
-| `/vision` | Turn vision mode on or off so the model can see images |
-| `/search` | Turn the conversation search bar on or off, like `Ctrl+F` |
-| `/clear` | Clear the conversation history |
-| `/exit` | Exit localcode |
+| `/compact` | Compact session |
+| `/copy` | Copy session transcript |
+| `/debug` | View debug info |
+| `/diff` | Open diff viewer |
+| `/editor` | Open the external editor for the prompt (falls back to `nano`) |
+| `/exit` | Exit the app |
+| `/export` | Export session transcript |
+| `/help` | Help |
+| `/lsp` | Language servers: install or start one |
+| `/mcps` | Toggle MCPs |
+| `/models` | Switch model |
+| `/move` | Move to another project dir |
+| `/new` | New session |
+| `/permissions` | Permissions |
+| `/project-context` | Edit project context |
+| `/rename` | Rename session |
+| `/review` | Review changes `[commit\|branch\|pr]`, defaults to uncommitted |
+| `/sessions` | Switch session |
+| `/settings` | Settings |
+| `/skills` | Skills |
+| `/speak` | Read aloud / stop reading |
+| `/status` | View status |
+| `/themes` | Switch theme |
+| `/thinking` | Expand thinking display |
+| `/timestamps` | Hide timestamps |
+| `/undo` | Undo previous message |
+| `/vision` | Vision: download this model's image projector |
 
-`/search` is a valid command, but it does not appear in the `/` palette. `Ctrl+F` is the main way to open it. Typing `/search` opens or closes the same search bar.
+## Shell commands
 
-You can also use `/quit` instead of `/exit`, and `/copy` to copy the last reply.
+Start a line with `!` to run a shell command yourself, for example `!git status`. The output appears in the session and the model is not involved.
 
-`/thinking` does nothing for models without a hidden-reasoning channel. localcode tells you this instead of acting as if the setting worked.
+## Keys
+
+The leader key is `ctrl+x`. Press it, then a second key. For example `ctrl+x` then `v` starts voice input. `/help` lists every binding.
+
+Hold **Space** on an empty prompt to record voice. Release to transcribe into the prompt. The first use asks for consent and lists what it needs to download: a recorder runtime of about 60 MB and a speech model of about 514 MB. Set `LOCALCODE_MIC` to choose the microphone.
+
+## Notes
+
+- `/lsp` lists language servers. Installing one downloads it only after you confirm.
+- `/vision` shows the projector size first and downloads only after you confirm. It applies to the loaded model only.
+- `/thinking` only changes how thinking is shown. Hidden reasoning is off by default for every model.
+- `/models` opens the picker described in [Models](/localcode/start-here/choose-a-model).

@@ -39,11 +39,16 @@ cd your-project
 localcode
 ```
 
-On first launch localcode recommends a model for your Mac's memory. Pick one, wait for the download, and start typing.
+On first launch the model picker opens: models first, then every quant the
+repository ships, with the size and whether it fits your Mac's memory. The
+recommended one for your machine is starred. Pick one, watch the download, and
+start typing. `/models` switches later.
 
 ```
 > Implement the retry decorator in retry.py so every test in test_retry.py passes. Then run: pytest -q
 ```
+
+`localcode --classic` opens the previous (0.3) interface.
 
 Docs: [mjwsolo.github.io/localcode](https://mjwsolo.github.io/localcode/)
 
@@ -57,14 +62,14 @@ Docs: [mjwsolo.github.io/localcode](https://mjwsolo.github.io/localcode/)
 
 ## Requirements
 
-- Mac with Apple Silicon
+- Mac with Apple Silicon, macOS 13 or newer
 - 16 GB unified memory or more
 - Python 3.10 or newer
 - About 12 GB of free disk for the smallest model
 
 ## Models
 
-localcode recommends a model by your Mac's memory and marks it with a star. You choose; nothing is selected for you. Every model runs on binaries shipped in the package.
+localcode recommends a model by your Mac's memory and marks it with a star. You choose; nothing is selected for you. Every quant the model's repository ships is listed, with a fit badge for your machine. Every model runs on binaries shipped in the package.
 
 | Model | Weights | Quant | Active params | Min RAM |
 | --- | ---: | --- | --- | ---: |
