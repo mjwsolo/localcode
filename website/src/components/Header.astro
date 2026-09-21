@@ -11,11 +11,24 @@
 import Search from '@astrojs/starlight/components/Search.astro';
 import MobileMenuToggle from '@astrojs/starlight/components/MobileMenuToggle.astro';
 import SiteNav from './SiteNav.astro';
+// The docs version switcher (starlight-versions). The plugin normally mounts it
+// through Starlight's ThemeSelect slot, which this site overrides with nothing,
+// so it is rendered here next to search instead.
+import VersionSelect from 'starlight-versions/components/VersionSelect.astro';
 ---
 
 <SiteNav search linkLabel="Home" linkHref="/">
-  <Search slot="search" />
+  <div slot="search" class="lc-docs-tools">
+    <Search />
+    <VersionSelect />
+  </div>
 </SiteNav>
+
+<style is:global>
+  .lc-docs-tools { display: flex; align-items: center; gap: 0.75rem; min-width: 0; }
+  .lc-docs-tools > :first-child { flex: 1 1 auto; min-width: 0; }
+  .lc-docs-tools starlight-version-select { flex: 0 0 auto; }
+</style>
 
 <div class="lc-mobile-menu md:sl-hidden">
   <MobileMenuToggle />

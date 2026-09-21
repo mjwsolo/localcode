@@ -4,8 +4,8 @@
  *
  * IMPORTANT — this is an ILLUSTRATIVE DESIGN PREVIEW, not a recorded run.
  * No timings, durations, token counts, or throughput figures appear here,
- * because none of them would be measured. The tool names (`read_file`,
- * `edit_file`, `bash`) are real localcode tools and `pytest -q` is a real
+ * because none of them would be measured. The tool names (`read`,
+ * `edit`, `bash`) are real localcode tools and `pytest -q` is a real
  * command the model can run; the output text is written for this page.
  *
  * The showcased prompt starts with "change" deliberately: `infer_goal_state`
@@ -29,15 +29,15 @@ const BLANK: Row = { cls: 'l' };
 const rows: Row[] = [
   { cls: 'l l--prompt', sigil: '>', text: 'change parse_duration so it accepts "1h30m"' },
   BLANK,
-  { cls: 'l l--ok', glyph: '\u2022', tool: 'read_file', arg: '(src/timeutil.py)' },
+  { cls: 'l l--ok', glyph: '\u2022', tool: 'read', arg: '(src/timeutil.py)' },
   { cls: 'l l--note', text: '  found parse_duration \u2014 handles "90m" and "2h", not compound units' },
-  { cls: 'l l--ok', glyph: '\u2022', tool: 'edit_file', arg: '(src/timeutil.py)' },
+  { cls: 'l l--ok', glyph: '\u2022', tool: 'edit', arg: '(src/timeutil.py)' },
   BLANK,
   { cls: 'l l--fail', glyph: '\u00d7', tool: 'bash', arg: '(pytest -q)' },
   { cls: 'l l--failtext', text: '  1 failed \u2014 test_parse_duration_rejects_garbage' },
   { cls: 'l l--note', text: '  the new regex made every unit optional, so "" now parses' },
   BLANK,
-  { cls: 'l l--ok', glyph: '\u2022', tool: 'edit_file', arg: '(src/timeutil.py)' },
+  { cls: 'l l--ok', glyph: '\u2022', tool: 'edit', arg: '(src/timeutil.py)' },
   { cls: 'l l--note', text: '  require at least one unit; keep the compound branch' },
   { cls: 'l l--ok', glyph: '\u2022', tool: 'bash', arg: '(pytest -q)' },
   { cls: 'l l--verifytext', text: '  \u2713 48 passed' },

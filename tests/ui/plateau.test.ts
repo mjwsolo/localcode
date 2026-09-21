@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import LocalcodePluginDefault from "../plugins/localcode";
+import LocalcodePluginDefault from "../../src/localcode/ui/plugin/localcode";
 type ToolEvent = { tool: string; args: any; output?: string; metadata?: any };
 const { PLATEAU_MIN_ROUND, PLATEAU_NUDGE_AFTER, PLATEAU_STOP_AFTER, PLATEAU_PASS_GRACE, PlateauTracker, checkPassed, editedPaths, failureSignatures, isCheckCommand, isTempPath, newProgressMemory, plateauNudgeText, progressOf } = LocalcodePluginDefault as any;
 

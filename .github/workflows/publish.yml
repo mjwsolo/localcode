@@ -28,6 +28,14 @@ jobs:
             echo "::error::Release commit $GITHUB_SHA ($GITHUB_REF_NAME) is not on main. Merge to main before tagging/releasing."
             exit 1
           fi
+      - name: Tag must equal the package version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          v="$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml | head -1)"
+          f="$(sed -n 's/^    __version__ = "\(.*\)"/\1/p' src/localcode/__init__.py | head -1)"
+          echo "pyproject=$v fallback=$f tag=$GITHUB_REF_NAME"
+          [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "::error::tag $GITHUB_REF_NAME != pyproject version $v"; exit 1; }
+          [ "$v" = "$f" ] || { echo "::error::__init__ fallback version $f != pyproject $v"; exit 1; }
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -43,9 +51,9 @@ jobs:
             tests/test_execution_policies.py \
             tests/test_code_navigation_and_processes.py
 
-  # LocalCode has no compiled Python extensions; the llama-server binary
-  # (the one shipped binary) is checked in under src/localcode/bin/ and rides
-  # along as package data (see .github/workflows/turboquant.yml for how
+  # LocalCode has no compiled Python extensions; the two shipped binaries
+  # (llama-server and the localcode-ui runtime) are checked in under
+  # src/localcode/bin/ and ride along as package data in a macosx_13_0_arm64 wheel (see .github/workflows/turboquant.yml for how
   # it is built and checked). So a normal wheel + sdist via
   # `python -m build` is right. No cibuildwheel — that is for packages
   # with compiled extensions, and it errors out ("pure Python wheel

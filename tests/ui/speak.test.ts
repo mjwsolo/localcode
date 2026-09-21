@@ -5,7 +5,7 @@ test("read aloud toggles its owned process without stopping unrelated processes"
   const python = process.env.LOCALCODE_PY ?? "python3"
   const result = Bun.spawnSync([python, "-c", `
 import os, pathlib, subprocess, tempfile, threading
-from localcode_supervisor import Supervisor
+from localcode.ui.supervisor import Supervisor
 with tempfile.TemporaryDirectory() as directory:
     executable = pathlib.Path(directory) / 'say'
     executable.write_text('#!/bin/sh\\nexec /bin/sleep 30\\n')

@@ -5,6 +5,75 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
+## 0.4.0a1 — 2026-09-21
+
+### Changed
+
+- **A new default interface.** `localcode` now opens the localcode agent
+  runtime: a fork of opencode, branded, with every cloud feature removed and
+  the same model → quant picker localcode has always had (`/models`). It won
+  our head-to-head harness benchmark against the previous interface and the
+  other candidates, with no timeouts. The previous interface is still there:
+  `localcode --classic` (or `LOCALCODE_FRONTEND=classic`), and it remains
+  the fallback on installs without the UI binary.
+- **The wheel is now tagged for its platform.** `localcode` ships two
+  Apple-Silicon binaries (`llama-server` and the UI runtime), so the wheel is
+  `macosx_13_0_arm64` instead of claiming to be pure Python for any machine.
+  pip refuses it on Intel Macs and Linux instead of failing at first run.
+- **Both binaries run on macOS 13 and newer.** 0.3.71 shipped a `llama-server`
+  built without a deployment target, which required macOS 26 and failed with a
+  dyld error on every older Mac. The build now pins macOS 13, the test suite
+  fails (rather than skips) if that ceiling is ever exceeded, and CI runs on
+  macOS 14 and 15 runners.
+- **Nothing is written into your project.** The runtime's session config and
+  the discipline plugin are loaded from the package and a per-user run
+  directory (`~/.local/share/localcode-agent/run`); the launcher no longer
+  drops `localcode.json` or `.localcode-agent/plugins` into the working
+  directory. (The runtime keeps its own per-project state in
+  `.localcode-agent/`, like before.)
+- **Language servers are installed only when you ask.** `/lsp` lists what is
+  available and installs on confirmation; nothing downloads on its own.
+
+### Added
+
+- `localcode --version`, `localcode --classic`.
+- `scripts/build_ui_binary.sh` rebuilds the UI runtime from the pinned fork
+  commit (`src/localcode/ui/FORK_COMMIT`) in a neutral directory; the test
+  suite checks the shipped binaries for architecture, self-containment, the
+  macOS ceiling, embedded developer paths, and a version that matches the
+  package.
+- `scripts/ui_journeys.sh`: the four critical user journeys (respond, TDD,
+  build a CLI, refuse to delete outside the workspace) against a real model.
+- bun tests for the discipline plugin, the supervisor, and the port guard
+  live in `tests/ui/` and run in CI.
+
+### Removed
+
+- The `opencode-agent/` development harness; everything it did is now inside
+  the package (`src/localcode/ui/`).
+
+## 0.3.64 – 0.3.71 — 2026-08-24 to 2026-08-25
+
+Small releases on the way to the docs site launch, listed together.
+
+### Added
+
+- Qwen 3.8 27B Q8 (31.5 GB) in the catalog for high-memory Macs.
+- `/voice` works out of the box on macOS: whisper, the microphone recorder and
+  piper are bundled.
+- MCP servers can be added from inside the app (`/mcp`, URL first); `/mcp` is
+  a plain inline list like `/skills`.
+- The shell prefix is discoverable: the composer shows a `! for shell` hint.
+
+### Changed
+
+- The status line uses a smooth gradient shimmer; collapsed reasoning blocks
+  name the ctrl+o toggle.
+- `/vision` errors list every vision-capable model.
+- The docs site moved to Astro + Starlight (Node 22); the home page lists real
+  Mac memory configurations (16 to 128 GB).
+
+
 ## 0.3.63 — 2026-08-24
 
 ### Removed
