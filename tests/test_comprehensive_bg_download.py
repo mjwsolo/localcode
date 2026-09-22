@@ -45,12 +45,19 @@ _CONTRACT_KEYS = {
 
 @pytest.fixture(autouse=True)
 def reset_registry():
-    """Wipe the shared background-download registry around each test."""
+    """Wipe the shared background-download registry around each test, and
+    wait for the worker threads a test started. A straggler from a previous
+    test (its gate released, thread not yet finished) otherwise marks the
+    next test's identically-keyed entry "done" mid-assertion."""
+    before = set(threading.enumerate())
     with bootstrap._DOWNLOAD_LOCK:
         bootstrap._DOWNLOADS.clear()
         bootstrap._DOWNLOAD_QUEUE.clear()
         bootstrap._DOWNLOAD_CHOICES.clear()
     yield
+    for t in threading.enumerate():
+        if t not in before and t is not threading.current_thread():
+            t.join(timeout=15)
     with bootstrap._DOWNLOAD_LOCK:
         bootstrap._DOWNLOADS.clear()
         bootstrap._DOWNLOAD_QUEUE.clear()
