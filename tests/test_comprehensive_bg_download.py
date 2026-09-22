@@ -45,12 +45,19 @@ _CONTRACT_KEYS = {
 
 @pytest.fixture(autouse=True)
 def reset_registry():
-    """Wipe the shared background-download registry around each test."""
+    """Wipe the shared background-download registry around each test, and
+    wait for the worker threads a test started. A straggler from a previous
+    test (its gate released, thread not yet finished) otherwise marks the
+    next test's identically-keyed entry "done" mid-assertion."""
+    before = set(threading.enumerate())
     with bootstrap._DOWNLOAD_LOCK:
         bootstrap._DOWNLOADS.clear()
         bootstrap._DOWNLOAD_QUEUE.clear()
         bootstrap._DOWNLOAD_CHOICES.clear()
     yield
+    for t in threading.enumerate():
+        if t not in before and t is not threading.current_thread():
+            t.join(timeout=15)
     with bootstrap._DOWNLOAD_LOCK:
         bootstrap._DOWNLOADS.clear()
         bootstrap._DOWNLOAD_QUEUE.clear()
@@ -154,7 +161,9 @@ def test_concurrency_cap_leaves_extras_queued(monkeypatch, not_on_disk):
     release = threading.Event()
 
     def _gated_download(choice, on_progress=None, cancel_event=None):
-        release.wait(timeout=5.0)
+        # Hold until the test releases; a short timeout let a download "finish"
+        # before the queued assertion on slow CI runners.
+        release.wait(timeout=60.0)
         return True, str(choice.local_path)
 
     monkeypatch.setattr(bootstrap, "download_model", _gated_download)
@@ -177,8 +186,9 @@ def test_concurrency_cap_leaves_extras_queued(monkeypatch, not_on_disk):
     assert statuses.count("downloading") == 2
     assert statuses.count("queued") == 2
 
-    active = bootstrap.list_active_downloads()
-    assert len(active) == 4  # 2 downloading + 2 queued, terminal excluded
+    # 2 downloading + 2 queued, terminal excluded. The registry is updated
+    # from worker threads, so wait for the count rather than sampling once.
+    assert _wait_until(lambda: len(bootstrap.list_active_downloads()) == 4), bootstrap.list_active_downloads()
 
     # Free the slots; all four must drain to 'done'.
     release.set()

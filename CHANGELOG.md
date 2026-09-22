@@ -5,6 +5,16 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
+## 0.4.0 — 2026-09-22
+
+The stable release of the new default interface. It is 0.4.0a2 plus a
+version-stamped runtime binary; the two pre-release entries below describe
+everything that changed since 0.3.71. Verified by installing each pre-release
+from PyPI into a sandbox with an empty home directory and driving the picker,
+a model load, a turn, a file-writing task, model switching, the vision and
+language-server dialogs, web search, the headless `run` mode, and the
+previous interface.
+
 ## 0.4.0a2 — 2026-09-22
 
 ### Fixed
