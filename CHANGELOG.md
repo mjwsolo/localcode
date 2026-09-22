@@ -19,6 +19,13 @@ All notable changes to LocalCode will be documented here. The format follows
   stopped unexpectedly, run localcode again" instead of leaving a zombie UI.
   Inside the UI the control calls time out after 5 s, the status line reads
   "Model service not running", and the picker shows an error you can dismiss.
+- **Running `localcode` in your home directory no longer stalls for minutes
+  before the first answer.** The runtime's undo/diff snapshots shadow-index the
+  working directory with git before the first message; on a home directory
+  that indexed everything you own (146 s measured). Snapshots are now skipped
+  for the home directory and the first index has a 15 s budget anywhere else;
+  past it, undo/diff are off for that directory and the session answers
+  normally.
 
 ## 0.4.0 — 2026-09-22
 

@@ -117,13 +117,3 @@ def test_supervisor_serves_every_route_the_ui_calls():
     missing = [r for r in CONTROL_ROUTES if f'"{r}"' not in src]
     assert not missing, missing
 
-
-def test_launch_refuses_home_directory(monkeypatch, tmp_path, capsys):
-    """Running in $HOME makes the runtime index the whole home; refuse with a hint."""
-    from localcode.ui import launch
-    monkeypatch.setattr(launch, "ui_binary_path", lambda: tmp_path / "ui")
-    (tmp_path / "ui").write_bytes(b"x")
-    monkeypatch.setattr(launch, "_llama_server", lambda: tmp_path / "ui")
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
-    assert launch.main(None, str(tmp_path)) == 1
-    assert "home directory" in capsys.readouterr().err
