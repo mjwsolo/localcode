@@ -44,7 +44,7 @@ def server_command(gguf: str, port: int, alias: str | None = None) -> list[str]:
     # Vision: same rule as classic localcode (runtime.py) — pass --mmproj when the
     # catalog says this model ships a projector and the sidecar is on disk.
     mm = mmproj_for(gguf)
-    if mm is not None:
+    if mm is not None and "--mmproj" not in cmd:
         cmd += ["--mmproj", str(mm)]
     return cmd
 

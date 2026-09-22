@@ -5,6 +5,21 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
+## 0.4.0a2 — 2026-09-22
+
+### Fixed
+
+- **A fresh install ran the model server on the CPU and then failed to load
+  any model.** The config default for `llama_cpp_gpu_layers` was 0 (CPU mode),
+  which also switched flash attention off, and the quantized KV cache refuses
+  to start without it. The previous interface's setup screen used to write
+  999 into config.toml before the first server start, so the bug only
+  surfaced with the new default interface on a machine with no config. The
+  default is now 999 (every layer on Metal). Found by installing 0.4.0a1 into
+  a sandbox with an empty home directory.
+- `LOCALCODE_MODEL_DIR` (the documented override) is honoured by the new
+  launcher and supervisor; `LOCALCODE_MODELS_DIR` still works.
+
 ## 0.4.0a1 — 2026-09-21
 
 ### Changed
