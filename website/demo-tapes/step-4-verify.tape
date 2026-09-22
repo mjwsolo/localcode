@@ -11,7 +11,7 @@ Type "Implement the retry decorator in retry.py so every test in test_retry.py p
 Enter
 Sleep 20s
 Show
-Sleep 45s
+Sleep 26s
 Hide
 Type "/exit"
 Enter
