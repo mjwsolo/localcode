@@ -179,8 +179,9 @@ def test_concurrency_cap_leaves_extras_queued(monkeypatch, not_on_disk):
     assert statuses.count("downloading") == 2
     assert statuses.count("queued") == 2
 
-    active = bootstrap.list_active_downloads()
-    assert len(active) == 4  # 2 downloading + 2 queued, terminal excluded
+    # 2 downloading + 2 queued, terminal excluded. The registry is updated
+    # from worker threads, so wait for the count rather than sampling once.
+    assert _wait_until(lambda: len(bootstrap.list_active_downloads()) == 4), bootstrap.list_active_downloads()
 
     # Free the slots; all four must drain to 'done'.
     release.set()
