@@ -3,13 +3,22 @@ title: Permissions
 description: What the agent can do on its own, what it asks about, and what is never allowed.
 ---
 
-localcode has three autonomy levels. Set one at startup or toggle approvals with `/permissions`:
+File edits and shell commands go through the runtime's permission prompt. When the agent wants to edit a file or run a command, the prompt shows what it is about to do and offers three answers:
 
-- **suggest** - asks before every shell command and every file write.
-- **auto_edit** (the interactive default) - edits files without asking, but confirms risky or destructive shell commands such as `rm -rf`, `git push`, `pip install`, `npm install`, and `curl ... | sh`.
-- **full_auto** - nothing prompts.
+- **allow once** - run this one action.
+- **always** - allow this kind of action for the rest of this session without asking.
+- **deny** - refuse it. The agent gets the refusal as a tool result and plans around it.
 
-Two rules hold at every level:
+Reading files does not prompt. `/permissions` shows the current rules for the session.
 
-- **Network tools never prompt.** `web_search`, `web_fetch`, and MCP tools run without asking, even in `suggest`. See [Network Boundary](/localcode/concepts/network-boundary).
-- **A hard safety block cannot be turned off.** Catastrophic operations - `rm -rf /`, `mkfs`, `dd` to a disk device, or writing credential files like `~/.ssh/id_rsa` - are refused in every mode, including `full_auto`. It is a guard against mistakes, not a security boundary.
+## Rules that always hold
+
+- **Writes outside the project directory are refused.** The agent can only edit files under the directory you opened. This holds in the interface and in headless runs.
+- **Headless runs cannot answer prompts.** `localcode run` has nobody to ask, so it runs the previous 0.3 agent loop in full-auto; out-of-workspace writes are auto-rejected. See [CLI](/localcode/reference/cli).
+- **Network tools do not prompt.** `websearch`, `webfetch`, and MCP tools run when the model calls them. See [Network Boundary](/localcode/concepts/network-boundary).
+
+## Project rules
+
+A project `localcode.json` can pre-answer permissions, for example to allow `pytest` without asking or deny a command outright. See [Configuration](/localcode/reference/configuration).
+
+The permission prompt is a guard against mistakes. It is not a security boundary against a hostile model or repository.

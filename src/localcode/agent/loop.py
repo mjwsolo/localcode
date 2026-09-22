@@ -496,6 +496,7 @@ def run_agent_loop(
     _last_round_signature: tuple[int, str] | None = None
     _same_round_signature_count = 0
     _same_round_synthetic_rejections = 0
+    _MAX_SAME_ROUND_REJECTIONS = 6  # 3 rejections earn a nudge; 6 (3 ignored nudges) end the turn
     _MUTATING_TOOLS = frozenset({
         "write_file",
         "append_file",
@@ -569,6 +570,36 @@ def run_agent_loop(
     # rounds (zero tools) reset the read-only streak. Resets to 0 the moment
     # a round changes a file or runs a build.
     _planning_streak = 0
+    # ── Plateau detector (HarnessBench 2026-09-08: 043/086/087 hit the 20 min
+    # cap while the oracle score had already reached what other frontends got
+    # by STOPPING). A round makes progress only if it (a) changed a path not
+    # previously changed this turn, (b) turned a failing build/test into a
+    # passing one (or produced the first pass), or (c) completed a todo item.
+    # Re-edits of already-edited files, reads/greps, identical or failing test
+    # runs and /tmp experiments are NOT progress — but a failing check whose
+    # failure set SHRANK or CHANGED to something unseen this turn is (a real
+    # debugging loop). 6 no-progress rounds → one wrap-up nudge naming the open
+    # todo items; 8 more after that → end the turn honestly, unless a check
+    # passed in the last 2 rounds (then one "finish now" nudge + 3 rounds).
+    # Never fires in the first PLATEAU_GRACE_ROUNDS rounds. Bookkeeping lives
+    # in agent/plateau.py so this stays a few lines here.
+    from .plateau import PlateauTracker as _PlateauTracker
+    _plateau = _PlateauTracker()
+    _round_build_outcomes: list[bool] = []
+    _round_build_outputs: list[str] = []
+
+    def _open_todo_labels() -> list[str]:
+        labels = [
+            str((t or {}).get("content") or "").strip()
+            for t in list(getattr(getattr(app, "session", None), "todos", []) or [])
+            if str((t or {}).get("status", "")).lower() != "completed"
+        ]
+        return [t for t in labels if t]
+
+    def _todo_progress_snapshot() -> tuple[int, int]:
+        todos = list(getattr(getattr(app, "session", None), "todos", []) or [])
+        done = sum(1 for t in todos if str((t or {}).get("status", "")).lower() == "completed")
+        return len(todos) - done, done
     # Build-verification STOP gate: a true completion gate (claude-code
     # query.ts stop-hook pattern). When the model tries to END a build_app turn
     # that changed code, we run the project's real typecheck/test and, if it
@@ -577,6 +608,7 @@ def run_agent_loop(
     # project can't spin forever; each retry RE-RUNS the check so the gate keeps
     # holding until the project is clean or the bound is hit.
     _build_verify_nudges = 0
+    _reverify_runs = 0  # auto re-runs of the model's own last verification command
     _MAX_BUILD_VERIFY_RETRIES = 2
     # The project checker ran but could NOT produce a verdict (timeout, failed to
     # execute, incomplete TypeScript coverage). Turn-level, not round-level: it
@@ -821,6 +853,9 @@ def run_agent_loop(
         # concrete progress (new file / build) or was pure (re-)planning.
         _changed_files_at_round_start = len(changed_files)
         _bash_history_at_round_start = len(bash_history)
+        _todos_at_round_start = _todo_progress_snapshot()
+        _round_build_outcomes = []
+        _round_build_outputs = []
         round_task_stage = _current_task_stage_for_thinking()
         round_use_thinking = should_use_thinking(
             app.config.runtime.laptop_26b_runtime_mode,
@@ -1355,6 +1390,34 @@ def run_agent_loop(
                         ),
                         "tool_call_id": _tc.get("id", ""),
                     })
+                if _same_round_synthetic_rejections >= _MAX_SAME_ROUND_REJECTIONS:
+                    # HARD STOP. Rejecting + nudging is bounded feedback, not a
+                    # loop breaker: observed 2026-09-08 a 27B model re-issued the
+                    # same bash call 26 times in a row, each rejected, each
+                    # followed by the strategy-change nudge, until the 20 min
+                    # task cap. Once the model has ignored several nudges the
+                    # turn has to END with an honest reason, not spin.
+                    _stuck_name = str(((tool_calls[0].get("function") or {}).get("name")) or _primary_round_tool or "tool")
+                    _stuck_args = (tool_calls[0].get("function") or {}).get("arguments") or ""
+                    _stuck_head = (_stuck_args if isinstance(_stuck_args, str) else json.dumps(_stuck_args))[:160]
+                    _stuck_msg = (
+                        "LocalCode stopped this turn: the model kept re-issuing the same "
+                        f"`{_stuck_name}` call after it was rejected {_same_round_synthetic_rejections} "
+                        "times and ignored every request to change approach. The task is "
+                        f"incomplete. Last attempted call: {_stuck_head}"
+                    )
+                    out.print_info("Stopping: the model repeated the same rejected action too many times.")
+                    _render_markdown(_stuck_msg, app.console if hasattr(app, 'console') else None)
+                    full_response.append(_stuck_msg)
+                    try:
+                        from ..events import emit as _emit_stuck
+                        _emit_stuck("loop_break", signal="same_round_rejections_exhausted",
+                                    rejections=_same_round_synthetic_rejections,
+                                    tool_name=_stuck_name, round_idx=round_num)
+                    except Exception:
+                        pass
+                    _loop_exit_reason = "repeat_loop_exhausted"
+                    break
                 if _same_round_synthetic_rejections >= 3:
                     messages.append({
                         "role": "user",
@@ -1699,7 +1762,8 @@ def run_agent_loop(
                     from ..tools.project_check import run_project_check_result
                     out.print_info("Verifying — running the project's typecheck…")
                     _check = run_project_check_result(
-                        str(app.repo_root), ctx_tokens=_ctx_tokens_turn)
+                        str(getattr(app, "check_root", None) or app.repo_root),
+                        ctx_tokens=_ctx_tokens_turn)
                     if _project_check_gate.observe(_check) == "red":
                         _proj_errors = _check.detail
                 except Exception as _check_exc:
@@ -1826,6 +1890,63 @@ def run_agent_loop(
                     kind="edit_verify_advise",
                 ):
                     continue
+            # ── Stale-evidence re-verification ──────────────────────────────
+            # The model DID run a relevant build/test earlier, then edited again
+            # and declared done without re-running it. The registry keys its
+            # evidence on the changed files' hashes, so that record is now stale
+            # and the turn would end as `completion_gate:unverified` (exit 1
+            # under --json) even when the work is right. Observed 3x in one
+            # HarnessBench night on runs the oracle scored 0.93-0.98. Rather than
+            # fail the user for the model's omission, re-run the model's OWN last
+            # verification command ourselves (same guards as a model bash call),
+            # record the fresh verdict, and only then decide. A failure is fed
+            # back and forces one more round; bounded so it cannot spin.
+            if (not _blocking_question
+                    and _goal_state.goal_type in {"build_app", "edit_existing"}
+                    and _changed_code_files(changed_files)
+                    and "relevant-verification" in _hook_state.verification_registry.requirements
+                    and not _hook_state.verification_registry.satisfied("relevant-verification", os.environ)
+                    and _reverify_runs < 2):
+                _reverify_runs += 1
+                _req = _hook_state.verification_registry.requirements["relevant-verification"]
+                _recmd = _req.command if isinstance(_req.command, str) else " ".join(_req.command)
+                out.print_info(f"Re-running your last verification after the final edits: {_recmd[:80]}")
+                try:
+                    _re_obj = _execute_tool_result(app, "bash", {"command": _recmd}, out)
+                    _re_text = str(_re_obj)
+                    _re_facts = dict(getattr(_re_obj, "facts", {}) or {})
+                    from ..execution_policy import assess_shell_execution as _assess_re
+                    _re_ok = bool(getattr(_re_obj, "ok", True))
+                    _re_exec = _assess_re(_recmd, _re_text, int(_re_facts.get("exit_code", 0 if _re_ok else 1)))
+                    from pathlib import Path as _ReP
+                    from ..evidence import EvidenceRequirement as _ReReq
+                    _hook_state.verification_registry.require(_ReReq(
+                        "relevant-verification",
+                        tuple(_ReP(f) if _ReP(f).is_absolute() else _ReP(app.repo_root) / f for f in changed_files),
+                        _recmd, ("PATH", "NODE_ENV", "PYTHONPATH"),
+                    ))
+                    _hook_state.verification_registry.record(
+                        "relevant-verification", environment=os.environ,
+                        passed=_re_exec.task_succeeded, output=_re_text,
+                    )
+                    bash_history.append((_recmd, _re_text))
+                    try:
+                        from ..events import emit as _emit_rv
+                        _emit_rv("auto_reverify", command=_recmd[:200], passed=_re_exec.task_succeeded,
+                                 attempt=_reverify_runs, round_idx=round_num)
+                    except Exception:
+                        pass
+                    if not _re_exec.task_succeeded:
+                        _snippet = _truncate_result(_re_text, "bash", ctx_tokens=_ctx_tokens_turn)
+                        if _append_nudge(
+                            "SYSTEM: Your last verification command was re-run after your final "
+                            f"edits and FAILED:\n$ {_recmd}\n{_snippet}\nFix the failure, re-run it, "
+                            "then finish. Do not claim it works while this fails.",
+                            kind="reverify_failed",
+                        ):
+                            continue
+                except Exception as _re_exc:
+                    out.print_info(f"Re-verification could not run: {type(_re_exc).__name__}")
             if (not _blocking_question
                     and _goal_state.goal_type in {"build_app", "edit_existing"}
                     and changed_files
@@ -2157,6 +2278,11 @@ def run_agent_loop(
                 bash_history.append((_bash_cmd, str(tool_result)))
                 from ..execution_policy import assess_shell_execution
                 _execution = assess_shell_execution(_bash_cmd, str(tool_result), int(_tool_facts.get("exit_code", 0 if _tool_succeeded else 1)))
+                if ran_build_or_test([(_bash_cmd, str(tool_result))]) and not str(tool_result).startswith("REJECTED"):
+                    # A guard's synthetic REJECTED stub is not a check run: it
+                    # must neither reset nor advance the plateau failure history.
+                    _round_build_outcomes.append(bool(_execution.task_succeeded))
+                    _round_build_outputs.append(str(tool_result))
                 if not _execution.task_succeeded:
                     app._last_failed_tool_name = tool_name
                 else:
@@ -2532,6 +2658,62 @@ def run_agent_loop(
             _planning_streak = 0
         elif _round_had_reasoning and not _round_was_readonly:
             _planning_streak += 1
+
+        # ── Plateau detector: nudge at 6 no-progress rounds, stop 8 later ──
+        if _is_enabled(Feature.AUTO_NUDGE_RECOVERY):
+            _plateau_action = _plateau.observe_round(
+                round_idx=round_num,
+                changed_new_file=_round_changed_new_file,
+                build_outcomes=_round_build_outcomes,
+                build_outputs=_round_build_outputs,
+                todos_before=_todos_at_round_start,
+                todos_after=_todo_progress_snapshot(),
+            )
+            if _plateau_action == "wrap_up":
+                if _append_nudge(_plateau.wrap_up_nudge(_open_todo_labels()), kind="plateau_wrap_up"):
+                    out.print_info(
+                        f"No new progress for {_plateau.nudge_after} steps — asking the "
+                        "model to stop experimenting and finish the deliverables."
+                    )
+                    try:
+                        from ..events import emit as _emit_plateau
+                        _emit_plateau("auto_nudge", signal="plateau_wrap_up",
+                                      no_progress_rounds=_plateau.nudge_after,
+                                      round_idx=round_num,
+                                      changed_files=len(changed_files))
+                    except Exception:
+                        pass
+            elif _plateau_action == "finish_now":
+                if _append_nudge(_plateau.finish_now_nudge(), kind="plateau_finish_now"):
+                    out.print_info(
+                        "The model's check passed — asking it to finish now instead of stopping."
+                    )
+                    try:
+                        from ..events import emit as _emit_plateau_finish
+                        _emit_plateau_finish("auto_nudge", signal="plateau_finish_now",
+                                             no_progress_rounds=_plateau.total_no_progress,
+                                             round_idx=round_num,
+                                             changed_files=len(changed_files))
+                    except Exception:
+                        pass
+            elif _plateau_action == "exhausted":
+                _plateau_msg = _plateau.exhausted_summary(
+                    changed_files=changed_files,
+                    open_todos=_open_todo_labels(),
+                )
+                out.print_info("Stopping: the model stopped making progress and ignored the wrap-up request.")
+                _render_markdown(_plateau_msg, app.console if hasattr(app, 'console') else None)
+                full_response.append(_plateau_msg)
+                try:
+                    from ..events import emit as _emit_plateau_break
+                    _emit_plateau_break("loop_break", signal="plateau_exhausted",
+                                        no_progress_rounds=_plateau.total_no_progress,
+                                        round_idx=round_num,
+                                        changed_files=len(changed_files))
+                except Exception:
+                    pass
+                _loop_exit_reason = "plateau_exhausted"
+                break
 
         if not _churn_nudge_done and not _spin_nudge_done and _is_enabled(Feature.AUTO_NUDGE_RECOVERY):
             _churn = detect_churn(

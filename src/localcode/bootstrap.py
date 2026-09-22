@@ -1032,6 +1032,10 @@ def download_mmproj(
         mmproj_filename=None,
         mmproj_size_gb=0.0,
         mmproj_hf_filename=None,
+        # The catalog's sha256 is the MODEL's digest; carrying it over made every
+        # projector download fail its integrity check. The projector has no
+        # recorded digest, so download_model falls back to the size check.
+        sha256=None,
     )
     ok, result = download_model(proxy, on_progress=on_progress)
     if not ok:

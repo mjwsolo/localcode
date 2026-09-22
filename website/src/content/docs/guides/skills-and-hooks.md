@@ -1,26 +1,27 @@
 ---
 title: Skills
-description: Reusable prompt templates the model can load into a task.
+description: Reusable instructions the model can load into a task.
 ---
 
 ## Skills
 
-A skill is a Markdown file. It is a reusable prompt template that the model can use. Frontmatter is optional. If a file has no frontmatter, its full body is used.
+A skill is a folder with a `SKILL.md` file. The file holds instructions the model can load when a task calls for them: a release checklist, a migration recipe, the way your team writes tests. The folder can hold supporting files the instructions refer to.
 
-localcode finds skills in several places. This means it can use skills you wrote for another agent:
-
-```text
-~/.localcode/skills/
-<repo>/.localcode/skills/
-<repo>/.agents/skills/      ~/.agents/skills/
-<repo>/.claude/skills/      ~/.claude/skills/
-<repo>/.opencode/skills/    ~/.config/opencode/skills/
-```
-
-In the TUI:
+localcode reads skill folders from two places:
 
 ```text
-/skills     # list loaded skills and where each came from
+<project>/.localcode-agent/skills/      # this project
+~/.config/localcode-agent/skills/       # every project
 ```
 
-You can also install skills from a URL. This fetches data from the network. See [Network Boundary](/localcode/concepts/network-boundary).
+In the interface:
+
+```text
+/skills     # list the skills that were found and where each came from
+```
+
+Skills are read from disk only. localcode does not fetch skills from a URL.
+
+## Hooks
+
+Lifecycle hooks are a feature of the 0.3 classic interface (`~/.localcode/hooks.toml`) and are not part of the 0.4 interface. In 0.4, the discipline plugin runs the project's own checks after edits; see [Architecture](/localcode/concepts/architecture). For the classic hook format, use the 0.3 docs through the version switcher in the header.

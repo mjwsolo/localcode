@@ -377,3 +377,53 @@ def test_a_real_module_under_a_green_checker_completes(tmp_path):
     trace = run_one_turn(app, EventRecorder(), BUILD_PROMPT)
     status, code, _reason, text = _headless(app, trace)
     assert (status, code) == ("ok", 0), f"a real implementation came back {status}: {text!r}"
+
+
+# ── stale evidence: verified, then edited again, then "done" ────────────────
+
+
+def _drive_verify_then_edit(tmp_path: Path, repo: Path):
+    """The model runs the check, then makes ONE more edit and declares done
+    without re-running it. The recorded evidence is keyed on the old file hash,
+    so before 2026-09-08 this ended `completion_gate:unverified` → exit 1 even
+    though nothing was wrong (seen 3x in one HarnessBench night on runs the
+    oracle scored 0.93-0.98)."""
+    script = [
+        tool_round(("write_file", {
+            "path": "src/app.ts",
+            "content": "export const app = () => 'todo';\n",
+        })),
+        tool_round(("bash", {"command": "./node_modules/.bin/tsc --noEmit"})),
+        tool_round(("write_file", {
+            "path": "src/app.ts",
+            "content": "export const app = () => 'todo list';\n",
+        })),
+        say("Done — the app is built and type-checks."),
+    ]
+    app = build_test_app(tmp_path, script=script, cwd=repo)
+    trace = run_one_turn(app, EventRecorder(), BUILD_PROMPT)
+    return trace, app
+
+
+def test_stale_evidence_is_re_verified_and_completes_when_green(tmp_path):
+    repo = tmp_path / "project"
+    repo.mkdir()
+    counter = repo / "tsc_runs"
+    _ts_project(repo, f"#!/bin/sh\necho x >> {counter}\nexit 0\n")
+    trace, app = _drive_verify_then_edit(tmp_path, repo)
+    status, code, _reason, text = _headless(app, trace)
+    assert (status, code) == ("ok", 0), f"turn came back {status}: {text!r}"
+    # the checker ran again AFTER the final edit (once by the model, once by us)
+    assert counter.read_text().count("x") >= 2
+
+
+def test_stale_evidence_re_verification_failure_still_blocks(tmp_path):
+    """Re-running is not a rubber stamp: if the final edit broke the check, the
+    turn must not complete as verified."""
+    repo = tmp_path / "project"
+    repo.mkdir()
+    # green the first time, red every time after
+    _ts_project(repo, "#!/bin/sh\nif [ -f ran_once ]; then echo 'src/app.ts(1,1): error TS2322' ; exit 1; fi\ntouch ran_once\nexit 0\n")
+    trace, app = _drive_verify_then_edit(tmp_path, repo)
+    status, code, _reason, _text = _headless(app, trace)
+    assert (status, code) == ("incomplete", 1)

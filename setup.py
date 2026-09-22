@@ -43,22 +43,26 @@ class CustomBuildPy(build_py):
     """Include binary and data files that setuptools normally skips."""
     def build_package_data(self):
         super().build_package_data()
-        # Copy llama-server binary
-        src = Path("src/localcode/bin/llama-server")
-        if src.exists():
-            dst_dir = Path(self.build_lib) / "localcode" / "bin"
-            dst_dir.mkdir(parents=True, exist_ok=True)
-            import shutil
-            shutil.copy2(str(src), str(dst_dir / "llama-server"))
+        # Copy the shipped binaries (llama-server, the UI runtime)
+        import shutil
+        dst_dir = Path(self.build_lib) / "localcode" / "bin"
+        for name in ("llama-server", "localcode-ui"):
+            src = Path("src/localcode/bin") / name
+            if src.exists():
+                dst_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(str(src), str(dst_dir / name))
 
 setup(
     ext_modules=ext_modules,
     cmdclass={"build_py": CustomBuildPy},
     options={
-        "bdist_wheel": {},
+        # Both shipped binaries are Mach-O arm64 built for macOS 13+, so the
+        # wheel says so instead of claiming to be pure Python for any platform.
+        "bdist_wheel": {"plat_name": "macosx_13_0_arm64"},
     },
     package_data={
-        "localcode": ["bin/llama-server", "bin/*.dylib", "**/*.tcss"],
+        "localcode": ["bin/llama-server", "bin/localcode-ui", "bin/*.dylib", "**/*.tcss",
+                      "ui/plugin/*.ts", "ui/FORK_COMMIT"],
     },
     exclude_package_data={
         "localcode": ["*.c"],
