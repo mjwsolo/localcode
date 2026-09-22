@@ -116,3 +116,4 @@ def test_supervisor_serves_every_route_the_ui_calls():
     src = (Path(entrypoint.__file__).parent / "ui" / "supervisor.py").read_text()
     missing = [r for r in CONTROL_ROUTES if f'"{r}"' not in src]
     assert not missing, missing
+
