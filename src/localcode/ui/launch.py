@@ -194,7 +194,23 @@ def main(model: str | None = None, project: str | None = None) -> int:
         if alias:
             argv += ["-m", f"localcode/{alias}"]
         frontend = subprocess.Popen(argv, cwd=str(project_dir), env=env)
-        return frontend.wait()
+        # Watch both: if the supervisor dies (killed, crashed), the UI would
+        # sit on "No model loaded" with a picker that never answers. End the
+        # session with a clear message instead.
+        while True:
+            rc = frontend.poll()
+            if rc is not None:
+                return rc
+            if sup.poll() is not None:
+                frontend.terminate()
+                try:
+                    frontend.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    frontend.kill()
+                print(f"localcode: the model service stopped unexpectedly (see {rd / 'supervisor.log'}). "
+                      "Run `localcode` again.", file=sys.stderr)
+                return 1
+            time.sleep(0.5)
     finally:
         cleanup()
         sup_log.close()
