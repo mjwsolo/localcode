@@ -121,10 +121,13 @@ def test_bundled_binary_loads_and_runs(binary: Path):
 
 
 def test_ui_binary_version_matches_package():
+    """The runtime footer shows the binary's version; it must be the same
+    release as the wheel (X.Y.Z). Pre-release suffixes may differ so an alpha
+    bump does not force a rebuild of the 98 MB binary."""
     path = BIN_DIR / "localcode-ui"
     if not path.is_file():
         pytest.skip("no bundled UI binary")
     from localcode import __version__
-    want = re.sub(r"(\d)(a|b|rc)(\d+)$", r"\1-\2\3", __version__)
+    want = re.match(r"\d+\.\d+\.\d+", __version__).group(0)
     out = subprocess.run([str(path), "--version"], capture_output=True, text=True, timeout=60, check=False).stdout.strip()
-    assert out == want, f"UI binary reports {out!r}, package is {want!r}; rebuild with scripts/build_ui_binary.sh"
+    assert out.startswith(want), f"UI binary reports {out!r}, package is {__version__!r}; rebuild with scripts/build_ui_binary.sh"

@@ -36,7 +36,7 @@ internal_thinking_mode = "off"
 quant_preset = "balanced"
 cache_policy = "adaptive"
 rolling_window_messages = 24
-llama_cpp_gpu_layers = 0
+llama_cpp_gpu_layers = 999
 llama_cpp_threads = 10
 llama_cpp_batch_size = 2048
 llama_cpp_spec_type = ""
@@ -117,7 +117,10 @@ class RuntimeConfig:
     quant_preset: str = "balanced"
     cache_policy: str = "adaptive"
     rolling_window_messages: int = 24
-    llama_cpp_gpu_layers: int = 0
+    # 999 = every layer on the GPU (Metal). 0 = CPU mode. A fresh install must
+    # run on Metal: with 0 the server also drops flash attention, which the
+    # quantized KV cache requires, and fails to create a context at all.
+    llama_cpp_gpu_layers: int = 999
     llama_cpp_threads: int = -1   # -1 = auto-detect from CPU cores at startup
     llama_cpp_batch_size: int = -1  # -1 = auto-detect from platform at startup
     # Speed optimizations
@@ -365,7 +368,7 @@ def load_config() -> AppConfig:
         quant_preset=os.environ.get("LOCALCODE_QUANT_PRESET", runtime_data.get("quant_preset", "balanced")),
         cache_policy=os.environ.get("LOCALCODE_CACHE_POLICY", runtime_data.get("cache_policy", "adaptive")),
         rolling_window_messages=int(os.environ.get("LOCALCODE_ROLLING_WINDOW_MESSAGES", runtime_data.get("rolling_window_messages", 24))),
-        llama_cpp_gpu_layers=int(os.environ.get("LOCALCODE_LLAMA_CPP_GPU_LAYERS", runtime_data.get("llama_cpp_gpu_layers", 0))),
+        llama_cpp_gpu_layers=int(os.environ.get("LOCALCODE_LLAMA_CPP_GPU_LAYERS", runtime_data.get("llama_cpp_gpu_layers", 999))),
         llama_cpp_threads=int(os.environ.get("LOCALCODE_LLAMA_CPP_THREADS", runtime_data.get("llama_cpp_threads", 8))),
         llama_cpp_batch_size=int(os.environ.get("LOCALCODE_LLAMA_CPP_BATCH_SIZE", runtime_data.get("llama_cpp_batch_size", 128))),
         # These were saved but never loaded back (silent data loss on every
