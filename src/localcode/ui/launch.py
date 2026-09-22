@@ -131,6 +131,14 @@ def main(model: str | None = None, project: str | None = None) -> int:
               file=sys.stderr)
         alias = None
     project_dir = Path(project).expanduser().resolve() if project else Path.cwd()
+    if project_dir in (Path.home().resolve(), Path("/")):
+        # The runtime indexes the working directory as the project; on a home
+        # directory that means scanning everything you own before the first
+        # answer, and it never finishes in practice.
+        print(f"localcode: {project_dir} is your home directory, not a project. "
+              "cd into the project you want to work on (or `mkdir myapp && cd myapp`) and run localcode there.",
+              file=sys.stderr)
+        return 1
 
     try:
         port, ctrl = choose_ports()
@@ -194,7 +202,23 @@ def main(model: str | None = None, project: str | None = None) -> int:
         if alias:
             argv += ["-m", f"localcode/{alias}"]
         frontend = subprocess.Popen(argv, cwd=str(project_dir), env=env)
-        return frontend.wait()
+        # Watch both: if the supervisor dies (killed, crashed), the UI would
+        # sit on "No model loaded" with a picker that never answers. End the
+        # session with a clear message instead.
+        while True:
+            rc = frontend.poll()
+            if rc is not None:
+                return rc
+            if sup.poll() is not None:
+                frontend.terminate()
+                try:
+                    frontend.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    frontend.kill()
+                print(f"localcode: the model service stopped unexpectedly (see {rd / 'supervisor.log'}). "
+                      "Run `localcode` again.", file=sys.stderr)
+                return 1
+            time.sleep(0.5)
     finally:
         cleanup()
         sup_log.close()
