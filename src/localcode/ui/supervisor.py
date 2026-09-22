@@ -671,7 +671,7 @@ def main() -> int:
     ap.add_argument("--port", type=int, required=True)
     ap.add_argument("--control-port", type=int, required=True)
     ap.add_argument("--server", required=True)
-    ap.add_argument("--models-dir", default=os.environ.get(
+    ap.add_argument("--models-dir", default=os.environ.get("LOCALCODE_MODEL_DIR") or os.environ.get(
         "LOCALCODE_MODELS_DIR", str(Path.home() / ".local/share/localcode/models")))
     ap.add_argument("--parent-pid", type=int, default=0, help="launcher PID; exit if it disappears")
     a = ap.parse_args()

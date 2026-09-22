@@ -25,8 +25,11 @@ WAIT_S = 240
 
 
 def _models_dir() -> Path:
+    """Where GGUFs live: LOCALCODE_MODEL_DIR (the documented override, also
+    honoured by config), LOCALCODE_MODELS_DIR (the older launcher name), else
+    the configured/default directory."""
     from localcode.models_catalog import model_dir
-    env = os.environ.get("LOCALCODE_MODELS_DIR")
+    env = os.environ.get("LOCALCODE_MODEL_DIR") or os.environ.get("LOCALCODE_MODELS_DIR")
     return Path(env).expanduser() if env else model_dir()
 
 
