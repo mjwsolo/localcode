@@ -515,6 +515,32 @@ def test_restart_server_resets_stale_http_client(monkeypatch) -> None:
     assert gw.tags_endpoint == "http://localhost:8082/v1/models"
 
 
+def test_restart_server_keeps_an_explicitly_pinned_base_url(monkeypatch) -> None:
+    """LOCALCODE_BASE_URL is the operator's choice (a proxy, a remote host).
+    Adopting the live local port over it silently bypassed the proxy — seen when
+    a benchmark's usage proxy stopped seeing classic's requests after a model
+    load. Only an UNPINNED base_url follows the server's port."""
+    monkeypatch.setenv("LOCALCODE_BASE_URL", "http://127.0.0.1:9999/lc")
+    cfg = RuntimeConfig(provider="llama_cpp", base_url="http://127.0.0.1:9999/lc", model="test.gguf")
+    gw = LocalCodeRuntimeGateway(cfg)
+    monkeypatch.setattr("localcode.bootstrap.get_model_path", lambda preferred=None: "/tmp/model.gguf")
+    monkeypatch.setattr(gw, "llama_server_command", lambda model: ["llama-server"])
+
+    class _Mgr:
+        port = 8082
+
+        def restart(self, cmd, model):
+            return True
+
+        def is_running(self) -> bool:
+            return False
+
+    monkeypatch.setattr("localcode.server_manager.ServerManager.get", lambda: _Mgr())
+    assert gw._restart_server() is True
+    assert gw.config.base_url == "http://127.0.0.1:9999/lc"
+    assert gw.endpoint.startswith("http://127.0.0.1:9999/lc")
+
+
 def test_quick_server_probe_false_on_unreachable(monkeypatch) -> None:
     cfg = RuntimeConfig(provider="llama_cpp", base_url="http://localhost:65534")
     gw = LocalCodeRuntimeGateway(cfg)

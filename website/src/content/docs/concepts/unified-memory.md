@@ -19,7 +19,7 @@ localcode recommends the most capable production-ready model whose weights fit w
 
 localcode uses a llama.cpp fork with **TurboQuant KV cache compression**. It uses asymmetric `q8_0`-K and `turbo4`-V quantisation. According to the fork, this combination is about 3.8× smaller than `f16`. This figure describes the quantisation method, not your machine's performance.
 
-Compressing the cache leaves more memory for a longer context. This is why you can configure the K/V cache types with `kv_cache_type_k` and `kv_cache_type_v`.
+Compressing the cache leaves more memory for a longer context. localcode sets the K and V cache types when it starts the server; there is nothing to configure.
 
 ## Why Mixture-of-Experts models suit mid-range machines
 

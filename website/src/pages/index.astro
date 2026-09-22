@@ -25,7 +25,7 @@ const description =
 /** Hero badges. Rendered as real elements, not shields.io images: they stay
  *  crisp on retina, need no third-party request, and follow the theme. */
 const badges = [
-  { k: 'pypi', v: 'v0.3.71', href: 'https://pypi.org/project/localcode/' },
+  { k: 'pypi', v: 'v0.4.0', href: 'https://pypi.org/project/localcode/' },
   { k: 'license', v: 'Apache 2.0', href: 'https://github.com/mjwsolo/localcode/blob/main/LICENSE' },
   { k: 'python', v: '3.10+' },
   { k: 'platform', v: 'Apple Silicon' },
@@ -38,22 +38,23 @@ const proof = [
     body: `Choose from Qwen, Gemma, Cohere, and Meta families. The suite includes
       dense and MoE models from 12B to 35B, with several quants for each.
       localcode checks your Mac's unified memory, shows every model that fits,
-      and recommends the most capable one. Switch at any time with /model.`,
+      and recommends the most capable one. Switch at any time with /models.`,
     link: { label: 'See what your Mac runs', href: href('start-here/choose-a-model') },
   },
   {
     title: 'The server sets itself up',
-    body: `localcode
-      downloads the weights and starts llama-server on 127.0.0.1. It sets the
-      context and KV cache sizes for your machine. It shuts down the server when
-      you finish. You do not need to configure anything.`,
+    body: `Pick a quant in the picker and localcode downloads it, then starts
+      llama-server on 127.0.0.1. It sets the context and KV cache sizes for your
+      machine and shuts the server down when you finish. You do not need to
+      configure anything.`,
     link: { label: 'How it runs', href: href('concepts/architecture') },
   },
   {
     title: 'A system designed for local models',
-    body: `localcode is built specifically for local models. The agent loop,
-      prompts, and model server are tuned to get the best performance out of
-      small models on your Mac, with no API key, account, or bill.`,
+    body: `localcode is built specifically for local models. The runtime, its
+      completion discipline, and the model server are tuned to get the best
+      performance out of small models on your Mac, with no API key, account, or
+      bill.`,
     link: { label: 'What we tuned for local models', href: href('concepts/architecture#built-specifically-for-small-models') },
   },
 ];
@@ -183,7 +184,9 @@ localcode</code></pre>
             <li class="lc-step">
               <h3 class="lc-step__h"><span>2</span> Choose a model</h3>
               <p class="lc-step__p">
-                The star shows the largest model your Mac can run comfortably.
+                The picker opens on first launch. The star shows the largest
+                model your Mac can run comfortably. Press Enter, pick a quant,
+                and see its size before anything downloads.
               </p>
               <img
                 class="lc-step__img"
@@ -201,12 +204,17 @@ localcode</code></pre>
               <img
                 class="lc-step__img"
                 src={`${base}/demo/step-3-ask.gif?v=0523fe0c`}
-                alt="Typing a goal into the localcode chat screen and pressing enter"
+                alt="Typing a goal into the localcode prompt and pressing enter"
                 width="866" height="491" loading="lazy" decoding="async"
               />
             </li>
 
           </ol>
+
+          <p class="lc-lede">
+            Upgrading from 0.3? The previous interface is still there as
+            <code>localcode --classic</code>.
+          </p>
 
           <a class="lc-btn lc-btn--primary" href={href('start-here/first-change')}>
             Read more

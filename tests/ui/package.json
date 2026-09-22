@@ -1,0 +1,7 @@
+{
+  "name": "localcode-ui-tests",
+  "private": true,
+  "description": "bun tests for the default interface: the discipline plugin, the supervisor, and the port guard. Run with LOCALCODE_PY pointing at a python that imports localcode.",
+  "scripts": { "test": "bun test ." },
+  "dependencies": { "@opencode-ai/plugin": "^1.18.29", "@opencode-ai/sdk": "^1.18.29" }
+}
