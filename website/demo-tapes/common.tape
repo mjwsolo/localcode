@@ -1,7 +1,7 @@
 # Shared look for every recording (sourced by the tapes).
 Set Shell "bash"
 Set FontSize 15
-Set FontFamily "Geist Mono"
+Set FontFamily "Menlo"
 Set Width 1180
 Set Height 700
 Set Padding 12
