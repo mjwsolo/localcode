@@ -11,6 +11,15 @@ All notable changes to LocalCode will be documented here. The format follows
 
 - The model picker is titled "Select a model" (was "localcode models").
 
+### Fixed
+
+- **A dead model service no longer leaves the picker stuck on "loading…" with
+  Esc doing nothing.** If the supervisor process that owns llama-server dies
+  (killed, crashed), the launcher now ends the session with "the model service
+  stopped unexpectedly, run localcode again" instead of leaving a zombie UI.
+  Inside the UI the control calls time out after 5 s, the status line reads
+  "Model service not running", and the picker shows an error you can dismiss.
+
 ## 0.4.0 — 2026-09-22
 
 The stable release of the new default interface. It is 0.4.0a2 plus a
