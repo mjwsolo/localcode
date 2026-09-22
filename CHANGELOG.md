@@ -5,6 +5,12 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
+## 0.4.1 — 2026-09-22
+
+### Changed
+
+- The model picker is titled "Select a model" (was "localcode models").
+
 ## 0.4.0 — 2026-09-22
 
 The stable release of the new default interface. It is 0.4.0a2 plus a
