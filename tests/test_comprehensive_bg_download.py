@@ -154,7 +154,9 @@ def test_concurrency_cap_leaves_extras_queued(monkeypatch, not_on_disk):
     release = threading.Event()
 
     def _gated_download(choice, on_progress=None, cancel_event=None):
-        release.wait(timeout=5.0)
+        # Hold until the test releases; a short timeout let a download "finish"
+        # before the queued assertion on slow CI runners.
+        release.wait(timeout=60.0)
         return True, str(choice.local_path)
 
     monkeypatch.setattr(bootstrap, "download_model", _gated_download)
