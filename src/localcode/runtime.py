@@ -606,6 +606,14 @@ class LocalCodeRuntimeGateway:
             i = cmd.index("--ctx-size") + 1
             cmd[i] = str(int(cmd[i]) * slots)
         cmd.extend(["-np", str(slots), "-fit", "off"])
+        if slots > 1:
+            # Private per-slot KV shares: in unified mode one request can take
+            # the whole pool and starve the others ("context size exceeded").
+            # The shared host prompt cache keeps a request that lands on a
+            # different slot from paying a cold prefill.
+            cmd.extend(["--no-kv-unified"])
+            if "--cache-ram" not in cmd:
+                cmd.extend(["--cache-ram", "8192"])
         # Tuned launch params: a stored model-opt recommendation applies first,
         # then explicit LOCALCODE_OVERRIDE_* env vars win. Both no-op by
         # default (no store file, no env), so the default path is unchanged.
