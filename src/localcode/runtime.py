@@ -601,19 +601,7 @@ class LocalCodeRuntimeGateway:
         # --ctx-size evenly across slots, so the total is N x the per-slot
         # context; the RAM guard lowers N until N KV caches fit beside the
         # weights. Disable fit check (we manage memory via sysctl).
-        slots = self.parallel_slots(model_path)
-        if slots > 1 and "--ctx-size" in cmd:
-            i = cmd.index("--ctx-size") + 1
-            cmd[i] = str(int(cmd[i]) * slots)
-        cmd.extend(["-np", str(slots), "-fit", "off"])
-        if slots > 1:
-            # Private per-slot KV shares: in unified mode one request can take
-            # the whole pool and starve the others ("context size exceeded").
-            # The shared host prompt cache keeps a request that lands on a
-            # different slot from paying a cold prefill.
-            cmd.extend(["--no-kv-unified"])
-            if "--cache-ram" not in cmd:
-                cmd.extend(["--cache-ram", "8192"])
+        cmd.extend(["-np", "1", "-fit", "off"])
         # Tuned launch params: a stored model-opt recommendation applies first,
         # then explicit LOCALCODE_OVERRIDE_* env vars win. Both no-op by
         # default (no store file, no env), so the default path is unchanged.
@@ -622,7 +610,7 @@ class LocalCodeRuntimeGateway:
             merged_env = {**_rec_overrides(_P(model_path).name), **os.environ}
         except Exception:
             merged_env = dict(os.environ)
-        return apply_param_overrides(cmd, env=merged_env)
+        return self._apply_parallel_slots(apply_param_overrides(cmd, env=merged_env), model_path)
 
     @staticmethod
     def _ram_ctx_ceiling(ram_gb: int) -> int:
@@ -867,11 +855,11 @@ class LocalCodeRuntimeGateway:
         # Round down to a 2048 multiple; never below a 2048 floor.
         return max(KV_FIT_MIN_CTX, (max_ctx // KV_FIT_CTX_MULTIPLE) * KV_FIT_CTX_MULTIPLE)
 
-    def parallel_slots(self, model_path: str | None = None) -> int:
+    def parallel_slots(self, model_path: str | None = None, ctx: int | None = None) -> int:
         """How many requests the server serves at once. 1 unless
         LOCALCODE_PARALLEL asks for more; then the largest N <= the request
-        whose N KV caches (at the per-slot context) fit beside the weights
-        with the usual reserve. Unknown KV size -> trust the request."""
+        whose N KV caches (at the per-slot context `ctx`) fit beside the
+        weights with the usual reserve. Unknown KV size -> trust the request."""
         try:
             want = int(os.environ.get("LOCALCODE_PARALLEL", "1"))
         except ValueError:
@@ -886,10 +874,32 @@ class LocalCodeRuntimeGateway:
         total = self._system_ram_gb() * (1024 ** 3)
         weights = self._model_file_bytes(model_path)
         reserve = max(KV_FIT_RESERVE_GB * 1024 ** 3, int(total * KV_FIT_RESERVE_FRACTION))
-        per_slot = self._target_num_ctx(model_path=model_path) * bpt
+        per_slot = (ctx or self._target_num_ctx(model_path=model_path)) * bpt
         budget = total - weights - reserve
         fit = int(budget // per_slot) if per_slot > 0 else want
         return max(1, min(want, fit))
+
+    def _apply_parallel_slots(self, cmd: list[str], model_path: str | None) -> list[str]:
+        """Parallel slots (trial, off by default): LOCALCODE_PARALLEL=N serves N
+        requests at once from the one loaded model. Runs AFTER the launch
+        overrides so the per-slot context is the effective one: llama-server
+        splits --ctx-size evenly across slots, so the flag becomes N x it.
+        Private per-slot KV (in unified mode one request can take the whole
+        pool and starve the others) and a shared host prompt cache (a request
+        landing on another slot would otherwise pay a cold prefill)."""
+        if "--ctx-size" not in cmd or "-np" not in cmd:
+            return cmd
+        i = cmd.index("--ctx-size") + 1
+        per_slot = int(cmd[i])
+        slots = self.parallel_slots(model_path, ctx=per_slot)
+        if slots <= 1:
+            return cmd
+        cmd[i] = str(per_slot * slots)
+        cmd[cmd.index("-np") + 1] = str(slots)
+        cmd.extend(["--no-kv-unified"])
+        if "--cache-ram" not in cmd:
+            cmd.extend(["--cache-ram", "8192"])
+        return cmd
 
     def _system_ram_gb(self) -> int:
         # Physical RAM is constant for the process lifetime, so probe once and
