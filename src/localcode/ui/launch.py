@@ -73,6 +73,13 @@ def _context_size(models_dir: Path, ctrl: int) -> int:
         return 32768
 
 
+def _parallel_slots_requested() -> int:
+    try:
+        return max(1, int(os.environ.get("LOCALCODE_PARALLEL", "1")))
+    except ValueError:
+        return 1
+
+
 def write_config(path: Path, *, port: int, ctx: int, alias: str | None) -> None:
     """The runtime config for this session. Provider = the local server only;
     capabilities are explicit so no cloud default leaks in. With no model yet a
@@ -97,7 +104,10 @@ def write_config(path: Path, *, port: int, ctx: int, alias: str | None) -> None:
             }
         },
         "enabled_providers": ["localcode"],
-        "tools": {"task": False},
+        # Subagents need parallel server slots to be worth anything; with one
+        # slot they would queue behind the parent. LOCALCODE_PARALLEL=N (trial).
+        "tools": {"task": _parallel_slots_requested() > 1},
+        **({"subagent_depth": 1} if _parallel_slots_requested() > 1 else {}),
         "agent": {"plan": {"disable": True}},
         "lsp": True,
         "plugin": [str(plugin_path())],

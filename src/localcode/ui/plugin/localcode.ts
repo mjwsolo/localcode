@@ -56,6 +56,8 @@ const PLANNING_RULE = `WORKSPACE TASK COMPLETION:
 - Only stop for one of two reasons: (a) every todo is completed and verified, or (b) you have ONE specific blocking question you cannot answer yourself. The harness sends you back to the next open item if you stop early.
 - Never run a foreground server (npm run dev, vite, http.server) through bash: start it in the background with nohup ... & and a log file, then curl it.`;
 
+const PARALLEL_RULE = `SUBAGENTS: the task tool runs explore/general agents in parallel on this machine. Before editing, fan out independent research questions (which files handle X, how is Y called, what does the test for Z expect) to explore agents in ONE message with several task calls, then continue with their summaries. Never send two agents to edit the same file; keep edits in the main session unless the pieces are independent.`;
+
 // A dev server is a PROGRAM being run, so only match in program position (start of
 // command or after ; && || | ( or npx/bunx). Round 5 of the Anki bench died in 2 min
 // because "\bvite\b" matched inside `npm create vite@latest`, `vite-plugin-pwa` and a
@@ -486,6 +488,8 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
     "experimental.chat.system.transform": async (input, output) => {
       if (!workspaceActive || (input.agent && input.agent !== "build")) return;
       output.system.push(PLANNING_RULE);
+      // Parallel slots trial: with subagents available, say when to fan out.
+      if (Number(process.env.LOCALCODE_PARALLEL ?? "1") > 1) output.system.push(PARALLEL_RULE);
       const open = renderTodos(todos);
       if (open) output.system.push(open);
     },
