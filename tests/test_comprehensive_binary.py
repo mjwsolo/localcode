@@ -128,6 +128,8 @@ def test_ui_binary_version_matches_package():
     if not path.is_file():
         pytest.skip("no bundled UI binary")
     from localcode import __version__
-    want = re.match(r"\d+\.\d+\.\d+", __version__).group(0)
+    # Same major.minor: a Python-only patch release must not force a rebuild of
+    # the 98 MB binary; a fork change bumps FORK_COMMIT and rebuilds anyway.
+    want = re.match(r"\d+\.\d+", __version__).group(0)
     out = subprocess.run([str(path), "--version"], capture_output=True, text=True, timeout=60, check=False).stdout.strip()
-    assert out.startswith(want), f"UI binary reports {out!r}, package is {__version__!r}; rebuild with scripts/build_ui_binary.sh"
+    assert out.startswith(want + "."), f"UI binary reports {out!r}, package is {__version__!r}; rebuild with scripts/build_ui_binary.sh"

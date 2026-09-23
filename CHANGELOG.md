@@ -5,6 +5,22 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
+## 0.4.2 — 2026-09-23
+
+### Changed
+
+- **A second terminal attaches instead of being refused.** Running `localcode`
+  while a session is open in another window now opens another window on the
+  same model server (one llama-server per machine, any number of windows),
+  the way other terminal agents behave. Closing the second window leaves the
+  first session's server running. The old message ("already running, use its
+  /models menu") is gone.
+- **Half the tokens before the first answer.** Tool descriptions sent to the
+  model are rewritten for local models: 15,000 characters down to 7,000 with
+  the same rules (absolute paths, read before edit, unique match). The first
+  request of a session drops from about 5,000 tokens to about 3,000, which is
+  the difference between 12 s and 7 s to the first token on a 16 GB M1.
+
 ## 0.4.1 — 2026-09-22
 
 ### Changed

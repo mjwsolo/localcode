@@ -117,3 +117,27 @@ def test_supervisor_serves_every_route_the_ui_calls():
     missing = [r for r in CONTROL_ROUTES if f'"{r}"' not in src]
     assert not missing, missing
 
+
+
+def test_second_launch_attaches_to_running_session(monkeypatch, tmp_path):
+    """Another terminal reuses the running session's model server instead of being refused."""
+    import json as _json
+    from localcode.ui import launch
+    calls = {}
+    monkeypatch.setattr(launch, "ui_binary_path", lambda: tmp_path / "ui")
+    (tmp_path / "ui").write_bytes(b"x")
+    monkeypatch.setattr(launch, "_llama_server", lambda: tmp_path / "ui")
+    monkeypatch.setenv("LOCALCODE_AGENT_RUN_DIR", str(tmp_path / "run"))
+    status = {"port": 8123, "ctx": 65536, "current": "gemma-4-12b-it-UD-Q4_K_XL", "state": "ready"}
+    monkeypatch.setattr(launch, "find_running", lambda: (8323, status))
+    def fake_call(argv, cwd, env):
+        calls["argv"] = argv; calls["env"] = env
+        cfg = _json.loads(Path(env["LOCALCODE_CONFIG"]).read_text())
+        calls["cfg"] = cfg
+        return 0
+    monkeypatch.setattr(launch.subprocess, "call", fake_call)
+    assert launch.main(None, str(tmp_path)) == 0
+    assert calls["env"]["LOCALCODE_CONTROL_URL"] == "http://127.0.0.1:8323"
+    assert calls["argv"][1:] == ["-m", "localcode/gemma-4-12b-it-UD-Q4_K_XL"]
+    assert calls["cfg"]["provider"]["localcode"]["options"]["baseURL"] == "http://127.0.0.1:8123/v1"
+    assert calls["cfg"]["model"] == "localcode/gemma-4-12b-it-UD-Q4_K_XL"

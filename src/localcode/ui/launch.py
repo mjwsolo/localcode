@@ -19,7 +19,7 @@ import urllib.request
 from pathlib import Path
 
 from localcode.ui import plugin_path, run_dir, ui_binary_path
-from localcode.ui.ports import choose_ports
+from localcode.ui.ports import choose_ports, find_running
 
 WAIT_S = 240
 
@@ -112,6 +112,35 @@ def write_config(path: Path, *, port: int, ctx: int, alias: str | None) -> None:
     os.replace(tmp, path)
 
 
+def attach(ctrl: int, status: dict, ui_bin: Path, project_dir: Path, alias: str | None) -> int:
+    """Open another UI window on the model server a running session owns."""
+    port = int(status["port"])
+    try:
+        ctx = int(status.get("ctx") or 0) or 32768
+    except (TypeError, ValueError):
+        ctx = 32768
+    current = status.get("current") or None
+    if alias and current and alias != current:
+        print(f"localcode: attaching to the running session's model {current}; use /models there to switch.",
+              file=sys.stderr)
+    rd = run_dir()
+    rd.mkdir(parents=True, exist_ok=True)
+    config_path = rd / f"session-{os.getpid()}.json"
+    write_config(config_path, port=port, ctx=ctx, alias=current)
+    env = dict(os.environ)
+    env["LOCALCODE_CONTROL_URL"] = f"http://127.0.0.1:{ctrl}"
+    env["LOCALCODE_CONFIG"] = str(config_path)
+    env.setdefault("OPENCODE_DISABLE_LSP_DOWNLOAD", "1")
+    argv = [str(ui_bin)] + (["-m", f"localcode/{current}"] if current else [])
+    try:
+        return subprocess.call(argv, cwd=str(project_dir), env=env)
+    finally:
+        try:
+            config_path.unlink()
+        except OSError:
+            pass
+
+
 def main(model: str | None = None, project: str | None = None) -> int:
     ui_bin = ui_binary_path()
     if ui_bin is None:
@@ -131,6 +160,12 @@ def main(model: str | None = None, project: str | None = None) -> int:
               file=sys.stderr)
         alias = None
     project_dir = Path(project).expanduser().resolve() if project else Path.cwd()
+
+    # A session already open in another terminal: attach to its model server
+    # instead of refusing. One llama-server per machine, any number of windows.
+    running = find_running()
+    if running is not None:
+        return attach(running[0], running[1], ui_bin, project_dir, alias)
 
     try:
         port, ctrl = choose_ports()
