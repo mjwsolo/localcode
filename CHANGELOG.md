@@ -20,6 +20,11 @@ All notable changes to LocalCode will be documented here. The format follows
   the same rules (absolute paths, read before edit, unique match). The first
   request of a session drops from about 5,000 tokens to about 3,000, which is
   the difference between 12 s and 7 s to the first token on a 16 GB M1.
+- **Tool schemas are compacted for local models the way Codex does it.** Any
+  tool schema over 2 KB (typically an MCP server's) loses nested parameter
+  descriptions, then definitions, then depth beyond three levels, then
+  anyOf/oneOf, stopping as soon as it fits. Built-in tools are small and keep
+  their descriptions.
 
 ## 0.4.1 — 2026-09-22
 
