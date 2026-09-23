@@ -15,6 +15,21 @@ def available(port: int) -> bool:
             return False
 
 
+def find_running(control_ports=range(8323, 8400)) -> tuple[int, dict] | None:
+    """The control port and /status of a supervisor already running for this user, if any."""
+    for port in control_ports:
+        if available(port):
+            continue
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/status", timeout=0.3) as response:
+                status = json.load(response)
+                int(status["port"])
+                return port, status
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return None
+
+
 def choose_ports(model_ports=range(8123, 8200), control_ports=range(8323, 8400)) -> tuple[int, int]:
     control = None
     for port in control_ports:
@@ -25,7 +40,7 @@ def choose_ports(model_ports=range(8123, 8200), control_ports=range(8323, 8400))
         try:
             with urllib.request.urlopen(f"http://127.0.0.1:{port}/status", timeout=0.3) as response:
                 int(json.load(response)["port"])
-                raise RuntimeError("localcode is already running. Use its /models menu to switch models, or exit that session before opening another.")
+                raise RuntimeError("localcode is already running in another terminal; a second window attaches to its model server.")
         except (OSError, ValueError, KeyError, TypeError):
             continue
     model = next((port for port in model_ports if available(port)), None)
