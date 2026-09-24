@@ -10,7 +10,8 @@ There is nothing to configure before the first run. Most day-to-day settings liv
 | Variable | Effect |
 | --- | --- |
 | `LOCALCODE_FRONTEND` | `ui` (default) or `classic` for the previous 0.3 interface |
-| `LOCALCODE_MODELS_DIR` | Where GGUFs live. Default `~/.local/share/localcode/models`. The picker's **Models folder** entry changes the same setting |
+| `LOCALCODE_MODEL_DIR` | Where GGUFs live. Default `~/.local/share/localcode/models`. The picker's **Models folder** entry changes the same setting |
+| `LOCALCODE_MODELS_DIR` | Older override name; `LOCALCODE_MODEL_DIR` takes precedence |
 | `LOCALCODE_AGENT_RUN_DIR` | Supervisor logs, the per-session runtime config, and the voice runtime. Default `~/.local/share/localcode-agent/run` |
 | `LOCALCODE_MIC` | Microphone device for voice input |
 | `LOCALCODE_ENABLE_EXA=1` + `EXA_API_KEY` | Web search through Exa instead of the keyless DuckDuckGo backend |
