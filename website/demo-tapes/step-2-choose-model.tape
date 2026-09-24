@@ -1,24 +1,24 @@
 Source common.tape
-Output out/step-2-choose-model.gif
-Set Height 620
+Output out/step-2-choose-model.png
 Hide
 Type "cd $LC_DEMO_PROJECT; clear"
 Enter
 Sleep 500ms
-Type "localcode"
+Type "localcode --model Qwen3.6-35B-A3B-UD-Q8_K_XL"
 Enter
-Sleep 9s
+Sleep 25s
+Type "/models"
+Enter
+Sleep 2s
 Show
 Sleep 1.5s
-Down
-Sleep 900ms
 Enter
 Sleep 3s
 Down
 Sleep 900ms
+Up
 Sleep 1.5s
-Enter
-Sleep 6s
+Sleep 2s
 Hide
 Ctrl+C
 Sleep 500ms

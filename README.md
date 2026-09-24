@@ -19,7 +19,7 @@
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/mjwsolo/localcode/main/docs/assets/demo/first-change.gif" alt="A localcode turn: two reads, one edit, then pytest reporting 5 passed" width="900">
+  <img src="https://raw.githubusercontent.com/mjwsolo/localcode/main/docs/assets/demo/first-change.gif" alt="A localcode turn: it reads the stub and test, edits the file, then pytest reports 1 passed" width="900">
 </p>
 
 localcode runs an open-weight model on your Mac and uses it to read, edit and test your code. Your prompts and your files stay on your machine. The only thing it downloads is the model weights, once per model.
