@@ -28,7 +28,7 @@ description: The pieces localcode is made of, from the launcher down to the infe
 3. **Runtime + plugin** - the interface, `localcode-ui`, is a fork of opencode branded localcode. Every cloud feature is removed. It talks only to `http://127.0.0.1:PORT/v1`. The config loads localcode's discipline plugin from the package.
 4. **Tools** - file reading and editing, glob and grep, shell commands, todo list, web search and fetch, language servers you install through `/lsp`, and any MCP servers you configure.
 
-One launcher runs per user. A second launch is refused with a hint to use `/models` in the running one.
+One model server runs per user. Opening `localcode` in another terminal starts a separate interface session attached to that server. Close either window without ending the other session; use `/models` to switch the shared model.
 
 The previous interface (0.3) is still in the package as `localcode --classic`. It runs its own Python agent loop against the same `llama-server`. `localcode run`, the headless mode, uses that loop too.
 
@@ -49,6 +49,7 @@ localcode is designed to enable agentic coding with local models on consumer har
 
 - **Long context on 16 GB** - the llama.cpp fork compresses the KV cache with TurboQuant (about 3.8x smaller than f16), so long contexts fit on small machines. See [Unified Memory](/localcode/concepts/unified-memory).
 - **Fast multi-turn** - the server keeps the prompt prefix between turns, so the next turn does not re-read it.
+- **Compact tool definitions** - the runtime shortens built-in tool descriptions and large MCP schemas before sending them to the model. This leaves more room for the task and project context, especially on a 16 GB Mac.
 - **Hidden reasoning is off by default** - the server starts with `--reasoning off`. Small models finish faster and follow tool calls better without it.
 - **Vision on demand** - the image projector for a vision-capable model is a separate download through `/vision`. Nothing is fetched until you ask.
 

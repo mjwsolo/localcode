@@ -23,7 +23,7 @@ Run `localcode` by itself to open the interface. Setup, the model picker, and se
 
 `--profile`, `--resume`, and `--preview-screen` belong to the classic interface and imply `--classic`.
 
-One launcher runs per user. A second `localcode` is refused with a hint to use `/models` in the running one, or to exit it first.
+A second `localcode` opens another interface session attached to the running model server. The windows share that model; closing the second window leaves the first session running. Use `/models` to switch the shared model.
 
 ## `localcode run`
 
@@ -53,7 +53,8 @@ Recovers from a stuck `llama-server` without a reboot. It runs `memory_pressure`
 | Variable | Effect |
 | --- | --- |
 | `LOCALCODE_FRONTEND` | `ui` (default) or `classic` |
-| `LOCALCODE_MODELS_DIR` | Where GGUFs live. Default `~/.local/share/localcode/models` |
+| `LOCALCODE_MODEL_DIR` | Where GGUFs live. Default `~/.local/share/localcode/models` |
+| `LOCALCODE_MODELS_DIR` | Older name for the models directory override; `LOCALCODE_MODEL_DIR` takes precedence |
 | `LOCALCODE_AGENT_RUN_DIR` | Supervisor logs and the voice runtime. Default `~/.local/share/localcode-agent/run` |
 | `LOCALCODE_MIC` | Microphone device for voice input |
 | `LOCALCODE_ENABLE_EXA=1` + `EXA_API_KEY` | Use Exa for web search instead of the keyless default |
