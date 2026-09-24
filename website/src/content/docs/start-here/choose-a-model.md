@@ -36,7 +36,7 @@ Press Enter on a `Ready` row to load it. The model server reloads on the same po
 
 Nothing downloads without you choosing it and seeing its size. Downloads come from Hugging Face and happen once per quant.
 
-A **Models folder** entry at the bottom of the picker shows where GGUFs are stored and lets you change it. The default is `~/.local/share/localcode/models`; `LOCALCODE_MODELS_DIR` overrides it. See [Configuration](/localcode/reference/configuration).
+A **Models folder** entry at the bottom of the picker shows where GGUFs are stored and lets you change it. The default is `~/.local/share/localcode/models`; `LOCALCODE_MODEL_DIR` overrides it. The older `LOCALCODE_MODELS_DIR` also works. See [Configuration](/localcode/reference/configuration).
 
 ## Starting with a model
 
