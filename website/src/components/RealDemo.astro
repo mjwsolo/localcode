@@ -6,20 +6,20 @@
  * agent works against a local llama-server, then assembled with ffmpeg. The repository's tests
  * genuinely pass at the end of the take; nothing here is authored.
  *
- * Regenerate: bakeoff/film.py  (see website/scripts)
+ * Regenerate: website/demo-tapes/record.sh
  */
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
-const src = `${base}/demo/first-change.gif?v=f0f2758d`;
-const still = `${base}/demo/first-change-final.png?v=3744a23d`;
+const src = `${base}/demo/first-change.gif?v=ad5980ad`;
+const still = `${base}/demo/first-change-final.png?v=a4688fab`;
 ---
 
 <figure class="lc-demo">
   <div class="lc-demo__frame">
     <img
       src={src}
-      alt="A real localcode turn: it reads the stub and the tests, edits the file, runs pytest -q, and reports 5 passed"
-      width="866"
-      height="491"
+      alt="A real localcode turn: it reads the stub and test, edits the file, runs pytest -q, and reports 1 passed"
+      width="1224"
+      height="748"
       loading="lazy"
       decoding="async"
       style={`background-image:url(${still});background-size:cover`}

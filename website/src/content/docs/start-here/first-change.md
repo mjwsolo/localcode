@@ -26,7 +26,7 @@ cd ~/work/some-project
 localcode
 ```
 
-Choose a project whose tests already pass. localcode uses your repo's own checks as proof.
+Choose a project with a runnable test suite. localcode uses your repo's own checks as proof.
 
 `localcode` opens the home screen. The previous 0.3 interface is still there: run `localcode --classic`, and read its docs through the version switcher in the header.
 
@@ -34,7 +34,7 @@ Choose a project whose tests already pass. localcode uses your repo's own checks
 
 With no model loaded, the model picker opens on top of the home screen. The first level lists every model in the catalog with its maker, how many of its quants are already on disk, and a star on the model recommended for your Mac's unified memory. Press Enter on a model to see every quant its Hugging Face repo ships, with the size in GB and whether it fits in memory. Enter on a row marked **Download** starts the download and shows a live percentage. Nothing downloads until you choose it and see its size.
 
-![The localcode model picker: seven models, moving down the list and choosing one](/localcode/demo/step-2-choose-model.gif?v=a0c3cc9d)
+![The localcode model picker: seven models and the quant options for one model](/localcode/demo/step-2-choose-model.gif?v=3f833e97)
 
 When the download finishes, the included `llama-server` loads the model on a localhost port and the interface connects to it. Type `/models` at any time to open the picker again. Esc goes back one level.
 
@@ -44,21 +44,21 @@ Learn more in [Models](/localcode/start-here/choose-a-model).
 
 Enter your request in the prompt. Include the file name and the check to run.
 
-![Entering a goal in the localcode prompt and pressing Enter](/localcode/demo/step-3-ask.gif?v=0523fe0c)
+![Entering a goal in the localcode prompt and pressing Enter](/localcode/demo/step-3-ask.gif?v=fa1ce55d)
 
 ```text
-> Implement the retry decorator in retry.py so every test in test_retry.py
-  passes. Do not modify test_retry.py. Then run: pytest -q
+> Implement the retry decorator in retry.py so test_retry.py passes.
+  Then run: python3 -m pytest -q
 ```
 
 ## Watch it verify
 
-The model reads the stub and tests. It writes the code, runs `pytest -q`, and reports what it checked. The first file edit and the first shell command each ask for permission; choose **always** to stop being asked for the rest of the session. See [Permissions](/localcode/start-here/permissions).
+The model reads the stub and test. It writes the code, runs `python3 -m pytest -q`, and reports what it checked. Depending on your permissions settings, the first file edit and shell command may ask for approval. See [Permissions](/localcode/start-here/permissions).
 
-![localcode reading files, editing them, and then showing 5 passed in pytest](/localcode/demo/step-4-verify.gif?v=92c546ff)
+![localcode reading files, editing them, and then showing 1 passed in pytest](/localcode/demo/step-4-verify.gif?v=216ca61b)
 
-<small>Qwen3.6-35B-A3B (IQ2_M) runs locally on a `127.0.0.1` port. The repository's
-tests fail before the turn and pass after it.</small>
+<small>Qwen3.6-35B-A3B (Q8_K_XL) runs locally. The scratch project's test fails
+before the turn and passes after it.</small>
 
 ## Key commands
 

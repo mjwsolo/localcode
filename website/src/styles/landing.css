@@ -63,7 +63,7 @@ code {
   overflow: hidden;
 }
 
-/* Stacked, not side-by-side. The recording is 866x491 with a lot of quiet
+/* Stacked, not side-by-side. The recording is 1224x748 with a lot of quiet
    space in it; in a half-width column it never lines up with the type, and
    the mismatch reads as an accident. Full width below the copy gives it its
    own beat and lets it sit at native size. */
