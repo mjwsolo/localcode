@@ -56,6 +56,8 @@ const PLANNING_RULE = `WORKSPACE TASK COMPLETION:
 - Only stop for one of two reasons: (a) every todo is completed and verified, or (b) you have ONE specific blocking question you cannot answer yourself. The harness sends you back to the next open item if you stop early.
 - Never run a foreground server (npm run dev, vite, http.server) through bash: start it in the background with nohup ... & and a log file, then curl it.`;
 
+const EXPLORE_RULE = `You are a read-only explore agent answering one scoped question for the main session. Be economical: at most 8 tool calls, read only the files that answer the question, and reply in under 200 words with file paths and line numbers. Do not plan, do not write todos, do not edit.`;
+
 const PARALLEL_RULE = `SUBAGENTS: the task tool runs explore/general agents in parallel on this machine. Before editing, fan out independent research questions (which files handle X, how is Y called, what does the test for Z expect) to explore agents in ONE message with several task calls, then continue with their summaries. Never send two agents to edit the same file; keep edits in the main session unless the pieces are independent.`;
 
 // A dev server is a PROGRAM being run, so only match in program position (start of
@@ -415,6 +417,8 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
   let plateauStopped = false;
   const interrupted = new Set<string>();
   let activeSession: string | undefined;
+  const SUBAGENTS = new Set(["explore", "general", "scout"]);
+  const subagentSessions = new Set<string>();
   // The agent the user is talking to. Nudges must keep it (a prompt without an
   // agent defaults to build, which silently escalated Plan sessions to Build),
   // and in Plan mode the model is conversing with the user, so no gate fires at all.
@@ -486,6 +490,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
 
   return {
     "experimental.chat.system.transform": async (input, output) => {
+      if (input.agent === "explore") { output.system.push(EXPLORE_RULE); return; }
       if (!workspaceActive || (input.agent && input.agent !== "build")) return;
       output.system.push(PLANNING_RULE);
       // Parallel slots trial: with subagents available, say when to fan out.
@@ -495,6 +500,11 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
     },
 
     "chat.message": async (input, output) => {
+      // Subagent sessions (task tool: explore/general/scout) never become the
+      // active session: the plateau tracker, todo gate and planning rule belong
+      // to the user's session. A read-only explore agent "makes no progress"
+      // by the delivery definition and was being nudged and stopped.
+      if (input.agent && SUBAGENTS.has(input.agent)) { subagentSessions.add(input.sessionID); return; }
       if (input.agent) currentAgent = input.agent;
       const text = output.parts.map((p: any) => (p.type === "text" ? p.text : "")).join(" ");
       if (!text.startsWith(NUDGE_PREFIX)) {
@@ -514,6 +524,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
     },
 
     "tool.execute.after": async (input, output) => {
+      if (subagentSessions.has(input.sessionID)) return;
       if (activeSession && input.sessionID !== activeSession) return;
       if (["read", "glob", "grep", "bash", "write", "edit", "multiedit", "apply_patch"].includes(input.tool)) workspaceActive = true;
       plateau.observe({ tool: input.tool, args: input.args, output: output?.output, metadata: output?.metadata });
@@ -571,6 +582,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
         return;
       }
       if (event.type !== "session.idle" || !workspaceActive) return;
+      if (subagentSessions.has((event.properties as any)?.sessionID)) return;
       const sessionID = (event.properties as any).sessionID as string;
       if (interrupted.has(sessionID) || (activeSession && sessionID !== activeSession)) return;
 
