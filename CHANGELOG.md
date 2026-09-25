@@ -5,6 +5,20 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
+### Changed
+
+- **The first answer of a session starts sooner.** When a model loads, the
+  server now pre-reads the part of the first request that never changes (the
+  system prompt and tool schemas, 3-5k tokens) before you have typed anything.
+  The runtime learns that prefix from the first turn you run with a model
+  (it keeps the token ids only, a few KB per model, under the run dir) and
+  replays it on every later load. Measured on an M5: the first request's
+  prompt reading drops from 2.7 s to 0.5 s on Gemma 4 12B and from 6.3 s to
+  under 0.1 s on Qwen3.8 27B; on a 16 GB M1 that is most of the wait before
+  the first token. Turns after the first were already cached. Off switch:
+  `LOCALCODE_PROMPT_WARMUP=0`. The environment block carries today's date, so
+  the first load of a day still reads the tail after it once.
+
 ## 0.4.2 — 2026-09-23
 
 ### Changed
