@@ -91,6 +91,7 @@ class Supervisor:
         self.ram_gb = _system_ram_gb()
         self.bandwidth = _bandwidth()
         self.log = open(HERE / "server.log", "ab", buffering=0)  # noqa: SIM115 (lives with the server)
+        self._warm_stop = threading.Event()
 
     # ---- llama-server lifecycle -------------------------------------------
     def progress(self) -> dict:
@@ -196,11 +197,61 @@ class Supervisor:
                 return False
             if self.healthy():
                 self.current = alias
+                self._start_warmup(alias)
                 return True
             time.sleep(1)
         return False
 
+    # ---- prompt warm-up (see ui/warmup.py) ----------------------------------
+    def _start_warmup(self, alias: str) -> None:
+        from localcode.ui import warmup
+        if not warmup.enabled():
+            return
+        self._warm_stop = threading.Event()
+        threading.Thread(target=self._warmup_worker, args=(alias, self._warm_stop), daemon=True).start()
+
+    def _warmup_worker(self, alias: str, stop: threading.Event) -> None:
+        from localcode.ui import warmup
+        port = self.port
+        baseline: int | None = None
+        try:
+            toks = warmup.load(alias)
+            if toks:
+                t0 = time.time()
+                try:
+                    tm = warmup.replay(port, toks)
+                    log(f"warmup: replayed {len(toks)} tokens for {alias} in {time.time() - t0:.1f}s "
+                        f"(server prompt_ms={tm.get('prompt_ms')}, cache_n={tm.get('cache_n')})")
+                except Exception as e:  # noqa: BLE001
+                    log(f"warmup: replay failed for {alias}, forgetting it: {e}")
+                    warmup.forget(alias)
+                for s in warmup.slots(port) or []:
+                    try:
+                        baseline = max(baseline or -1, int(s.get("id_task") if s.get("id_task") is not None else -1))
+                    except (TypeError, ValueError):
+                        pass
+        except Exception as e:  # noqa: BLE001
+            log(f"warmup: skipped: {e}")
+        # Capture this session's first turn so the next load of this model is warm.
+        tracker = warmup.CaptureTracker(baseline_task=baseline)
+        deadline = time.time() + warmup.CAPTURE_WINDOW_S
+        while not stop.is_set() and time.time() < deadline:
+            snap = warmup.slots(port)
+            if snap is not None:
+                slot_id = tracker.observe(snap, time.time())
+                if slot_id is not None:
+                    try:
+                        new = warmup.capture(port, slot_id)
+                        merged = warmup.merge_tokens(warmup.load(alias), new)
+                        warmup.store(alias, merged)
+                        log(f"warmup: captured {len(new)} tokens for {alias}, stored {len(merged)}")
+                    except Exception as e:  # noqa: BLE001
+                        log(f"warmup: capture failed for {alias}: {e}")
+                    return
+            stop.wait(0.5)
+
     def stop(self) -> None:
+        self._warm_stop.set()
         if self.proc and self.proc.poll() is None:
             log(f"supervisor: stopping llama-server pid {self.proc.pid}")
             self.proc.terminate()
