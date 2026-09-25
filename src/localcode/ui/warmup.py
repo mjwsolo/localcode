@@ -28,8 +28,10 @@ the common prefix is under half of the new capture the new one replaces it.
 """
 from __future__ import annotations
 
+import http.client
 import json
 import os
+import socket
 import struct
 import time
 import urllib.request
@@ -198,10 +200,45 @@ def slots(port: int) -> list[dict] | None:
         return None
 
 
+class Replay:
+    """One in-flight prefill of the stored prefix, cancellable from another thread.
+
+    llama-server drops a task whose client went away (checked between
+    batches), so closing the socket is the cancel: the tokens read so far
+    stay in the slot as a partial prefix. The plugin asks for this the moment
+    the user submits, so a still-running warm-up never delays a real turn by
+    more than one batch.
+    """
+
+    def __init__(self, port: int, timeout: float = 900.0) -> None:
+        self.conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+        self.cancelled = False
+
+    def run(self, tokens: list[int]) -> dict:
+        body = json.dumps({"prompt": tokens, "n_predict": 1, "cache_prompt": True, "temperature": 0})
+        self.conn.request("POST", "/completion", body=body, headers={"Content-Type": "application/json"})
+        r = json.loads(self.conn.getresponse().read().decode())
+        return r.get("timings") or {}
+
+    def cancel(self) -> None:
+        self.cancelled = True
+        # shutdown() is what unblocks the reader thread; close() alone is
+        # deferred while http.client's file wrapper holds the socket.
+        sock = getattr(self.conn, "sock", None)
+        try:
+            if sock is not None:
+                sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        try:
+            self.conn.close()
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+
 def replay(port: int, tokens: list[int], timeout: float = 900.0) -> dict:
     """Prefill the stored prefix. Returns llama-server's timings."""
-    r = _post(port, "/completion", {"prompt": tokens, "n_predict": 1, "cache_prompt": True, "temperature": 0}, timeout)
-    return r.get("timings") or {}
+    return Replay(port, timeout).run(tokens)
 
 
 def capture(port: int, slot_id: int) -> list[int]:

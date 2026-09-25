@@ -494,6 +494,10 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
       if (input.agent) currentAgent = input.agent;
       const text = output.parts.map((p: any) => (p.type === "text" ? p.text : "")).join(" ");
       if (!text.startsWith(NUDGE_PREFIX)) {
+        // A real turn is about to hit the model: if the supervisor is still
+        // pre-reading the prompt prefix (warm-up), stop it so this request runs next.
+        const control = process.env.LOCALCODE_CONTROL_URL;
+        if (control) fetch(`${control}/warmup/cancel`, { method: "POST", body: "{}" }).catch(() => {});
         workspaceActive = false;
         if (activeSession !== input.sessionID || interrupted.has(input.sessionID)) todos = [];
         activeSession = input.sessionID;
