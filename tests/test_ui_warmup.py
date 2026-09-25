@@ -107,3 +107,22 @@ def test_server_command_carries_slot_save_path(tmp_path, monkeypatch):
     assert cmd[cmd.index("--slot-save-path") + 1] == str(tmp_path / "slots")
     monkeypatch.setenv("LOCALCODE_PROMPT_WARMUP", "0")
     assert "--slot-save-path" not in server_command(str(tmp_path / "x.gguf"), 8123, "x")
+
+
+def test_replay_cancel_closes_the_socket_promptly():
+    """Closing the client socket is the cancel: llama-server drops a task whose client left."""
+    import socket
+    import threading
+    import time
+
+    srv = socket.socket(); srv.bind(("127.0.0.1", 0)); srv.listen(1)
+    port = srv.getsockname()[1]
+    def stall():  # accept, read the request, never answer (a prefill in progress)
+        c, _ = srv.accept(); c.recv(65536); time.sleep(5); c.close()
+    threading.Thread(target=stall, daemon=True).start()
+    rp = warmup.Replay(port, timeout=30)
+    t = threading.Timer(0.3, rp.cancel); t.start()
+    t0 = time.time()
+    with pytest.raises(Exception):
+        rp.run(list(range(600)))
+    assert rp.cancelled and time.time() - t0 < 3
