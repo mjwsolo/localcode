@@ -819,6 +819,11 @@ def _apply_progress(key: str, line: str) -> None:
         entry = _DOWNLOADS.get(key)
         if entry is None:
             return
+        # A progress line that arrives after the download finished (a worker
+        # flushing its last output, or a stale worker for the same key) must
+        # never move a finished entry backwards: 'done' stays at 100.
+        if entry.get("status") in ("done", "failed"):
+            return
         if downloaded_mb is not None:
             entry["downloaded_mb"] = downloaded_mb
         if total_mb is not None:
