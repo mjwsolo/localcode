@@ -3,6 +3,18 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.4.7 — 2026-09-26
+
+### Fixed
+
+- **No more "Interrupted" seconds after being asked to fix something.** The
+  loop breaker that stops a session making no progress kept counting from an
+  earlier nudge, so when a gate sent the model back to replace a placeholder or
+  finish a todo, the breaker could stop it 9 seconds later while it was reading
+  the file it had just been told to fix. A gate's instruction now restarts the
+  budget. When the breaker does stop a session it says so, with the round count
+  and the files changed, instead of a bare "Interrupted".
+
 ## 0.4.6 — 2026-09-26
 
 ### Fixed
@@ -23,7 +35,7 @@ All notable changes to LocalCode will be documented here. The format follows
   turn and dropped again on the next, the planning rule followed the same
   switch, and the open-todo list was rewritten into the system prompt on every
   update. Each change made the server re-read the whole conversation, twice
-  per turn (15-23 s at 30k tokens on an M5). The system prompt is now constant
+  per turn (15-23 s at 30k tokens). The system prompt is now constant
   for a session, and todos travel with the user turn. Measured on Qwen3.8 27B:
   requests after the first tool call re-read 23-310 tokens (0.3-0.8 s)
   instead of 6-7k (10-15 s).
@@ -57,9 +69,9 @@ All notable changes to LocalCode will be documented here. The format follows
   system prompt and tool schemas, 3-5k tokens) before you have typed anything.
   The runtime learns that prefix from the first turn you run with a model
   (it keeps the token ids only, a few KB per model, under the run dir) and
-  replays it on every later load. Measured on an M5: the first request's
+  replays it on every later load. Measured on Apple silicon: the first request's
   prompt reading drops from 2.7 s to 0.5 s on Gemma 4 12B and from 6.3 s to
-  under 0.1 s on Qwen3.8 27B; on a 16 GB M1 that is most of the wait before
+  under 0.1 s on Qwen3.8 27B; on a 16 GB Mac that is most of the wait before
   the first token. Turns after the first were already cached. Off switch:
   `LOCALCODE_PROMPT_WARMUP=0`. The environment block carries today's date, so
   the first load of a day still reads the tail after it once.
