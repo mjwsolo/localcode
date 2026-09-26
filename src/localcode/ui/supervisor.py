@@ -12,6 +12,7 @@ through bootstrap.download_model — the same code the Textual picker uses.
                                         server on the SAME port with that gguf
     GET  /status             {"state": idle|downloading|loading|ready|error, ...}
     POST /cancel             stop the download in progress (the .part is discarded)
+    POST /warmup/cancel      stop the prompt warm-up prefill (the user just sent a turn)
     GET  /models_dir         {"path", "free_gb"}
     GET  /progress           prompt-fill progress of the running request (from llama-server /slots)
     GET  /voice/status       {"ready", "recording", "detail"}   (whisper env + STT model)
@@ -91,6 +92,8 @@ class Supervisor:
         self.ram_gb = _system_ram_gb()
         self.bandwidth = _bandwidth()
         self.log = open(HERE / "server.log", "ab", buffering=0)  # noqa: SIM115 (lives with the server)
+        self._warm_stop = threading.Event()
+        self._warm_replay = None  # warmup.Replay while the prefix is being pre-read
 
     # ---- llama-server lifecycle -------------------------------------------
     def progress(self) -> dict:
@@ -196,11 +199,77 @@ class Supervisor:
                 return False
             if self.healthy():
                 self.current = alias
+                self._start_warmup(alias)
                 return True
             time.sleep(1)
         return False
 
+    # ---- prompt warm-up (see ui/warmup.py) ----------------------------------
+    def _start_warmup(self, alias: str) -> None:
+        from localcode.ui import warmup
+        if not warmup.enabled():
+            return
+        self._warm_stop = threading.Event()
+        threading.Thread(target=self._warmup_worker, args=(alias, self._warm_stop), daemon=True).start()
+
+    def _warmup_worker(self, alias: str, stop: threading.Event) -> None:
+        from localcode.ui import warmup
+        port = self.port
+        baseline: int | None = None
+        try:
+            toks = warmup.load(alias)
+            if toks:
+                t0 = time.time()
+                rp = warmup.Replay(port)
+                self._warm_replay = rp
+                try:
+                    tm = rp.run(toks)
+                    log(f"warmup: replayed {len(toks)} tokens for {alias} in {time.time() - t0:.1f}s "
+                        f"(server prompt_ms={tm.get('prompt_ms')}, cache_n={tm.get('cache_n')})")
+                except Exception as e:  # noqa: BLE001
+                    if rp.cancelled or stop.is_set():
+                        log(f"warmup: replay cancelled after {time.time() - t0:.1f}s (user turn started)")
+                    else:
+                        log(f"warmup: replay failed for {alias}, forgetting it: {e}")
+                        warmup.forget(alias)
+                finally:
+                    self._warm_replay = None
+                for s in warmup.slots(port) or []:
+                    try:
+                        baseline = max(baseline or -1, int(s.get("id_task") if s.get("id_task") is not None else -1))
+                    except (TypeError, ValueError):
+                        pass
+        except Exception as e:  # noqa: BLE001
+            log(f"warmup: skipped: {e}")
+        # Capture this session's first turn so the next load of this model is warm.
+        tracker = warmup.CaptureTracker(baseline_task=baseline)
+        deadline = time.time() + warmup.CAPTURE_WINDOW_S
+        while not stop.is_set() and time.time() < deadline:
+            snap = warmup.slots(port)
+            if snap is not None:
+                slot_id = tracker.observe(snap, time.time())
+                if slot_id is not None:
+                    try:
+                        new = warmup.capture(port, slot_id)
+                        merged = warmup.merge_tokens(warmup.load(alias), new)
+                        warmup.store(alias, merged)
+                        log(f"warmup: captured {len(new)} tokens for {alias}, stored {len(merged)}")
+                    except Exception as e:  # noqa: BLE001
+                        log(f"warmup: capture failed for {alias}: {e}")
+                    return
+            stop.wait(0.5)
+
+    def cancel_warmup(self) -> dict:
+        """The user submitted a turn: stop pre-reading so their request is next."""
+        rp = self._warm_replay
+        if rp is not None:
+            rp.cancel()
+            return {"ok": True, "cancelled": True}
+        return {"ok": True, "cancelled": False}
+
     def stop(self) -> None:
+        self._warm_stop.set()
+        self.cancel_warmup()
         if self.proc and self.proc.poll() is None:
             log(f"supervisor: stopping llama-server pid {self.proc.pid}")
             self.proc.terminate()
@@ -636,6 +705,8 @@ def make_handler(sup: Supervisor):
             if u.path == "/select":
                 res = sup.select(str(body.get("group", "")), str(body.get("filename", "")))
                 return self._json(res, 200 if "error" not in res else 409)
+            if u.path == "/warmup/cancel":
+                return self._json(sup.cancel_warmup())
             if u.path == "/cancel":
                 res = sup.cancel_download()
                 return self._json(res, 200 if "error" not in res else 409)
