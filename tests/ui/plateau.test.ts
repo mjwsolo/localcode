@@ -458,3 +458,26 @@ describe("repeated check failures", () => {
     expect(checkPassed(check("", 0, "npx vite build | head -100"))).toBe(false);
   });
 });
+
+
+test("a gate's fresh instruction resets the no-progress budget instead of stopping seconds later", () => {
+  const tracker = new PlateauTracker();
+  const noop = { tool: "grep", args: { pattern: "placeholder" }, output: "x", metadata: {} };
+  const rounds = (n: number) => { const out: string[] = []; for (let k = 0; k < n; k++) { tracker.observe(noop); out.push(tracker.endRound()); } return out; };
+  const first = rounds(PLATEAU_MIN_ROUND + PLATEAU_NUDGE_AFTER + 2);
+  expect(first).toContain("nudge");
+  expect(first).not.toContain("stop");
+  const nudgeAt = first.indexOf("nudge");
+  const sinceNudge = first.length - nudgeAt - 1;
+  // one round short of the stop, a gate sends the model back with new work
+  rounds(PLATEAU_STOP_AFTER - 1 - sinceNudge);
+  expect(tracker.stopped).toBe(false);
+  tracker.freshInstruction();
+  const after = rounds(PLATEAU_STOP_AFTER - 1);
+  expect(after).not.toContain("stop");
+  expect(tracker.stopped).toBe(false);
+  // without the reset the same rounds would have stopped it
+  const control = new PlateauTracker();
+  const c = (n: number) => { const out: string[] = []; for (let k = 0; k < n; k++) { control.observe(noop); out.push(control.endRound()); } return out; };
+  expect(c(PLATEAU_MIN_ROUND + PLATEAU_NUDGE_AFTER + 2 + PLATEAU_STOP_AFTER + PLATEAU_STOP_AFTER)).toContain("stop");
+});
