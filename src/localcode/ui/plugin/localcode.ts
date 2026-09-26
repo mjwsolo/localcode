@@ -538,7 +538,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
       // Open todos travel with the turn (user message or nudge), never in the
       // system prompt, so the cached prefix stays stable across todo updates.
       const open = renderTodos(todos);
-      if (open) output.parts.push({ type: "text", text: open, synthetic: true } as any);
+      if (open) output.parts.push({ type: "text", text: open, synthetic: true, sessionID: input.sessionID, messageID: input.messageID } as any);
     },
 
     "tool.execute.after": async (input, output) => {
