@@ -46,6 +46,17 @@ def server_command(gguf: str, port: int, alias: str | None = None) -> list[str]:
     mm = mmproj_for(gguf)
     if mm is not None and "--mmproj" not in cmd:
         cmd += ["--mmproj", str(mm)]
+    # Prompt warm-up (ui/warmup.py) reads the first turn's token ids back out
+    # of a slot save; the flag only enables the endpoint, nothing is written
+    # until the supervisor asks.
+    try:
+        from localcode.ui import warmup
+        if warmup.enabled():
+            d = warmup.slot_save_dir()
+            d.mkdir(parents=True, exist_ok=True)
+            cmd += ["--slot-save-path", str(d)]
+    except Exception:  # noqa: BLE001, S110
+        pass
     return cmd
 
 
