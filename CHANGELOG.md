@@ -3,6 +3,16 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.4.6 — 2026-09-26
+
+### Fixed
+
+- **0.4.5 could fail a turn once a plan had open items.** The open-todo list
+  that 0.4.5 moved onto the user turn was added without a part identity, so the
+  runtime refused to save the message ("invalid user part before save") and the
+  continuation nudge failed. Parts a plugin appends now get their id and
+  session/message identity before the save. Upgrade from 0.4.5.
+
 ## 0.4.5 — 2026-09-26
 
 ### Fixed
