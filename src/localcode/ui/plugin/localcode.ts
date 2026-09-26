@@ -437,10 +437,8 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
     try {
       const r = await fetch(`${control}/status`, { signal: AbortSignal.timeout(1_000) });
       const j = (await r.json()) as { current?: string; state?: string };
-      loadedName = { name: j.state === "ready" && j.current ? j.current : loadedName.name, at: Date.now() };
-    } catch {
-      loadedName = { ...loadedName, at: Date.now() };
-    }
+      if (j.state === "ready" && j.current) loadedName = { name: j.current, at: Date.now() };
+    } catch {}
     return loadedName.name;
   }
 
@@ -509,10 +507,15 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
           if (output.system[i].includes("__pending__")) output.system[i] = output.system[i].replaceAll("__pending__", loaded);
         }
       }
-      if (!workspaceActive || (input.agent && input.agent !== "build")) return;
+      if (input.agent && input.agent !== "build") return;
+      // The system prompt must be IDENTICAL for every request of a session: it
+      // is the cached prefix. This rule used to be added only once
+      // workspaceActive flipped (after the first tool call of each turn), so the
+      // prompt changed mid-turn and the server re-read the whole conversation
+      // once per turn (15-23 s at 30k tokens). It is inert in plain chat (the
+      // gates check workspaceActive in code), so always add it. The open-todo
+      // list is not put here either: it rides on the user turn (chat.message).
       output.system.push(PLANNING_RULE);
-      const open = renderTodos(todos);
-      if (open) output.system.push(open);
     },
 
     "chat.message": async (input, output) => {
@@ -532,6 +535,10 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
         turnStartedAt = Date.now() - 1000;
         plateau = new PlateauTracker(directory); plateauStopped = false; seenSteps.clear();
       }
+      // Open todos travel with the turn (user message or nudge), never in the
+      // system prompt, so the cached prefix stays stable across todo updates.
+      const open = renderTodos(todos);
+      if (open) output.parts.push({ type: "text", text: open, synthetic: true } as any);
     },
 
     "tool.execute.after": async (input, output) => {
