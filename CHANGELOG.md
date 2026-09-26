@@ -3,6 +3,26 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.4.5 — 2026-09-26
+
+### Fixed
+
+- **Every turn after the first is much faster.** llama-server reuses its cache
+  only for an identical prompt prefix, and the system prompt was changing
+  between steps: the workspace block was added after the first tool call of a
+  turn and dropped again on the next, the planning rule followed the same
+  switch, and the open-todo list was rewritten into the system prompt on every
+  update. Each change made the server re-read the whole conversation, twice
+  per turn (15-23 s at 30k tokens on an M5). The system prompt is now constant
+  for a session, and todos travel with the user turn. Measured on Qwen3.8 27B:
+  requests after the first tool call re-read 23-310 tokens (0.3-0.8 s)
+  instead of 6-7k (10-15 s).
+- Title generation and other short side requests no longer land on the
+  conversation's server slot when the server has several.
+- The code-intelligence panel said "Starts automatically for your project's
+  language", which was never true: localcode does not download language
+  servers on its own. It now says "Not running · /lsp to set up".
+
 ## 0.4.4 — 2026-09-26
 
 ### Fixed
