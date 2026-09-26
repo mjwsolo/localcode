@@ -565,10 +565,15 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
         turnStartedAt = Date.now() - 1000;
         plateau = new PlateauTracker(directory); plateauStopped = false; seenSteps.clear();
       }
-      // Open todos travel with the turn (user message or nudge), never in the
-      // system prompt, so the cached prefix stays stable across todo updates.
-      const open = renderTodos(todos);
-      if (open) output.parts.push({ type: "text", text: open, synthetic: true, sessionID: input.sessionID, messageID: input.messageID } as any);
+      // Open todos travel with the gate's continuation nudges, never in the
+      // system prompt (the cached prefix) and never on the user's own message:
+      // a leftover list from an earlier task would pull a new, unrelated
+      // request back to the old work. The model's own todowrite history is
+      // still in the conversation.
+      if (text.startsWith(NUDGE_PREFIX)) {
+        const open = renderTodos(todos);
+        if (open) output.parts.push({ type: "text", text: open, synthetic: true, sessionID: input.sessionID, messageID: input.messageID } as any);
+      }
     },
 
     "tool.execute.after": async (input, output) => {
