@@ -3,6 +3,21 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.4.4 — 2026-09-26
+
+### Fixed
+
+- **The first screen is the prompt, not the model picker.** On a fresh install
+  the picker opened over the welcome screen before you had typed anything. It
+  now opens when you send a message with no model loaded, and on `/models`.
+- **Sessions know which model they run.** A session opened through the picker
+  told the model it was `localcode/__pending__` (the launcher's placeholder
+  for "no model yet"), so "what model are you?" got that back. A picked model
+  now carries its alias on the wire, and the runtime substitutes the loaded
+  model's name into the system prompt.
+- 0.4.3 never reached PyPI: its release gate caught a second version string
+  left at 0.4.2. This release carries the 0.4.3 changes below.
+
 ## 0.4.3 — 2026-09-26
 
 ### Changed

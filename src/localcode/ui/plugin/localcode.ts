@@ -429,6 +429,21 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
   const log = (msg: string) => emit(`[localcode gate] ${msg}`);
   const plog = (msg: string) => emit(`[localcode plateau] ${msg}`);
 
+  let loadedName: { name: string | undefined; at: number } = { name: undefined, at: 0 };
+  async function loadedModelName(): Promise<string | undefined> {
+    const control = process.env.LOCALCODE_CONTROL_URL;
+    if (!control) return undefined;
+    if (Date.now() - loadedName.at < 3_000) return loadedName.name;
+    try {
+      const r = await fetch(`${control}/status`, { signal: AbortSignal.timeout(1_000) });
+      const j = (await r.json()) as { current?: string; state?: string };
+      loadedName = { name: j.state === "ready" && j.current ? j.current : loadedName.name, at: Date.now() };
+    } catch {
+      loadedName = { ...loadedName, at: Date.now() };
+    }
+    return loadedName.name;
+  }
+
   async function nudge(sessionID: string, text: string) {
     if (interrupted.has(sessionID)) return;
     // synthetic: the TUI hides it from the transcript; the model still sees it.
@@ -484,6 +499,16 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
 
   return {
     "experimental.chat.system.transform": async (input, output) => {
+      // A session opened through the picker keeps the launcher's "__pending__"
+      // placeholder as the wire id, and the runtime quotes that id in its
+      // "You are powered by" line, so the model introduced itself as
+      // __pending__. Put the loaded model's name there instead.
+      const loaded = await loadedModelName();
+      if (loaded) {
+        for (let i = 0; i < output.system.length; i++) {
+          if (output.system[i].includes("__pending__")) output.system[i] = output.system[i].replaceAll("__pending__", loaded);
+        }
+      }
       if (!workspaceActive || (input.agent && input.agent !== "build")) return;
       output.system.push(PLANNING_RULE);
       const open = renderTodos(todos);
