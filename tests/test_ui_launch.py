@@ -11,7 +11,7 @@ import pytest
 
 from localcode import entrypoint
 from localcode.ui import fork_commit, plugin_path, run_dir, ui_binary_path
-from localcode.ui.launch import write_config
+from localcode.ui.launch import parallel_slots, write_config
 
 
 def _args(**kw):
@@ -52,7 +52,8 @@ def test_write_config_points_at_local_server_and_plugin(tmp_path):
     assert prov["options"]["baseURL"] == "http://127.0.0.1:8123/v1"
     assert cfg["enabled_providers"] == ["localcode"]
     assert cfg["share"] == "disabled" and cfg["autoupdate"] is False
-    assert cfg["tools"] == {"task": False}
+    # subagents follow the machine's RAM tier (tests/test_parallel_slots.py pins the ladder)
+    assert cfg["tools"] == {"task": parallel_slots() > 1}
     assert "model" not in cfg
     assert list(prov["models"]) == ["__pending__"]
     assert prov["models"]["__pending__"]["limit"]["context"] == 32768

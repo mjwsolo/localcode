@@ -73,10 +73,16 @@ def _context_size(models_dir: Path, ctrl: int) -> int:
         return 32768
 
 
-def _parallel_slots_requested() -> int:
+def parallel_slots() -> int:
+    """Server slots for this session: the RAM tier decides (64 GB -> 2,
+    96 -> 3, 128+ -> 4, below 64 -> 1), LOCALCODE_PARALLEL overrides. The model
+    is not known yet when the session config is written, so this is the
+    pre-fit number; the server's own KV guard may still lower it."""
     try:
-        return max(1, int(os.environ.get("LOCALCODE_PARALLEL", "1")))
-    except ValueError:
+        from localcode.config import load_config
+        from localcode.runtime import LocalCodeRuntimeGateway
+        return max(1, int(LocalCodeRuntimeGateway(load_config().runtime).parallel_slots(None)))
+    except Exception:  # noqa: BLE001
         return 1
 
 
@@ -85,6 +91,7 @@ def write_config(path: Path, *, port: int, ctx: int, alias: str | None) -> None:
     capabilities are explicit so no cloud default leaks in. With no model yet a
     hidden template entry carries the wiring; the picker synthesizes the real
     alias from it once a model is loaded."""
+    slots = parallel_slots()
     model_key = alias or "__pending__"
     cfg: dict = {
         "$schema": "https://localcode.dev/schema/config.json",
@@ -104,10 +111,11 @@ def write_config(path: Path, *, port: int, ctx: int, alias: str | None) -> None:
             }
         },
         "enabled_providers": ["localcode"],
-        # Subagents need parallel server slots to be worth anything; with one
-        # slot they would queue behind the parent. LOCALCODE_PARALLEL=N (trial).
-        "tools": {"task": _parallel_slots_requested() > 1},
-        **({"subagent_depth": 1} if _parallel_slots_requested() > 1 else {}),
+        # Subagents (@explore, @general, the task tool) need parallel server
+        # slots to be worth anything; with one slot they would queue behind the
+        # parent. On, with no flags, whenever the RAM tier gives more than one.
+        "tools": {"task": slots > 1},
+        **({"subagent_depth": 1} if slots > 1 else {}),
         "agent": {"plan": {"disable": True}},
         "lsp": True,
         "plugin": [str(plugin_path())],
@@ -233,6 +241,9 @@ def main(model: str | None = None, project: str | None = None) -> int:
         env = dict(os.environ)
         env["LOCALCODE_CONTROL_URL"] = f"http://127.0.0.1:{ctrl}"
         env["LOCALCODE_CONFIG"] = str(config_path)
+        # The plugin gates its fan-out rule on this; keep it equal to what the
+        # session config just decided (an explicit override is left alone).
+        env.setdefault("LOCALCODE_PARALLEL", str(parallel_slots()))
         # Language servers are installed only on request (/lsp), never silently.
         env.setdefault("OPENCODE_DISABLE_LSP_DOWNLOAD", "1")
         argv = [str(ui_bin)]

@@ -596,8 +596,8 @@ class LocalCodeRuntimeGateway:
                 "--ctx-checkpoints", _ckpts,
                 "--checkpoint-min-step", "2048",
             ])
-        # Parallel slots (trial, off by default): LOCALCODE_PARALLEL=N serves N
-        # requests at once from the one loaded model. llama-server splits
+        # Parallel slots: N requests at once from the one loaded model, N from
+        # the RAM tier (LOCALCODE_PARALLEL overrides). llama-server splits
         # --ctx-size evenly across slots, so the total is N x the per-slot
         # context; the RAM guard lowers N until N KV caches fit beside the
         # weights. Disable fit check (we manage memory via sysctl).
@@ -855,15 +855,34 @@ class LocalCodeRuntimeGateway:
         # Round down to a 2048 multiple; never below a 2048 floor.
         return max(KV_FIT_MIN_CTX, (max_ctx // KV_FIT_CTX_MULTIPLE) * KV_FIT_CTX_MULTIPLE)
 
+    @staticmethod
+    def default_parallel_slots(ram_gb: int) -> int:
+        """Slots by RAM tier when nothing overrides it. Below 64 GB every byte
+        goes to one context; 64 GB gets a second slot so one explore agent can
+        run beside the main session; 96 GB three; 128 GB and up four. The KV
+        fit guard in parallel_slots() still lowers these for big models."""
+        if ram_gb >= 128:
+            return 4
+        if ram_gb >= 96:
+            return 3
+        if ram_gb >= 64:
+            return 2
+        return 1
+
     def parallel_slots(self, model_path: str | None = None, ctx: int | None = None) -> int:
-        """How many requests the server serves at once. 1 unless
-        LOCALCODE_PARALLEL asks for more; then the largest N <= the request
-        whose N KV caches (at the per-slot context `ctx`) fit beside the
-        weights with the usual reserve. Unknown KV size -> trust the request."""
-        try:
-            want = int(os.environ.get("LOCALCODE_PARALLEL", "1"))
-        except ValueError:
-            want = 1
+        """How many requests the server serves at once: the RAM-tier default
+        (default_parallel_slots) unless LOCALCODE_PARALLEL overrides it
+        (=1 turns subagents off); then the largest N <= that whose N KV caches
+        (at the per-slot context `ctx`) fit beside the weights with the usual
+        reserve. Unknown KV size -> trust the number."""
+        raw = os.environ.get("LOCALCODE_PARALLEL", "").strip()
+        if raw:
+            try:
+                want = int(raw)
+            except ValueError:
+                want = self.default_parallel_slots(self._system_ram_gb())
+        else:
+            want = self.default_parallel_slots(self._system_ram_gb())
         if want <= 1:
             return 1
         want = min(want, 16)
@@ -880,8 +899,8 @@ class LocalCodeRuntimeGateway:
         return max(1, min(want, fit))
 
     def _apply_parallel_slots(self, cmd: list[str], model_path: str | None) -> list[str]:
-        """Parallel slots (trial, off by default): LOCALCODE_PARALLEL=N serves N
-        requests at once from the one loaded model. Runs AFTER the launch
+        """Parallel slots: serve N requests at once from the one loaded model,
+        N from parallel_slots() (RAM tier, env override). Runs AFTER the launch
         overrides so the per-slot context is the effective one: llama-server
         splits --ctx-size evenly across slots, so the flag becomes N x it.
         Private per-slot KV (in unified mode one request can take the whole
