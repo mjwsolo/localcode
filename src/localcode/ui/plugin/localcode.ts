@@ -443,10 +443,8 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
     try {
       const r = await fetch(`${control}/status`, { signal: AbortSignal.timeout(1_000) });
       const j = (await r.json()) as { current?: string; state?: string };
-      loadedName = { name: j.state === "ready" && j.current ? j.current : loadedName.name, at: Date.now() };
-    } catch {
-      loadedName = { ...loadedName, at: Date.now() };
-    }
+      if (j.state === "ready" && j.current) loadedName = { name: j.current, at: Date.now() };
+    } catch {}
     return loadedName.name;
   }
 
@@ -516,12 +514,19 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
         }
       }
       if (input.agent === "explore") { output.system.push(EXPLORE_RULE); return; }
-      if (!workspaceActive || (input.agent && input.agent !== "build")) return;
+      if (input.agent && input.agent !== "build") return;
+      // The system prompt must be IDENTICAL for every request of a session: it
+      // is the cached prefix. These rules used to be added only once
+      // workspaceActive flipped (after the first tool call of each turn), so the
+      // prompt changed mid-turn and the server re-read the whole conversation
+      // once per turn (15-23 s at 30k tokens). The rules are inert in plain
+      // chat (the gates below check workspaceActive in code), so always add them.
       output.system.push(PLANNING_RULE);
-      // Parallel slots trial: with subagents available, say when to fan out.
       if (Number(process.env.LOCALCODE_PARALLEL ?? "1") > 1) output.system.push(PARALLEL_RULE);
-      const open = renderTodos(todos);
-      if (open) output.system.push(open);
+      // The open-todo list is NOT put here: the system prompt is the cached
+      // prefix of every request, and each todowrite changed it, so the server
+      // re-read the whole prefix (~6.6k tokens, ~3 s) on the next step. It
+      // rides on the user turn instead (chat.message below).
     },
 
     "chat.message": async (input, output) => {
@@ -546,6 +551,10 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
         turnStartedAt = Date.now() - 1000;
         plateau = new PlateauTracker(directory); plateauStopped = false; seenSteps.clear();
       }
+      // Open todos travel with the turn (user message or nudge), never in the
+      // system prompt, so the cached prefix stays stable across todo updates.
+      const open = renderTodos(todos);
+      if (open) output.parts.push({ type: "text", text: open, synthetic: true } as any);
     },
 
     "tool.execute.after": async (input, output) => {
