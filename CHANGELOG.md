@@ -3,6 +3,18 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.4.7 — 2026-09-26
+
+### Fixed
+
+- **No more "Interrupted" seconds after being asked to fix something.** The
+  loop breaker that stops a session making no progress kept counting from an
+  earlier nudge, so when a gate sent the model back to replace a placeholder or
+  finish a todo, the breaker could stop it 9 seconds later while it was reading
+  the file it had just been told to fix. A gate's instruction now restarts the
+  budget. When the breaker does stop a session it says so, with the round count
+  and the files changed, instead of a bare "Interrupted".
+
 ## 0.4.6 — 2026-09-26
 
 ### Fixed
