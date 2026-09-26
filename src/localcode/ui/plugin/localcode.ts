@@ -364,6 +364,15 @@ class PlateauTracker {
     if (ev.tool === "bash" && isCheckCommand(String(ev.args?.command ?? "")) && this.mem.lastCheckPassed) this.lastPassRound = this.round + 1;
   }
 
+  /** A gate just gave the model a NEW instruction (finish a todo, replace a
+   *  placeholder, run the build). That earns a fresh no-progress budget: the
+   *  model was stopped 9 s after being sent back to fix a placeholder because
+   *  the counter still ran from a nudge 48 minutes earlier. */
+  freshInstruction(): void {
+    if (this.stopped) return;
+    this.noProgress = 0; this.nudged = false; this.passNudged = false;
+  }
+
   /** Close the current round (a step-finish, or session.idle as a flush). Steps without tools are ignored. */
   endRound(): PlateauDecision {
     if (!this.open || this.stopped) return "none";
@@ -491,6 +500,11 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
       plog(plateau.repeated.evidence);
       try {
         await client.tui.showToast({ body: { title: "Repair stalled", message: "The same check keeps failing. Changes are preserved; this task is incomplete.", variant: "warning", duration: 12000 } });
+      } catch (e: any) { plog(`status notification failed: ${e?.message ?? e}`); }
+    }
+    if (!plateau.repairStopped) {
+      try {
+        await client.tui.showToast({ body: { title: "Stopped: no new progress", message: `${plateau.round} tool rounds without new progress after being asked to finish. ${files.length ? `${files.length} file(s) changed so far. ` : ""}Send a message to continue.`, variant: "warning", duration: 15000 } });
       } catch (e: any) { plog(`status notification failed: ${e?.message ?? e}`); }
     }
     plog(`stopping session after ${plateau.round} tool rounds with no progress since the nudge; ` +
@@ -634,6 +648,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
           continueCount += 1;
           const next = open.find((t) => t.status === "in_progress") ?? open[0];
           log(`${open.length} todo(s) still open — continuing with: ${next.content}`);
+          plateau.freshInstruction();
           await nudge(sessionID, `${NUDGE_PREFIX} You still have ${open.length} unfinished todo(s). The task is NOT complete — do not stop. Continue now with: ${next.content}. Mark a todo completed via todowrite only when it is genuinely done, and keep going until every item is completed.`);
           return;
         }
@@ -647,6 +662,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
         if (stubs.length) {
           stubNudgeDone = true;
           log(`placeholders found in ${stubs.length} line(s) — sending back`);
+          plateau.freshInstruction();
           await nudge(sessionID, `${NUDGE_PREFIX} your changes still contain placeholders — the user asked for complete, working features, not stubs:\n${stubs.join("\n")}\nImplement each one for real (reopen it as a todo if needed), or tell the user explicitly which requirement you cannot meet and why.`);
           return;
         }
@@ -661,6 +677,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
           const errors = runCheck(root, cmd);
           if (errors) {
             buildVerifyNudges += 1;
+            plateau.freshInstruction();
             log(`${cmd.join(" ")} failed in ${root} — sending errors back`);
             await nudge(sessionID, `${NUDGE_PREFIX} the project's typecheck/build (\`${cmd.join(" ")}\`, in ${root}) was run for you and reported errors. FIX each one with targeted edits, then finish. Do not claim it works until these are gone:\n\n${errors}`);
             return;
