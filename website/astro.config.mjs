@@ -1,7 +1,6 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
-import starlightVersions from 'starlight-versions';
 
 // Preview docs site for localcode.
 //
@@ -15,15 +14,6 @@ export default defineConfig({
   integrations: [
     starlight({
       title: 'localcode',
-      plugins: [
-        // Versioned docs. The current tree documents the default interface
-        // (0.4+); `0.3` is a snapshot of the docs for the previous interface,
-        // still reachable with `localcode --classic`.
-        starlightVersions({
-          current: { label: '0.4' },
-          versions: [{ slug: '0.3', label: '0.3 · classic interface', redirect: 'root' }],
-        }),
-      ],
       description:
         'An open-source coding agent that runs local models on Apple Silicon. No API key, and no remote inference unless you point it at one.',
       components: {

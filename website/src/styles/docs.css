@@ -87,7 +87,7 @@
 }
 
 /* ── Demo recordings ─────────────────────────────────────────────
-   The Textual frames are 898px wide natively. Never upscale them:
+   The terminal captures are 898px wide natively. Never upscale them:
    stretched terminal type is the fastest way to make a real capture
    look fake. */
 .sl-markdown-content img[src*='/demo/'] {

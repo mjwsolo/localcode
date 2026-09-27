@@ -17,7 +17,7 @@ The full table is **generated from the code**. It is not written by hand. The so
 python -m localcode.errors --emit-docs > docs/ERRORS.md
 ```
 
-When the model server fails to load a model, the detail is in `server.log` under the run directory (`~/.local/share/localcode-agent/run` by default). The classic interface and `localcode run` write `<project>/.localcode/last_error.log`.
+When the model server fails to load a model, the detail is in `server.log` under the run directory (`~/.local/share/localcode-agent/run` by default). The headless `localcode run` writes `<project>/.localcode/last_error.log`.
 
 :::note[`dyld: Library not loaded` on launch]
 If `localcode` fails right away with a `dyld` error such as "Library not loaded", the Mac is running a macOS older than 13. The bundled binaries are built for macOS 13 and newer on Apple Silicon. Update macOS; there is no build for older versions.
