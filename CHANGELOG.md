@@ -3,7 +3,7 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## 0.4.9 — unreleased
+## 0.4.9 — 2026-09-27
 
 ### Changed
 
