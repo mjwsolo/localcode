@@ -49,7 +49,7 @@ const PLANNING_RULE = `WORKSPACE TASK COMPLETION:
 - These execution rules apply ONLY when the user asks for work on project files. Answer general questions, advice, greetings, and unrelated web research directly, without todowrite, repository exploration, build checks, or creating files. Do not invent deliverables, compliance requirements, or project work the user did not request.
 - LOCALCODE.md is the only project instruction file and is supplied automatically. Never read, create, or update legacy agent instruction files. Do not seek out configuration or skills for unrelated questions.
 - Keep going until the user's request is COMPLETELY done. Do not end your turn while any part of the work remains. A dev server that starts, a scaffold that installs, a single file written — none of these is "done" unless that was the entire request.
-- ORIENT FROM THE LAYOUT, NOT FROM TOOL CALLS. The workspace layout below is complete for the top two levels: do not list directories, glob for tests, or read files just to see what exists. Open only the files you will change or must quote. Every tool call is a full model round trip; a typical small change is read -> edit -> check, three calls.
+- ORIENT FROM THE SNAPSHOT, NOT FROM TOOL CALLS. The first user turn carries a snapshot of the workspace (top two levels) and later turns report files changed outside this session. Do not list directories or glob just to see what exists; if a file you need is not in the snapshot or a change report, glob for that specific file. Open only the files you will change or must quote. Every tool call is a full model round trip; a typical small change is read -> edit -> check, three calls.
 - PLAN, THEN EXECUTE THE PLAN. For requested workspace changes of THREE or more steps, call todowrite FIRST to lay out every concrete step (one per requirement, and every deliverable the user named — a README is a plan item like any feature, not a closing flourish). Skip the plan for one/two-step tasks. Keep exactly ONE item in_progress. Update the list ONCE per step, after the step's edit — never before and after the same edit, never as a separate call between two edits.
 - ONE EDIT PER FILE PER STEP: when a step changes several places in one file, make them in a single edit or multi-edit call.
 - Validate incrementally: get the minimal scaffold building before implementing the full app. After each coherent feature, run the relevant check and repair failures before adding more features. Do not defer all integration checks until the end.
@@ -415,8 +415,42 @@ const PLATEAU_PASS_TEXT = `${NUDGE_PREFIX} Your check passed — finish now. Do 
 // session so the cached prefix never changes. Removes the agent's orientation
 // reads (read:tests, glob **/*.py) which were ~2 round trips per task.
 const LAYOUT_SKIP = new Set([".git", "node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", "dist", "build", ".localcode-agent", ".eval", ".next", "target", ".cache", ".DS_Store"]);
-const LAYOUT_MAX_ENTRIES = 60;
-const LAYOUT_MAX_CHARS = 2500;
+const LAYOUT_MAX_ENTRIES = 200;
+const LAYOUT_MAX_CHARS = 6000;
+const CHANGES_MAX = 20;
+const SCAN_MAX_FILES = 4000;
+/** Modification times of every file (skip list applied, depth-unlimited, capped). */
+function scanTree(directory: string): Map<string, number> {
+  const out = new Map<string, number>();
+  const walk = (dir: string, rel: string) => {
+    if (out.size >= SCAN_MAX_FILES) return;
+    let entries: import("node:fs").Dirent[] = [];
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const d of entries) {
+      if (LAYOUT_SKIP.has(d.name)) continue;
+      const r = rel ? rel + "/" + d.name : d.name;
+      if (d.isDirectory()) walk(join(dir, d.name), r);
+      else if (d.isFile()) { try { out.set(r, statSync(join(dir, d.name)).mtimeMs); } catch {} }
+      if (out.size >= SCAN_MAX_FILES) return;
+    }
+  };
+  walk(directory, "");
+  return out;
+}
+/** Files added, modified or removed since `prev`, ignoring paths the agent itself touched. */
+function treeChanges(prev: Map<string, number>, now: Map<string, number>, ignore: Set<string>): string {
+  const added: string[] = [], modified: string[] = [], removed: string[] = [];
+  for (const [k, t] of now) { if (ignore.has(k)) continue; if (!prev.has(k)) added.push(k); else if (prev.get(k) !== t) modified.push(k); }
+  for (const k of prev.keys()) if (!now.has(k) && !ignore.has(k)) removed.push(k);
+  const total = added.length + modified.length + removed.length;
+  if (!total) return "";
+  const cap = (xs: string[]) => xs.slice(0, CHANGES_MAX).join(", ") + (xs.length > CHANGES_MAX ? `, +${xs.length - CHANGES_MAX} more` : "");
+  const parts = [];
+  if (added.length) parts.push("added: " + cap(added));
+  if (modified.length) parts.push("modified: " + cap(modified));
+  if (removed.length) parts.push("removed: " + cap(removed));
+  return "WORKSPACE CHANGED SINCE YOUR LAST TURN (outside this session): " + parts.join("; ") + ".";
+}
 function workspaceLayout(directory: string): string {
   const lines: string[] = [];
   let truncated = false;
@@ -437,11 +471,14 @@ function workspaceLayout(directory: string): string {
   if (!lines.length) return "";
   let body = lines.join("\n");
   if (body.length > LAYOUT_MAX_CHARS) { body = body.slice(0, LAYOUT_MAX_CHARS); truncated = true; }
-  return "WORKSPACE LAYOUT (top two levels" + (truncated ? ", truncated" : "") + "; complete for orientation, do not re-list):\n" + body;
+  return "WORKSPACE SNAPSHOT AT SESSION START (top two levels" + (truncated ? ", truncated" : "") + "; files you or the user add later are reported at the start of each turn):\n" + body;
 }
 
 const LocalcodePlugin: Plugin = async ({ client, directory }) => {
   const layoutBlock = workspaceLayout(directory);
+  let lastTree = scanTree(directory);
+  const agentTouched = new Set<string>();
+  const snapshotSent = new Set<string>();   // sessions that already received the snapshot
   let todos: Todo[] = [];
   let workspaceActive = false;
   let continueCount = 0;
@@ -562,7 +599,6 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
       // gates check workspaceActive in code), so always add it. The open-todo
       // list is not put here either: it rides on the user turn (chat.message).
       output.system.push(PLANNING_RULE);
-      if (layoutBlock) output.system.push(layoutBlock);
     },
 
     "chat.message": async (input, output) => {
@@ -582,6 +618,17 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
         turnStartedAt = Date.now() - 1000;
         plateau = new PlateauTracker(directory); plateauStopped = false; seenSteps.clear();
       }
+      if (!text.startsWith(NUDGE_PREFIX)) {
+        if (!snapshotSent.has(input.sessionID)) {
+          snapshotSent.add(input.sessionID);
+          if (layoutBlock) output.parts.push({ type: "text", text: layoutBlock, synthetic: true, sessionID: input.sessionID, messageID: input.messageID } as any);
+        } else {
+          const now = scanTree(directory);
+          const report = treeChanges(lastTree, now, agentTouched);
+          lastTree = now;
+          if (report) output.parts.push({ type: "text", text: report, synthetic: true, sessionID: input.sessionID, messageID: input.messageID } as any);
+        }
+      }
       // Open todos travel with the turn (user message or nudge), never in the
       // system prompt, so the cached prefix stays stable across todo updates.
       const open = renderTodos(todos);
@@ -592,6 +639,9 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
       if (activeSession && input.sessionID !== activeSession) return;
       if (["read", "glob", "grep", "bash", "write", "edit", "multiedit", "apply_patch"].includes(input.tool)) workspaceActive = true;
       plateau.observe({ tool: input.tool, args: input.args, output: output?.output, metadata: output?.metadata });
+      for (const p of editedPaths({ tool: input.tool, args: input.args, output: output?.output, metadata: output?.metadata })) {
+        agentTouched.add(relative(resolve(directory), resolve(directory, p)).replace(/\\/g, "/"));
+      }
       if (process.env.LOCALCODE_PLUGIN_DEBUG) emit(`[localcode debug] progress: ${plateau.mem.changedPaths.size} delivered files, ${plateau.mem.completedTodos} completed todos`);
     },
 
