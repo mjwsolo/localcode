@@ -20,8 +20,11 @@
  *     after failing, a check whose failure set shrinks or shows a new failure
  *     signature, or a todowrite raising the completed count. From round 4 on,
  *     6 consecutive no-progress rounds nudge once ("stop experimenting, deliver
- *     the open items, run the check once, finish"); 8 more stop the session via
- *     client.session.abort and log a partial summary. If the last check
+ *     the open items, run the check once, finish"); 8 more stop the task: further
+ *     tool calls are refused with the reason so the model writes up what it has
+ *     and the turn ends by itself (session.abort only if it ignores 3 refusals).
+ *     A turn that has delivered nothing yet (research, investigation) counts a
+ *     round with a never-seen tool call as progress, so only repetition stops it. If the last check
  *     passed within 2 rounds the stop is replaced once by a "finish now" nudge
  *     and 3 more rounds. Repeated identical check failures are tracked separately:
  *     3 request a focused diagnosis; 8 stop further churn, even after new edits.
@@ -33,7 +36,7 @@
  */
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import type { Plugin } from "@opencode-ai/plugin";
@@ -49,9 +52,11 @@ const PLANNING_RULE = `WORKSPACE TASK COMPLETION:
 - These execution rules apply ONLY when the user asks for work on project files. Answer general questions, advice, greetings, and unrelated web research directly, without todowrite, repository exploration, build checks, or creating files. Do not invent deliverables, compliance requirements, or project work the user did not request.
 - LOCALCODE.md is the only project instruction file and is supplied automatically. Never read, create, or update legacy agent instruction files. Do not seek out configuration or skills for unrelated questions.
 - Keep going until the user's request is COMPLETELY done. Do not end your turn while any part of the work remains. A dev server that starts, a scaffold that installs, a single file written — none of these is "done" unless that was the entire request.
-- PLAN, THEN EXECUTE THE PLAN. For requested multi-step workspace changes, call todowrite FIRST to lay out every concrete step (one per requirement, and every deliverable the user named — a README is a plan item like any feature, not a closing flourish). Skip the plan for one/two-step tasks. Keep exactly ONE item in_progress.
+- ORIENT FROM THE SNAPSHOT, NOT FROM TOOL CALLS. The first user turn carries a snapshot of the workspace (top two levels) and later turns report files changed outside this session. Do not list directories or glob just to see what exists; if a file you need is not in the snapshot or a change report, glob for that specific file. Open only the files you will change or must quote. Every tool call is a full model round trip; a typical small change is read -> edit -> check, three calls.
+- PLAN, THEN EXECUTE THE PLAN. For requested workspace changes of THREE or more steps, call todowrite FIRST to lay out every concrete step (one per requirement, and every deliverable the user named — a README is a plan item like any feature, not a closing flourish). Skip the plan for one/two-step tasks. Keep exactly ONE item in_progress. Mark a step completed as soon as its last edit lands (one todowrite call, which may also set the next item in_progress); never call todowrite twice in a row without an edit or check in between, and never before AND after the same edit.
+- ONE EDIT PER FILE PER STEP: when a step changes several places in one file, make them in a single edit or multi-edit call.
 - Validate incrementally: get the minimal scaffold building before implementing the full app. After each coherent feature, run the relevant check and repair failures before adding more features. Do not defer all integration checks until the end.
-- The last plan item is final verification: run the project's own build/typecheck and one smoke check of the main flow. Do not repeat already-passing checks without new edits, or install browsers and test rigs unless requested.
+- RUN THE CHECK ONCE, AFTER THE EDIT. Do not run tests or builds before you have changed anything unless the user asked for a diagnosis; do not re-run a passing check without a new edit. The last plan item is final verification: the project's own build/typecheck and one smoke check of the main flow. Do not install browsers and test rigs unless requested.
 - Write complete, runnable code — no TODOs, stubs, placeholders, "demo only" or "you could add…". If a piece is too big for one call, split it across calls; never drop it.
 - Only stop for one of two reasons: (a) every todo is completed and verified, or (b) you have ONE specific blocking question you cannot answer yourself. The harness sends you back to the next open item if you stop early.
 - Never run a foreground server (npm run dev, vite, http.server) through bash: start it in the background with nohup ... & and a log file, then curl it.`;
@@ -155,6 +160,7 @@ const PLATEAU_NUDGE_AFTER = 6;      // consecutive no-progress rounds -> nudge o
 const PLATEAU_STOP_AFTER = 8;       // further no-progress rounds after the nudge -> stop
 const PLATEAU_RECENT_PASS = 2;      // a check that passed within this many rounds blocks the stop...
 const PLATEAU_PASS_GRACE = 3;       // ...and grants this many more rounds after a "finish now" nudge
+const PLATEAU_STOP_DENIALS = 3;     // tool calls refused after a stop before the session is aborted as a last resort
 
 type ToolEvent = { tool: string; args: any; output?: string; metadata?: any };
 type ProgressMemory = {
@@ -334,6 +340,12 @@ class RepeatedCheckTracker {
   }
 }
 
+/** Identity of a tool call for repetition detection: same tool, same arguments. */
+function callSignature(ev: ToolEvent): string {
+  const args = ev.tool === "bash" ? { command: String(ev.args?.command ?? "").replace(/\s+/g, " ").trim(), workdir: ev.args?.workdir } : ev.args;
+  return createHash("sha256").update(ev.tool + "\n" + JSON.stringify(args ?? null)).digest("hex");
+}
+
 /** Round bookkeeping and thresholds. One instance per session; reset on a genuine user message. */
 class PlateauTracker {
   constructor(private directory?: string) {}
@@ -347,6 +359,8 @@ class PlateauTracker {
   lastPassRound = -Infinity; // round number (1-based, the round it ran in) of the last passing check
   private open = false;      // a round is open once a tool ran in the current step
   private reasons: string[] = [];
+  private novel = false;     // this round made a tool call not seen before in the turn
+  private callSigs = new Set<string>();
   readonly repeated = new RepeatedCheckTracker();
   private repairDecision: PlateauDecision = "none";
 
@@ -357,6 +371,8 @@ class PlateauTracker {
     if (repair !== "none") this.repairDecision = repair;
     const r = progressOf(ev, this.mem, this.directory);
     if (r) this.reasons.push(r);
+    const sig = callSignature(ev);
+    if (!this.callSigs.has(sig)) { this.callSigs.add(sig); this.novel = true; }
     if (ev.tool === "bash" && isCheckCommand(String(ev.args?.command ?? "")) && this.mem.lastCheckPassed) this.lastPassRound = this.round + 1;
   }
 
@@ -381,8 +397,13 @@ class PlateauTracker {
       if (decision === "stop") { this.stopped = true; this.repairStopped = true; }
       return decision;
     }
-    const progressed = this.reasons.length > 0;
-    this.reasons = [];
+    // A turn that has delivered nothing yet (research, investigation, a
+    // question answered from the code) is measured by whether it is still
+    // covering new ground: a round with at least one never-seen tool call is
+    // progress. Once something has been delivered, only deliverables count.
+    const exploring = this.novel && this.mem.changedPaths.size === 0 && this.mem.completedTodos === 0;
+    const progressed = this.reasons.length > 0 || exploring;
+    this.reasons = []; this.novel = false;
     if (progressed) { this.noProgress = 0; this.nudged = false; this.passNudged = false; return "none"; }
     this.noProgress += 1;
     if (this.round < PLATEAU_MIN_ROUND) return "none";
@@ -409,7 +430,81 @@ function plateauNudgeText(open: Todo[]): string {
 }
 const PLATEAU_PASS_TEXT = `${NUDGE_PREFIX} Your check passed — finish now. Do not start another experiment: write up what is delivered and what is not, then stop.`;
 
+// Workspace layout for the system prompt: two levels, capped, computed ONCE per
+// session so the cached prefix never changes. Removes the agent's orientation
+// reads (read:tests, glob **/*.py) which were ~2 round trips per task.
+const LAYOUT_SKIP = new Set([".git", "node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", "dist", "build", ".localcode-agent", ".eval", ".next", "target", ".cache", ".DS_Store"]);
+const LAYOUT_MAX_ENTRIES = 200;
+const LAYOUT_MAX_CHARS = 6000;
+const CHANGES_MAX = 20;
+const SCAN_MAX_FILES = 4000;
+/** Modification times of every file (skip list applied, depth-unlimited, capped). */
+function scanTree(directory: string): Map<string, number> {
+  const out = new Map<string, number>();
+  const walk = (dir: string, rel: string) => {
+    if (out.size >= SCAN_MAX_FILES) return;
+    let entries: import("node:fs").Dirent[] = [];
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const d of entries) {
+      if (LAYOUT_SKIP.has(d.name)) continue;
+      const r = rel ? rel + "/" + d.name : d.name;
+      if (d.isDirectory()) walk(join(dir, d.name), r);
+      else if (d.isFile()) { try { out.set(r, statSync(join(dir, d.name)).mtimeMs); } catch {} }
+      if (out.size >= SCAN_MAX_FILES) return;
+    }
+  };
+  walk(directory, "");
+  return out;
+}
+/** Files added, modified or removed since `prev`, ignoring paths the agent itself touched. */
+function treeChanges(prev: Map<string, number>, now: Map<string, number>, ignore: Set<string>): string {
+  const added: string[] = [], modified: string[] = [], removed: string[] = [];
+  for (const [k, t] of now) { if (ignore.has(k)) continue; if (!prev.has(k)) added.push(k); else if (prev.get(k) !== t) modified.push(k); }
+  for (const k of prev.keys()) if (!now.has(k) && !ignore.has(k)) removed.push(k);
+  const total = added.length + modified.length + removed.length;
+  if (!total) return "";
+  const cap = (xs: string[]) => xs.slice(0, CHANGES_MAX).join(", ") + (xs.length > CHANGES_MAX ? `, +${xs.length - CHANGES_MAX} more` : "");
+  const parts = [];
+  if (added.length) parts.push("added: " + cap(added));
+  if (modified.length) parts.push("modified: " + cap(modified));
+  if (removed.length) parts.push("removed: " + cap(removed));
+  return "WORKSPACE CHANGED SINCE YOUR LAST TURN (outside this session): " + parts.join("; ") + ".";
+}
+function workspaceLayout(directory: string): string {
+  const lines: string[] = [];
+  let truncated = false;
+  const list = (dir: string): string[] => {
+    try { return readdirSync(dir, { withFileTypes: true }).filter((d) => !LAYOUT_SKIP.has(d.name)).sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name)).map((d) => d.isDirectory() ? d.name + "/" : d.name); } catch { return []; }
+  };
+  for (const top of list(directory)) {
+    if (lines.length >= LAYOUT_MAX_ENTRIES) { truncated = true; break; }
+    lines.push(top);
+    if (top.endsWith("/")) {
+      const kids = list(join(directory, top));
+      for (const k of kids) {
+        if (lines.length >= LAYOUT_MAX_ENTRIES) { truncated = true; break; }
+        lines.push("  " + k);
+      }
+    }
+  }
+  if (!lines.length) return "";
+  let body = lines.join("\n");
+  if (body.length > LAYOUT_MAX_CHARS) { body = body.slice(0, LAYOUT_MAX_CHARS); truncated = true; }
+  return "WORKSPACE SNAPSHOT AT SESSION START (top two levels" + (truncated ? ", truncated" : "") + "; files you or the user add later are reported at the start of each turn):\n" + body;
+}
+
 const LocalcodePlugin: Plugin = async ({ client, directory }) => {
+  const layoutBlock = workspaceLayout(directory);
+  // Per-session workspace state lives on disk, not in memory: a headless `run`
+  // is one process per turn, and a user may close and reopen the UI mid-session.
+  // Without this the snapshot was re-sent on every turn and no change was ever reported.
+  const wsStateDir = join(directory, ".localcode-agent");
+  const wsStatePath = (sessionID: string) => join(wsStateDir, `ws-${sessionID.replace(/[^A-Za-z0-9_-]/g, "_")}.json`);
+  type WsState = { sent: boolean; tree: Record<string, number>; touched: string[] };
+  const loadWs = (sessionID: string): WsState | undefined => { try { return JSON.parse(readFileSync(wsStatePath(sessionID), "utf8")); } catch { return undefined; } };
+  const saveWs = (sessionID: string, st: WsState) => { try { mkdirSync(wsStateDir, { recursive: true }); writeFileSync(wsStatePath(sessionID), JSON.stringify(st)); } catch {} };
+  const touchWs = (sessionID: string, rel: string) => { const st = loadWs(sessionID); if (!st) return; if (!st.touched.includes(rel)) { st.touched.push(rel); saveWs(sessionID, st); } };
+  const agentTouched = new Set<string>();
   let todos: Todo[] = [];
   let workspaceActive = false;
   let continueCount = 0;
@@ -420,6 +515,8 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
   let turnStartedAt = Date.now() - 1000;
   let plateau = new PlateauTracker(directory);
   let plateauStopped = false;
+  let stopDenials = 0;       // tool calls refused since the plateau stop
+  let stopReason = "";
   const interrupted = new Set<string>();
   let activeSession: string | undefined;
   // The agent the user is talking to. Nudges must keep it (a prompt without an
@@ -489,6 +586,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
     }
     // stop
     plateauStopped = true;
+    stopDenials = 0;
     const files = [...plateau.mem.changedPaths];
     if (plateau.repairStopped) {
       plog(plateau.repeated.evidence);
@@ -505,7 +603,13 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
       `files delivered ${files.length}${files.length ? ` (${files.slice(0, 12).join(", ")}${files.length > 12 ? ", ..." : ""})` : ""}, ` +
       `open items ${open.length}${open.length ? `: ${open.map((t) => t.content).join("; ")}` : ""}, ` +
       `last check ${plateau.mem.lastCheckPassed === null ? "never run" : plateau.mem.lastCheckPassed ? "passed" : "failed"}; treat as partial`);
-    try { await client.session.abort({ path: { id: sessionID } }); } catch (e: any) { plog(`abort failed: ${e?.message ?? e}`); }
+    // No session.abort here: that killed whatever tool was running and showed
+    // the user "Interrupted" with no explanation. Instead further tool calls are
+    // refused with the reason (tool.execute.before), so the model writes up
+    // what it has and the turn ends on its own.
+    stopReason = plateau.repairStopped
+      ? `${NUDGE_PREFIX} LocalCode stopped this task: the same check has kept failing identically. Do not call any more tools. Reply now, in text: what is delivered, what still fails and why, and what you would try next. The user can send a message to continue.`
+      : `${NUDGE_PREFIX} LocalCode stopped this task: ${plateau.round} tool rounds with no new progress after being asked to finish. Do not call any more tools. Reply now, in text: what is delivered, what is not, and why. The user can send a message to continue.`;
     return decision;
   }
 
@@ -547,7 +651,19 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
         continueCount = 0; stuckCount = 0; lastRemaining = Number.MAX_SAFE_INTEGER;
         buildVerifyNudges = 0; stubNudgeDone = false;
         turnStartedAt = Date.now() - 1000;
-        plateau = new PlateauTracker(directory); plateauStopped = false; seenSteps.clear();
+        plateau = new PlateauTracker(directory); plateauStopped = false; stopDenials = 0; stopReason = ""; seenSteps.clear();
+      }
+      if (!text.startsWith(NUDGE_PREFIX)) {
+        const st = loadWs(input.sessionID);
+        const now = scanTree(directory);
+        if (!st || !st.sent) {
+          if (layoutBlock) output.parts.push({ type: "text", text: layoutBlock, synthetic: true, sessionID: input.sessionID, messageID: input.messageID } as any);
+        } else {
+          const ignore = new Set([...st.touched, ...agentTouched]);
+          const report = treeChanges(new Map(Object.entries(st.tree)), now, ignore);
+          if (report) output.parts.push({ type: "text", text: report, synthetic: true, sessionID: input.sessionID, messageID: input.messageID } as any);
+        }
+        saveWs(input.sessionID, { sent: true, tree: Object.fromEntries(now), touched: [] });
       }
       // Open todos travel with the turn (user message or nudge), never in the
       // system prompt, so the cached prefix stays stable across todo updates.
@@ -559,10 +675,23 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
       if (activeSession && input.sessionID !== activeSession) return;
       if (["read", "glob", "grep", "bash", "write", "edit", "multiedit", "apply_patch"].includes(input.tool)) workspaceActive = true;
       plateau.observe({ tool: input.tool, args: input.args, output: output?.output, metadata: output?.metadata });
+      for (const p of editedPaths({ tool: input.tool, args: input.args, output: output?.output, metadata: output?.metadata })) {
+        const rel = relative(resolve(directory), resolve(directory, p)).replace(/\\/g, "/");
+        agentTouched.add(rel);
+        if (input.sessionID) touchWs(input.sessionID, rel);
+      }
       if (process.env.LOCALCODE_PLUGIN_DEBUG) emit(`[localcode debug] progress: ${plateau.mem.changedPaths.size} delivered files, ${plateau.mem.completedTodos} completed todos`);
     },
 
     "tool.execute.before": async (input, output) => {
+      if (plateauStopped && stopReason && (!activeSession || input.sessionID === activeSession)) {
+        stopDenials += 1;
+        if (stopDenials > PLATEAU_STOP_DENIALS) {
+          plog(`model kept calling tools after the stop (${stopDenials} refused); aborting the session as a last resort`);
+          client.session.abort({ path: { id: input.sessionID } }).catch((e: any) => plog(`abort failed: ${e?.message ?? e}`));
+        }
+        throw new Error(stopReason);
+      }
       if (["read", "glob", "grep", "bash", "write", "edit", "multiedit", "apply_patch"].includes(input.tool)) workspaceActive = true;
       if (["read", "write", "edit", "multiedit"].includes(input.tool)) {
         for (const name of ["filePath", "file_path", "path"]) {
@@ -631,6 +760,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
           const next = open.find((t) => t.status === "in_progress") ?? open[0];
           log(`${open.length} todo(s) still open — continuing with: ${next.content}`);
           plateau.freshInstruction();
+          try { void client.tui?.showToast?.({ body: { title: "Continuing", message: `${open.length} todo(s) still open — next: ${next.content.slice(0, 60)}`, variant: "info", duration: 6000 } })?.catch?.(() => {}); } catch {}
           await nudge(sessionID, `${NUDGE_PREFIX} You still have ${open.length} unfinished todo(s). The task is NOT complete — do not stop. Continue now with: ${next.content}. Mark a todo completed via todowrite only when it is genuinely done, and keep going until every item is completed.`);
           return;
         }
@@ -645,6 +775,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
           stubNudgeDone = true;
           log(`placeholders found in ${stubs.length} line(s) — sending back`);
           plateau.freshInstruction();
+          try { void client.tui?.showToast?.({ body: { title: "Continuing", message: `${stubs.length} placeholder line(s) still to implement`, variant: "info", duration: 6000 } })?.catch?.(() => {}); } catch {}
           await nudge(sessionID, `${NUDGE_PREFIX} your changes still contain placeholders — the user asked for complete, working features, not stubs:\n${stubs.join("\n")}\nImplement each one for real (reopen it as a todo if needed), or tell the user explicitly which requirement you cannot meet and why.`);
           return;
         }
@@ -675,5 +806,5 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
 // if one is not a function ("Plugin export is not a function") — which silently
 // disabled this whole plugin once test helpers were exported. Expose the helpers
 // as properties on the plugin function instead; tests read them from `default`.
-Object.assign(LocalcodePlugin, { PLATEAU_MIN_ROUND, PLATEAU_NUDGE_AFTER, PLATEAU_STOP_AFTER, PLATEAU_RECENT_PASS, PLATEAU_PASS_GRACE, newProgressMemory, projectCheck, checkDirectory, CHECK_CMD, isCheckCommand, filteredCheck, isTempPath, editedPaths, failureSignatures, checkPassed, progressOf, referenceOnlyTypecheck, RepeatedCheckTracker, PlateauTracker, plateauNudgeText, PLATEAU_PASS_TEXT });
+Object.assign(LocalcodePlugin, { PLATEAU_MIN_ROUND, PLATEAU_NUDGE_AFTER, PLATEAU_STOP_AFTER, PLATEAU_RECENT_PASS, PLATEAU_PASS_GRACE, PLATEAU_STOP_DENIALS, callSignature, newProgressMemory, projectCheck, checkDirectory, CHECK_CMD, isCheckCommand, filteredCheck, isTempPath, editedPaths, failureSignatures, checkPassed, progressOf, referenceOnlyTypecheck, RepeatedCheckTracker, PlateauTracker, plateauNudgeText, PLATEAU_PASS_TEXT });
 export default LocalcodePlugin;
