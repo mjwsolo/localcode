@@ -116,10 +116,17 @@ def budget(n_ctx: int, reserve: int, samples: list[Sample], prior_pp_tps: float 
     results); the budget never exceeds n_ctx - reserve and never drops below
     n_ctx / FLOOR_DIV."""
     n_ctx = max(1, int(n_ctx))
-    floor = max(1, n_ctx // FLOOR_DIV)
-    cap = max(floor, n_ctx - max(0, int(reserve)))
     step = max(1, n_ctx // GRID)
-    info: dict = {"n_ctx": n_ctx, "floor": floor, "cap": cap, "samples": 0, "basis": "cap"}
+    cap = max(1, n_ctx - max(0, int(reserve)))
+    # The floor is the larger of a quarter of the context and twice the fixed
+    # prefix (system prompt, tool schemas, first message). Below the prefix a
+    # compaction cannot bring the prompt under the budget, so the runtime would
+    # compact on every step; measured live at 16k ctx before this rule existed.
+    prefix = prefix_tokens(samples)
+    floor = max(1, n_ctx // FLOOR_DIV, 2 * prefix if prefix else 0)
+    if floor > cap:
+        floor = cap
+    info: dict = {"n_ctx": n_ctx, "floor": floor, "cap": cap, "prefix": prefix, "samples": 0, "basis": "cap"}
 
     measured = [s for s in samples if s.pp_tps is not None and s.pp_n >= PP_MIN_CHUNK]
     if not measured:
@@ -155,6 +162,14 @@ def budget(n_ctx: int, reserve: int, samples: list[Sample], prior_pp_tps: float 
         best = c
     info["basis"] = "measured"
     return _snap(best, step, floor, cap), info
+
+
+def prefix_tokens(samples: list[Sample]) -> int:
+    """Size of the fixed prompt prefix: the cold prefill of a session's first
+    request reads the whole prompt, so the smallest large prefill seen is the
+    best estimate. 0 until a cold request has been observed."""
+    cold = [s.pp_n for s in samples if s.pp_n >= PP_MIN_CHUNK and s.pp_tps is not None]
+    return min(cold) if cold else 0
 
 
 def _snap(c: int, step: int, floor: int, cap: int) -> int:
