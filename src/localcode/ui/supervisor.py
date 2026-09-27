@@ -92,6 +92,16 @@ class Supervisor:
         self.ram_gb = _system_ram_gb()
         self.bandwidth = _bandwidth()
         self.log = open(HERE / "server.log", "ab", buffering=0)  # noqa: SIM115 (lives with the server)
+        # Context budget (ui/context_budget.py): the per-slot context the server
+        # really loaded, and how much of it this machine can use at speed.
+        self.ctx_total = ctx
+        self.slots = 1
+        self.pp_prior: float | None = None     # prefill tokens/s from the warm-up replay
+        self._timing = None                    # context_budget.TimingTable for the loaded model
+        self._log_offset = 0                   # server.log bytes already fed to it
+        self._budget: int | None = None
+        self._budget_info: dict = {}
+        self._budget_lock = threading.Lock()
         self._warm_stop = threading.Event()
         self._warm_replay = None  # warmup.Replay while the prefix is being pre-read
 
@@ -189,8 +199,16 @@ class Supervisor:
         from localcode.ui.server_cmd import server_command
         cmd = server_command(str(gguf), self.port, alias)
         cmd[0] = self.server_bin
-        self.ctx = int(cmd[cmd.index("--ctx-size") + 1])
+        self.ctx = self.ctx_total = int(cmd[cmd.index("--ctx-size") + 1])
+        self.slots = int(cmd[cmd.index("--parallel") + 1]) if "--parallel" in cmd else 1
         self.log.write(f"\n=== {time.ctime()} {' '.join(cmd)}\n".encode())
+        with self._budget_lock:
+            from localcode.ui.context_budget import TimingTable
+            self._timing = TimingTable()
+            self._log_offset = self.log.tell()
+            self.pp_prior = None
+            self._budget = None
+            self._budget_info = {}
         self.proc = subprocess.Popen(cmd, stdout=self.log, stderr=subprocess.STDOUT,
                                      start_new_session=True, pass_fds=(self.lease_fd,) if getattr(self, "lease_fd", None) is not None else ())
         log(f"supervisor: started llama-server pid {self.proc.pid} for {alias}")
@@ -199,6 +217,7 @@ class Supervisor:
                 return False
             if self.healthy():
                 self.current = alias
+                self._probe_props()
                 self._start_warmup(alias)
                 return True
             time.sleep(1)
@@ -226,6 +245,12 @@ class Supervisor:
                     tm = rp.run(toks)
                     log(f"warmup: replayed {len(toks)} tokens for {alias} in {time.time() - t0:.1f}s "
                         f"(server prompt_ms={tm.get('prompt_ms')}, cache_n={tm.get('cache_n')})")
+                    try:
+                        ms = float(tm.get("prompt_ms") or 0)
+                        if ms > 0 and len(toks) >= 512:
+                            self.pp_prior = len(toks) / (ms / 1000.0)
+                    except (TypeError, ValueError):
+                        pass
                 except Exception as e:  # noqa: BLE001
                     if rp.cancelled or stop.is_set():
                         log(f"warmup: replay cancelled after {time.time() - t0:.1f}s (user turn started)")
@@ -278,6 +303,61 @@ class Supervisor:
             except subprocess.TimeoutExpired:
                 self.proc.kill()
         self.proc = None
+
+    def _probe_props(self) -> None:
+        """The context the server really gives each request. With --parallel N the
+        flag's --ctx-size is split N ways; /props reports the per-slot figure."""
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/props", timeout=3) as r:
+                props = json.loads(r.read().decode())
+            n_ctx = int((props.get("default_generation_settings") or {}).get("n_ctx") or 0)
+            slots = int(props.get("total_slots") or 0)
+        except Exception:  # noqa: BLE001
+            n_ctx, slots = 0, 0
+        if slots > 0:
+            self.slots = slots
+        if n_ctx > 0:
+            self.ctx = n_ctx
+        elif self.slots > 1:
+            self.ctx = max(1, self.ctx_total // self.slots)
+        log(f"supervisor: context per slot {self.ctx} (total {self.ctx_total}, slots {self.slots})")
+
+    def context_info(self) -> dict:
+        """ctx (per slot), the speed-derived budget, and the measurements behind it.
+        Reads whatever llama-server has appended to server.log since the last call."""
+        from localcode.ui import context_budget as cb
+        with self._budget_lock:
+            table = self._timing
+            if table is not None:
+                try:
+                    with open(HERE / "server.log", "rb") as f:
+                        f.seek(self._log_offset)
+                        chunk = f.read()
+                    self._log_offset += len(chunk)
+                    if chunk:
+                        table.feed(chunk.decode("utf-8", "replace"))
+                except OSError:
+                    pass
+            samples = table.samples if table is not None else []
+            reserve = cb.step_reserve(self.ctx, min(8192, max(1, self.ctx // 4)), 50 * 1024)
+            # LOCALCODE_CONTEXT_BUDGET=off publishes no budget (the runtime then
+            # compacts at ctx - output as before); LOCALCODE_REREAD_MAX_S tunes
+            # the one latency constant. Both are escape hatches, not settings.
+            if os.environ.get("LOCALCODE_CONTEXT_BUDGET", "").strip().lower() in {"0", "off", "false", "no"}:
+                return {"ctx": self.ctx, "ctx_total": self.ctx_total, "slots": self.slots}
+            try:
+                reread_s = float(os.environ.get("LOCALCODE_REREAD_MAX_S") or cb.REREAD_MAX_S)
+            except ValueError:
+                reread_s = cb.REREAD_MAX_S
+            new, info = cb.budget(self.ctx, reserve, samples, self.pp_prior, reread_max_s=reread_s)
+            step = max(1, self.ctx // cb.GRID)
+            if self._budget is None or abs(new - self._budget) >= step:
+                if self._budget is not None:
+                    log(f"supervisor: context budget {self._budget} -> {new} ({info.get('basis')}, {info.get('limit', 'no limit hit')})")
+                self._budget = new
+            self._budget_info = info
+            return {"ctx": self.ctx, "ctx_total": self.ctx_total, "slots": self.slots,
+                    "budget": self._budget, "budget_info": info}
 
     def healthy(self) -> bool:
         try:
@@ -684,9 +764,9 @@ def make_handler(sup: Supervisor):
                 key = parse_qs(u.query).get("group", [""])[0]
                 return self._json(sup.quants(key))
             if u.path == "/status":
-                return self._json(dict(sup.state, current=sup.current, port=sup.port, ctx=sup.ctx,
+                return self._json(dict(sup.state, current=sup.current, port=sup.port,
                                        group=sup.active.get("group"), filename=sup.active.get("filename"),
-                                       **sup.vision_info()))
+                                       **sup.context_info(), **sup.vision_info()))
             if u.path == "/models_dir":
                 return self._json(sup.models_dir_info())
             if u.path == "/voice/status":

@@ -70,7 +70,13 @@ def _context_size(models_dir: Path, ctrl: int) -> int:
         from localcode.ui.server_cmd import context_size
         return context_size(str(models_dir / "x.gguf"))
     except Exception:  # noqa: BLE001
-        return 32768
+        # No server and no runtime gateway to ask: the same policy knob the
+        # gateway starts from, never a literal token count.
+        try:
+            from localcode.config import load_config
+            return max(2048, int(load_config().max_context_chars) // 4)
+        except Exception:  # noqa: BLE001
+            return 2048
 
 
 def write_config(path: Path, *, port: int, ctx: int, alias: str | None) -> None:
@@ -97,6 +103,10 @@ def write_config(path: Path, *, port: int, ctx: int, alias: str | None) -> None:
             }
         },
         "enabled_providers": ["localcode"],
+        # The supervisor's /status budget already includes the headroom one step
+        # can add (ui/context_budget.step_reserve), and the provider sets it as
+        # the model's input limit; a second reserve here would double-count.
+        "compaction": {"reserved": 0},
         "tools": {"task": False},
         "agent": {"plan": {"disable": True}},
         "lsp": True,
@@ -116,9 +126,11 @@ def attach(ctrl: int, status: dict, ui_bin: Path, project_dir: Path, alias: str 
     """Open another UI window on the model server a running session owns."""
     port = int(status["port"])
     try:
-        ctx = int(status.get("ctx") or 0) or 32768
+        ctx = int(status.get("ctx") or 0)
     except (TypeError, ValueError):
-        ctx = 32768
+        ctx = 0
+    if not ctx:
+        ctx = _context_size(_models_dir(), ctrl)
     current = status.get("current") or None
     if alias and current and alias != current:
         print(f"localcode: attaching to the running session's model {current}; use /models there to switch.",
