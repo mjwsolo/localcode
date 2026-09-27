@@ -340,7 +340,16 @@ class Supervisor:
                     pass
             samples = table.samples if table is not None else []
             reserve = cb.step_reserve(self.ctx, min(8192, max(1, self.ctx // 4)), 50 * 1024)
-            new, info = cb.budget(self.ctx, reserve, samples, self.pp_prior)
+            # LOCALCODE_CONTEXT_BUDGET=off publishes no budget (the runtime then
+            # compacts at ctx - output as before); LOCALCODE_REREAD_MAX_S tunes
+            # the one latency constant. Both are escape hatches, not settings.
+            if os.environ.get("LOCALCODE_CONTEXT_BUDGET", "").strip().lower() in {"0", "off", "false", "no"}:
+                return {"ctx": self.ctx, "ctx_total": self.ctx_total, "slots": self.slots}
+            try:
+                reread_s = float(os.environ.get("LOCALCODE_REREAD_MAX_S") or cb.REREAD_MAX_S)
+            except ValueError:
+                reread_s = cb.REREAD_MAX_S
+            new, info = cb.budget(self.ctx, reserve, samples, self.pp_prior, reread_max_s=reread_s)
             step = max(1, self.ctx // cb.GRID)
             if self._budget is None or abs(new - self._budget) >= step:
                 if self._budget is not None:
