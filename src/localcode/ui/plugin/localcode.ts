@@ -33,7 +33,7 @@
  */
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import type { Plugin } from "@opencode-ai/plugin";
@@ -476,9 +476,16 @@ function workspaceLayout(directory: string): string {
 
 const LocalcodePlugin: Plugin = async ({ client, directory }) => {
   const layoutBlock = workspaceLayout(directory);
-  let lastTree = scanTree(directory);
+  // Per-session workspace state lives on disk, not in memory: a headless `run`
+  // is one process per turn, and a user may close and reopen the UI mid-session.
+  // Without this the snapshot was re-sent on every turn and no change was ever reported.
+  const wsStateDir = join(directory, ".localcode-agent");
+  const wsStatePath = (sessionID: string) => join(wsStateDir, `ws-${sessionID.replace(/[^A-Za-z0-9_-]/g, "_")}.json`);
+  type WsState = { sent: boolean; tree: Record<string, number>; touched: string[] };
+  const loadWs = (sessionID: string): WsState | undefined => { try { return JSON.parse(readFileSync(wsStatePath(sessionID), "utf8")); } catch { return undefined; } };
+  const saveWs = (sessionID: string, st: WsState) => { try { mkdirSync(wsStateDir, { recursive: true }); writeFileSync(wsStatePath(sessionID), JSON.stringify(st)); } catch {} };
+  const touchWs = (sessionID: string, rel: string) => { const st = loadWs(sessionID); if (!st) return; if (!st.touched.includes(rel)) { st.touched.push(rel); saveWs(sessionID, st); } };
   const agentTouched = new Set<string>();
-  const snapshotSent = new Set<string>();   // sessions that already received the snapshot
   let todos: Todo[] = [];
   let workspaceActive = false;
   let continueCount = 0;
@@ -619,15 +626,16 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
         plateau = new PlateauTracker(directory); plateauStopped = false; seenSteps.clear();
       }
       if (!text.startsWith(NUDGE_PREFIX)) {
-        if (!snapshotSent.has(input.sessionID)) {
-          snapshotSent.add(input.sessionID);
+        const st = loadWs(input.sessionID);
+        const now = scanTree(directory);
+        if (!st || !st.sent) {
           if (layoutBlock) output.parts.push({ type: "text", text: layoutBlock, synthetic: true, sessionID: input.sessionID, messageID: input.messageID } as any);
         } else {
-          const now = scanTree(directory);
-          const report = treeChanges(lastTree, now, agentTouched);
-          lastTree = now;
+          const ignore = new Set([...st.touched, ...agentTouched]);
+          const report = treeChanges(new Map(Object.entries(st.tree)), now, ignore);
           if (report) output.parts.push({ type: "text", text: report, synthetic: true, sessionID: input.sessionID, messageID: input.messageID } as any);
         }
+        saveWs(input.sessionID, { sent: true, tree: Object.fromEntries(now), touched: [] });
       }
       // Open todos travel with the turn (user message or nudge), never in the
       // system prompt, so the cached prefix stays stable across todo updates.
@@ -640,7 +648,9 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
       if (["read", "glob", "grep", "bash", "write", "edit", "multiedit", "apply_patch"].includes(input.tool)) workspaceActive = true;
       plateau.observe({ tool: input.tool, args: input.args, output: output?.output, metadata: output?.metadata });
       for (const p of editedPaths({ tool: input.tool, args: input.args, output: output?.output, metadata: output?.metadata })) {
-        agentTouched.add(relative(resolve(directory), resolve(directory, p)).replace(/\\/g, "/"));
+        const rel = relative(resolve(directory), resolve(directory, p)).replace(/\\/g, "/");
+        agentTouched.add(rel);
+        if (input.sessionID) touchWs(input.sessionID, rel);
       }
       if (process.env.LOCALCODE_PLUGIN_DEBUG) emit(`[localcode debug] progress: ${plateau.mem.changedPaths.size} delivered files, ${plateau.mem.completedTodos} completed todos`);
     },

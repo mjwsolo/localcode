@@ -37,3 +37,27 @@ test("snapshot on the first turn, change report later, system prompt untouched",
     expect(t3.parts.length).toBe(1);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+
+// A second plugin instance (new process, same session) must not re-send the snapshot,
+// must see the user's external change, and must not report the first instance's own edit.
+test("snapshot state survives a process restart", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "layout2-"));
+  try {
+    mkdirSync(join(dir, "app")); writeFileSync(join(dir, "app", "calc.py"), "");
+    const h1 = await (Plugin as any)({ directory: dir, client: {} });
+    const t1 = { parts: [{ type: "text", text: "hello" }] as any[] };
+    await h1["chat.message"]({ sessionID: "s9", agent: "build", messageID: "m1" }, t1);
+    expect(t1.parts.some((p) => String(p.text).startsWith("WORKSPACE SNAPSHOT"))).toBe(true);
+    await h1["tool.execute.after"]({ tool: "edit", args: { filePath: join(dir, "app", "calc.py") }, sessionID: "s9" }, { output: "ok", metadata: {} });
+    writeFileSync(join(dir, "app", "calc.py"), "edited by agent", { flush: true });
+    writeFileSync(join(dir, "USER.md"), "by user");
+    const h2 = await (Plugin as any)({ directory: dir, client: {} });   // new process
+    const t2 = { parts: [{ type: "text", text: "next" }] as any[] };
+    await h2["chat.message"]({ sessionID: "s9", agent: "build", messageID: "m2" }, t2);
+    expect(t2.parts.some((p) => String(p.text).startsWith("WORKSPACE SNAPSHOT"))).toBe(false);
+    const rep = t2.parts.find((p) => String(p.text).startsWith("WORKSPACE CHANGED"));
+    expect(rep).toBeDefined();
+    expect(rep.text).toContain("added: USER.md"); expect(rep.text).not.toContain("calc.py");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
