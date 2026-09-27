@@ -3,6 +3,27 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.4.9 — unreleased
+
+### Changed
+
+- **Sessions compact at the point where this Mac stays fast, not at the edge of the
+  context window.** The server is loaded with the largest context that fits in
+  memory, and the runtime used to fill almost all of it before compacting; on the
+  same machine a model's decode speed halves and its prompt processing drops four to
+  six times between a 16k and a 64k prompt, so late in a long session every step
+  crawled and any cache miss took minutes. The supervisor now measures prompt-
+  processing and decode speed from the server's own timings as the session runs
+  and sets the compaction point where a full re-read still finishes within a minute
+  and decode keeps at least half its short-prompt speed. Nothing is a fixed token
+  count: the budget is relative to the context the server actually loaded, per
+  model, per machine, and it is recomputed as measurements arrive.
+- **The runtime's idea of the context window is the server's.** The supervisor reads
+  the per-slot context from the server after it loads (with parallel slots the
+  window is split between them), and the launcher no longer falls back to a fixed
+  32768. This is the class of failure behind "request exceeds the available context
+  size" in earlier 0.4 builds.
+
 ## 0.4.8 — 2026-09-27
 
 ### Fixed
