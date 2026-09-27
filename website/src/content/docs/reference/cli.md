@@ -4,7 +4,7 @@ description: Every flag and subcommand localcode accepts.
 ---
 
 ```text
-localcode [-c DIR] [--model TAG] [--classic]
+localcode [-c DIR] [--model TAG]
 localcode --version
 localcode run --goal "..." [options]
 localcode unstick
@@ -18,16 +18,13 @@ Run `localcode` by itself to open the interface. Setup, the model picker, and se
 | --- | --- |
 | `-c`, `--cwd DIR` | Project directory. The default is the current directory |
 | `--model TAG` | Start with an already-downloaded model alias instead of the picker |
-| `--classic` | Open the previous 0.3 interface. `LOCALCODE_FRONTEND=classic` does the same |
 | `--version` | Print the version and exit |
-
-`--profile`, `--resume`, and `--preview-screen` belong to the classic interface and imply `--classic`.
 
 A second `localcode` opens another interface session attached to the running model server. The windows share that model; closing the second window leaves the first session running. Use `/models` to switch the shared model.
 
 ## `localcode run`
 
-Run one coding goal without the interface, then exit. Use this for scripts, CI, and evaluation. This is the headless agent from 0.3 and is unchanged. Approvals always use full-auto because no person is available to answer prompts; writes outside the project directory are rejected.
+Run one coding goal without the interface, then exit. Use this for scripts, CI, and evaluation. Approvals always use full-auto because no person is available to answer prompts; writes outside the project directory are rejected.
 
 | Flag | Description |
 | --- | --- |
@@ -52,7 +49,6 @@ Recovers from a stuck `llama-server` without a reboot. It runs `memory_pressure`
 
 | Variable | Effect |
 | --- | --- |
-| `LOCALCODE_FRONTEND` | `ui` (default) or `classic` |
 | `LOCALCODE_MODEL_DIR` | Where GGUFs live. Default `~/.local/share/localcode/models` |
 | `LOCALCODE_MODELS_DIR` | Older name for the models directory override; `LOCALCODE_MODEL_DIR` takes precedence |
 | `LOCALCODE_AGENT_RUN_DIR` | Supervisor logs and the voice runtime. Default `~/.local/share/localcode-agent/run` |
@@ -64,4 +60,4 @@ Recovers from a stuck `llama-server` without a reboot. It runs `memory_pressure`
 | `LOCALCODE_UI_BIN` | Developer override: path to the interface binary |
 | `LOCALCODE_LLAMA_SERVER` | Developer override: path to a `llama-server` binary |
 
-The full list, with the classic-only variables, is in [Configuration](/localcode/reference/configuration).
+The full list is in [Configuration](/localcode/reference/configuration).

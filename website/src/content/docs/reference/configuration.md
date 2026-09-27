@@ -1,6 +1,6 @@
 ---
 title: Configuration
-description: Environment variables, the run directory, localcode.json, LOCALCODE.md, and the classic interface.
+description: Environment variables, the run directory, localcode.json, and LOCALCODE.md.
 ---
 
 There is nothing to configure before the first run. Most day-to-day settings live in the interface: `/models`, `/settings`, `/themes`, `/permissions`, `/mcps`. This page covers what lives outside it.
@@ -9,7 +9,6 @@ There is nothing to configure before the first run. Most day-to-day settings liv
 
 | Variable | Effect |
 | --- | --- |
-| `LOCALCODE_FRONTEND` | `ui` (default) or `classic` for the previous 0.3 interface |
 | `LOCALCODE_MODEL_DIR` | Where GGUFs live. Default `~/.local/share/localcode/models`. The picker's **Models folder** entry changes the same setting |
 | `LOCALCODE_MODELS_DIR` | Older override name; `LOCALCODE_MODEL_DIR` takes precedence |
 | `LOCALCODE_AGENT_RUN_DIR` | Supervisor logs, the per-session runtime config, and the voice runtime. Default `~/.local/share/localcode-agent/run` |
@@ -60,7 +59,3 @@ See [MCP](/localcode/guides/mcp) for the server shapes. The model provider secti
 ## Skills
 
 Skill folders are read from `<project>/.localcode-agent/skills/` and `~/.config/localcode-agent/skills/`. See [Skills](/localcode/guides/skills-and-hooks).
-
-## The classic interface
-
-`localcode --classic` (or `LOCALCODE_FRONTEND=classic`) opens the 0.3 interface. It keeps its own configuration in `~/.localcode/config.toml` and `<project>/.localcode/`, and its own variables such as `LOCALCODE_AUTONOMY` and `LOCALCODE_HOME`. The headless `localcode run` uses the same files. Those are documented in the 0.3 docs, reachable from the version switcher in the header.

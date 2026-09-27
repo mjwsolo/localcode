@@ -28,11 +28,11 @@ localcode
 
 Choose a project with a runnable test suite. localcode uses your repo's own checks as proof.
 
-`localcode` opens the home screen. The previous 0.3 interface is still there: run `localcode --classic`, and read its docs through the version switcher in the header.
+`localcode` opens the prompt.
 
 ## Choose a model
 
-With no model loaded, the model picker opens on top of the home screen. The first level lists every model in the catalog with its maker, how many of its quants are already on disk, and a star on the model recommended for your Mac's unified memory. Press Enter on a model to see every quant its Hugging Face repo ships, with the size in GB and whether it fits in memory. Enter on a row marked **Download** starts the download and shows a live percentage. Nothing downloads until you choose it and see its size.
+With no model loaded, the model picker opens when you send your first message, or when you type `/models`. The first level lists every model in the catalog with its maker, how many of its quants are already on disk, and a star on the model recommended for your Mac's unified memory. Press Enter on a model to see every quant its Hugging Face repo ships, with the size in GB and whether it fits in memory. Enter on a row marked **Download** starts the download and shows a live percentage. Nothing downloads until you choose it and see its size.
 
 ![The localcode model picker: seven models and the quant options for one model](/localcode/demo/step-2-choose-model.gif?v=3f833e97)
 

@@ -30,18 +30,17 @@ description: The pieces localcode is made of, from the launcher down to the infe
 
 One model server runs per user. Opening `localcode` in another terminal starts a separate interface session attached to that server. Close either window without ending the other session; use `/models` to switch the shared model.
 
-The previous interface (0.3) is still in the package as `localcode --classic`. It runs its own Python agent loop against the same `llama-server`. `localcode run`, the headless mode, uses that loop too.
-
 ## The discipline plugin
 
 Small local models finish a task when the loop makes them. The plugin adds localcode's completion discipline to the runtime:
 
-- **Plan first** - the model lays out the steps in the todo list before editing.
+- **Orient from a snapshot** - the first message of a session carries a snapshot of the project's layout, and later messages report files that changed outside the session, so the model does not spend steps listing directories.
+- **Plan first** - for work of three or more steps the model lays out the steps in the todo list before editing, and marks each one done as its last edit lands.
 - **Keep going** - a turn does not end while todo items are still open.
 - **Prove it** - after edits, the plugin runs the project's own typecheck and tests and feeds failures back to the model.
 - **Audit stubs** - placeholder code and `TODO` bodies are flagged before the task counts as done.
 - **No foreground servers** - a command that would block the session, such as a dev server, is refused with a hint to run it in the background.
-- **Stop cleanly** - when no progress is being made across rounds, the plugin asks the model to wrap up and then stops, instead of looping.
+- **Stop cleanly** - when the model only repeats itself across rounds, the plugin asks it to wrap up; if that does not help it refuses further tool calls with the reason, so the model reports what it has and the turn ends. A task that keeps covering new ground is never stopped.
 
 ## Built specifically for small models
 

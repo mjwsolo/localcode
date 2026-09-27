@@ -101,3 +101,41 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           skip-existing: true
+
+  # The GitHub release is created from the same tag, with the notes taken from
+  # the CHANGELOG section for that version (scripts/release_notes.py), and the
+  # wheel and sdist attached. Only on a tag push: creating the release fires a
+  # `release: published` event that re-runs this workflow, and that run must not
+  # try to create it again.
+  github-release:
+    name: GitHub release
+    needs: [publish]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Release notes from CHANGELOG.md
+        run: |
+          python3 scripts/release_notes.py "${GITHUB_REF_NAME#v}" --check > notes.md
+          cat notes.md
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          pre=""
+          if [[ "${tag#v}" =~ [a-zA-Z] ]]; then pre="--prerelease"; fi
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --title "$tag" --notes-file notes.md $pre
+            gh release upload "$tag" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$tag" dist/* --repo "$GITHUB_REPOSITORY" --title "$tag" --notes-file notes.md $pre --verify-tag
+          fi
