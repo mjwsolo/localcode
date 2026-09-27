@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import LocalcodePluginDefault from "../../src/localcode/ui/plugin/localcode";
 type ToolEvent = { tool: string; args: any; output?: string; metadata?: any };
-const { PLATEAU_MIN_ROUND, PLATEAU_NUDGE_AFTER, PLATEAU_STOP_AFTER, PLATEAU_PASS_GRACE, PlateauTracker, checkPassed, editedPaths, failureSignatures, isCheckCommand, isTempPath, newProgressMemory, plateauNudgeText, progressOf } = LocalcodePluginDefault as any;
+const { PLATEAU_MIN_ROUND, PLATEAU_NUDGE_AFTER, PLATEAU_STOP_AFTER, PLATEAU_PASS_GRACE, PLATEAU_STOP_DENIALS, PlateauTracker, checkPassed, editedPaths, failureSignatures, isCheckCommand, isTempPath, newProgressMemory, plateauNudgeText, progressOf } = LocalcodePluginDefault as any;
 
 const edit = (filePath: string): ToolEvent => ({ tool: "edit", args: { filePath, oldString: "a", newString: "b" } });
 const write = (filePath: string): ToolEvent => ({ tool: "write", args: { filePath, content: "x" } });
@@ -125,6 +125,12 @@ describe("progressOf", () => {
 });
 
 /** Run `n` no-progress tool rounds (reads, or re-edits of a known path), returning decisions. */
+/** A tracker that has already seen the calls these tests repeat (grep, read, the check): the one novel round is spent. */
+function primed(path = "/p/a.ts") {
+  const t = new PlateauTracker();
+  t.observe(grep()); t.observe(read(path)); t.observe(check("ok", 0)); t.endRound();
+  return t;
+}
 function stall(t: PlateauTracker, n: number, path = "/p/a.ts") {
   const out: string[] = [];
   for (let i = 0; i < n; i++) {
@@ -158,13 +164,13 @@ describe("PlateauTracker thresholds", () => {
     expect(t.round).toBe(1 + PLATEAU_NUDGE_AFTER);
     expect(t.round).toBeGreaterThanOrEqual(PLATEAU_MIN_ROUND);
   });
-  test("a fresh tracker that stalls from round 1 still waits for the 6th no-progress round (>= round 4)", () => {
-    const t = new PlateauTracker();
+  test("a tracker that only repeats itself still waits for the 6th no-progress round (>= round 4)", () => {
+    const t = primed();
     const d = stall(t, PLATEAU_NUDGE_AFTER);
     expect(d.indexOf("nudge")).toBe(PLATEAU_NUDGE_AFTER - 1);
   });
   test("after the nudge, 8 further no-progress rounds stop; progress in between resets", () => {
-    const t = new PlateauTracker();
+    const t = primed();
     stall(t, PLATEAU_NUDGE_AFTER);
     expect(t.nudged).toBe(true);
     stall(t, 3);
@@ -178,7 +184,7 @@ describe("PlateauTracker thresholds", () => {
     t.observe(edit("/p/a.ts")); expect(t.endRound()).toBe("none");
   });
   test("no second nudge: after the first nudge the only outcome is stop", () => {
-    const t = new PlateauTracker();
+    const t = primed();
     stall(t, PLATEAU_NUDGE_AFTER);
     const d = stall(t, PLATEAU_STOP_AFTER);
     expect(d.filter((x) => x === "nudge")).toHaveLength(0);
@@ -186,13 +192,14 @@ describe("PlateauTracker thresholds", () => {
   });
   test("a check that passed within the last 2 rounds converts the stop into a finish-now nudge and 3 more rounds", () => {
     const t = new PlateauTracker();
+    t.observe(grep()); t.observe(read("/p/a.ts")); t.endRound();   // primed, but no check yet
     stall(t, PLATEAU_NUDGE_AFTER);
     stall(t, PLATEAU_STOP_AFTER - 2);
     // round with a passing check: first pass this session -> progress, resets the counter
     t.observe(check("ok", 0)); expect(t.endRound()).toBe("none");
     expect(t.noProgress).toBe(0);
     // now stall again: 8 rounds, but the pass is old by then -> stop
-    const t2 = new PlateauTracker();
+    const t2 = primed();
     stall(t2, PLATEAU_NUDGE_AFTER);
     stall(t2, PLATEAU_STOP_AFTER - 1);
     // a repeat pass (not progress) in the 8th round: passed within 2 rounds -> pass-nudge instead of stop
@@ -205,7 +212,7 @@ describe("PlateauTracker thresholds", () => {
     expect(d.at(-1)).toBe("stop");
   });
   test("the pass-nudge is granted only once", () => {
-    const t = new PlateauTracker();
+    const t = primed();
     stall(t, PLATEAU_NUDGE_AFTER);
     stall(t, PLATEAU_STOP_AFTER - 1);
     t.mem.lastCheckPassed = true;
@@ -257,7 +264,8 @@ async function boot() {
   const userMessage = async (text: string) => hooks["chat.message"]({ sessionID: sid }, { message: {}, parts: [{ type: "text", text }] });
   const idle = async () => hooks.event({ event: { type: "session.idle", properties: { sessionID: sid } } });
   const setTodos = async (todos: any[]) => hooks.event({ event: { type: "todo.updated", properties: { todos } } });
-  return { dir, hooks, prompts, aborts, sid, toolRound, userMessage, idle, setTodos };
+  const before = async (ev: ToolEvent) => hooks["tool.execute.before"]({ tool: ev.tool, sessionID: sid, callID: `b${++n}` }, { args: ev.args });
+  return { dir, hooks, prompts, aborts, sid, toolRound, userMessage, idle, setTodos, before };
 }
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
@@ -299,7 +307,7 @@ describe("plugin wiring", () => {
     await h.idle();
     expect(h.prompts).toHaveLength(1);
   });
-  test("nudges once mid-loop after 6 stalled rounds, with open items; then aborts after 8 more and silences the todo gate", async () => {
+  test("nudges once mid-loop after 6 stalled rounds, with open items; then stops after 8 more by refusing tools, and silences the todo gate", async () => {
     const h = await boot();
     await h.userMessage("build me a thing");
     await h.setTodos([{ content: "Ship README", status: "pending" }, { content: "Done part", status: "completed" }]);
@@ -311,9 +319,16 @@ describe("plugin wiring", () => {
     expect(h.prompts[0]).toContain("- Ship README");
     expect(h.prompts[0]).not.toContain("Done part");
     for (let i = 0; i < PLATEAU_STOP_AFTER - 1; i++) await h.toolRound(edit("/p/app.ts"));
-    expect(h.aborts).toHaveLength(0);
+    await expect(h.before(read("/p/app.ts"))).resolves.toBeUndefined();
     await h.toolRound(edit("/p/app.ts"));
-    expect(h.aborts).toEqual([h.sid]);
+    // Stopped: the session is NOT aborted (that killed running tools and showed a bare
+    // "Interrupted"); the next tool calls are refused with the reason instead.
+    expect(h.aborts).toHaveLength(0);
+    for (let i = 0; i < PLATEAU_STOP_DENIALS; i++) await expect(h.before(read("/p/app.ts"))).rejects.toThrow("LocalCode stopped this task");
+    expect(h.aborts).toHaveLength(0);
+    await expect(h.before(read("/p/app.ts"))).rejects.toThrow("stopped");
+    await tick();
+    expect(h.aborts).toEqual([h.sid]);          // last resort after 3 ignored refusals
     // the todo gate would normally re-prompt here (one todo still open) - it must not
     await h.idle();
     await tick();
@@ -336,7 +351,8 @@ describe("plugin wiring", () => {
     const part = { id: "dup", type: "step-finish", sessionID: h.sid, messageID: "m", reason: "tool-calls" };
     await h.hooks.event({ event: { type: "message.part.updated", properties: { part } } });
     await h.hooks.event({ event: { type: "message.part.updated", properties: { part } } });
-    for (let i = 0; i < PLATEAU_NUDGE_AFTER - 2; i++) await h.toolRound(read("/p/a"));
+    await h.toolRound(read("/p/b"));                  // second novel read: still progress (nothing delivered)
+    for (let i = 0; i < PLATEAU_NUDGE_AFTER - 1; i++) await h.toolRound(read("/p/a"));
     await tick();
     expect(h.prompts).toHaveLength(0);
     await h.userMessage("SYSTEM: some nudge");       // not a genuine user message
@@ -348,6 +364,7 @@ describe("plugin wiring", () => {
     const h = await boot();
     await h.userMessage("go");
     await h.toolRound(check("ok", 0));                 // first pass: progress
+    await h.toolRound(read("/p/a"));                   // first sighting of the read: novel, progress
     for (let i = 0; i < PLATEAU_NUDGE_AFTER; i++) await h.toolRound(read("/p/a"));
     for (let i = 0; i < PLATEAU_STOP_AFTER - 1; i++) await h.toolRound(read("/p/a"));
     await h.toolRound(check("ok", 0));                 // repeat pass, no progress, 8th round
@@ -356,7 +373,53 @@ describe("plugin wiring", () => {
     expect(h.prompts).toHaveLength(2);
     expect(h.prompts[1]).toContain("Your check passed — finish now");
     for (let i = 0; i < PLATEAU_PASS_GRACE; i++) await h.toolRound(read("/p/a"));
-    expect(h.aborts).toEqual([h.sid]);
+    expect(h.aborts).toHaveLength(0);
+    await expect(h.before(read("/p/a"))).rejects.toThrow("LocalCode stopped this task");
+  });
+  test("a new user message after a stop lifts the refusal", async () => {
+    const h = await boot();
+    await h.userMessage("go");
+    await h.toolRound(edit("/p/a"));
+    for (let i = 0; i < PLATEAU_NUDGE_AFTER + PLATEAU_STOP_AFTER; i++) await h.toolRound(edit("/p/a"));
+    await expect(h.before(read("/p/a"))).rejects.toThrow("stopped");
+    await h.userMessage("ok try again");
+    await expect(h.before(read("/p/a"))).resolves.toBeUndefined();
+    expect(h.aborts).toHaveLength(0);
+  });
+});
+
+describe("exploration (nothing delivered yet)", () => {
+  test("rounds that cover new ground are progress; repeating the same calls is not", () => {
+    const t = new PlateauTracker();
+    for (let i = 0; i < 30; i++) { t.observe(read(`/p/f${i}.ts`)); expect(t.endRound()).toBe("none"); }
+    expect(t.noProgress).toBe(0);
+    for (let i = 0; i < 30; i++) { t.observe({ tool: "bash", args: { command: `curl -s https://x.test/${i}` } }); expect(t.endRound()).toBe("none"); }
+    expect(t.noProgress).toBe(0);
+    const d: string[] = [];
+    for (let i = 0; i < PLATEAU_NUDGE_AFTER; i++) { t.observe(read("/p/f0.ts")); d.push(t.endRound()); } // already seen
+    expect(d.at(-1)).toBe("nudge");
+  });
+  test("whitespace-only differences in a command are the same call", () => {
+    const t = new PlateauTracker();
+    t.observe({ tool: "bash", args: { command: "cat  a.txt" } }); t.endRound();
+    for (let i = 0; i < PLATEAU_NUDGE_AFTER; i++) { t.observe({ tool: "bash", args: { command: "cat a.txt " } }); t.endRound(); }
+    expect(t.noProgress === 0 && t.nudged).toBe(true);
+  });
+  test("once something is delivered, only deliverables count", () => {
+    const t = new PlateauTracker();
+    t.observe(edit("/p/a.ts")); expect(t.endRound()).toBe("none");
+    const d: string[] = [];
+    for (let i = 0; i < PLATEAU_NUDGE_AFTER; i++) { t.observe(read(`/p/new${i}.ts`)); d.push(t.endRound()); }
+    expect(d.at(-1)).toBe("nudge");
+  });
+  test("a research turn is never stopped while it keeps trying new things", async () => {
+    const h = await boot();
+    await h.userMessage("find what londoners earn from that article");
+    for (let i = 0; i < 40; i++) await h.toolRound({ tool: "bash", args: { command: `curl -sL https://example.test/${i}` }, output: "..." });
+    await tick();
+    expect(h.prompts).toHaveLength(0);
+    expect(h.aborts).toHaveLength(0);
+    await expect(h.before(read("/p/a"))).resolves.toBeUndefined();
   });
 });
 
