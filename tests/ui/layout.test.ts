@@ -4,27 +4,36 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Plugin from "../../src/localcode/ui/plugin/localcode";
 
-// The layout block is part of the cached prefix: identical on every request of a
-// session, two levels deep, capped, and blind to build/tool directories.
-test("workspace layout is constant per session, two levels, capped, and skips noise dirs", async () => {
+// The snapshot rides on the session's FIRST user turn (history, cached, labelled as a
+// snapshot); later turns get a change report; the system prompt carries neither.
+test("snapshot on the first turn, change report later, system prompt untouched", async () => {
   const dir = mkdtempSync(join(tmpdir(), "layout-"));
   try {
     mkdirSync(join(dir, "app")); writeFileSync(join(dir, "app", "calc.py"), "");
     mkdirSync(join(dir, "tests")); writeFileSync(join(dir, "tests", "test_calc.py"), "");
     mkdirSync(join(dir, "node_modules", "x"), { recursive: true }); writeFileSync(join(dir, "node_modules", "x", "i.js"), "");
-    mkdirSync(join(dir, "app", "deep", "deeper"), { recursive: true }); writeFileSync(join(dir, "app", "deep", "deeper", "z.py"), "");
-    for (let i = 0; i < 80; i++) writeFileSync(join(dir, `f${String(i).padStart(2, "0")}.txt`), "");
     const hooks = await (Plugin as any)({ directory: dir, client: {} });
-    const a = { system: [] as string[] }; await hooks["experimental.chat.system.transform"]({ agent: "build" }, a);
-    writeFileSync(join(dir, "late.txt"), "");            // files created mid-session must NOT change the prefix
-    const b = { system: [] as string[] }; await hooks["experimental.chat.system.transform"]({ agent: "build" }, b);
-    expect(b.system).toEqual(a.system);
-    const layout = a.system.find((s) => s.startsWith("WORKSPACE LAYOUT"))!;
-    expect(layout).toBeDefined();
-    expect(layout).toContain("app/"); expect(layout).toContain("  calc.py"); expect(layout).toContain("tests/");
-    expect(layout).not.toContain("node_modules"); expect(layout).not.toContain("deeper"); expect(layout).not.toContain("late.txt");
-    expect(layout).toContain("truncated");
-    expect(layout.split("\n").length - 1).toBeLessThanOrEqual(60);
-    expect(layout.length).toBeLessThanOrEqual(2600);
+    const sys = { system: [] as string[] }; await hooks["experimental.chat.system.transform"]({ agent: "build" }, sys);
+    expect(sys.system.join("\n")).not.toContain("WORKSPACE SNAPSHOT");
+    const t1 = { parts: [{ type: "text", text: "hello" }] as any[] };
+    await hooks["chat.message"]({ sessionID: "s1", agent: "build", messageID: "m1" }, t1);
+    const snap = t1.parts.find((p) => String(p.text).startsWith("WORKSPACE SNAPSHOT"));
+    expect(snap).toBeDefined();
+    expect(snap.text).toContain("app/"); expect(snap.text).toContain("  calc.py"); expect(snap.text).not.toContain("node_modules");
+    // the user edits a file outside the session; the agent edits another via a tool
+    writeFileSync(join(dir, "app", "calc.py"), "changed", { flush: true });
+    writeFileSync(join(dir, "NEW.md"), "x");
+    await hooks["tool.execute.after"]({ tool: "write", args: { filePath: join(dir, "tests", "agent.py") }, sessionID: "s1" }, { output: "ok", metadata: {} });
+    writeFileSync(join(dir, "tests", "agent.py"), "by agent");
+    const t2 = { parts: [{ type: "text", text: "next" }] as any[] };
+    await hooks["chat.message"]({ sessionID: "s1", agent: "build", messageID: "m2" }, t2);
+    expect(t2.parts.some((p) => String(p.text).startsWith("WORKSPACE SNAPSHOT"))).toBe(false);
+    const rep = t2.parts.find((p) => String(p.text).startsWith("WORKSPACE CHANGED"));
+    expect(rep).toBeDefined();
+    expect(rep.text).toContain("added: NEW.md"); expect(rep.text).toContain("modified: app/calc.py"); expect(rep.text).not.toContain("agent.py");
+    // nothing changed since -> no report
+    const t3 = { parts: [{ type: "text", text: "again" }] as any[] };
+    await hooks["chat.message"]({ sessionID: "s1", agent: "build", messageID: "m3" }, t3);
+    expect(t3.parts.length).toBe(1);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
