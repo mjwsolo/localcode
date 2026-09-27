@@ -20,8 +20,11 @@
  *     after failing, a check whose failure set shrinks or shows a new failure
  *     signature, or a todowrite raising the completed count. From round 4 on,
  *     6 consecutive no-progress rounds nudge once ("stop experimenting, deliver
- *     the open items, run the check once, finish"); 8 more stop the session via
- *     client.session.abort and log a partial summary. If the last check
+ *     the open items, run the check once, finish"); 8 more stop the task: further
+ *     tool calls are refused with the reason so the model writes up what it has
+ *     and the turn ends by itself (session.abort only if it ignores 3 refusals).
+ *     A turn that has delivered nothing yet (research, investigation) counts a
+ *     round with a never-seen tool call as progress, so only repetition stops it. If the last check
  *     passed within 2 rounds the stop is replaced once by a "finish now" nudge
  *     and 3 more rounds. Repeated identical check failures are tracked separately:
  *     3 request a focused diagnosis; 8 stop further churn, even after new edits.
@@ -157,6 +160,7 @@ const PLATEAU_NUDGE_AFTER = 6;      // consecutive no-progress rounds -> nudge o
 const PLATEAU_STOP_AFTER = 8;       // further no-progress rounds after the nudge -> stop
 const PLATEAU_RECENT_PASS = 2;      // a check that passed within this many rounds blocks the stop...
 const PLATEAU_PASS_GRACE = 3;       // ...and grants this many more rounds after a "finish now" nudge
+const PLATEAU_STOP_DENIALS = 3;     // tool calls refused after a stop before the session is aborted as a last resort
 
 type ToolEvent = { tool: string; args: any; output?: string; metadata?: any };
 type ProgressMemory = {
@@ -336,6 +340,12 @@ class RepeatedCheckTracker {
   }
 }
 
+/** Identity of a tool call for repetition detection: same tool, same arguments. */
+function callSignature(ev: ToolEvent): string {
+  const args = ev.tool === "bash" ? { command: String(ev.args?.command ?? "").replace(/\s+/g, " ").trim(), workdir: ev.args?.workdir } : ev.args;
+  return createHash("sha256").update(ev.tool + "\n" + JSON.stringify(args ?? null)).digest("hex");
+}
+
 /** Round bookkeeping and thresholds. One instance per session; reset on a genuine user message. */
 class PlateauTracker {
   constructor(private directory?: string) {}
@@ -349,6 +359,8 @@ class PlateauTracker {
   lastPassRound = -Infinity; // round number (1-based, the round it ran in) of the last passing check
   private open = false;      // a round is open once a tool ran in the current step
   private reasons: string[] = [];
+  private novel = false;     // this round made a tool call not seen before in the turn
+  private callSigs = new Set<string>();
   readonly repeated = new RepeatedCheckTracker();
   private repairDecision: PlateauDecision = "none";
 
@@ -359,6 +371,8 @@ class PlateauTracker {
     if (repair !== "none") this.repairDecision = repair;
     const r = progressOf(ev, this.mem, this.directory);
     if (r) this.reasons.push(r);
+    const sig = callSignature(ev);
+    if (!this.callSigs.has(sig)) { this.callSigs.add(sig); this.novel = true; }
     if (ev.tool === "bash" && isCheckCommand(String(ev.args?.command ?? "")) && this.mem.lastCheckPassed) this.lastPassRound = this.round + 1;
   }
 
@@ -383,8 +397,13 @@ class PlateauTracker {
       if (decision === "stop") { this.stopped = true; this.repairStopped = true; }
       return decision;
     }
-    const progressed = this.reasons.length > 0;
-    this.reasons = [];
+    // A turn that has delivered nothing yet (research, investigation, a
+    // question answered from the code) is measured by whether it is still
+    // covering new ground: a round with at least one never-seen tool call is
+    // progress. Once something has been delivered, only deliverables count.
+    const exploring = this.novel && this.mem.changedPaths.size === 0 && this.mem.completedTodos === 0;
+    const progressed = this.reasons.length > 0 || exploring;
+    this.reasons = []; this.novel = false;
     if (progressed) { this.noProgress = 0; this.nudged = false; this.passNudged = false; return "none"; }
     this.noProgress += 1;
     if (this.round < PLATEAU_MIN_ROUND) return "none";
@@ -496,6 +515,8 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
   let turnStartedAt = Date.now() - 1000;
   let plateau = new PlateauTracker(directory);
   let plateauStopped = false;
+  let stopDenials = 0;       // tool calls refused since the plateau stop
+  let stopReason = "";
   const interrupted = new Set<string>();
   let activeSession: string | undefined;
   // The agent the user is talking to. Nudges must keep it (a prompt without an
@@ -565,6 +586,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
     }
     // stop
     plateauStopped = true;
+    stopDenials = 0;
     const files = [...plateau.mem.changedPaths];
     if (plateau.repairStopped) {
       plog(plateau.repeated.evidence);
@@ -581,7 +603,13 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
       `files delivered ${files.length}${files.length ? ` (${files.slice(0, 12).join(", ")}${files.length > 12 ? ", ..." : ""})` : ""}, ` +
       `open items ${open.length}${open.length ? `: ${open.map((t) => t.content).join("; ")}` : ""}, ` +
       `last check ${plateau.mem.lastCheckPassed === null ? "never run" : plateau.mem.lastCheckPassed ? "passed" : "failed"}; treat as partial`);
-    try { await client.session.abort({ path: { id: sessionID } }); } catch (e: any) { plog(`abort failed: ${e?.message ?? e}`); }
+    // No session.abort here: that killed whatever tool was running and showed
+    // the user "Interrupted" with no explanation. Instead further tool calls are
+    // refused with the reason (tool.execute.before), so the model writes up
+    // what it has and the turn ends on its own.
+    stopReason = plateau.repairStopped
+      ? `${NUDGE_PREFIX} LocalCode stopped this task: the same check has kept failing identically. Do not call any more tools. Reply now, in text: what is delivered, what still fails and why, and what you would try next. The user can send a message to continue.`
+      : `${NUDGE_PREFIX} LocalCode stopped this task: ${plateau.round} tool rounds with no new progress after being asked to finish. Do not call any more tools. Reply now, in text: what is delivered, what is not, and why. The user can send a message to continue.`;
     return decision;
   }
 
@@ -623,7 +651,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
         continueCount = 0; stuckCount = 0; lastRemaining = Number.MAX_SAFE_INTEGER;
         buildVerifyNudges = 0; stubNudgeDone = false;
         turnStartedAt = Date.now() - 1000;
-        plateau = new PlateauTracker(directory); plateauStopped = false; seenSteps.clear();
+        plateau = new PlateauTracker(directory); plateauStopped = false; stopDenials = 0; stopReason = ""; seenSteps.clear();
       }
       if (!text.startsWith(NUDGE_PREFIX)) {
         const st = loadWs(input.sessionID);
@@ -656,6 +684,14 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
     },
 
     "tool.execute.before": async (input, output) => {
+      if (plateauStopped && stopReason && (!activeSession || input.sessionID === activeSession)) {
+        stopDenials += 1;
+        if (stopDenials > PLATEAU_STOP_DENIALS) {
+          plog(`model kept calling tools after the stop (${stopDenials} refused); aborting the session as a last resort`);
+          client.session.abort({ path: { id: input.sessionID } }).catch((e: any) => plog(`abort failed: ${e?.message ?? e}`));
+        }
+        throw new Error(stopReason);
+      }
       if (["read", "glob", "grep", "bash", "write", "edit", "multiedit", "apply_patch"].includes(input.tool)) workspaceActive = true;
       if (["read", "write", "edit", "multiedit"].includes(input.tool)) {
         for (const name of ["filePath", "file_path", "path"]) {
@@ -770,5 +806,5 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
 // if one is not a function ("Plugin export is not a function") — which silently
 // disabled this whole plugin once test helpers were exported. Expose the helpers
 // as properties on the plugin function instead; tests read them from `default`.
-Object.assign(LocalcodePlugin, { PLATEAU_MIN_ROUND, PLATEAU_NUDGE_AFTER, PLATEAU_STOP_AFTER, PLATEAU_RECENT_PASS, PLATEAU_PASS_GRACE, newProgressMemory, projectCheck, checkDirectory, CHECK_CMD, isCheckCommand, filteredCheck, isTempPath, editedPaths, failureSignatures, checkPassed, progressOf, referenceOnlyTypecheck, RepeatedCheckTracker, PlateauTracker, plateauNudgeText, PLATEAU_PASS_TEXT });
+Object.assign(LocalcodePlugin, { PLATEAU_MIN_ROUND, PLATEAU_NUDGE_AFTER, PLATEAU_STOP_AFTER, PLATEAU_RECENT_PASS, PLATEAU_PASS_GRACE, PLATEAU_STOP_DENIALS, callSignature, newProgressMemory, projectCheck, checkDirectory, CHECK_CMD, isCheckCommand, filteredCheck, isTempPath, editedPaths, failureSignatures, checkPassed, progressOf, referenceOnlyTypecheck, RepeatedCheckTracker, PlateauTracker, plateauNudgeText, PLATEAU_PASS_TEXT });
 export default LocalcodePlugin;
