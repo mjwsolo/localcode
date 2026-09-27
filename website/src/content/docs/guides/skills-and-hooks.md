@@ -24,4 +24,4 @@ Skills are read from disk only. localcode does not fetch skills from a URL.
 
 ## Hooks
 
-Lifecycle hooks are a feature of the 0.3 classic interface (`~/.localcode/hooks.toml`) and are not part of the 0.4 interface. In 0.4, the discipline plugin runs the project's own checks after edits; see [Architecture](/localcode/concepts/architecture). For the classic hook format, use the 0.3 docs through the version switcher in the header.
+localcode has no user-defined lifecycle hooks. The discipline plugin runs the project's own checks after edits and feeds failures back to the model; see [Architecture](/localcode/concepts/architecture). To run something on every commit, use your repository's own pre-commit hooks; the agent's `git commit` goes through them like yours does.

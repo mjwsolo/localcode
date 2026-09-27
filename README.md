@@ -48,8 +48,6 @@ start typing. `/models` switches later.
 > Implement the retry decorator in retry.py so every test in test_retry.py passes. Then run: pytest -q
 ```
 
-`localcode --classic` opens the previous (0.3) interface.
-
 Docs: [mjwsolo.github.io/localcode](https://mjwsolo.github.io/localcode/)
 
 ## What it does
@@ -86,7 +84,7 @@ localcode recommends a model by your Mac's memory and marks it with a star. You 
 
 Min RAM is the memory at which localcode will recommend the model. You can pick a heavier one by hand. DiffusionGemma is a research model that is never recommended automatically.
 
-Measured on a MacBook Pro (M5 Max, 128 GB) with Qwen 3.6 35B-A3B UD-IQ2_M at a 131072-token context: about 89 tokens/s generation, about 1174 tokens/s prompt processing, and 12 to 15 seconds for a typical four-tool-call task.
+Measured on a 128 GB Apple Silicon Mac with Qwen 3.6 35B-A3B UD-IQ2_M at a 131072-token context: about 89 tokens/s generation, about 1174 tokens/s prompt processing, and 12 to 15 seconds for a typical four-tool-call task.
 
 ## Network
 
