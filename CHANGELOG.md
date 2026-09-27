@@ -5,6 +5,19 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## 0.4.8 — unreleased
 
+### Fixed
+
+- **No more "Interrupted" on research and investigation tasks.** The loop breaker
+  measured progress only by edits, passing checks and completed plan items, so a turn
+  that was legitimately reading, fetching and trying new commands without editing
+  anything was stopped after 14 rounds as "no progress". A turn that has delivered
+  nothing yet now counts a round with a never-seen tool call as progress; only
+  repeating the same calls stalls it. And when the breaker does stop a task it no
+  longer aborts the session, which killed whatever command was running and showed a
+  bare "Interrupted": it refuses further tool calls with the reason, so the model
+  writes up what it has and the turn ends normally. Abort remains only as a last
+  resort if the model ignores three refusals.
+
 ### Changed
 
 - **About a quarter fewer tool calls per task.** On the regression evals (16 tasks,
