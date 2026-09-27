@@ -79,6 +79,19 @@ def test_budget_is_relative_to_the_loaded_context():
     assert 8192 // 4 <= b8 <= 8192 - 1024
 
 
+def test_floor_never_drops_below_twice_the_prompt_prefix():
+    # 16k context, 4.8k prefix, very slow prefill: the re-read rule wants the floor,
+    # but a budget under the prefix would compact on every step.
+    samples = [cb.Sample(5000, 100.0, 4800, 20.0, 100)] * 3 + [cb.Sample(9000, 50.0, 3000, 15.0, 100)] * 3
+    b, info = cb.budget(16384, 8192, samples, reread_max_s=1.0)
+    assert info["prefix"] == 3000                     # the smallest cold prefill seen
+    assert info["floor"] == 6000 and b == 6000        # 2 x prefix beats n_ctx/4 (4096); re-read rule wanted less
+    b1, info1 = cb.budget(16384, 8192, [cb.Sample(5000, 100.0, 4800, 20.0, 100)] * 3, reread_max_s=1.0)
+    assert info1["floor"] == 8192 and b1 == 8192      # 2 x 4800 exceeds the cap: the cap is the floor
+    b2, info2 = cb.budget(65536, 8192, [cb.Sample(5000, 100.0, 4800, 20.0, 100)] * 3, reread_max_s=1.0)
+    assert b2 >= 2 * 4800 and info2["floor"] == max(65536 // 4, 9600)
+
+
 def test_step_reserve_scales_with_context():
     assert cb.step_reserve(131072, 8192, 50 * 1024) == 8192 + 2 * (50 * 1024 // 4)
     assert cb.step_reserve(8192, 2048, 50 * 1024) == 4096          # capped at half the context
