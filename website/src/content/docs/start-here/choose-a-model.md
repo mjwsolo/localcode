@@ -20,7 +20,7 @@ Model weights must use about **55% of unified memory** or less. The rest is for 
 
 ## The model picker
 
-The picker opens on first launch when no model is loaded. Type `/models` to open it at any time. Esc goes back one level.
+With no model loaded, the picker opens when you send your first message. Type `/models` to open it at any time. Esc goes back one level.
 
 **Level 1: models.** Every model in the catalog, shown as display name and maker. A count such as "2 on disk" tells you how many of its quants are already downloaded. The star marks the model recommended for this Mac's memory. Press Enter to open a model.
 

@@ -42,10 +42,3 @@ that provider.
 
 The web tools and MCP tools run without a permission prompt. Shell commands
 prompt; see [Permissions](/localcode/start-here/permissions).
-
-## The classic interface
-
-`localcode --classic` and the headless `localcode run` use the 0.3 agent loop.
-It has a configurable inference endpoint and a connectivity probe that the
-default interface does not have. See the 0.3 docs through the version switcher
-in the header.
