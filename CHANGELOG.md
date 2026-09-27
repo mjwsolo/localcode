@@ -3,6 +3,20 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.4.8 — unreleased
+
+### Changed
+
+- **About a quarter fewer tool calls per task.** On the regression evals (16 tasks,
+  Qwen3.8 27B) the agent now takes a median of 4 steps where it took 7, with the same
+  pass rate. Three causes: it no longer lists directories or globs to orient itself,
+  because the session's first turn carries a snapshot of the workspace and later turns
+  report files changed outside the session; it runs the project check once after an
+  edit instead of before and after; and it updates its plan once per step instead of
+  around every edit. The plan itself is unchanged and still gates completion.
+- When a gate sends the model back to open items or placeholders, the UI now says so
+  ("Continuing: 2 todos open") instead of pausing silently.
+
 ## 0.4.7 — 2026-09-26
 
 ### Fixed
