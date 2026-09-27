@@ -49,9 +49,11 @@ const PLANNING_RULE = `WORKSPACE TASK COMPLETION:
 - These execution rules apply ONLY when the user asks for work on project files. Answer general questions, advice, greetings, and unrelated web research directly, without todowrite, repository exploration, build checks, or creating files. Do not invent deliverables, compliance requirements, or project work the user did not request.
 - LOCALCODE.md is the only project instruction file and is supplied automatically. Never read, create, or update legacy agent instruction files. Do not seek out configuration or skills for unrelated questions.
 - Keep going until the user's request is COMPLETELY done. Do not end your turn while any part of the work remains. A dev server that starts, a scaffold that installs, a single file written — none of these is "done" unless that was the entire request.
-- PLAN, THEN EXECUTE THE PLAN. For requested multi-step workspace changes, call todowrite FIRST to lay out every concrete step (one per requirement, and every deliverable the user named — a README is a plan item like any feature, not a closing flourish). Skip the plan for one/two-step tasks. Keep exactly ONE item in_progress.
+- ORIENT FROM THE LAYOUT, NOT FROM TOOL CALLS. The workspace layout below is complete for the top two levels: do not list directories, glob for tests, or read files just to see what exists. Open only the files you will change or must quote. Every tool call is a full model round trip; a typical small change is read -> edit -> check, three calls.
+- PLAN, THEN EXECUTE THE PLAN. For requested workspace changes of THREE or more steps, call todowrite FIRST to lay out every concrete step (one per requirement, and every deliverable the user named — a README is a plan item like any feature, not a closing flourish). Skip the plan for one/two-step tasks. Keep exactly ONE item in_progress. Update the list ONCE per step, after the step's edit — never before and after the same edit, never as a separate call between two edits.
+- ONE EDIT PER FILE PER STEP: when a step changes several places in one file, make them in a single edit or multi-edit call.
 - Validate incrementally: get the minimal scaffold building before implementing the full app. After each coherent feature, run the relevant check and repair failures before adding more features. Do not defer all integration checks until the end.
-- The last plan item is final verification: run the project's own build/typecheck and one smoke check of the main flow. Do not repeat already-passing checks without new edits, or install browsers and test rigs unless requested.
+- RUN THE CHECK ONCE, AFTER THE EDIT. Do not run tests or builds before you have changed anything unless the user asked for a diagnosis; do not re-run a passing check without a new edit. The last plan item is final verification: the project's own build/typecheck and one smoke check of the main flow. Do not install browsers and test rigs unless requested.
 - Write complete, runnable code — no TODOs, stubs, placeholders, "demo only" or "you could add…". If a piece is too big for one call, split it across calls; never drop it.
 - Only stop for one of two reasons: (a) every todo is completed and verified, or (b) you have ONE specific blocking question you cannot answer yourself. The harness sends you back to the next open item if you stop early.
 - Never run a foreground server (npm run dev, vite, http.server) through bash: start it in the background with nohup ... & and a log file, then curl it.`;
@@ -409,7 +411,37 @@ function plateauNudgeText(open: Todo[]): string {
 }
 const PLATEAU_PASS_TEXT = `${NUDGE_PREFIX} Your check passed — finish now. Do not start another experiment: write up what is delivered and what is not, then stop.`;
 
+// Workspace layout for the system prompt: two levels, capped, computed ONCE per
+// session so the cached prefix never changes. Removes the agent's orientation
+// reads (read:tests, glob **/*.py) which were ~2 round trips per task.
+const LAYOUT_SKIP = new Set([".git", "node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", "dist", "build", ".localcode-agent", ".eval", ".next", "target", ".cache", ".DS_Store"]);
+const LAYOUT_MAX_ENTRIES = 60;
+const LAYOUT_MAX_CHARS = 2500;
+function workspaceLayout(directory: string): string {
+  const lines: string[] = [];
+  let truncated = false;
+  const list = (dir: string): string[] => {
+    try { return readdirSync(dir, { withFileTypes: true }).filter((d) => !LAYOUT_SKIP.has(d.name)).sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name)).map((d) => d.isDirectory() ? d.name + "/" : d.name); } catch { return []; }
+  };
+  for (const top of list(directory)) {
+    if (lines.length >= LAYOUT_MAX_ENTRIES) { truncated = true; break; }
+    lines.push(top);
+    if (top.endsWith("/")) {
+      const kids = list(join(directory, top));
+      for (const k of kids) {
+        if (lines.length >= LAYOUT_MAX_ENTRIES) { truncated = true; break; }
+        lines.push("  " + k);
+      }
+    }
+  }
+  if (!lines.length) return "";
+  let body = lines.join("\n");
+  if (body.length > LAYOUT_MAX_CHARS) { body = body.slice(0, LAYOUT_MAX_CHARS); truncated = true; }
+  return "WORKSPACE LAYOUT (top two levels" + (truncated ? ", truncated" : "") + "; complete for orientation, do not re-list):\n" + body;
+}
+
 const LocalcodePlugin: Plugin = async ({ client, directory }) => {
+  const layoutBlock = workspaceLayout(directory);
   let todos: Todo[] = [];
   let workspaceActive = false;
   let continueCount = 0;
@@ -530,6 +562,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
       // gates check workspaceActive in code), so always add it. The open-todo
       // list is not put here either: it rides on the user turn (chat.message).
       output.system.push(PLANNING_RULE);
+      if (layoutBlock) output.system.push(layoutBlock);
     },
 
     "chat.message": async (input, output) => {
@@ -631,6 +664,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
           const next = open.find((t) => t.status === "in_progress") ?? open[0];
           log(`${open.length} todo(s) still open — continuing with: ${next.content}`);
           plateau.freshInstruction();
+          try { void client.tui?.showToast?.({ body: { title: "Continuing", message: `${open.length} todo(s) still open — next: ${next.content.slice(0, 60)}`, variant: "info", duration: 6000 } })?.catch?.(() => {}); } catch {}
           await nudge(sessionID, `${NUDGE_PREFIX} You still have ${open.length} unfinished todo(s). The task is NOT complete — do not stop. Continue now with: ${next.content}. Mark a todo completed via todowrite only when it is genuinely done, and keep going until every item is completed.`);
           return;
         }
@@ -645,6 +679,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
           stubNudgeDone = true;
           log(`placeholders found in ${stubs.length} line(s) — sending back`);
           plateau.freshInstruction();
+          try { void client.tui?.showToast?.({ body: { title: "Continuing", message: `${stubs.length} placeholder line(s) still to implement`, variant: "info", duration: 6000 } })?.catch?.(() => {}); } catch {}
           await nudge(sessionID, `${NUDGE_PREFIX} your changes still contain placeholders — the user asked for complete, working features, not stubs:\n${stubs.join("\n")}\nImplement each one for real (reopen it as a todo if needed), or tell the user explicitly which requirement you cannot meet and why.`);
           return;
         }

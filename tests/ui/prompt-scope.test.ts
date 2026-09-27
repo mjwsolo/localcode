@@ -19,7 +19,7 @@ test("completion rules stay out of helper prompts and are constant for the build
     }
     const first = { system: [] as string[] };
     await hooks["experimental.chat.system.transform"]({ agent: "build" }, first);
-    expect(first.system.join("\n")).toContain("requested multi-step workspace changes");
+    expect(first.system.join("\n")).toContain("WORKSPACE TASK COMPLETION");
     await hooks["tool.execute.before"]({ tool: "read" }, { args: { filePath: "." } });
     const afterTool = { system: [] as string[] };
     await hooks["experimental.chat.system.transform"]({ agent: "build" }, afterTool);
