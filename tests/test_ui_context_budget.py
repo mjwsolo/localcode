@@ -82,12 +82,13 @@ def test_budget_is_relative_to_the_loaded_context():
 def test_floor_never_drops_below_twice_the_prompt_prefix():
     # 16k context, 4.8k prefix, very slow prefill: the re-read rule wants the floor,
     # but a budget under the prefix would compact on every step.
-    samples = [cb.Sample(5000, 100.0, 4800, 20.0, 100)] * 3 + [cb.Sample(9000, 50.0, 3000, 15.0, 100)] * 3
+    # title request (631), first main request (4800), then post-compaction prefills (~900): the prefix is 4800
+    samples = [cb.Sample(640, 800.0, 631, 20.0, 40), cb.Sample(5000, 100.0, 4800, 20.0, 100)] + [cb.Sample(6000, 50.0, 900, 15.0, 100)] * 6
     b, info = cb.budget(16384, 8192, samples, reread_max_s=1.0)
-    assert info["prefix"] == 3000                     # the smallest cold prefill seen
-    assert info["floor"] == 6000 and b == 6000        # 2 x prefix beats n_ctx/4 (4096); re-read rule wanted less
-    b1, info1 = cb.budget(16384, 8192, [cb.Sample(5000, 100.0, 4800, 20.0, 100)] * 3, reread_max_s=1.0)
-    assert info1["floor"] == 8192 and b1 == 8192      # 2 x 4800 exceeds the cap: the cap is the floor
+    assert info["prefix"] == 4800
+    assert info["floor"] == 8192 and b == 8192        # 2 x 4800 exceeds the cap: the cap is the floor
+    b1, info1 = cb.budget(32768, 8192, samples, reread_max_s=1.0)
+    assert info1["floor"] == 9600 and b1 == 9600      # 2 x prefix beats n_ctx/4 (8192); the re-read rule wanted less
     b2, info2 = cb.budget(65536, 8192, [cb.Sample(5000, 100.0, 4800, 20.0, 100)] * 3, reread_max_s=1.0)
     assert b2 >= 2 * 4800 and info2["floor"] == max(65536 // 4, 9600)
 

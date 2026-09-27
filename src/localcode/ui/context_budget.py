@@ -164,12 +164,18 @@ def budget(n_ctx: int, reserve: int, samples: list[Sample], prior_pp_tps: float 
     return _snap(best, step, floor, cap), info
 
 
+PREFIX_FIRST_N = 3     # the first main request is among the first few large prefills after load
+
+
 def prefix_tokens(samples: list[Sample]) -> int:
-    """Size of the fixed prompt prefix: the cold prefill of a session's first
-    request reads the whole prompt, so the smallest large prefill seen is the
-    best estimate. 0 until a cold request has been observed."""
-    cold = [s.pp_n for s in samples if s.pp_n >= PP_MIN_CHUNK and s.pp_tps is not None]
-    return min(cold) if cold else 0
+    """Size of the fixed prompt prefix (system prompt, tool schemas, first
+    message). The first main request of a session prefills it cold; the other
+    early requests are small side requests (title) or the warm-up replay of the
+    same prefix, so the largest of the first few large prefills is the estimate.
+    Later prefills cannot be used: after a compaction they are short. 0 until a
+    large prefill has been observed."""
+    cold = [s.pp_n for s in samples if s.pp_n >= PP_MIN_CHUNK and s.pp_tps is not None][:PREFIX_FIRST_N]
+    return max(cold) if cold else 0
 
 
 def _snap(c: int, step: int, floor: int, cap: int) -> int:
