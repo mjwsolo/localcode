@@ -812,7 +812,7 @@ Small releases on the way to the docs site launch, listed together.
   is reserved exclusively for terminal, turn-ending failures.
 
 ### Docs
-- README tested-hardware table adds the M5 (M5 Max, 128 GB) primary-dev row and
+- README tested-hardware table adds the top-memory laptop row and
   notes that Linux is CI/dev-only while Apple Silicon (Metal) is the supported
   target.
 
