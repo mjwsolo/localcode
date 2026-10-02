@@ -3,6 +3,15 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.4.10 — 2026-09-30
+
+### Fixed
+
+- **Model picker labels.** A quant that does not fit in memory showed
+  `undefined too_big`; it now shows `✗ too big` and cannot be selected, as intended.
+  The top level of the picker is one `Models` list instead of `Models` and
+  `Available to download`: each row already says `Loaded`, `N on disk` or `Download`.
+
 ## 0.4.9 — 2026-09-27
 
 ### Changed
