@@ -157,7 +157,7 @@ def main(model: str | None = None, project: str | None = None) -> int:
     ui_bin = ui_binary_path()
     if ui_bin is None:
         print("localcode: the UI binary is missing from this install. "
-              "Run `localcode --classic` for the previous interface, or reinstall with `pip install -U localcode`.",
+              "Reinstall with `pip install -U localcode`.",
               file=sys.stderr)
         return 1
     server = _llama_server()

@@ -61,7 +61,7 @@ setup(
         "bdist_wheel": {"plat_name": "macosx_13_0_arm64"},
     },
     package_data={
-        "localcode": ["bin/llama-server", "bin/localcode-ui", "bin/*.dylib", "**/*.tcss",
+        "localcode": ["bin/llama-server", "bin/localcode-ui", "bin/*.dylib",
                       "ui/plugin/*.ts", "ui/FORK_COMMIT"],
     },
     exclude_package_data={

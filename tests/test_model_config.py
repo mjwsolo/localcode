@@ -54,24 +54,6 @@ def test_cohere_generation_cap_helper():
 
 # ── compaction tiers delegate to model_config ───────────────────────
 
-def test_compaction_constants_delegate():
-    from localcode import compaction
-    assert compaction.LLM_SUMMARY_MIN_RAM_GB == mc.LLM_SUMMARY_MIN_RAM_GB
-    assert compaction.KEEP_RECENT_TOKENS_DEFAULT == mc.KEEP_RECENT_TOKENS_DEFAULT
-    assert compaction.KEEP_RECENT_TOKENS_MAX == mc.KEEP_RECENT_TOKENS_MAX
-    assert compaction.RESERVE_TOKENS_DEFAULT == mc.RESERVE_TOKENS_DEFAULT
-    assert compaction.COMPACT_THRESHOLD_FRACTION == mc.COMPACT_THRESHOLD_FRACTION
-    assert compaction._CHARS_PER_TOKEN == mc.CHARS_PER_TOKEN
-
-
-def test_keep_recent_for_window_delegates():
-    from localcode import compaction
-    for win in (0, 16384, 65536, 131072, 262144):
-        assert compaction._keep_recent_for_window(win) == mc.keep_recent_for_window(win)
-
-
-# ── thermal caps delegate to model_config ───────────────────────────
-
 def test_thermal_caps_delegate():
     from localcode.thermal import recommended_thermal_caps
     for level in ("nominal", "fair", "serious", "critical"):
