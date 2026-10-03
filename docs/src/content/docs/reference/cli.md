@@ -32,6 +32,7 @@ A second `localcode` opens another interface session attached to the running mod
 | `LOCALCODE_ENABLE_PARALLEL=1` + `PARALLEL_API_KEY` | Use Parallel for web search instead of the keyless default |
 | `LOCALCODE_WEBFETCH_MAX_CHARS` | Cap on fetched page text. Default `20000` |
 | `OPENCODE_DISABLE_LSP_DOWNLOAD` | Default `1`: language servers are never downloaded without `/lsp` |
+| `LOCALCODE_AUTO_CHECK=1` | Let the plugin run the project's own build or test command after a change, without asking. Off by default: that command is code from the opened repository |
 | `LOCALCODE_UI_BIN` | Developer override: path to the interface binary |
 | `LOCALCODE_LLAMA_SERVER` | Developer override: path to a `llama-server` binary |
 

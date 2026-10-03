@@ -41,7 +41,7 @@ def start(self, alias, wait_s=240):
 module.Supervisor.start = start
 raise SystemExit(module.main())
 ''')
-    env = dict(os.environ, QA_ROOT=directory)
+    env = dict(os.environ, QA_ROOT=directory, LOCALCODE_CONTROL_TOKEN='qa-token', LOCALCODE_SERVER_KEY='qa-key')
     args = [sys.executable, str(worker), '--server', sys.executable, '--model', 'test',
             '--port', str(port()), '--control-port', str(control), '--models-dir', directory]
     parent = subprocess.Popen([sys.executable, '-c',
@@ -52,7 +52,7 @@ raise SystemExit(module.main())
     try:
         for _ in range(100):
             try:
-                with urllib.request.urlopen(f'http://127.0.0.1:{control}/status', timeout=.2) as r:
+                with urllib.request.urlopen(urllib.request.Request(f'http://127.0.0.1:{control}/status', headers={'X-Localcode-Token': 'qa-token'}), timeout=.2) as r:
                     if json.load(r)['state'] == 'ready': break
             except OSError: pass
             time.sleep(.05)

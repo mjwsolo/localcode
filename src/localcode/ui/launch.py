@@ -19,6 +19,7 @@ import urllib.request
 from pathlib import Path
 
 from localcode.ui import plugin_path, run_dir, ui_binary_path
+from localcode.ui.auth import KEY_ENV, TOKEN_ENV, control_headers, new_secret, read_auth_file, server_key
 from localcode.ui.ports import choose_ports, find_running
 
 WAIT_S = 240
@@ -43,8 +44,10 @@ def _llama_server() -> Path | None:
 
 
 def _get_json(url: str, timeout: float = 1.0) -> dict | None:
+    """GET a control-API route with the session token."""
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as r:
+        req = urllib.request.Request(url, headers=control_headers())
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.load(r)
     except Exception:  # noqa: BLE001
         return None
@@ -52,7 +55,8 @@ def _get_json(url: str, timeout: float = 1.0) -> dict | None:
 
 def _ok(url: str) -> bool:
     try:
-        with urllib.request.urlopen(url, timeout=1.0):
+        req = urllib.request.Request(url, headers=control_headers())
+        with urllib.request.urlopen(req, timeout=1.0):
             return True
     except Exception:  # noqa: BLE001
         return False
@@ -91,7 +95,7 @@ def write_config(path: Path, *, port: int, ctx: int, alias: str | None) -> None:
             "localcode": {
                 "npm": "@ai-sdk/openai-compatible",
                 "name": "localcode",
-                "options": {"baseURL": f"http://127.0.0.1:{port}/v1", "apiKey": "local"},
+                "options": {"baseURL": f"http://127.0.0.1:{port}/v1", "apiKey": server_key() or "local"},
                 "models": {
                     model_key: {
                         "name": alias or "no model loaded",
@@ -124,6 +128,10 @@ def write_config(path: Path, *, port: int, ctx: int, alias: str | None) -> None:
 
 def attach(ctrl: int, status: dict, ui_bin: Path, project_dir: Path, alias: str | None) -> int:
     """Open another UI window on the model server a running session owns."""
+    # The running session's secrets, left owner-only in the run directory.
+    auth = read_auth_file(run_dir())
+    if auth:
+        os.environ[TOKEN_ENV], os.environ[KEY_ENV] = auth
     port = int(status["port"])
     try:
         ctx = int(status.get("ctx") or 0)
@@ -185,8 +193,16 @@ def main(model: str | None = None, project: str | None = None) -> int:
         print(f"localcode: {error}", file=sys.stderr)
         return 1
 
+    # Fresh secrets for this session; the supervisor and the UI inherit them.
+    os.environ[TOKEN_ENV] = new_secret()
+    os.environ[KEY_ENV] = new_secret()
+
     rd = run_dir()
     rd.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(rd, 0o700)   # server.log, warm-up token files and auth.json live here
+    except OSError:
+        pass
     sup_log = (rd / "supervisor.log").open("ab")
     sup = subprocess.Popen(
         [sys.executable, "-m", "localcode.ui.supervisor",

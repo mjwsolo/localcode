@@ -52,6 +52,7 @@ from localcode.models_catalog import (
 
 MIN_SPEED_FRACTION = 0.5  # same rule as tui/screens/model_picker.py
 from localcode.ui import run_dir
+from localcode.ui.auth import KEY_ENV, control_token, new_secret, request_allowed, server_headers, server_key, write_auth_file
 
 HERE = run_dir()
 
@@ -110,7 +111,8 @@ class Supervisor:
         """What the server is doing right now: reading the prompt (with a fraction) or
         generating. Lets the TUI show 'reading context 40%' instead of a bare spinner."""
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/slots", timeout=1) as r:
+            req = urllib.request.Request(f"http://127.0.0.1:{self.port}/slots", headers=server_headers())
+            with urllib.request.urlopen(req, timeout=1) as r:
                 slots = json.loads(r.read().decode())
         except Exception:  # noqa: BLE001
             return {"phase": "unknown"}
@@ -308,7 +310,8 @@ class Supervisor:
         """The context the server really gives each request. With --parallel N the
         flag's --ctx-size is split N ways; /props reports the per-slot figure."""
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/props", timeout=3) as r:
+            req = urllib.request.Request(f"http://127.0.0.1:{self.port}/props", headers=server_headers())
+            with urllib.request.urlopen(req, timeout=3) as r:
                 props = json.loads(r.read().decode())
             n_ctx = int((props.get("default_generation_settings") or {}).get("n_ctx") or 0)
             slots = int(props.get("total_slots") or 0)
@@ -446,6 +449,18 @@ class Supervisor:
         g = next((g for g in MODEL_GROUPS if g.key == key), None)
         if g is None:
             return {"error": f"unknown group {key}"}
+        # The filename names a file under models_dir and a path in the download
+        # URL, so it must be exactly one the group's listing offers: no
+        # separators, no dot segments, nothing the catalogue did not list.
+        if not _safe_filename(filename):
+            return {"error": "invalid filename"}
+        if not (self.models_dir / filename).is_file():   # installed files work offline
+            try:
+                listed = {q.filename for q in fetch_quants(g.hf_repo)}
+            except Exception as e:  # noqa: BLE001
+                return {"error": f"could not list {g.hf_repo}: {e}"}
+            if filename not in listed:
+                return {"error": f"{filename} is not a file of {g.hf_repo}"}
         if not self.lock.acquire(blocking=False):
             return {"error": "a model switch is already in progress"}
         alias = _alias(filename)
@@ -742,6 +757,11 @@ with wave.open(path, 'wb') as w:
         return dict(self.models_dir_info(), ok=True)
 
 
+def _safe_filename(name: str) -> bool:
+    return bool(name) and name.endswith(".gguf") and "/" not in name and "\\" not in name \
+        and ".." not in name and not name.startswith(".") and name == name.strip() and "\x00" not in name
+
+
 def make_handler(sup: Supervisor):
     class H(BaseHTTPRequestHandler):
         def log_message(self, *a):  # quiet
@@ -756,7 +776,14 @@ def make_handler(sup: Supervisor):
             self.end_headers()
             self.wfile.write(body)
 
+        def _refuse(self, why: str) -> None:
+            log(f"control: refused {self.command} {self.path}: {why}")
+            self._json({"error": why}, 403)
+
         def do_GET(self):
+            why = request_allowed(self.headers, sup.control_token, sup.control_port)
+            if why:
+                return self._refuse(why)
             u = urlparse(self.path)
             if u.path == "/catalog":
                 return self._json(sup.catalog())
@@ -776,6 +803,9 @@ def make_handler(sup: Supervisor):
             self._json({"error": "not found"}, 404)
 
         def do_POST(self):
+            why = request_allowed(self.headers, sup.control_token, sup.control_port, want_json=True)
+            if why:
+                return self._refuse(why)
             u = urlparse(self.path)
             n = int(self.headers.get("Content-Length") or 0)
             try:
@@ -841,6 +871,13 @@ def main() -> int:
         return 1
     sup = Supervisor(a.server, a.port, Path(a.models_dir), 0)
     sup.lease_fd = lease.fileno()
+    # Session secrets: from the launcher's environment, else fresh. Written
+    # owner-only into the run dir for a second `localcode` and dev tooling.
+    sup.control_port = a.control_port
+    sup.control_token = control_token() or new_secret()
+    if not server_key():
+        os.environ[KEY_ENV] = new_secret()
+    write_auth_file(HERE, sup.control_token, server_key())
     httpd = ThreadingHTTPServer(("127.0.0.1", a.control_port), make_handler(sup))
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
 

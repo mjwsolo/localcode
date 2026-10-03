@@ -20,6 +20,7 @@ for. This page lists every path.
 
 There is no analytics endpoint, usage reporting, update check, or account.
 Every localcode process binds to `127.0.0.1`.
+Loopback alone is not a boundary, since a web page can send requests to a local port. So each session also has two random secrets: the model service refuses any request without the session token, and the model server refuses any request without the session key. Both are generated at launch and kept owner-only on disk.
 
 ## Where localcode uses the network
 

@@ -3,6 +3,30 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.5.1 — 2026-10-03
+
+### Security
+
+- **The model service's control API requires a per-session token.** It listens on
+  loopback only, but a web page in your browser can send requests to a localhost
+  port. Every request, reads included, now needs a random token the launcher
+  generates and hands to the interface. Requests carrying an `Origin` header, a
+  `Host` other than this listener, or (for changes) a non-JSON content type are
+  refused. This closes cross-site and DNS-rebinding access to model selection,
+  downloads, the models folder and voice recording.
+- **The model server requires a per-session key.** llama-server is started with
+  `--api-key`; before, any site could use the loaded model and read its slots.
+- **Model selection accepts only files the catalogue lists.** A filename must be a
+  plain `.gguf` name with no separators or dot segments, and must appear in the
+  group's listing (or already be installed). It was used in a filesystem path and a
+  download URL unchecked.
+- **The project's build or test command is no longer run automatically.** After a
+  change the plugin ran `npm run build` or the project's pytest outside the
+  permission system, which executes code from the opened repository. It is now off;
+  `LOCALCODE_AUTO_CHECK=1` restores it. The model still runs checks itself.
+- The run directory is owner-only (`0700`); it holds the session secrets, the
+  server log and warm-up token files.
+
 ## 0.5.0 — 2026-10-03
 
 ### Removed
