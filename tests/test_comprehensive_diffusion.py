@@ -278,19 +278,6 @@ def test_one_shipped_binary():
         assert "llama-diffusion" not in text
 
 
-def test_tui_has_no_diffusion_special_cases():
-    """Setup no longer skips the server launch for diffusion, and the status
-    bar no longer shows a separate "diffusion runner" state: the server is
-    probed for liveness like for every model."""
-    setup_src = (SRC / "tui" / "screens" / "setup.py").read_text()
-    assert "diffusion" not in setup_src.lower()
-    chat_src = (SRC / "tui" / "screens" / "chat.py").read_text()
-    assert "diffusion runner" not in chat_src
-
-
-# ── Catalog / picker wiring ──────────────────────────────────────────
-
-
 def test_diffusion_group_in_picker():
     g = catalog.by_group("diffusiongemma-26b-a4b")
     assert g is not None

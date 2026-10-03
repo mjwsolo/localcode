@@ -91,7 +91,6 @@ export default defineConfig({
             { label: 'CLI', slug: 'reference/cli' },
             { label: 'Slash Commands', slug: 'reference/slash-commands' },
             { label: 'Configuration', slug: 'reference/configuration' },
-            { label: 'JSONL Events', slug: 'reference/jsonl-events' },
             { label: 'Error Codes', slug: 'reference/error-codes' },
           ],
         },

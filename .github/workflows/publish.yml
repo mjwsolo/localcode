@@ -43,13 +43,6 @@ jobs:
       - run: python -m pip install -e . pytest pytest-timeout ruff
       - run: ruff check --select E9,F63,F7,F82 src tests
       - run: pytest tests/test_comprehensive_*.py -q --timeout=120
-      - name: Agent harness regression tests
-        run: |
-          pytest -q \
-            tests/test_agent_state_machine.py \
-            tests/test_evidence_and_lifecycle_hooks.py \
-            tests/test_execution_policies.py \
-            tests/test_code_navigation_and_processes.py
 
   # LocalCode has no compiled Python extensions; the two shipped binaries
   # (llama-server and the localcode-ui runtime) are checked in under

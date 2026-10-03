@@ -13,8 +13,7 @@ Reading files does not prompt. `/permissions` shows the current rules for the se
 
 ## Rules that always hold
 
-- **Writes outside the project directory are refused.** The agent can only edit files under the directory you opened. This holds in the interface and in headless runs.
-- **Headless runs cannot answer prompts.** `localcode run` has nobody to ask, so it runs in full-auto; out-of-workspace writes are auto-rejected. See [CLI](/localcode/reference/cli).
+- **Writes outside the project directory are refused.** The agent can only edit files under the directory you opened.
 - **Network tools do not prompt.** `websearch`, `webfetch`, and MCP tools run when the model calls them. See [Network Boundary](/localcode/concepts/network-boundary).
 
 ## Project rules
