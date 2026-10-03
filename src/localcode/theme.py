@@ -62,7 +62,7 @@ class Palette:
     # `textual-ansi` theme set in tui/app.py — see the explanation
     # in tui/styles/app.tcss. These hex strings are kept only for
     # the rare consumer that imports `C.background` / `C.surface`
-    # for a non-TUI render (logs / docs / promptfoo screenshots).
+    # for a non-TUI render (logs / docs screenshots).
     # If any user-visible UI is reading these for an actual
     # rendered background, that's a bug — route through ANSI instead.
     background:     str = "#1e1e1e"   # legacy, non-rendering
