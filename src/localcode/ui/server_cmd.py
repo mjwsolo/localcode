@@ -20,6 +20,11 @@ def server_command(gguf: str, port: int, alias: str | None = None) -> list[str]:
     g = LocalCodeRuntimeGateway(cfg.runtime)
     cmd = g.llama_server_command(gguf, port)
     cmd[1:1] = ["--host", "127.0.0.1"]
+    # Any web page can reach a localhost port; the key makes the model and its
+    # /slots (which can hold prompt text) unusable without the session secret.
+    from localcode.ui.auth import server_key
+    if server_key():
+        cmd += ["--api-key", server_key()]
     if alias:
         cmd += ["--alias", alias]
     # Hidden thinking is a SERVER property, one switch for every front end and

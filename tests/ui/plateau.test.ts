@@ -240,7 +240,7 @@ describe("nudge wording", () => {
 // Hook wiring: drive the plugin with a stub client and OpenCode-shaped events.
 // ---------------------------------------------------------------------------
 const LocalcodePlugin = LocalcodePluginDefault as any;
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
@@ -452,7 +452,27 @@ test("check guard rejects output pipelines before they hide a failure", async ()
   await h.hooks["tool.execute.before"]({tool: "bash",sessionID:h.sid}, {args:{command:"npm run build"}});
 });
 
+test("the project's build is never run automatically unless the user opted in", async () => {
+  // The build script is code from the opened repository; running it on idle
+  // would execute it outside the runtime's permission system.
+  const root = mkdtempSync(join(tmpdir(), "verify-off-"));
+  mkdirSync(join(root, "src"));
+  const marker = join(root, "ran.txt");
+  writeFileSync(join(root, "package.json"), JSON.stringify({scripts: {build: "node check.cjs"}}));
+  writeFileSync(join(root, "check.cjs"), `require("fs").writeFileSync(${JSON.stringify(marker)}, "x"); process.exit(1)`);
+  const file = join(root, "src", "app.ts");
+  writeFileSync(file, "export const answer = 42");
+  delete process.env.LOCALCODE_AUTO_CHECK;
+  const h = await boot();
+  await h.userMessage("fix app");
+  await h.toolRound(write(relative(h.dir, file)));
+  await h.idle();
+  expect(existsSync(marker)).toBe(false);
+  expect(h.prompts.some((p: string) => p.includes("typecheck/build"))).toBe(false);
+});
+
 test("verification finds the edited app outside the launcher and runs its build", async () => {
+  process.env.LOCALCODE_AUTO_CHECK = "1";
   const root = mkdtempSync(join(tmpdir(), "verify-app-"));
   mkdirSync(join(root, "src"));
   writeFileSync(join(root, "package.json"), JSON.stringify({scripts: {build: "node check.cjs"}}));
@@ -467,6 +487,7 @@ test("verification finds the edited app outside the launcher and runs its build"
   await h.toolRound(write(relative(h.dir, file)));
   await h.idle();
   expect(h.prompts.some((p: string) => p.includes("bundle fixture failed") && p.includes(root))).toBe(true);
+  delete process.env.LOCALCODE_AUTO_CHECK;
 });
 
 describe("repeated check failures", () => {
