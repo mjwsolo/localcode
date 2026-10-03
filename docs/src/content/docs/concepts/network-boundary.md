@@ -34,12 +34,12 @@ Loopback alone is not a boundary, since a web page can send requests to a local 
 | 6 | **`websearch` tool** | DuckDuckGo by default; Exa or Parallel if you set a key | Whenever the model calls it |
 | 7 | **`webfetch` tool** | The URL named in the call | Whenever the model calls it. Page text is capped at 20,000 characters (`LOCALCODE_WEBFETCH_MAX_CHARS`) |
 | 8 | **MCP servers** | Wherever you pointed them | Whenever the model calls one of their tools |
-| 9 | **Shell commands** | Wherever the command goes | Whenever a `bash` call runs, subject to the permission prompt |
+| 9 | **Shell commands** | Wherever the command goes | Whenever a `bash` call runs; commands inside the project do not prompt |
 
 Web search works out of the box with a keyless DuckDuckGo backend. To use a
 paid search API instead, set `LOCALCODE_ENABLE_EXA=1` with `EXA_API_KEY`, or
 `LOCALCODE_ENABLE_PARALLEL=1` with `PARALLEL_API_KEY`. The key is sent only to
 that provider.
 
-The web tools and MCP tools run without a permission prompt. Shell commands
-prompt; see [Permissions](/localcode/start-here/permissions).
+The web tools, MCP tools and shell commands all run without a permission prompt;
+see [Permissions](/localcode/start-here/permissions).
