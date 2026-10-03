@@ -3,6 +3,20 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.5.0 — 2026-10-03
+
+### Removed
+
+- **The previous interface is gone.** `--classic`, `LOCALCODE_FRONTEND=classic`,
+  `--resume`, `--preview-screen`, `localcode run` and `localcode unstick` no longer
+  exist; `localcode [DIR]` is the one command. The old Python agent loop, its tools,
+  its terminal UI and their tests (about 38,000 lines) are deleted, and with them the
+  Textual, tree-sitter, jedi, scikit-learn, mcp, prompt_toolkit and ddgs dependencies.
+  Headless runs use `localcode-ui run`, which the eval suite already drives.
+- **Unsupported platforms get a plain refusal.** On anything but an Apple silicon Mac
+  the launcher now says so and exits 1. The previous interface never worked there
+  either: its wheel installed anywhere but bundled an Apple silicon model server.
+
 ## 0.4.10 — 2026-09-30
 
 ### Fixed

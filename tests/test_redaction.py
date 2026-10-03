@@ -169,33 +169,3 @@ def test_events_emit_scrubs_before_writing(tmp_path, monkeypatch):
     assert "[redacted:github-token]" in written
 
 
-def test_session_save_scrubs_transcript(tmp_path):
-    from localcode.session import SessionState, SessionStore, utc_now
-
-    store = SessionStore()
-    store.sessions_dir = tmp_path
-    session = SessionState(
-        session_id="redaction-test",
-        repo_root=tmp_path,
-        created_at=utc_now(),
-        messages=[{"role": "user", "content": "token AKIAIOSFODNN7EXAMPLE"}],
-    )
-    path = store.save(session)
-    text = path.read_text()
-    assert "AKIA" "IOSFODNN7EXAMPLE" not in text
-    assert "[redacted:aws-key]" in text
-
-
-def test_history_record_scrubs_content(tmp_path, monkeypatch):
-    from localcode import history as history_mod
-
-    db = history_mod.HistoryDB(tmp_path / "history.db")
-    db.record_user_prompt(
-        session_id="s1", repo_root=str(tmp_path),
-        prompt="deploy with sk-ant-api03-" + "Kk3" * 20,
-    )
-    rows = db.get_session_history("s1")
-    assert rows, "prompt was not recorded"
-    assert "sk-ant-" not in rows[0]["content"]
-    assert "[redacted:anthropic-key]" in rows[0]["content"]
-    db.close()

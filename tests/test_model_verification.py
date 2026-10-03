@@ -229,55 +229,6 @@ def _screen_methods():
     return ChatScreen._verify_serving_model, ChatScreen._update_status
 
 
-def test_status_bar_shouts_when_a_different_model_is_serving(monkeypatch):
-    verify, update = _screen_methods()
-    import localcode.server_manager as _sm
-    monkeypatch.setattr(_sm, "probe_loaded_model",
-                        lambda port, timeout=1.0: "/m/Qwen3.8-27B-UD-Q8_K_XL.gguf")
-    monkeypatch.setattr(_sm.ServerManager, "get",
-                        classmethod(lambda cls: _FakeStubMgr()))
-    s = _FakeScreen()
-    verify(s)
-    assert s._model_mismatch is not None
-    assert s._verified_model_name is None
-    update(s)
-    # Loud on the left (survives narrow-terminal truncation) AND names the
-    # model that is really answering.
-    assert "server: WRONG MODEL" in s.rendered
-    assert "serving Qwen3.8-27B-UD-Q8_K_XL" in s.rendered
-
-
-def test_status_bar_names_the_model_once_verified(monkeypatch):
-    verify, update = _screen_methods()
-    import localcode.server_manager as _sm
-    monkeypatch.setattr(
-        _sm, "probe_loaded_model",
-        lambda port, timeout=1.0: "/m/Muse-Glimmer-30B-UD-Q8_K_XL.gguf")
-    monkeypatch.setattr(_sm.ServerManager, "get",
-                        classmethod(lambda cls: _FakeStubMgr()))
-    s = _FakeScreen()
-    verify(s)
-    assert s._model_mismatch is None
-    assert s._verified_model_name == "Muse-Glimmer-30B-UD-Q8_K_XL.gguf"
-    update(s)
-    assert "WRONG MODEL" not in s.rendered
-    assert "unverified" not in s.rendered
-    assert "server: ready" in s.rendered
-
-
-def test_status_bar_says_unverified_when_the_probe_is_silent(monkeypatch):
-    verify, update = _screen_methods()
-    import localcode.server_manager as _sm
-    monkeypatch.setattr(_sm, "probe_loaded_model", lambda port, timeout=1.0: None)
-    monkeypatch.setattr(_sm.ServerManager, "get",
-                        classmethod(lambda cls: _FakeStubMgr()))
-    s = _FakeScreen()
-    verify(s)
-    update(s)
-    assert "unverified" in s.rendered
-    assert "WRONG MODEL" not in s.rendered
-
-
 class _FakeStubMgr:
     """ServerManager stand-in: knows what was requested and which port."""
     current_model = "/models/Muse-Glimmer-30B-UD-Q8_K_XL.gguf"
