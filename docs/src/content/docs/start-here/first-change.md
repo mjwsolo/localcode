@@ -66,7 +66,7 @@ before the turn and passes after it.</small>
 | --- | --- |
 | `/models` | Opens the model picker to download or switch models |
 | `/status` | Shows the server, the current model, and the session |
-| `/permissions` | Reviews what the agent may do without asking |
+| `/permissions` | Turns auto-approve on or off for the few actions that ask |
 | `/new` | Starts a new session |
 | `/sessions` | Switches to an earlier session |
 | `/undo` | Undoes the previous message and its edits |
