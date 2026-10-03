@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import types
 from pathlib import Path
 
 import pytest
@@ -14,34 +13,39 @@ from localcode.ui import fork_commit, plugin_path, run_dir, ui_binary_path
 from localcode.ui.launch import write_config
 
 
-def _args(**kw):
-    base = dict(classic=False, preview_screen=None, resume=None, model=None)
-    base.update(kw)
-    return types.SimpleNamespace(**base)
-
-
-def test_default_frontend_is_ui(monkeypatch):
-    monkeypatch.delenv("LOCALCODE_FRONTEND", raising=False)
-    assert entrypoint._frontend_choice(_args()) == "ui"
-
-
-@pytest.mark.parametrize("env", ["classic", "CLASSIC", "tui", "textual"])
-def test_env_selects_classic(monkeypatch, env):
-    monkeypatch.setenv("LOCALCODE_FRONTEND", env)
-    assert entrypoint._frontend_choice(_args()) == "classic"
-
-
-def test_flag_and_classic_only_options_select_classic(monkeypatch):
-    monkeypatch.delenv("LOCALCODE_FRONTEND", raising=False)
-    assert entrypoint._frontend_choice(_args(classic=True)) == "classic"
-    assert entrypoint._frontend_choice(_args(preview_screen="chat")) == "classic"
-    assert entrypoint._frontend_choice(_args(resume="last")) == "classic"
-
-
-def test_parser_accepts_classic_and_version():
+def test_parser_accepts_version_model_and_project():
     p = entrypoint.build_parser()
-    assert p.parse_args(["--classic"]).classic is True
-    assert p.parse_args(["--version"]).version is True
+    a = p.parse_args(["--version"])
+    assert a.version is True
+    a = p.parse_args(["--model", "x", "somedir"])
+    assert a.model == "x" and a.project == "somedir"
+    with pytest.raises(SystemExit):
+        p.parse_args(["--classic"])  # the previous interface is gone
+
+
+def test_unsupported_platform_refuses_plainly(monkeypatch, capsys):
+    monkeypatch.setattr("localcode.ui.platform_supported", lambda: False)
+    with pytest.raises(SystemExit) as e:
+        entrypoint.main([])
+    assert e.value.code == 1
+    err = capsys.readouterr().err
+    assert "Apple silicon" in err and "did not work there either" in err
+
+
+def test_missing_binary_refuses_plainly(monkeypatch, capsys):
+    monkeypatch.setattr("localcode.ui.platform_supported", lambda: True)
+    monkeypatch.setattr("localcode.ui.ui_binary_path", lambda: None)
+    with pytest.raises(SystemExit) as e:
+        entrypoint.main([])
+    assert e.value.code == 1
+    assert "pip install -U localcode" in capsys.readouterr().err
+
+
+def test_missing_project_dir_is_an_error(tmp_path, capsys):
+    with pytest.raises(SystemExit) as e:
+        entrypoint.main([str(tmp_path / "nope")])
+    assert e.value.code == 1
+    assert "directory not found" in capsys.readouterr().err
 
 
 def test_write_config_points_at_local_server_and_plugin(tmp_path):

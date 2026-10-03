@@ -72,17 +72,6 @@ def test_preset_apple_silicon_16gb():
 
 
 # ── Test 3: TUI always goes to setup screen ──
-def test_autobootstrap_triggers():
-    """TUI always shows setup screen when server isn't running."""
-    # on_mount now always pushes setup screen — no conditional logic
-    # Just verify the setup screen class exists and has _run_setup
-    from localcode.tui.screens.setup import SetupScreen
-    assert hasattr(SetupScreen, '_run_setup')
-    print("  TUI always goes to setup screen: verified")
-    print("  ✓ PASS")
-
-
-# ── Test 4: TUI setup screen flow — config gets updated correctly ──
 def test_tui_setup_config_update():
     """Simulate TUI setup: verify config is correctly set after binary + model download."""
     from localcode.config import save_config, load_config
@@ -177,21 +166,6 @@ def test_cli_bootstrap_sets_llama_cpp(monkeypatch, tmp_path):
 
 
 # ── Test 10: Setup screen step 2 actually has server launch code ──
-def test_setup_screen_has_server_launch():
-    """Verify setup.py Step 2 contains server launch code (not just a label)."""
-    # Read source file directly — inspect.getsource fails on Cython-compiled code
-    from pathlib import Path
-    setup_file = Path(__file__).parent.parent / "src" / "localcode" / "tui" / "screens" / "setup.py"
-    source = setup_file.read_text()
-    assert "Popen" in source, "Step 2 must launch server via Popen"
-    assert "healthcheck" in source, "Step 2 must wait for healthcheck"
-    assert "llama_server_command" in source, "Step 2 must use llama_server_command for full flags"
-    print("  Setup screen setup.py contains: Popen, healthcheck, llama_server_command")
-    print("  ✓ PASS")
-
-
-# ── Test 11: download_model uses parallel download ──
-# ── Test 12: End-to-end config roundtrip ──
 def test_config_roundtrip():
     """Write config, reload, verify all llama_cpp fields survive."""
     from localcode.config import load_config, save_config
