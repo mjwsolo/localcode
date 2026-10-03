@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import platform
 import re
+import os
 import subprocess
 from pathlib import Path
 
@@ -110,11 +111,21 @@ def test_bundled_binary_embeds_no_developer_path(binary: Path):
     assert not leaks, "developer paths embedded:\n" + "\n".join(sorted(leaks)[:5])
 
 
+# Launching the server binary on a hosted macOS runner can take minutes, every
+# time: the Metal backend probes a VM with no GPU and the unsigned 16 MB file is
+# scanned on exec. That is runner cost, not a product defect, so the check that
+# the binary runs at all gets a long budget; launch speed is asserted only on
+# real hardware (below), where it is what users experience.
+FIRST_LAUNCH_TIMEOUT_S = 600
+
+
+def _version(path: Path, timeout: int = FIRST_LAUNCH_TIMEOUT_S) -> subprocess.CompletedProcess:
+    return subprocess.run([str(path), "--version"], capture_output=True, text=True, timeout=timeout, check=False)
+
+
 def test_bundled_binary_loads_and_runs(binary: Path):
     """`--version` exits 0 — i.e. dyld resolves every linked symbol."""
-    proc = subprocess.run(
-        [str(binary), "--version"], capture_output=True, text=True, timeout=60, check=False,
-    )
+    proc = _version(binary)
     assert proc.returncode == 0, (
         f"bundled {binary.name} failed to run (rc={proc.returncode}).\n{proc.stderr[-800:]}"
     )
@@ -131,5 +142,14 @@ def test_ui_binary_version_matches_package():
     # Same major.minor: a Python-only patch release must not force a rebuild of
     # the 98 MB binary; a fork change bumps FORK_COMMIT and rebuilds anyway.
     want = re.match(r"\d+\.\d+", __version__).group(0)
-    out = subprocess.run([str(path), "--version"], capture_output=True, text=True, timeout=60, check=False).stdout.strip()
+    out = _version(path).stdout.strip()
     assert out.startswith(want + "."), f"UI binary reports {out!r}, package is {__version__!r}; rebuild with scripts/build_ui_binary.sh"
+
+
+@pytest.mark.skipif(os.environ.get("GITHUB_ACTIONS") == "true", reason="hosted macOS VMs launch the binary in minutes; speed is measured on real hardware")
+def test_bundled_binary_second_launch_is_fast(binary: Path):
+    """On real hardware a second `--version` answers in seconds: that is what
+    users see at every launch."""
+    _version(binary)
+    proc = _version(binary, timeout=30)
+    assert proc.returncode == 0, proc.stderr[-400:]
