@@ -140,7 +140,7 @@ from .helpers import (  # noqa: F401
 
 # ── Prompt templates + project-instructions loader ────────────────────────
 # Moved to agent/prompts.py during the T0.1-b split. Re-exported here so
-# external callers (dev/eval/prompt_variants.py, tests/promptfoo, app.py,
+# external callers (app.py,
 # tests/test_context_pipeline_e2e.py) that do
 #   `from localcode.agent import SYSTEM_PROMPT`
 # keep working unchanged. See agent/prompts.py for the commented
