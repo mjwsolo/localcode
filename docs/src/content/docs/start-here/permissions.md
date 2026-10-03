@@ -1,23 +1,48 @@
 ---
 title: Permissions
-description: What the agent can do on its own, what it asks about, and what is never allowed.
+description: What the agent does on its own, what it asks about, and where the boundary is.
 ---
 
-File edits and shell commands go through the runtime's permission prompt. When the agent wants to edit a file or run a command, the prompt shows what it is about to do and offers three answers:
+Inside the project you opened, the agent works on its own. It reads files, edits files and runs shell commands without asking first. That is the default, and it is what lets a task run to the end unattended.
+
+A few actions stop and ask. The prompt shows what the agent is about to do and offers three answers:
 
 - **allow once** - run this one action.
 - **always** - allow this kind of action for the rest of this session without asking.
 - **deny** - refuse it. The agent gets the refusal as a tool result and plans around it.
 
-Reading files does not prompt. `/permissions` shows the current rules for the session.
+## What asks
 
-## Rules that always hold
+| Action | Why |
+| --- | --- |
+| Reading or writing outside the project directory | The project is the boundary |
+| Reading a `.env` file | It usually holds secrets |
+| Repeating the same tool call over and over | It is probably stuck |
 
-- **Writes outside the project directory are refused.** The agent can only edit files under the directory you opened.
-- **Network tools do not prompt.** `websearch`, `webfetch`, and MCP tools run when the model calls them. See [Network Boundary](/localcode/concepts/network-boundary).
+`/permissions` has one switch, **Auto-approve permissions**. It is off by default. Turning it on answers "allow once" to these prompts for you.
 
-## Project rules
+## What does not ask
 
-A project `localcode.json` can pre-answer permissions, for example to allow `pytest` without asking or deny a command outright. See [Configuration](/localcode/reference/configuration).
+- **Edits and shell commands inside the project.** They run when the model calls them.
+- **Network tools.** `websearch`, `webfetch` and MCP tools run when the model calls them. See [Network Boundary](/localcode/concepts/network-boundary).
 
-The permission prompt is a guard against mistakes. It is not a security boundary against a hostile model or repository.
+So open a project you are willing to let the agent change, and keep it under version control. Undo is `git`.
+
+## Tightening it
+
+A project `localcode.json` can make edits or commands ask, or deny a command outright:
+
+```json
+{
+  "permission": {
+    "bash": "ask",
+    "edit": "ask"
+  }
+}
+```
+
+It can also allow or deny by pattern, for example allowing `pytest` while asking for everything else. See [Configuration](/localcode/reference/configuration).
+
+## What this is not
+
+The prompts guard against mistakes. They are not a security boundary against a hostile repository or a model that has been steered by text it read. A shell command can reach anything your user account can. Do not open a repository you do not trust.
