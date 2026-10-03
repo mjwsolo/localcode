@@ -1,14 +1,14 @@
 name: Deploy site to GitHub Pages
 
 # The published site at https://mjwsolo.github.io/localcode/ is the Astro +
-# Starlight project in website/. It replaced the MkDocs build in 0.3.x; the
+# Starlight project in docs/. It replaced the MkDocs build in 0.3.x; the
 # landing page and the docs are one deployment.
 
 on:
   push:
     branches: [main]
     paths:
-      - "website/**"
+      - "docs/**"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
 
@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: website
+        working-directory: docs
     steps:
       - uses: actions/checkout@v4
 
@@ -32,7 +32,7 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: website/package-lock.json
+          cache-dependency-path: docs/package-lock.json
 
       - run: npm ci
 
@@ -47,7 +47,7 @@ jobs:
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: website/dist
+          publish_dir: docs/dist
           publish_branch: gh-pages
           force_orphan: true
           commit_message: "docs: deploy ${{ github.sha }}"

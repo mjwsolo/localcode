@@ -74,7 +74,7 @@ if [[ -d "$REC_DIR/out/first-change.png" ]]; then
   ffmpeg -hide_banner -loglevel error -y -framerate 10 -start_number 70 -i "$REC_DIR/out/first-change.png/frame-text-%05d.png" -frames:v 116 -filter_complex 'split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=none' -loop 0 "$REC_DIR/out/step-4-verify.gif"
   if command -v gifsicle >/dev/null; then gifsicle -O3 -o "$REC_DIR/out/step-4-verify.opt.gif" "$REC_DIR/out/step-4-verify.gif" && mv "$REC_DIR/out/step-4-verify.opt.gif" "$REC_DIR/out/step-4-verify.gif"; fi
 fi
-cp "$REC_DIR"/out/*.gif "$ROOT/website/public/demo/"
-[ -f "$REC_DIR/out/first-change-final.png" ] && cp "$REC_DIR/out/first-change-final.png" "$ROOT/website/public/demo/"
+cp "$REC_DIR"/out/*.gif "$ROOT/docs/public/demo/"
+[ -f "$REC_DIR/out/first-change-final.png" ] && cp "$REC_DIR/out/first-change-final.png" "$ROOT/docs/public/demo/"
 [ -f "$REC_DIR/out/first-change.gif" ] && cp "$REC_DIR/out/first-change.gif" "$ROOT/docs/assets/demo/first-change.gif"
-echo "installed into website/public/demo and docs/assets/demo"
+echo "installed into docs/public/demo and docs/assets/demo"
