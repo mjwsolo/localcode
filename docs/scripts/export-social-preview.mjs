@@ -46,8 +46,8 @@ import { fileURLToPath } from 'node:url';
 import { pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
 
-// This script lives in website/scripts/ rather than the repo's own scripts/
-// because `playwright` resolves out of website/node_modules -- the only
+// This script lives in docs/scripts/ rather than the repo's own scripts/
+// because `playwright` resolves out of docs/node_modules -- the only
 // lockfile-managed dependency tree in the repo. It writes to docs/assets/brand/
 // at the repo root, which is where the GitHub-facing brand assets live.
 /**
@@ -132,7 +132,7 @@ const REPO = join(HERE, '..', '..');
 const SVG = join(REPO, 'docs/assets/brand/github-social-preview.svg');
 const PNG = join(REPO, 'docs/assets/brand/github-social-preview.png');
 const MANIFEST = join(REPO, 'docs/assets/brand/github-social-preview.manifest.json');
-const FONTS = join(REPO, 'website/node_modules/@fontsource');
+const FONTS = join(REPO, 'docs/node_modules/@fontsource');
 
 const W = 1280;
 const H = 640;
@@ -167,7 +167,7 @@ const fontHashes = {};
 const faceCss = FACES.map(([family, weight, rel]) => {
   const path = join(FONTS, rel);
   if (!existsSync(path)) {
-    die(`Missing font: ${relative(REPO, path)}\n  Run \`npm ci\` in website/ first.`);
+    die(`Missing font: ${relative(REPO, path)}\n  Run \`npm ci\` in docs/ first.`);
   }
   const bytes = readFileSync(path);
   fontHashes[rel] = sha256(bytes).slice(0, 16);
@@ -178,7 +178,7 @@ const faceCss = FACES.map(([family, weight, rel]) => {
 }).join('');
 
 const playwrightVersion = JSON.parse(
-  readFileSync(join(REPO, 'website/node_modules/playwright/package.json'), 'utf8'),
+  readFileSync(join(REPO, 'docs/node_modules/playwright/package.json'), 'utf8'),
 ).version;
 // The revision directory name is what actually pins the binary, e.g. chromium-1234.
 const chromiumRevision =

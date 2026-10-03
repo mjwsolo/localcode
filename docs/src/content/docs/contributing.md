@@ -9,7 +9,7 @@ The contributor guides live in the repository: [`CONTRIBUTING.md`](https://githu
 
 ## Working on these docs
 
-This site is in `website/` (Astro + Starlight):
+This site is in `docs/` (Astro + Starlight):
 
 ```sh
 cd website
@@ -17,4 +17,4 @@ npm install
 npm run dev
 ```
 
-See `website/README.md` for full preview instructions.
+See `docs/README.md` for full preview instructions.

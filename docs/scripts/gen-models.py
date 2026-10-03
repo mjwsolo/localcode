@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate website/src/data/models.json from localcode's own catalog.
+"""Generate docs/src/data/models.json from localcode's own catalog.
 
 Everything in the memory chooser comes from localcode.models_catalog:
 the fit rule is the one recommend() implements (weights <= 55% of unified
@@ -7,7 +7,7 @@ memory), the recommended pick is recommend(ram), and every size/active-param
 string is the catalog's own.
 
 Run with the interpreter that has localcode installed:
-  ~/.local/share/uv/tools/localcode/bin/python website/scripts/gen-models.py
+  ~/.local/share/uv/tools/localcode/bin/python docs/scripts/gen-models.py
 """
 import json, pathlib, re
 from localcode import models_catalog as m

@@ -30,11 +30,11 @@ npm run social:export     # rewrites the PNG and the manifest
 npm run social:check      # verifies; writes nothing; non-zero on mismatch
 ```
 
-Both need `npm ci` to have run in `website/`, plus `npx playwright install
+Both need `npm ci` to have run in `docs/`, plus `npx playwright install
 chromium` once.
 
 The exporter loads Martian Mono, Inter and Commit Mono from
-`website/node_modules/@fontsource` and renders through a browser. Do not
+`docs/node_modules/@fontsource` and renders through a browser. Do not
 substitute rsvg-convert, cairosvg or Preview: the card's text is live `<text>`
 in faces that are not installed system-wide, so those tools quietly swap in a
 system font and produce something that looks close enough to ship and is wrong.
@@ -42,7 +42,7 @@ system font and produce something that looks close enough to ship and is wrong.
 #### What is actually pinned, and what is not
 
 The renderer is the Chromium build pinned by the `playwright` version in
-`website/package-lock.json` — currently **playwright 1.62.1 → chromium-1234** —
+`docs/package-lock.json` — currently **playwright 1.62.1 → chromium-1234** —
 not whatever Chrome the machine happens to have. Bumping playwright changes the
 renderer deliberately and visibly instead of silently.
 
@@ -136,7 +136,7 @@ Three things now coexist, deliberately, and someone should choose between them:
 2. `house-mark.svg` — that same logo as flat geometry. Used by the social
    preview.
 3. The **Finder Mark** (concentric squares) — used by the docs preview site in
-   `website/`, per the approved preview direction.
+   `docs/`, per the approved preview direction.
 
 (2) and (3) share a construction language on purpose, so the current state is
 coherent rather than broken. But a project should ship one mark. Swapping the
@@ -150,4 +150,4 @@ already approved as-is.
 `scripts/gen_hero_banner.py` that produced them were removed — the art was the
 gradient/glow style the brand direction rules out, and the PNG was 338 KB. The
 replacement hero banner is hand-authored at
-`website/public/brand/hero-banner.svg` (5 KB).
+`docs/public/brand/hero-banner.svg` (5 KB).
