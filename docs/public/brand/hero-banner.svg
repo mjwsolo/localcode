@@ -18,7 +18,7 @@
     so it is never green. This mirrors landing.css exactly.
 
     NOTE: the wordmark and transcript are live <text>. Convert to outlines
-    before using this file as a distributed asset — see website/README.md,
+    before using this file as a distributed asset — see docs/README.md,
     "Outlined SVG text".
   -->
 

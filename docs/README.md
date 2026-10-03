@@ -1,7 +1,19 @@
+# docs/
+
+One folder for everything documentation:
+
+| Path | What |
+| --- | --- |
+| `src/content/docs/` | The published docs site (Astro + Starlight), deployed by `.github/workflows/docs.yml` |
+| `assets/` | Brand marks, logos, the README demo GIF, the GitHub social preview |
+| `ERRORS.md` | Generated from `src/localcode/errors.py`; the site's error-codes page links to it |
+| `mcp-lsp.md`, `upstream-fork.md` | Contributor recipes linked from the site and `CONTRIBUTING.md` |
+| `demo-tapes/`, `scripts/` | Recording and export tooling for the assets above |
+
 # localcode docs — preview site
 
 A self-contained [Astro](https://astro.build) + [Starlight](https://starlight.astro.build)
-docs site with a custom landing page. It lives entirely in `website/` and does
+docs site with a custom landing page. It lives entirely in `docs/` and does
 not touch the Python package, the existing `docs/` directory, or `mkdocs.yml`.
 
 ## Run it locally
@@ -36,7 +48,7 @@ npm run check      # astro check (also aliased as npm run lint)
 ## Layout
 
 ```
-website/
+docs/
 ├── astro.config.mjs           Starlight config + sidebar IA
 ├── src/
 │   ├── pages/index.astro      Custom landing page (owns "/")
