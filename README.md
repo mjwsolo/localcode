@@ -53,7 +53,7 @@ Docs: [mjwsolo.github.io/localcode](https://mjwsolo.github.io/localcode/)
 ## What it does
 
 - Reads and edits files in your project
-- Runs your tests, builds, Git and shell commands, and asks before anything risky
+- Runs your tests, builds, Git and shell commands inside the project on its own, and asks before touching anything outside it
 - Searches code by name, content or structure
 - Scaffolds and launches apps, then checks that they respond
 - Remembers the task across messages
