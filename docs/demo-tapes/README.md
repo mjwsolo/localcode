@@ -1,13 +1,13 @@
 # Demo recordings
 
-The GIFs under `website/public/demo/` (and the README hero copy under
+The GIFs under `docs/public/demo/` (and the README hero copy under
 `docs/assets/demo/`) are recorded from the real app with
 [vhs](https://github.com/charmbracelet/vhs). Re-record after any change to
 the first-run flow:
 
     brew install vhs gifsicle
     # a project with a failing test, and the model already downloaded
-    cd website/demo-tapes && ./record.sh
+    cd docs/demo-tapes && ./record.sh
 
 Each `.tape` drives localcode 0.4.2 in `/private/tmp/retry-demo`. `record.sh`
 captures PNG frames with VHS, builds crisp GIFs with ffmpeg, checks

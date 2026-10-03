@@ -36,7 +36,7 @@ export default defineConfig({
       // landing page's size and order. Configuring it here would render a
       // second, smaller one that then has to be hidden in CSS.
       editLink: {
-        baseUrl: 'https://github.com/mjwsolo/localcode/edit/main/website/',
+        baseUrl: 'https://github.com/mjwsolo/localcode/edit/main/docs/',
       },
       customCss: [
         // Must match the landing page's imports in src/pages/index.astro,
@@ -53,7 +53,7 @@ export default defineConfig({
       // https://mjwsolo.github.io/localcode/ would name an origin that
       // currently serves the MkDocs site and has no social-preview.svg.
       // `public/social-preview.svg` is built and ready; wire the tag up at
-      // deploy time. See website/README.md → "Deployment-time requirements".
+      // deploy time. See docs/README.md → "Deployment-time requirements".
       head: [
         {
           tag: 'meta',
