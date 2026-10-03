@@ -185,15 +185,18 @@ def forget(alias: str) -> None:
 # ---- server I/O --------------------------------------------------------------
 
 def _post(port: int, path: str, body: dict, timeout: float) -> dict:
+    from localcode.ui.auth import server_headers
     req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json"})
+                                 headers={"Content-Type": "application/json", **server_headers()})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode())
 
 
 def slots(port: int) -> list[dict] | None:
     try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/slots", timeout=2) as r:
+        from localcode.ui.auth import server_headers
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/slots", headers=server_headers())
+        with urllib.request.urlopen(req, timeout=2) as r:
             data = json.loads(r.read().decode())
         return data if isinstance(data, list) else None
     except Exception:  # noqa: BLE001
@@ -216,7 +219,8 @@ class Replay:
 
     def run(self, tokens: list[int]) -> dict:
         body = json.dumps({"prompt": tokens, "n_predict": 1, "cache_prompt": True, "temperature": 0})
-        self.conn.request("POST", "/completion", body=body, headers={"Content-Type": "application/json"})
+        from localcode.ui.auth import server_headers
+        self.conn.request("POST", "/completion", body=body, headers={"Content-Type": "application/json", **server_headers()})
         r = json.loads(self.conn.getresponse().read().decode())
         return r.get("timings") or {}
 

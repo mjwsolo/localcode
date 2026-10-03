@@ -47,6 +47,16 @@ const MAX_TODO_CONTINUATIONS = 15;
 const MAX_TODO_STUCK = 3;
 const MAX_BUILD_VERIFY = 3;
 const NUDGE_PREFIX = "SYSTEM:";
+/** The supervisor's control API requires the session token on every request. */
+const controlHeaders = (): Record<string, string> => ({
+  "content-type": "application/json",
+  "x-localcode-token": process.env.LOCALCODE_CONTROL_TOKEN ?? "",
+});
+/** The build-check gate runs the project's own build or test command. That is
+ *  code from the opened repository executing outside the runtime's permission
+ *  system, so it is off unless the user opts in. The model still runs checks
+ *  itself through the bash tool, where permissions apply. */
+const autoCheck = () => process.env.LOCALCODE_AUTO_CHECK === "1";
 
 const PLANNING_RULE = `WORKSPACE TASK COMPLETION:
 - These execution rules apply ONLY when the user asks for work on project files. Answer general questions, advice, greetings, and unrelated web research directly, without todowrite, repository exploration, build checks, or creating files. Do not invent deliverables, compliance requirements, or project work the user did not request.
@@ -541,7 +551,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
     if (!control) return undefined;
     if (Date.now() - loadedName.at < 3_000) return loadedName.name;
     try {
-      const r = await fetch(`${control}/status`, { signal: AbortSignal.timeout(1_000) });
+      const r = await fetch(`${control}/status`, { headers: controlHeaders(), signal: AbortSignal.timeout(1_000) });
       const j = (await r.json()) as { current?: string; state?: string };
       if (j.state === "ready" && j.current) loadedName = { name: j.current, at: Date.now() };
     } catch {}
@@ -643,7 +653,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
         // A real turn is about to hit the model: if the supervisor is still
         // pre-reading the prompt prefix (warm-up), stop it so this request runs next.
         const control = process.env.LOCALCODE_CONTROL_URL;
-        if (control) fetch(`${control}/warmup/cancel`, { method: "POST", body: "{}" }).catch(() => {});
+        if (control) fetch(`${control}/warmup/cancel`, { method: "POST", headers: controlHeaders(), body: "{}" }).catch(() => {});
         workspaceActive = false;
         if (activeSession !== input.sessionID || interrupted.has(input.sessionID)) todos = [];
         activeSession = input.sessionID;
@@ -781,7 +791,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
         }
       }
 
-      if (buildVerifyNudges < MAX_BUILD_VERIFY) {
+      if (autoCheck() && buildVerifyNudges < MAX_BUILD_VERIFY) {
         const roots = [...new Set(changed.map(checkDirectory).filter((root): root is string => Boolean(root)))];
         if (!roots.length) roots.push(directory);
         for (const root of roots) {
