@@ -131,8 +131,8 @@ either to apply.
 
 Three things now coexist, deliberately, and someone should choose between them:
 
-1. `../logo/{light,dark}.png` and `../../logo.png` — the emoji house plus
-   wordmark. **Untouched.** Still what `README.md` and `docs/index.md` render.
+1. `../logo/lockup-{light,dark}-v2.png` — the emoji house plus wordmark.
+   What `README.md` renders. The old `logo.png` with a baked-in version number is gone.
 2. `house-mark.svg` — that same logo as flat geometry. Used by the social
    preview.
 3. The **Finder Mark** (concentric squares) — used by the docs preview site in
