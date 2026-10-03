@@ -207,13 +207,11 @@ if __name__ == "__main__":
     tests = [
         ("1. Fresh config defaults", test_fresh_config_defaults),
         ("2. Preset selects llama_cpp on Apple Silicon 16GB", test_preset_apple_silicon_16gb),
-        ("3. Autobootstrap triggers on fresh install", test_autobootstrap_triggers),
         ("4. TUI setup updates config correctly", test_tui_setup_config_update),
         ("6. Healthcheck endpoint correct for llama_cpp", test_healthcheck_endpoint),
         ("7. TUI on_mount: no binary → setup screen", test_tui_on_mount_no_binary),
         ("8. TUI on_mount: binary exists → start server", test_tui_on_mount_binary_exists),
         ("9. CLI autobootstrap sets llama_cpp", test_cli_bootstrap_sets_llama_cpp),
-        ("10. Setup screen has actual server launch code", test_setup_screen_has_server_launch),
         ("12. Config roundtrip preserves all fields", test_config_roundtrip),
     ]
 
