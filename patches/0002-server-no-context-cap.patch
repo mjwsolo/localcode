@@ -1,15 +1,35 @@
 diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
-index 572682af7..c54a5e9ba 100644
+index 809be94cd..b851f9b07 100644
 --- a/tools/server/server-context.cpp
 +++ b/tools/server/server-context.cpp
-@@ -1155,8 +1155,8 @@ private:
+@@ -1297,7 +1297,9 @@ private:
+                 std::min(n_ctx_seq, params_base.kv_unified_per_slot) : n_ctx_seq;
  
-         int n_ctx_slot = llama_n_ctx_seq(ctx_tgt);
-         if (n_ctx_slot > n_ctx_train) {
--            SRV_WRN("the slot context (%d) exceeds the training context of the model (%d) - capping\n", n_ctx_slot, n_ctx_train);
--            n_ctx_slot = n_ctx_train;
-+            SRV_WRN("the slot context (%d) exceeds the training context of the model (%d) - using rope scaling to extend\n", n_ctx_slot, n_ctx_train);
-+            // Do not cap: caller has configured rope scaling (--rope-scale / --rope-scaling yarn) to handle extended context.
+             if (n_ctx_capped > n_ctx_train) {
+-                SRV_WRN("the slot context (%d) exceeds the training context of the model (%d) - capping\n",
++                // fork-local: do not cap. localcode configures rope scaling (--rope-scale / --rope-scaling yarn)
++                // to run beyond the training context, so this is reported, not enforced (see n_ctx_slot()).
++                SRV_WRN("the slot context (%d) exceeds the training context of the model (%d) - using rope scaling to extend\n",
+                         n_ctx_capped, n_ctx_train);
+             }
+         }
+@@ -4242,7 +4244,9 @@ private:
+         });
+     }
+ 
+-    // context size of a single slot, capped by --kv-unified-per-slot and by the training context of the model
++    // context size of a single slot, capped by --kv-unified-per-slot
++    // fork-local: NOT capped by the training context of the model. The caller configures rope
++    // scaling to run beyond it; upstream's clamp is replaced with the warning in load_model().
+     int n_ctx_slot() const {
+         int res = llama_n_ctx_seq(ctx_tgt);
+ 
+@@ -4250,7 +4254,7 @@ private:
+             res = std::min(res, params_base.kv_unified_per_slot);
          }
  
-         slots.clear();
+-        return std::min(res, llama_model_n_ctx_train(model_tgt));
++        return res;
+     }
+ 
+     server_response_reader get_response_reader() {
