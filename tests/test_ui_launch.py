@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,9 @@ def test_parser_accepts_version_model_and_project():
     assert a.version is True
     a = p.parse_args(["--model", "x", "somedir"])
     assert a.model == "x" and a.project == "somedir"
+    for flag in ("-s", "--session", "--resume"):
+        assert p.parse_args([flag, "ses_example"]).resume == "ses_example"
+    assert p.parse_args(["--continue"]).resume == "last"
     with pytest.raises(SystemExit):
         p.parse_args(["--classic"])  # the previous interface is gone
 
@@ -46,6 +50,18 @@ def test_missing_project_dir_is_an_error(tmp_path, capsys):
         entrypoint.main([str(tmp_path / "nope")])
     assert e.value.code == 1
     assert "directory not found" in capsys.readouterr().err
+
+
+def test_entrypoint_forwards_session_to_launcher(monkeypatch):
+    from localcode.ui import launch
+    monkeypatch.setattr("localcode.ui.platform_supported", lambda: True)
+    monkeypatch.setattr("localcode.ui.ui_binary_path", lambda: Path("/fake/ui"))
+    calls = []
+    monkeypatch.setattr(launch, "main", lambda *args, **kwargs: calls.append((args, kwargs)) or 0)
+    with pytest.raises(SystemExit) as exc:
+        entrypoint.main(["-s", "ses_example"])
+    assert exc.value.code == 0
+    assert calls == [((None,), {"project": None, "resume": "ses_example"})]
 
 
 def test_write_config_points_at_local_server_and_plugin(tmp_path):
@@ -145,3 +161,33 @@ def test_second_launch_attaches_to_running_session(monkeypatch, tmp_path):
     assert calls["argv"][1:] == ["-m", "localcode/gemma-4-12b-it-UD-Q4_K_XL"]
     assert calls["cfg"]["provider"]["localcode"]["options"]["baseURL"] == "http://127.0.0.1:8123/v1"
     assert calls["cfg"]["model"] == "localcode/gemma-4-12b-it-UD-Q4_K_XL"
+
+
+def test_resume_flags_reach_attached_runtime(monkeypatch, tmp_path):
+    from localcode.ui import launch
+    binary = tmp_path / "ui"
+    binary.write_bytes(b"x")
+    monkeypatch.setattr(launch, "ui_binary_path", lambda: binary)
+    monkeypatch.setattr(launch, "_llama_server", lambda: binary)
+    monkeypatch.setattr(launch, "find_running", lambda: (8323, {"port": 8123, "ctx": 8192}))
+    monkeypatch.setenv("LOCALCODE_AGENT_RUN_DIR", str(tmp_path / "run"))
+    calls = []
+    monkeypatch.setattr(launch.subprocess, "call", lambda argv, **kwargs: calls.append((argv, kwargs)) or 0)
+    assert launch.main(project=str(tmp_path), resume="ses_example") == 0
+    assert calls[-1][0][-2:] == ["--session", "ses_example"]
+    assert launch.main(project=str(tmp_path), resume="last") == 0
+    assert calls[-1][0][-1:] == ["--continue"]
+
+
+def test_session_id_uses_its_saved_project(monkeypatch, tmp_path):
+    from localcode.ui.launch import _session_directory
+    data = tmp_path / "data" / "localcode-agent"
+    data.mkdir(parents=True)
+    project = tmp_path / "original-project"
+    project.mkdir()
+    with sqlite3.connect(data / "opencode.db") as conn:
+        conn.execute("CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT)")
+        conn.execute("INSERT INTO session VALUES (?, ?)", ("ses_example", str(project)))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    assert _session_directory("ses_example") == project
+    assert _session_directory("ses_missing") is None

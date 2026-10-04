@@ -14,6 +14,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="store_true", help="Print the version and exit")
     parser.add_argument("--model", help="Model alias to load (otherwise the picker asks)")
+    parser.add_argument("-s", "--session", "--resume", dest="resume", metavar="SESSION_ID",
+                        help="Resume a session by ID; uses its saved project directory when no project is given")
+    parser.add_argument("--continue", dest="resume", action="store_const", const="last",
+                        help="Continue the latest session in this project")
     parser.add_argument("-c", "--cwd", type=str, default=None,
                         help="Working directory for the project (defaults to the current directory)")
     parser.add_argument("project", nargs="?", default=None,
@@ -62,7 +66,7 @@ def main(argv: list[str] | None = None) -> None:
               "Reinstall with `pip install -U localcode`.", file=sys.stderr)
         sys.exit(1)
     from .ui.launch import main as ui_main
-    sys.exit(ui_main(args.model))
+    sys.exit(ui_main(args.model, project=project, resume=args.resume))
 
 
 if __name__ == "__main__":
