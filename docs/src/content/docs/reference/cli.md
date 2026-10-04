@@ -6,6 +6,7 @@ description: Every flag localcode accepts.
 ```text
 localcode [DIR] [--model TAG] [--resume SESSION_ID]
 localcode --version
+localcode api [--json] [--show-key]
 ```
 
 Run `localcode` by itself to open the interface. Setup, the model picker, and sessions all live inside it. There is no `localcode setup` subcommand and no benchmark subcommand.
@@ -20,6 +21,8 @@ Run `localcode` by itself to open the interface. Setup, the model picker, and se
 | `--version` | Print the version and exit |
 
 A second `localcode` opens another interface session attached to the running model server. The windows share that model; closing the second window leaves the first session running. Use `/models` to switch the shared model.
+
+`localcode api` reports the running model's loopback endpoint. The API key is only printed with `--show-key`; see [Local API](/localcode/guides/local-api).
 
 ## Environment variables
 
