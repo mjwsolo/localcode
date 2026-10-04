@@ -50,6 +50,9 @@ start typing. `/models` switches later.
 
 Docs: [mjwsolo.github.io/localcode](https://mjwsolo.github.io/localcode/)
 
+To use the running model from another local app, run `localcode api` for its
+OpenAI compatible endpoint. See the [Local API guide](https://mjwsolo.github.io/localcode/guides/local-api/).
+
 ## What it does
 
 - Reads and edits files in your project

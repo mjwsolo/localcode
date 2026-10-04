@@ -11,6 +11,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="localcode",
         description="LocalCode — AI coding assistant running entirely on your machine",
+        epilog="Other command: localcode api [--json] [--show-key] shows the running model endpoint.",
     )
     parser.add_argument("--version", action="store_true", help="Print the version and exit")
     parser.add_argument("--model", help="Model alias to load (otherwise the picker asks)")
@@ -32,6 +33,10 @@ def _unsupported_platform_message() -> str:
 
 
 def main(argv: list[str] | None = None) -> None:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "api":
+        from .ui.api import main as api_main
+        sys.exit(api_main(argv[1:]))
     os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
     # macOS malloc-warning silencer: these variables make every subprocess
     # print "can't turn off malloc stack logging" into stderr.
