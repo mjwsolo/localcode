@@ -3,9 +3,13 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## Unreleased
+## 0.5.2 — 2026-10-04
 
 ### Added
+
+- **Local API discovery.** `localcode api` reports the running model's local
+  OpenAI compatible endpoint; `--json` gives other tools connection metadata.
+  The session key is hidden unless `--show-key` is explicitly requested.
 
 - **Kolibri 1 (Aleph Alpha), experimental.** The open-weight English/German model
   released 2026-10-03: 78B parameters in total, about 3.5B active per token. It
@@ -19,15 +23,38 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ### Changed
 
+- **The bundled interface is updated to OpenCode dev `907b3bc`**, with the
+  LocalCode fork changes preserved. Builds use the frozen dependency lockfile.
+- **Permissions documentation matches the shipped defaults.** Commands and edits
+  inside the project run without prompts; the docs explain what does ask and
+  how to require approval for edits and commands.
+- `[DIR]` is the public project-directory form; the redundant `--cwd` / `-c`
+  flags and public `--continue` flag have been removed.
+
 - **The bundled model server moves to llama.cpp as of 2026-10-03** (from
   2026-08-22). Every catalogue model was re-verified on the new binary.
 
 ### Fixed
 
+- **Resume by session ID.** `localcode --resume SESSION_ID` (also `-s` or
+  `--session`) resumes from the session's saved project directory. Use
+  `localcode --resume last` to resume the latest session.
+- **Muse Glimmer reasoning metadata.** Its always-on reasoning policy now
+  resolves correctly instead of raising `ValueError`.
+
 - **Model launch flag removed upstream.** llama.cpp replaced `--mmap` with
   `--load-mode mmap`; the old spelling is now a hard error, so the launcher uses
   the new one. A test now asks the bundled server whether it accepts every flag
   the launcher emits, so a renamed flag fails in tests instead of at launch.
+
+### Known limitations
+
+- `turbo2` as the K cache type remains broken; use the default cache settings.
+- Kolibri is experimental and its coding quality has not been benchmarked.
+- The local model gate still uses a shorter launch command; the emitted-flags
+  regression test and local launcher verification cover the flag change in this
+  release. CUDA TurboQuant and the removed rotated Metal weight fast path remain
+  outside the tested shipping configuration.
 
 ## 0.5.1 — 2026-10-03
 

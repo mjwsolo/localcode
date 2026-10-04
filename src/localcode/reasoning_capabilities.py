@@ -15,6 +15,7 @@ __all__ = ["ReasoningControl", "ReasoningCapabilities", "reasoning_capabilities"
 class ReasoningControl(str, Enum):
     CHAT_TEMPLATE = "chat_template"
     EFFORT = "reasoning_effort"
+    ALWAYS = "always"  # Reasoning exists but cannot be switched off.
     NONE = "none"
 
 
