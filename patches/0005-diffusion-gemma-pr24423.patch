@@ -1,8 +1,8 @@
 diff --git a/common/arg.cpp b/common/arg.cpp
-index b271add..1236785 100644
+index aaaf812bc..3739a30ca 100644
 --- a/common/arg.cpp
 +++ b/common/arg.cpp
-@@ -1900,7 +1900,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+@@ -1911,7 +1911,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
          [](common_params & params, bool value) {
              params.conversation_mode = value ? COMMON_CONVERSATION_MODE_ENABLED : COMMON_CONVERSATION_MODE_DISABLED;
          }
@@ -11,7 +11,7 @@ index b271add..1236785 100644
      add_opt(common_arg(
          {"-st", "--single-turn"},
          "run conversation for a single turn only, then exit when done\n"
-@@ -4375,11 +4375,26 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+@@ -4466,11 +4466,26 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
          string_format("number of diffusion steps (default: %d)", params.diffusion.steps),
          [](common_params & params, int value) { params.diffusion.steps = value; }
      ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
@@ -38,7 +38,7 @@ index b271add..1236785 100644
      add_opt(common_arg(
          {"--diffusion-eps"}, "F",
          string_format("epsilon for timesteps (default: %.6f)", (double) params.diffusion.eps),
-@@ -4413,6 +4428,79 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+@@ -4504,6 +4519,79 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
          string_format("add gumbel noise to the logits if temp > 0.0 (default: %s)", params.diffusion.add_gumbel_noise ? "true" : "false"),
          [](common_params & params, const std::string & value) { params.diffusion.add_gumbel_noise = std::stof(value); }
      ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
@@ -118,11 +118,42 @@ index b271add..1236785 100644
      add_opt(common_arg(
          { "-lr", "--learning-rate" }, "ALPHA",
          string_format("adamw or sgd optimizer alpha (default: %.2g); note: sgd alpha recommended ~10x (no momentum)", (double) params.lr.lr0),
+diff --git a/common/common.cpp b/common/common.cpp
+index a2f162b6f..d80e9d2a8 100644
+--- a/common/common.cpp
++++ b/common/common.cpp
+@@ -19,6 +19,7 @@
+ #include <cmath>
+ #include <chrono>
+ #include <cstdarg>
++#include <cstdlib>
+ #include <cstring>
+ #include <ctime>
+ #include <filesystem>
+@@ -1268,6 +1269,18 @@ common_init_result::common_init_result(common_params & params, bool model_only)
+         return;
+     }
+ 
++    // fork-local (DiffusionGemma, see PATCHES.md 0005): canvas diffusion models self-condition through a
++    // full-vocab soft-embedding in the graph. The flag must be on BEFORE the context is created so the
++    // graph reserve sizes the compute buffer for it (the denoiser supplies the real logits per step).
++    // No-op for every other architecture.
++    if (llama_model_is_diffusion(model)) {
++        char canvas_str[32];
++        if (llama_model_meta_val_str(model, "diffusion.canvas_length", canvas_str, sizeof(canvas_str)) >= 0 &&
++            strtol(canvas_str, nullptr, 10) > 0) {
++            llama_diffusion_set_sc(model, nullptr, /*use_sc*/ 0.0f, /*temp_inv*/ 1.0f, /*enabled*/ true);
++        }
++    }
++
+     const llama_vocab * vocab = llama_model_get_vocab(model);
+ 
+     // these decision models return a score for each token via the embeddings output
 diff --git a/common/common.h b/common/common.h
-index de49dac..0dc45af 100644
+index 4308b0703..c2653bd6a 100644
 --- a/common/common.h
 +++ b/common/common.h
-@@ -394,7 +394,10 @@ struct common_params_speculative {
+@@ -407,7 +407,10 @@ struct common_params_speculative {
  
  struct common_params_diffusion {
      int32_t steps         = 128;
@@ -133,7 +164,7 @@ index de49dac..0dc45af 100644
  
      float   eps           = 0;        // epsilon for timesteps
      int32_t block_length  = 0;        // block length for generation
-@@ -404,6 +407,18 @@ struct common_params_diffusion {
+@@ -417,6 +420,18 @@ struct common_params_diffusion {
  
      float   cfg_scale     = 0;        // classifier-free guidance scale
      bool    add_gumbel_noise = false; // add gumbel noise to the logits if temp > 0.0
@@ -152,9 +183,25 @@ index de49dac..0dc45af 100644
  };
  
  // reasoning API response format (not to be confused as chat template's reasoning format)
+diff --git a/common/parsers/gemma4.cpp b/common/parsers/gemma4.cpp
+index f43c5ae46..511265b62 100644
+--- a/common/parsers/gemma4.cpp
++++ b/common/parsers/gemma4.cpp
+@@ -179,6 +179,11 @@ common_chat_params common_chat_params_init_gemma4(const common_chat_template &
+         "<|tool_call>",
+         "<tool_call|>",
+         "<|turn>",
++        // string delimiter of the tool-call syntax (`{path:<|"|>.<|"|>}`). Some GGUF conversions
++        // (e.g. DiffusionGemma BF16) export it as a CONTROL token; a non-preserved control token is
++        // dropped from the generated text, the arguments become `{path:.}` and the parser rejects
++        // the whole tool call.
++        "<|\"|>",
+     };
+ 
+     if (inputs.has_continuation()) {
 diff --git a/ggml/src/ggml-cuda/diffusion-sampling.cu b/ggml/src/ggml-cuda/diffusion-sampling.cu
 new file mode 100644
-index 0000000..2347002
+index 000000000..2347002d8
 --- /dev/null
 +++ b/ggml/src/ggml-cuda/diffusion-sampling.cu
 @@ -0,0 +1,178 @@
@@ -338,7 +385,7 @@ index 0000000..2347002
 +}
 diff --git a/ggml/src/ggml-cuda/diffusion-sampling.cuh b/ggml/src/ggml-cuda/diffusion-sampling.cuh
 new file mode 100644
-index 0000000..678611e
+index 000000000..678611e0d
 --- /dev/null
 +++ b/ggml/src/ggml-cuda/diffusion-sampling.cuh
 @@ -0,0 +1,19 @@
@@ -362,10 +409,10 @@ index 0000000..678611e
 +        int                  n_tokens,
 +        float                inv_temp);
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 522a2db..04cc5b8 100644
+index 188858191..0b53f2eb3 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
-@@ -24,6 +24,7 @@
+@@ -25,6 +25,7 @@
  #include "ggml-cuda/cumsum.cuh"
  #include "ggml-cuda/diagmask.cuh"
  #include "ggml-cuda/diag.cuh"
@@ -373,7 +420,7 @@ index 522a2db..04cc5b8 100644
  #include "ggml-cuda/fattn.cuh"
  #include "ggml-cuda/fwht.cuh"
  #include "ggml-cuda/getrows.cuh"
-@@ -5576,6 +5577,9 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
+@@ -5989,6 +5990,9 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
      if (strcmp(name, "ggml_backend_get_features") == 0) {
          return (void *)ggml_backend_cuda_get_features;
      }
@@ -384,10 +431,10 @@ index 522a2db..04cc5b8 100644
  }
  
 diff --git a/gguf-py/gguf/constants.py b/gguf-py/gguf/constants.py
-index abf1b6f..5abc864 100644
+index 5a9e3ab79..2143cb25f 100644
 --- a/gguf-py/gguf/constants.py
 +++ b/gguf-py/gguf/constants.py
-@@ -437,7 +437,14 @@ class Keys:
+@@ -481,7 +481,14 @@ class Keys:
              LAYERNORM_EPS   = "clip.gen.audio.attention.layer_norm_epsilon"
  
      class Diffusion:
@@ -403,7 +450,7 @@ index abf1b6f..5abc864 100644
  
      class xIELU:
          ALPHA_P             = "xielu.alpha_p"
-@@ -511,6 +518,7 @@ class MODEL_ARCH(IntEnum):
+@@ -558,6 +565,7 @@ class MODEL_ARCH(IntEnum):
      GEMMA3N          = auto()
      GEMMA4           = auto()
      GEMMA4_ASSISTANT = auto()
@@ -411,7 +458,7 @@ index abf1b6f..5abc864 100644
      GEMMA_EMBEDDING  = auto()
      STARCODER2       = auto()
      RWKV6            = auto()
-@@ -682,6 +690,11 @@ class MODEL_TENSOR(IntEnum):
+@@ -739,6 +747,11 @@ class MODEL_TENSOR(IntEnum):
      ATTN_K_NORM          = auto()
      LAYER_OUT_NORM       = auto()
      LAYER_OUT_SCALE      = auto()
@@ -423,7 +470,7 @@ index abf1b6f..5abc864 100644
      PER_LAYER_TOKEN_EMBD = auto() # gemma3n
      PER_LAYER_MODEL_PROJ = auto() # gemma3n
      PER_LAYER_INP_GATE   = auto() # gemma3n
-@@ -1234,6 +1247,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
+@@ -1337,6 +1350,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
      MODEL_ARCH.GEMMA3N:          "gemma3n",
      MODEL_ARCH.GEMMA4:           "gemma4",
      MODEL_ARCH.GEMMA4_ASSISTANT: "gemma4-assistant",
@@ -431,7 +478,7 @@ index abf1b6f..5abc864 100644
      MODEL_ARCH.GEMMA_EMBEDDING:  "gemma-embedding",
      MODEL_ARCH.STARCODER2:       "starcoder2",
      MODEL_ARCH.RWKV6:            "rwkv6",
-@@ -1404,6 +1418,11 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
+@@ -1517,6 +1531,11 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
      MODEL_TENSOR.MOE_LATENT_UP:             "blk.{bid}.ffn_latent_up",        # nemotron 3 super
      MODEL_TENSOR.LAYER_OUT_NORM:            "blk.{bid}.layer_output_norm",
      MODEL_TENSOR.LAYER_OUT_SCALE:           "blk.{bid}.layer_output_scale",
@@ -443,7 +490,7 @@ index abf1b6f..5abc864 100644
      MODEL_TENSOR.PER_LAYER_TOKEN_EMBD:      "per_layer_token_embd",           # gemma3n
      MODEL_TENSOR.PER_LAYER_MODEL_PROJ:      "per_layer_model_proj",           # gemma3n
      MODEL_TENSOR.PER_LAYER_PROJ_NORM:       "per_layer_proj_norm",            # gemma3n
-@@ -3115,6 +3134,39 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
+@@ -3430,6 +3449,39 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
          MODEL_TENSOR.PER_LAYER_PROJ_NORM,
          MODEL_TENSOR.PER_LAYER_POST_NORM,
      ],
@@ -484,10 +531,10 @@ index abf1b6f..5abc864 100644
          MODEL_TENSOR.ROPE_FREQS,
          MODEL_TENSOR.TOKEN_EMBD,
 diff --git a/gguf-py/gguf/gguf_writer.py b/gguf-py/gguf/gguf_writer.py
-index d8a96a2..ffe000e 100644
+index 4f1f8e5a5..b7fa25713 100644
 --- a/gguf-py/gguf/gguf_writer.py
 +++ b/gguf-py/gguf/gguf_writer.py
-@@ -1512,6 +1512,27 @@ class GGUFWriter:
+@@ -1626,6 +1626,27 @@ class GGUFWriter:
      def add_diffusion_shift_logits(self, value: bool) -> None:
          self.add_bool(Keys.Diffusion.SHIFT_LOGITS, value)
  
@@ -516,10 +563,10 @@ index d8a96a2..ffe000e 100644
          pack_prefix = ''
          if not skip_pack_prefix:
 diff --git a/include/llama.h b/include/llama.h
-index 87483f0..53cc844 100644
+index 11b4818ce..7f4e32171 100644
 --- a/include/llama.h
 +++ b/include/llama.h
-@@ -581,6 +581,55 @@ extern "C" {
+@@ -598,6 +598,55 @@ extern "C" {
      LLAMA_API const struct llama_vocab * llama_model_get_vocab(const struct llama_model * model);
      LLAMA_API enum llama_rope_type       llama_model_rope_type(const struct llama_model * model);
  
@@ -576,10 +623,10 @@ index 87483f0..53cc844 100644
      LLAMA_API int32_t llama_model_n_embd       (const struct llama_model * model);
      LLAMA_API int32_t llama_model_n_embd_inp   (const struct llama_model * model);
 diff --git a/src/llama-arch.cpp b/src/llama-arch.cpp
-index 025f9fb..8bb5e40 100644
+index 2af5445df..aab463522 100644
 --- a/src/llama-arch.cpp
 +++ b/src/llama-arch.cpp
-@@ -57,6 +57,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
+@@ -59,6 +59,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
      { LLM_ARCH_GEMMA3N,          "gemma3n"          },
      { LLM_ARCH_GEMMA4,           "gemma4"           },
      { LLM_ARCH_GEMMA4_ASSISTANT, "gemma4-assistant" },
@@ -587,7 +634,7 @@ index 025f9fb..8bb5e40 100644
      { LLM_ARCH_GEMMA_EMBEDDING,  "gemma-embedding"  },
      { LLM_ARCH_STARCODER2,       "starcoder2"       },
      { LLM_ARCH_MAMBA,            "mamba"            },
-@@ -445,6 +446,11 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
+@@ -485,6 +486,11 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
      { LLM_TENSOR_ATTN_QKV,                               "blk.%d.attn_qkv" },
      { LLM_TENSOR_LAYER_OUT_NORM,                         "blk.%d.layer_output_norm" },
      { LLM_TENSOR_LAYER_OUT_SCALE,                        "blk.%d.layer_output_scale" },
@@ -599,7 +646,7 @@ index 025f9fb..8bb5e40 100644
      { LLM_TENSOR_ATTN_OUT_NORM,                          "blk.%d.attn_output_norm" },
      { LLM_TENSOR_POS_EMBD,                               "position_embd" },
      { LLM_TENSOR_FFN_ACT,                                "blk.%d.ffn.act" },
-@@ -818,6 +824,11 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
+@@ -932,6 +938,11 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
      {LLM_TENSOR_ATTN_K_NORM,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
      {LLM_TENSOR_LAYER_OUT_NORM,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
      {LLM_TENSOR_LAYER_OUT_SCALE,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
@@ -611,7 +658,7 @@ index 025f9fb..8bb5e40 100644
      {LLM_TENSOR_ATTN_Q_A_NORM,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
      {LLM_TENSOR_ATTN_KV_A_NORM,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
      {LLM_TENSOR_ATTN_SUB_NORM,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
-@@ -1023,6 +1034,7 @@ bool llm_arch_is_diffusion(const llm_arch & arch) {
+@@ -1153,6 +1164,7 @@ bool llm_arch_is_diffusion(const llm_arch & arch) {
          case LLM_ARCH_LLADA:
          case LLM_ARCH_LLADA_MOE:
          case LLM_ARCH_RND1:
@@ -620,10 +667,10 @@ index 025f9fb..8bb5e40 100644
          default:
              return false;
 diff --git a/src/llama-arch.h b/src/llama-arch.h
-index 7159e23..7900825 100644
+index 148d293ce..c6160406d 100644
 --- a/src/llama-arch.h
 +++ b/src/llama-arch.h
-@@ -62,6 +62,7 @@ enum llm_arch {
+@@ -64,6 +64,7 @@ enum llm_arch {
      LLM_ARCH_GEMMA3N,
      LLM_ARCH_GEMMA4,
      LLM_ARCH_GEMMA4_ASSISTANT,
@@ -631,7 +678,7 @@ index 7159e23..7900825 100644
      LLM_ARCH_GEMMA_EMBEDDING,
      LLM_ARCH_STARCODER2,
      LLM_ARCH_MAMBA,
-@@ -466,6 +467,11 @@ enum llm_tensor {
+@@ -504,6 +505,11 @@ enum llm_tensor {
      LLM_TENSOR_ATTN_K_NORM,
      LLM_TENSOR_LAYER_OUT_NORM,
      LLM_TENSOR_LAYER_OUT_SCALE,
@@ -644,26 +691,27 @@ index 7159e23..7900825 100644
      LLM_TENSOR_POST_MLP_NORM,
      LLM_TENSOR_PER_LAYER_TOKEN_EMBD, // gemma3n
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index b3e6ad8..9b4cb65 100644
+index fc48428f4..1c796e305 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -1410,8 +1410,14 @@ int llama_context::encode(const llama_batch & batch_inp) {
-     const int64_t n_embd = hparams.n_embd_inp_enc();
+@@ -1487,8 +1487,14 @@ int llama_context::encode(const llama_batch_ext & batch_inp) {
+     // eagle3/DFlash: features as encoder input, and non-draft paths fall back to model's input dim
      const int64_t n_vocab = model.vocab.n_tokens();
  
+-    // note: during encode, we always output all tokens and skip position continuity checks (output_all=true)
+-    if (!balloc->init(batch_inp, model.vocab, true)) {
 +    // Memoryless models (e.g. canvas diffusion) route decode() here but often need logits for only a few rows
 +    // (the canvas). When the caller caps n_outputs_max below the batch size, honor the per-token output flags
 +    // instead of forcing every row, avoiding an [n_tokens, n_vocab] reserve (huge at a 262k vocab). The default
 +    // n_outputs_max == n_batch >= n_tokens, so this is a no-op for encoder/embedding models.
-+    const bool output_all = cparams.embeddings || cparams.n_outputs_max >= (uint32_t) batch_inp.n_tokens;
++    const bool output_all = cparams.embeddings || cparams.n_outputs_max >= (uint32_t) batch_inp.tokens.size();
 +
-     // note: during encode, we always pass the full sequence starting from pos = 0
--    if (!balloc->init(batch_inp, model.vocab, nullptr, n_embd, cparams.kv_unified ? LLAMA_MAX_SEQ : cparams.n_seq_max, true)) {
-+    if (!balloc->init(batch_inp, model.vocab, nullptr, n_embd, cparams.kv_unified ? LLAMA_MAX_SEQ : cparams.n_seq_max, output_all)) {
++    // note: during encode, we skip position continuity checks; all tokens are output unless capped above
++    if (!balloc->init(batch_inp, model.vocab, output_all)) {
          LLAMA_LOG_ERROR("%s: failed to initialize batch\n", __func__);
          return -1;
      }
-@@ -1440,17 +1446,27 @@ int llama_context::encode(const llama_batch & batch_inp) {
+@@ -1517,17 +1523,27 @@ int llama_context::encode(const llama_batch_ext & batch_inp) {
  
      n_queued_tokens += n_tokens;
  
@@ -697,7 +745,7 @@ index b3e6ad8..9b4cb65 100644
  
      const auto causal_attn_org = cparams.causal_attn;
  
-@@ -1483,7 +1499,7 @@ int llama_context::encode(const llama_batch & batch_inp) {
+@@ -1560,7 +1576,7 @@ int llama_context::encode(const llama_batch_ext & batch_inp) {
          GGML_ASSERT(backend_res != nullptr);
          GGML_ASSERT(logits.data != nullptr);
  
@@ -707,10 +755,10 @@ index b3e6ad8..9b4cb65 100644
  
      // extract embeddings
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index de0d3c1..8702c7d 100644
+index 97e0cee70..e0fa72370 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
-@@ -153,6 +153,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
+@@ -154,6 +154,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
              return new llama_model_gemma4(params);
          case LLM_ARCH_GEMMA4_ASSISTANT:
              return new llama_model_gemma4_assistant(params);
@@ -719,15 +767,15 @@ index de0d3c1..8702c7d 100644
          case LLM_ARCH_GEMMA_EMBEDDING:
              return new llama_model_gemma_embedding(params);
          case LLM_ARCH_STARCODER2:
-@@ -2121,6 +2123,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
-         case LLM_ARCH_LLADA:
+@@ -2376,6 +2378,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
          case LLM_ARCH_LLADA_MOE:
          case LLM_ARCH_RND1:
+         case LLM_ARCH_CLEF:
 +        case LLM_ARCH_DIFFUSION_GEMMA:
              {
                  res = nullptr;
              } break;
-@@ -2758,6 +2761,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+@@ -3151,6 +3154,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
          case LLM_ARCH_GEMMA3N:
          case LLM_ARCH_GEMMA4:
          case LLM_ARCH_GEMMA4_ASSISTANT:
@@ -736,10 +784,10 @@ index de0d3c1..8702c7d 100644
          case LLM_ARCH_STARCODER2:
          case LLM_ARCH_OPENELM:
 diff --git a/src/llama-model.h b/src/llama-model.h
-index 44bd967..2b9ccbb 100644
+index 2243377cc..ebe51ed0d 100644
 --- a/src/llama-model.h
 +++ b/src/llama-model.h
-@@ -558,6 +558,9 @@ struct llama_layer {
+@@ -596,6 +596,9 @@ struct llama_layer {
      // gemma4 layer output scale, reused for talkie embedding skip scale
      struct ggml_tensor * out_scale = nullptr;
  
@@ -749,9 +797,9 @@ index 44bd967..2b9ccbb 100644
      struct llama_layer_posnet posnet;
  
      struct llama_layer_convnext convnext;
-@@ -616,6 +619,12 @@ struct llama_model {
-     struct ggml_tensor * nextn_proj_pre  = nullptr;
-     struct ggml_tensor * nextn_proj_post = nullptr;
+@@ -673,6 +676,12 @@ struct llama_model {
+     // hrm-text initial low-cycle state
+     struct ggml_tensor * hrm_z_l_init = nullptr;
  
 +    // diffusion-gemma self-conditioning gated MLP (model-level, decoder-only)
 +    struct ggml_tensor * sc_pre_norm = nullptr;
@@ -764,7 +812,7 @@ index 44bd967..2b9ccbb 100644
      struct ggml_tensor * hc_head_base  = nullptr;
 diff --git a/src/models/diffusion-gemma.cpp b/src/models/diffusion-gemma.cpp
 new file mode 100644
-index 0000000..e541a2d
+index 000000000..f42f637f0
 --- /dev/null
 +++ b/src/models/diffusion-gemma.cpp
 @@ -0,0 +1,849 @@
@@ -991,7 +1039,7 @@ index 0000000..e541a2d
 +    hparams.f_attention_scale = 1.0f; // Gemma4 uses self.scaling = 1.0 (no pre-attn scaling)
 +
 +    ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA,          hparams.rope_freq_base_train_swa, false);
-+    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,  hparams.n_ff_exp, false);
++    ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all, false);
 +    ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa);
 +    ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 +    ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH_SWA,    hparams.n_embd_head_k_swa);
@@ -1013,7 +1061,7 @@ index 0000000..e541a2d
 +void llama_model_diffusion_gemma::load_arch_tensors(llama_model_loader &) {
 +    LLAMA_LOAD_LOCALS;
 +
-+    const int64_t n_ff_exp = hparams.n_ff_exp;
++    const int64_t n_ff_exp = hparams.n_ff_exp();
 +
 +    if (n_embd_head_k != n_embd_head_v) {
 +        throw std::runtime_error("DiffusionGemma requires n_embd_head_k == n_embd_head_v");
@@ -1619,7 +1667,7 @@ index 0000000..e541a2d
 +}
 diff --git a/src/models/gemma4-common.h b/src/models/gemma4-common.h
 new file mode 100644
-index 0000000..9a6f4dd
+index 000000000..9a6f4ddd5
 --- /dev/null
 +++ b/src/models/gemma4-common.h
 @@ -0,0 +1,126 @@
@@ -1750,10 +1798,10 @@ index 0000000..9a6f4dd
 +    return cur;
 +}
 diff --git a/src/models/models.h b/src/models/models.h
-index 157b05d..f3daedd 100644
+index 387a4adcb..b69550f3a 100644
 --- a/src/models/models.h
 +++ b/src/models/models.h
-@@ -872,6 +872,66 @@ struct llama_model_gemma4 : public llama_model_base {
+@@ -888,6 +888,66 @@ struct llama_model_gemma4 : public llama_model_base {
  };
  
  
@@ -1821,7 +1869,7 @@ index 157b05d..f3daedd 100644
      llama_model_gemma4_assistant(const struct llama_model_params & params) : llama_model_base(params) {}
      void load_arch_hparams(llama_model_loader & ml) override;
 diff --git a/tools/CMakeLists.txt b/tools/CMakeLists.txt
-index 780df32..5ba01ad 100644
+index c8ad1db43..c9562f768 100644
 --- a/tools/CMakeLists.txt
 +++ b/tools/CMakeLists.txt
 @@ -19,6 +19,9 @@ else()
@@ -1836,7 +1884,7 @@ index 780df32..5ba01ad 100644
      if (LLAMA_BUILD_SERVER)
 diff --git a/tools/diffusion-gemma-server/CMakeLists.txt b/tools/diffusion-gemma-server/CMakeLists.txt
 new file mode 100644
-index 0000000..d005a42
+index 000000000..d005a42b6
 --- /dev/null
 +++ b/tools/diffusion-gemma-server/CMakeLists.txt
 @@ -0,0 +1,16 @@
@@ -1858,7 +1906,7 @@ index 0000000..d005a42
 +endif()
 diff --git a/tools/diffusion-gemma-server/diffusion-gemma-server.cpp b/tools/diffusion-gemma-server/diffusion-gemma-server.cpp
 new file mode 100644
-index 0000000..3a1c122
+index 000000000..3a1c122f1
 --- /dev/null
 +++ b/tools/diffusion-gemma-server/diffusion-gemma-server.cpp
 @@ -0,0 +1,183 @@
@@ -2047,7 +2095,7 @@ index 0000000..3a1c122
 +}
 diff --git a/tools/diffusion-gemma-server/diffusion-gemma-visual-server.cpp b/tools/diffusion-gemma-server/diffusion-gemma-visual-server.cpp
 new file mode 100644
-index 0000000..06df54e
+index 000000000..06df54eef
 --- /dev/null
 +++ b/tools/diffusion-gemma-server/diffusion-gemma-visual-server.cpp
 @@ -0,0 +1,376 @@
@@ -2429,7 +2477,7 @@ index 0000000..06df54e
 +}
 diff --git a/tools/diffusion/CMakeLists.txt b/tools/diffusion/CMakeLists.txt
 new file mode 100644
-index 0000000..a92f7a1
+index 000000000..a92f7a177
 --- /dev/null
 +++ b/tools/diffusion/CMakeLists.txt
 @@ -0,0 +1,16 @@
@@ -2451,7 +2499,7 @@ index 0000000..a92f7a1
 +endif()
 diff --git a/tools/diffusion/README.md b/tools/diffusion/README.md
 new file mode 100644
-index 0000000..6d2fffd
+index 000000000..6d2fffd64
 --- /dev/null
 +++ b/tools/diffusion/README.md
 @@ -0,0 +1,59 @@
@@ -2516,7 +2564,7 @@ index 0000000..6d2fffd
 +```
 diff --git a/tools/diffusion/diffusion-cli.cpp b/tools/diffusion/diffusion-cli.cpp
 new file mode 100644
-index 0000000..1919764
+index 000000000..19197643a
 --- /dev/null
 +++ b/tools/diffusion/diffusion-cli.cpp
 @@ -0,0 +1,604 @@
@@ -3126,7 +3174,7 @@ index 0000000..1919764
 +}
 diff --git a/tools/diffusion/diffusion.cpp b/tools/diffusion/diffusion.cpp
 new file mode 100644
-index 0000000..4e15a55
+index 000000000..4e15a5550
 --- /dev/null
 +++ b/tools/diffusion/diffusion.cpp
 @@ -0,0 +1,709 @@
@@ -3841,7 +3889,7 @@ index 0000000..4e15a55
 +}
 diff --git a/tools/diffusion/diffusion.h b/tools/diffusion/diffusion.h
 new file mode 100644
-index 0000000..23eea19
+index 000000000..23eea1947
 --- /dev/null
 +++ b/tools/diffusion/diffusion.h
 @@ -0,0 +1,102 @@
@@ -3947,59 +3995,28 @@ index 0000000..23eea19
 +// position of the run against the one a period later, so a list like ", tides, salt, blue, deep" (where
 +// only the commas recur at stride 2) is NOT a loop. Returns the number of tokens to keep.
 +size_t diffusion_trim_canvas(const llama_vocab * vocab, const llama_token * canvas, size_t n);
-diff --git a/common/common.cpp b/common/common.cpp
-index d84d57a..42584c4 100644
---- a/common/common.cpp
-+++ b/common/common.cpp
-@@ -16,6 +16,7 @@
- #include <cmath>
- #include <chrono>
- #include <cstdarg>
-+#include <cstdlib>
- #include <cstring>
- #include <ctime>
- #include <filesystem>
-@@ -1336,6 +1337,18 @@ common_init_result::common_init_result(common_params & params, bool model_only)
-         return;
-     }
- 
-+    // fork-local (DiffusionGemma, see PATCHES.md 0005): canvas diffusion models self-condition through a
-+    // full-vocab soft-embedding in the graph. The flag must be on BEFORE the context is created so the
-+    // graph reserve sizes the compute buffer for it (the denoiser supplies the real logits per step).
-+    // No-op for every other architecture.
-+    if (llama_model_is_diffusion(model)) {
-+        char canvas_str[32];
-+        if (llama_model_meta_val_str(model, "diffusion.canvas_length", canvas_str, sizeof(canvas_str)) >= 0 &&
-+            strtol(canvas_str, nullptr, 10) > 0) {
-+            llama_diffusion_set_sc(model, nullptr, /*use_sc*/ 0.0f, /*temp_inv*/ 1.0f, /*enabled*/ true);
-+        }
-+    }
-+
-     const llama_vocab * vocab = llama_model_get_vocab(model);
- 
-     // load and optionally apply lora adapters
 diff --git a/tools/server/CMakeLists.txt b/tools/server/CMakeLists.txt
-index 280bd9e..bffa0b6 100644
+index 70b8d7da8..dea14d125 100644
 --- a/tools/server/CMakeLists.txt
 +++ b/tools/server/CMakeLists.txt
-@@ -30,8 +30,11 @@ if (BUILD_SHARED_LIBS)
+@@ -32,8 +32,11 @@ if (BUILD_SHARED_LIBS)
  endif()
  
  target_include_directories(${TARGET} PRIVATE ../mtmd)
 +# fork-local: the DiffusionGemma denoising loop (tools/diffusion/diffusion.cpp) drives canvas diffusion
 +# models from inside the server (see diffusion_process_slot in server-context.cpp)
 +target_include_directories(${TARGET} PRIVATE ../diffusion)
- target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
+ target_include_directories(${TARGET} PRIVATE ${PROJECT_SOURCE_DIR})
 -target_link_libraries(${TARGET} PUBLIC llama-common mtmd ${CMAKE_THREAD_LIBS_INIT})
 +target_link_libraries(${TARGET} PUBLIC llama-common mtmd llama-diffusion ${CMAKE_THREAD_LIBS_INIT})
  
  # llama-server-impl: server logic, reusable by app
  
 diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
-index c54a5e9..509460e 100644
+index b851f9b07..c614b4ddf 100644
 --- a/tools/server/server-context.cpp
 +++ b/tools/server/server-context.cpp
-@@ -16,6 +16,7 @@
+@@ -17,6 +17,7 @@
  #include "speculative.h"
  #include "mtmd.h"
  #include "mtmd-helper.h"
@@ -4007,7 +4024,7 @@ index c54a5e9..509460e 100644
  
  #include <algorithm>
  #include <cstddef>
-@@ -879,6 +880,22 @@ private:
+@@ -970,6 +971,22 @@ private:
  
      std::string model_name; // name of the loaded model, to be used by API
      std::set<std::string> model_aliases; // additional names for the model
@@ -4030,7 +4047,7 @@ index c54a5e9..509460e 100644
      std::set<std::string> model_tags;    // informational tags
  
      bool sleeping = false;
-@@ -965,6 +982,10 @@ private:
+@@ -1056,6 +1073,10 @@ private:
          params_base.n_outputs_max = output_limits.total;
          params_base.n_outputs_max_per_seq = output_limits.per_seq;
  
@@ -4041,7 +4058,7 @@ index c54a5e9..509460e 100644
          const bool has_mmproj = !params.mmproj.path.empty();
          const bool has_draft = params.speculative.has_dft();
          const bool spec_mtp = std::find(params_base.speculative.types.begin(),
-@@ -1067,6 +1088,10 @@ private:
+@@ -1173,6 +1194,10 @@ private:
  
          add_bos_token = llama_vocab_get_add_bos(vocab);
  
@@ -4052,7 +4069,7 @@ index c54a5e9..509460e 100644
          if (has_spec) {
              // spec_mtp doesn't use load a model internally, so we report 0.0 and 1.0 manually
              load_progress_callback(0.0f, &load_progress_spec);
-@@ -2663,6 +2688,321 @@ private:
+@@ -2931,6 +2956,321 @@ private:
      };
  #endif
  
@@ -4374,7 +4391,7 @@ index c54a5e9..509460e 100644
      void update_slots() {
  #ifdef DEBUG_TIMINGS
          static int64_t t_prev = 0;
-@@ -2704,6 +3044,12 @@ private:
+@@ -2972,6 +3312,12 @@ private:
              }
          }
  
@@ -4388,7 +4405,7 @@ index c54a5e9..509460e 100644
              scoped_timer t(t_pre_decode, n_pre_decode);
              pre_decode();
 diff --git a/tools/server/server-queue.cpp b/tools/server/server-queue.cpp
-index 78169e9..e9aa1be 100644
+index 78169e9a5..e9aa1be96 100644
 --- a/tools/server/server-queue.cpp
 +++ b/tools/server/server-queue.cpp
 @@ -47,6 +47,16 @@ int server_queue::post(server_task && task, bool front) {
@@ -4409,7 +4426,7 @@ index 78169e9..e9aa1be 100644
      std::unique_lock<std::mutex> lock(mutex_tasks);
      bool reset_timer = false;
 diff --git a/tools/server/server-queue.h b/tools/server/server-queue.h
-index e17733a..d698533 100644
+index e17733a74..d69853319 100644
 --- a/tools/server/server-queue.h
 +++ b/tools/server/server-queue.h
 @@ -61,6 +61,11 @@ public:
@@ -4424,19 +4441,3 @@ index e17733a..d698533 100644
      // Call when the state of one slot is changed, it will move one task from deferred to main queue
      // prioritize tasks that use the specified slot (otherwise, pop the first deferred task)
      void pop_deferred_task(int id_slot);
-diff --git a/common/chat.cpp b/common/chat.cpp
-index 24618d3..90c5838 100644
---- a/common/chat.cpp
-+++ b/common/chat.cpp
-@@ -1529,6 +1529,11 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
-         "<|tool_call>",
-         "<tool_call|>",
-         "<|turn>",
-+        // string delimiter of the tool-call syntax (`{path:<|"|>.<|"|>}`). Some GGUF conversions
-+        // (e.g. DiffusionGemma BF16) export it as a CONTROL token; a non-preserved control token is
-+        // dropped from the generated text, the arguments become `{path:.}` and the parser rejects
-+        // the whole tool call.
-+        "<|\"|>",
-     };
- 
-     if (inputs.has_continuation()) {

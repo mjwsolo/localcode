@@ -236,6 +236,18 @@ for f in ggml/src/ggml-metal/turbo-matrices.h ggml/src/ggml-metal/turbo-wht.h; d
   [ -f "$SRC/$f" ] || af "$f missing"
 done
 
+# Upstream compiles Metal as one library per kernels/<name>.metal. The TurboQuant
+# kernels live in three fork-local files, and each must be registered in BOTH the
+# CMake embed list and the X-macro in ggml-metal-device.m. A file that exists but
+# is not registered compiles fine and then fails at the first turbo KV request.
+for k in turbo fa_turbo fa_vec_turbo; do
+  [ -f "$SRC/ggml/src/ggml-metal/kernels/$k.metal" ] || af "ggml/src/ggml-metal/kernels/$k.metal missing"
+  grep -q "kernels/$k.metal" "$SRC/ggml/src/ggml-metal/CMakeLists.txt" \
+    || af "kernels/$k.metal is not in METALLIB_KERNEL_SOURCES (ggml-metal/CMakeLists.txt)"
+  grep -qE "X\([A-Z_]+, +$k\)" "$SRC/ggml/src/ggml-metal/ggml-metal-device.m" \
+    || af "$k is not in GGML_METAL_LIBS (ggml-metal-device.m)"
+done
+
 # Qwen 3.8 27B carries a trailing Multi-Token-Prediction head. Without this
 # guard the loader treats it as a transformer layer and dies on
 # "missing tensor 'blk.64.ssm_conv1d.weight'". A manual bump dropped it once and
@@ -265,13 +277,15 @@ fi
 log "Configuring (Release, static, Metal embedded)"
 cmake -S "$SRC" -B "$SRC/build-ci" \
   -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
   -DBUILD_SHARED_LIBS=OFF \
   -DGGML_METAL=ON \
   -DGGML_METAL_EMBED_LIBRARY=ON \
   -DLLAMA_BUILD_SERVER=ON \
   -DLLAMA_BUILD_TESTS=OFF \
   -DLLAMA_BUILD_EXAMPLES=OFF \
-  -DLLAMA_CURL=OFF || { emit STATUS build-failed; die "cmake configure failed" 50; }
+  -DLLAMA_CURL=OFF \
+  -DLLAMA_OPENSSL=OFF || { emit STATUS build-failed; die "cmake configure failed" 50; }
 
 log "Building with -j $JOBS"
 cmake --build "$SRC/build-ci" --config Release -j "$JOBS" \
@@ -292,6 +306,15 @@ if command -v otool >/dev/null 2>&1; then
     die "llama-server links Homebrew libraries - it will not run on a machine without them" 40
   fi
   echo "self-contained"
+  # The repo is public and this binary is committed to it. A build made inside
+  # a developer's home directory embeds that path (assert/__FILE__ strings).
+  # CI builds under /Users/runner, which is fine; anything else is a leak.
+  if strings "$BIN" | grep -qE '/Users/[^r/][^/]*/|/Users/r[^u/][^/]*/|/home/[^/]+/'; then
+    strings "$BIN" | grep -E '/Users/|/home/' | sed -E 's#(/(Users|home)/[^/]+).*#\1/...#' | sort -u | head -3 >&2
+    emit STATUS developer-path-embedded
+    die "llama-server embeds a developer path - build with --workdir in a neutral directory (e.g. /tmp/lc-bump)" 40
+  fi
+  echo "no developer paths embedded"
 else
   warn "otool not available (not macOS?) - skipping the self-containment check"
 fi
@@ -305,13 +328,26 @@ if [ "$DO_SYNC" -eq 1 ]; then
   log "Syncing the patched tree into $VENDOR_DIR"
   [ -d "$VENDOR_DIR" ] || die "vendor dir $VENDOR_DIR does not exist" 1
   rm -rf "$SRC/build-ci"
+  # Anchored excludes mirror "Vendoring exclusions" in llama-cpp-turboquant/PATCHES.md
+  # (leading slash = transfer root, so src/models/ is still synced). PATCHES.md is
+  # fork-only and lives in the vendored root; excluding it also protects it from --delete.
   rsync -a --delete \
     --exclude '.git/' \
     --exclude '.github/' \
     --exclude 'build/' \
     --exclude 'build-static/' \
     --exclude '.cache/' \
-    --exclude 'models/ggml-vocabs/' \
+    --exclude '/PATCHES.md' \
+    --exclude '/tests/' \
+    --exclude '/examples/' \
+    --exclude '/docs/' \
+    --exclude '/models/' \
+    --exclude '/media/' \
+    --exclude '/grammars/' \
+    --exclude '/benches/' \
+    --exclude '/pocs/' \
+    --exclude '/ci/' \
+    --exclude '/build-xcframework.sh' \
     "$SRC/" "$VENDOR_DIR/" || die "rsync into the vendored tree failed" 1
   printf '%s\n' "$NEW_SHA" > "$PINNED_FILE"
   echo "vendored tree updated; patches/PINNED_UPSTREAM -> $NEW_SHA"

@@ -82,6 +82,9 @@ struct common_json_value {
     // note: a nested pair {"a", "b"} does not build, use common_json::array({"a", "b"}) for an array
     common_json_value(std::initializer_list<common_json_item> items);
 
+    template <typename T, typename std::enable_if<std::is_enum<T>::value, int>::type = 0>
+    common_json_value(T val) : common_json_value((typename std::underlying_type<T>::type) val) {}
+
     template <typename T, typename std::enable_if<std::is_integral<T>::value && !std::is_same<T, bool>::value, int>::type = 0>
     common_json_value(T val) : type(std::is_signed<T>::value ? VAL_INT : VAL_UINT) {
         if (std::is_signed<T>::value) {
@@ -111,6 +114,7 @@ struct common_json_item {
 // the types common_json_value holds on its own
 // anything else reaches its common_json ctor and recurses forever
 template <typename T> struct common_json_is_value : std::integral_constant<bool,
+    std::is_enum<T>::value ||
     std::is_arithmetic<T>::value ||
     std::is_same<T, std::nullptr_t>::value ||
     std::is_same<T, std::string>::value ||
@@ -221,16 +225,14 @@ class common_json {
     // implicit get<T>() for plain values, so they can be assigned to their C++ type directly
     // note: kept to this short list on purpose, a wider one makes j["key"] ambiguous
     // note: a numeric one would make "str = json;" ambiguous, a number converts to char too
-    operator std::string() const { return get<std::string>(); }
+    operator std::string() const;
 
     template <typename T>
     T value(const std::string & key, T def) const {
         return contains(key) ? at(key).get<T>() : def;
     }
 
-    std::string value(const std::string & key, const char * def) const {
-        return contains(key) ? at(key).get<std::string>() : std::string(def);
-    }
+    std::string value(const std::string & key, const char * def) const;
 
     // a JSON default needs no get<T>(), it is already the right type
     common_json value(const std::string & key, const common_json & def) const {
