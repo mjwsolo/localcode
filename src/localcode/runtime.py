@@ -451,16 +451,18 @@ class LocalCodeRuntimeGateway:
         if mode in ("turbo", "turbo-think"):
             # Respect gpu_layers config (0 = CPU-only for 8GB machines)
             ngl = self.config.llama_cpp_gpu_layers if self.config.llama_cpp_gpu_layers >= 0 else 999
-            cmd.extend(["--mmap", "-ngl", str(ngl)])
+            # llama.cpp replaced --mmap / --no-mmap / --mlock with --load-mode
+            # (upstream, autumn 2026). The old spelling is a hard argument error.
+            cmd.extend(["--load-mode", "mmap", "-ngl", str(ngl)])
         elif mode == "context":
             # GPU mode: attention on Metal, experts on CPU, mmap for SSD paging
-            cmd.extend(["--mmap", "-ngl", "999", "-ot", "exps=CPU"])
+            cmd.extend(["--load-mode", "mmap", "-ngl", "999", "-ot", "exps=CPU"])
         elif self.config.llama_cpp_expert_offload:
             # Explicit expert offload (legacy config)
-            cmd.extend(["--mmap", "-ngl", "999", "-ot", "exps=CPU"])
+            cmd.extend(["--load-mode", "mmap", "-ngl", "999", "-ot", "exps=CPU"])
         else:
             # Default GPU mode
-            cmd.extend(["--mmap", "-ngl", "999"])
+            cmd.extend(["--load-mode", "mmap", "-ngl", "999"])
         # KV cache compression (asymmetric: q8_0 K + turbo4 V recommended)
         ctk = self.config.kv_cache_type_k
         ctv = self.config.kv_cache_type_v

@@ -3,6 +3,32 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Added
+
+- **Kolibri 1 (Aleph Alpha), experimental.** The open-weight English/German model
+  released 2026-10-03: 78B parameters in total, about 3.5B active per token. It
+  appears in the model list as `kolibri` and is never picked automatically. The
+  download is 47.5 GB and needs 64 GB of unified memory at minimum. Its
+  architecture is not in upstream llama.cpp yet, so the bundled server carries a
+  community patch for it, and the file is a community quant pinned to an exact
+  revision and digest. Checked on the bundled server: load, generation, tool
+  calls, reasoning on and off, and exact recall from a 60,000-token prompt.
+  Coding quality has not been benchmarked.
+
+### Changed
+
+- **The bundled model server moves to llama.cpp as of 2026-10-03** (from
+  2026-08-22). Every catalogue model was re-verified on the new binary.
+
+### Fixed
+
+- **Model launch flag removed upstream.** llama.cpp replaced `--mmap` with
+  `--load-mode mmap`; the old spelling is now a hard error, so the launcher uses
+  the new one. A test now asks the bundled server whether it accepts every flag
+  the launcher emits, so a renamed flag fails in tests instead of at launch.
+
 ## 0.5.1 — 2026-10-03
 
 ### Security
