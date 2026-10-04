@@ -23,6 +23,10 @@ def test_parser_accepts_version_model_and_project():
     for flag in ("-s", "--session", "--resume"):
         assert p.parse_args([flag, "ses_example"]).resume == "ses_example"
     with pytest.raises(SystemExit):
+        p.parse_args(["--cwd", "somedir"])
+    with pytest.raises(SystemExit):
+        p.parse_args(["-c", "somedir"])
+    with pytest.raises(SystemExit):
         p.parse_args(["--classic"])  # the previous interface is gone
 
 

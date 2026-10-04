@@ -16,10 +16,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model", help="Model alias to load (otherwise the picker asks)")
     parser.add_argument("-s", "--session", "--resume", dest="resume", metavar="SESSION_ID",
                         help="Resume a session by ID; uses its saved project directory when no project is given")
-    parser.add_argument("-c", "--cwd", type=str, default=None,
-                        help="Working directory for the project (defaults to the current directory)")
     parser.add_argument("project", nargs="?", default=None,
-                        help="Project directory (same as --cwd)")
+                        help="Project directory (defaults to the current directory)")
     return parser
 
 
@@ -47,7 +45,7 @@ def main(argv: list[str] | None = None) -> None:
         print(__version__)
         return
 
-    project = args.cwd or args.project
+    project = args.project
     if project:
         project_dir = Path(project).resolve()
         if not project_dir.is_dir():
