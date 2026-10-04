@@ -247,6 +247,10 @@ def infer_family_from_profile(profile_id: str) -> ModelFamily:
     low = profile_id.lower()
     if low.startswith("qwen") or "qwen" in low:
         return ModelFamily.QWEN
+    # Kolibri-1 ships a Qwen-style template: ChatML turns, <think> reasoning,
+    # Hermes <tool_call> JSON. Same adapter.
+    if "kolibri" in low:
+        return ModelFamily.QWEN
     if low.startswith("llama") or "llama" in low:
         return ModelFamily.LLAMA
     if low.startswith("deepseek") or "deepseek" in low:

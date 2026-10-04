@@ -418,6 +418,38 @@ CHOICES: list[ModelChoice] = [
         mmproj_size_gb=0.9,
         mmproj_hf_filename="mmproj-F16.gguf",
     ),
+    ModelChoice(
+        key="kolibri",
+        # Pinned: a community quant under a mutable `main`. A re-upload must be
+        # a visible change here, never a silent swap under the same filename.
+        revision="b08405e141706457126fa75b9f2f9e0729b30d0a",
+        sha256="c2ac1301424441ef210b6de50ce25e8ccf69f86494df53d6ba52ed558456062e",
+        size_bytes=47454113472,
+        name="Kolibri 1 78B-A3B (Q4, experimental)",
+        hf_repo="Hob-forge/Kolibri-1-GGUF",
+        filename="Kolibri-1-Q4_K_M.gguf",
+        size_gb=47.5,
+        active_params="3.5B active (78B total MoE)",
+        architecture="kolibri1",
+        license="Apache 2.0",
+        humaneval_pass_at_1=None,
+        notes=(
+            "Aleph Alpha's open-weight English/German MoE — 78B total, ~3.5B "
+            "active per token (top-6 of 384 experts plus one shared expert), "
+            "sliding-window / full attention interleave, 256K native context. "
+            "EXPERIMENTAL: the kolibri1 architecture is a community patch carried "
+            "by the bundled server (not yet in upstream llama.cpp) and this GGUF "
+            "is a community quant, not an Aleph Alpha release. Verified here: "
+            "load, generation, tool calling, reasoning on/off, and exact recall "
+            "at 60K tokens. Not benchmarked for coding quality. ~47.5 GB weights: "
+            "needs 64 GB unified memory at minimum, comfortable on 96-128 GB. "
+            "Text-only. Never auto-recommended."
+        ),
+        # Qwen-style template: <think> reasoning, Hermes <tool_call> JSON, and
+        # the standard server switch silences reasoning (measured: 2 completion
+        # tokens, empty reasoning channel). That is the default policy
+        # ("chat_template"), the same one the Gemma 4 and Qwen entries use.
+    ),
 ]
 
 
@@ -455,7 +487,7 @@ def _system_ram_gb() -> int:
 # time (not token by token) and it reasons visibly every turn. It works, but
 # it is not the coding-agent experience a first-run user should land on by
 # default. Owner can override by emptying this set.
-_NO_AUTO_RECOMMEND_ARCHS = {"diffusion_gemma"}
+_NO_AUTO_RECOMMEND_ARCHS = {"diffusion_gemma", "kolibri1"}
 
 # Capability order for auto-recommend, best → worst for coding-agent use. This
 # is deliberately NOT raw file size: the big MoEs measure ~95% HumanEval here
@@ -737,6 +769,21 @@ MODEL_GROUPS: list[ModelGroup] = [
             "Text-only."
         ),
         # Text-only: no vision sidecar.
+    ),
+    ModelGroup(
+        key="kolibri-1",
+        display_name="Kolibri 1 78B-A3B",
+        maker="Aleph Alpha",
+        hf_repo="Hob-forge/Kolibri-1-GGUF",
+        family="kolibri",
+        architecture="kolibri1",
+        license="Apache 2.0",
+        notes=(
+            "Aleph Alpha's open-weight English/German sparse MoE — 78B total, "
+            "~3.5B active. Experimental: community-patched architecture and a "
+            "community quant. Qwen-style reasoning tags and Hermes tool calls. "
+            "Text-only."
+        ),
     ),
 ]
 

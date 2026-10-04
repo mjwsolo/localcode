@@ -346,6 +346,56 @@ streaming one SSE chunk per committed block, a `get_weather` tool call through
 the OpenAI `tools` key, `max_tokens` honoured exactly, ~55 tok/s over a
 4-block answer. `otool -L` shows only system frameworks.
 
+### `0006-kolibri1.patch` — Aleph Alpha Kolibri-1 (`kolibri1` architecture)
+
+**Status: not upstream.** Tracking issue
+[ggml-org/llama.cpp#29922](https://github.com/ggml-org/llama.cpp/issues/29922),
+no upstream PR at the time of the bump. **When upstream ships `kolibri1`,
+delete this patch** and re-verify the catalog GGUF against upstream's loader
+(metadata keys may differ; a re-converted GGUF may be needed).
+
+Source: the four-commit series published with the community quant at
+`Hob-forge/Kolibri-1-GGUF` (`kolibri1-llama.cpp.patch`, revision `b08405e1`),
+written against exactly the upstream commit this tree is pinned to. Carried
+here as one plain diff. It was read in full before adoption: it is a standard
+model addition with no build-system, network or filesystem side effects.
+
+What it adds:
+
+- `LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID_LOGIT_ADD = 5` in `build_moe_ffn`:
+  experts are selected on `logits + expert_bias` and weighted by the unbiased
+  `sigmoid(logits)`. The DeepSeek-V3 path selects on `sigmoid(logits) + bias`,
+  which picks different experts whenever the bias is non-zero.
+- `src/models/kolibri1.cpp`: Qwen3-MoE style GQA with q/k RMSNorm, sandwich
+  norms around attention and MoE, one ungated shared expert per layer, and
+  interleaved attention through iSWA (sliding-window layers use RoPE,
+  full-attention layers use no positional encoding).
+- `kolibri1` pre-tokenizer name (same split regex as `qwen2`), the GGUF
+  constants / tensor mapping, and `conversion/kolibri.py`.
+
+#### Verified (2026-10-04, shipped binary, `Kolibri-1-Q4_K_M.gguf`, sha256 `c2ac1301…`)
+
+- Loads in about 2 s; `Reply`-style generation correct; German output fluent.
+- Tool calling through the OpenAI `tools` key (Hermes `<tool_call>` JSON,
+  parsed by the stock chat parser): single call, tool selection between two
+  tools, and a two-step loop that reads a tool result and answers from it.
+- Reasoning: with `--reasoning off --reasoning-budget 0` the answer costs 2
+  completion tokens and the reasoning channel is empty; with reasoning on, the
+  `<think>` text arrives in `reasoning_content` and `content` stays clean.
+- Long context on Metal, which the quant's author had not tested beyond 8,192
+  tokens: exact recall of a planted string at 6K, 24K and 61,785 prompt tokens.
+  The last one ran under localcode's own generated command (`--ctx-size 131072`,
+  q8_0 KV, `--cache-reuse`, `--ctx-checkpoints 4`, `--context-shift`); the
+  follow-up turn re-read 25 tokens, so the prefix cache and checkpoints work
+  with the sliding-window / full-attention interleave.
+- Resident memory about 46 GB at that context.
+
+- turbo4 K + turbo4 V also passes the tool loop and the 6K / 24K recall checks
+  (the turbo Q pre-rotation runs through the iSWA attention path).
+
+Not verified: coding benchmarks, turbo2 / turbo3 KV with this architecture,
+the Q8_0 split files, CUDA.
+
 ---
 
 ## Retired at the 2026-08-22 bump
