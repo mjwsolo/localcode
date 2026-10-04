@@ -787,7 +787,7 @@ index 000000000..106696ec7
 +=== Done: smem ===
 diff --git a/scripts/bench-smem-m5.sh b/scripts/bench-smem-m5.sh
 new file mode 100755
-index 000000000..9916af6f1
+index 000000000..c1eb8180b
 --- /dev/null
 +++ b/scripts/bench-smem-m5.sh
 @@ -0,0 +1,58 @@

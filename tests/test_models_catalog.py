@@ -83,6 +83,7 @@ _EXPECTED_VISION = {
     "muse-glimmer": True,
     "diffusiongemma": False,
     "north-mini-code": False,
+    "kolibri": False,
 }
 
 
@@ -252,3 +253,28 @@ class TestEstimateDecodeTokS:
             f"Gemma IQ3 estimated {result} tok/s on M5 Max — expected 60-105 range"
         )
 
+
+
+def test_kolibri_catalog_entry_is_pinned_and_never_auto_recommended() -> None:
+    from localcode.models_catalog import _NO_AUTO_RECOMMEND_ARCHS, group_for_filename, recommend
+    from localcode.model_families import ModelFamily, infer_family_from_profile
+
+    choice = by_key("kolibri")
+    assert choice is not None
+    assert choice.architecture == "kolibri1"
+    # a community quant: must be pinned to a revision AND a digest, never `main`
+    assert choice.revision != "main" and len(choice.revision) == 40
+    assert choice.sha256 and len(choice.sha256) == 64
+    assert choice.size_bytes == 47454113472
+    assert choice.reasoning_control == "chat_template"  # the standard server switch
+    assert not choice.supports_vision
+
+    # experimental architecture: no RAM tier may land a first-run user on it
+    assert "kolibri1" in _NO_AUTO_RECOMMEND_ARCHS
+    for ram in (16, 32, 64, 96, 128, 192, 512):
+        assert recommend(ram).key != "kolibri"
+
+    # browsed quants of the repo resolve to the group, and the family adapter is Qwen-style
+    g = group_for_filename("Kolibri-1-Q4_K_M.gguf")
+    assert g is not None and g.architecture == "kolibri1"
+    assert infer_family_from_profile("kolibri-1-q4") == ModelFamily.QWEN

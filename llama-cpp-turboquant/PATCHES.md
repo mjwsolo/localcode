@@ -12,25 +12,44 @@ The machine-readable form of this inventory lives at the repo root:
 | `patches/PINNED_UPSTREAM` | the upstream commit the series applies to |
 | `patches/000N-*.patch` | numbered patches, applied in order with `git apply` |
 
-**Pinned upstream:** `3f545beccee69d9975f466ec7e45fd9aacd8ba90` (2026-08-22,
-`vulkan : added the PAD_REFLECT_1D operation (#26586)`).
+**Pinned upstream:** `836d57176dc699a726c55418e4f96b8ca628e1bf` (2026-10-03,
+`mtmd : fix deprecated strdup warning on Windows (#29863)`).
 
-**Previous pin:** `c08d28d08871715fd68accffaeeb76ddcaede658` (2026-04-05). That
+**Previous pins:** `3f545beccee69d9975f466ec7e45fd9aacd8ba90` (2026-08-22), and
+before it `c08d28d08871715fd68accffaeeb76ddcaede658` (2026-04-05). That
 commit was never recorded anywhere; it was recovered for this bump by
 blob-matching the vendored tree against upstream history. Do not let that
 happen again — update `patches/PINNED_UPSTREAM` on every bump.
 
 ## How to bump
 
+`scripts/bump_upstream.sh --ref <new-sha> --sync` does the whole thing when
+every patch still applies: replay, source assertions, static build,
+self-containment check, sync into this directory (honouring the vendoring
+exclusions below), and the `patches/PINNED_UPSTREAM` update.
+
+When a patch no longer applies, do **not** hand-edit reject hunks out of
+`git apply`. It has no merge base, so six weeks of drift produced 26 rejects
+across 12 files at the 2026-10-03 bump. Turn the series into real history and
+let git do a 3-way merge instead; that cut the same bump to 10 conflicted files,
+most of them one hunk each:
+
 ```sh
 git clone https://github.com/ggml-org/llama.cpp upstream && cd upstream
-git checkout <new-sha>
-for p in /path/to/patches/*.patch; do git apply --index "$p" || echo "STALE: $p"; done
+git checkout -b fork-old "$(cat /path/to/patches/PINNED_UPSTREAM)"
+for p in /path/to/patches/*.patch; do
+  git apply --index "$p" && git commit -qm "$(basename "$p" .patch)"
+done
+git rebase <new-sha>            # resolve, `git add`, `git rebase --continue`
+# build + test here, committing fixes with `git commit --fixup=<patch commit>`
+GIT_SEQUENCE_EDITOR=true git rebase -i --autosquash <new-sha>
+# one plain diff per commit, in order (no author headers end up in the repo):
+git diff --binary <new-sha> <c1> > 0001-….patch ; git diff --binary <c1> <c2> > 0002-….patch ; …
 ```
 
-Then copy the result over `llama-cpp-turboquant/`, honouring the vendoring
-exclusions below, update `patches/PINNED_UPSTREAM`, and regenerate the patches
-with `git diff <new-sha> HEAD -- <paths>`.
+Then run `scripts/bump_upstream.sh --ref <new-sha> --sync --force` so the
+regenerated series is proven to replay from a pristine clone before it lands.
+`UPSTREAM_REPO=file:///path/to/that/clone` avoids a second network clone.
 
 ### Vendoring exclusions
 
@@ -43,7 +62,9 @@ The vendored copy deliberately omits these upstream top-level paths:
 1. Static build links nothing from Homebrew:
    `otool -L build/bin/llama-server | grep /opt/homebrew` must be **empty**.
    A previous rebuild linked Homebrew `libssl` and would have broken every user
-   without Homebrew installed.
+   without Homebrew installed. `-DLLAMA_OPENSSL=OFF` is what prevents it
+   (upstream defaults it ON); the bump script was missing that flag until the
+   2026-10-03 bump, where this gate caught exactly that binary.
 2. `bash dev/verify_models.sh` — **all 11** bundled-server configs pass
    (load + generate + tool-call, including the `turbo4` KV path and
    DiffusionGemma on the same binary).
@@ -106,6 +127,84 @@ model and no code in localcode's `src/` uses them, so renumbering them now was
 free too — and it was the only cheap moment to do it. **Any pre-existing
 TQ3_1S/TQ4_1S GGUF must be requantized.** None are known to exist.
 
+#### Metal layout since the 2026-10-03 bump
+
+Upstream deleted the monolithic `ggml-metal.metal` (#26561, #29329): Metal is
+now one library per `ggml/src/ggml-metal/kernels/<name>.metal`, compiled in
+parallel, with shared code in `kernels/*.h`. The TurboQuant shader delta
+(2,015 lines in the old file) was redistributed, not rewritten:
+
+| where | what |
+| --- | --- |
+| `kernels/common.h` | WHT sign tables, `turbo_fwht_128*`, `turbo_rotate_*`, all centroid / midpoint LUTs (every kernel file sees them) |
+| `kernels/quantize.h` | `quantize_turbo{2,3,4}_0` |
+| `kernels/dequantize.h` | `dequantize_turbo{2,3,4}_0` (+ `_t4`), and the TQ3_1S / TQ4_1S constants and dequantizers |
+| `kernels/turbo.metal` (new) | `kernel_turbo_wht`, `kernel_turbo4_dequant_f16`, `kernel_set_rows_turbo{,2,4}` and their instantiations |
+| `kernels/fa_turbo.metal` (new) | non-vec flash-attention instantiations for every turbo / turbo-q8_0 K/V pair |
+| `kernels/fa_vec_turbo.metal` (new) | the same for the vec kernel, baseline config only (see below) |
+| `kernels/fa_vec_common.metal` | the `TURBO_SPARSE_V` skip in the quantized-V loop |
+| `kernels/mul_mv.metal`, `mul_mm.metal`, `quantize.metal` | TQ3_1S / TQ4_1S mat-vec kernels and `mul_mm` / `mul_mm_id` / `mul_mv_ext` / `mul_mv_id` / `cpy` / `get_rows` instantiations; larger `mul_mm_id_map0` tiles (32…256) |
+
+**A new kernel file must be registered twice**: in `METALLIB_KERNEL_SOURCES`
+(`ggml-metal/CMakeLists.txt`) and in the `GGML_METAL_LIBS` X-macro
+(`ggml-metal-device.m`). The bump script asserts both for the three turbo files.
+
+Host-side decisions that differ from the pre-bump fork:
+
+- **Flash-attention pipeline names.** The fork used to rename every FA kernel to
+  `k<K>_v<V>`. Now symmetric K/V keeps upstream's single-type name
+  (`kernel_flash_attn_ext_turbo4_dk128_dv128`) and only mixed pairs encode both
+  (`…_kturbo4_vq8_0_…`), so upstream's own instantiation files are untouched.
+- **Vec kernel: baseline only.** Upstream instantiates tuned `_q<Q>_ne<NE>`
+  variants per dtype and picks them from `ggml_metal_tuning::fa_vec_pick`. The
+  table has no turbo entries, so the pick always falls back to the baseline
+  (`Q=1`, `NE=fa_vec_baseline_ne(dk,dv)`), which is what `fa_vec_turbo.metal`
+  instantiates. If the baseline NE table changes upstream, regenerate that file.
+- **`TURBO_SPARSE_V`** now skips a cache position only when the attention weight
+  is negligible for *every* query in the threadgroup (upstream batches `Q`
+  queries per threadgroup; the old check assumed one).
+- **`use_kv_f16`** (upstream's dequantize-KV-to-F16 prefill path, #27390) is
+  disabled for mixed K/V pairs; it assumes one type for both.
+- **`FC_TURBO_WHT`** moved 1700 → 2300; upstream took 1700 (`FC_NORM`).
+- **Compile-time knobs** (`TURBO_USE_4MAG`, `TURBO_SPARSE_V`,
+  `TURBO_PROFILE_MODE`) are set on the shared `prep` dictionary in
+  `ggml_metal_library_init`, so every per-kind library sees them.
+
+Measured after the port (gemma-4-12b Q4_K_XL, 16 prompts, mean KL of the first
+generated token's top-20 distribution against the same binary's f16 KV):
+
+| K / V | pre-bump binary | post-bump binary |
+| --- | --- | --- |
+| q8_0 / q8_0 | 0.0000 | 0.0000 |
+| turbo4 / turbo4 | 0.0005 | 0.0014 |
+| turbo3 / turbo3 | 0.0699 | 0.0009 |
+| turbo3 / q8_0 | 0.0448 | 0.0527 |
+| turbo4 / turbo2 | 0.0017 | 0.0099 |
+| q8_0 / turbo2 | 0.0023 | 0.0017 |
+| turbo2 / turbo2 | 5.58 | 4.97 |
+
+**turbo2 as the K type is broken on both binaries** (top-1 agreement 2/16 and
+4/16): pre-existing, not introduced by the bump, and no shipped config uses it.
+turbo2 is only usable as the V type.
+
+#### Known gaps deliberately accepted at the 2026-10-03 bump
+
+- **Metal TQ-weight rotated fast path removed entirely.** The previous bump
+  left `get_pipeline_mul_mm_tq_rotated` / `tq3_rotate_act` and the in-place
+  activation rotation in `mul_mat_id` half-wired; they are gone, along with the
+  `*_rotated` dequantizers and the concurrency-reset hack they needed.
+  TQ3_1S / TQ4_1S weights run the generic `mul_mv` / `mul_mm` kernels. No
+  catalog model uses these types.
+- **CUDA turbo flash-attention instances are no longer compiled.** Upstream
+  replaced the hand-listed `fattn-vec-instance-*.cu` files with a generator
+  driven by `GGML_CUDA_FA_QUANTS`, which only accepts upstream's type names.
+  Turbo K/V on CUDA therefore takes upstream's convert-to-F16 fallback (correct
+  but slow), and the fork's `template-instances/*turbo*.cu` files are dead until
+  the generator is taught the turbo types. **Not built or tested**: only Metal
+  ships.
+- **The extra 512 bytes of FA-vec threadgroup memory** ("turbo block cache") was
+  dropped; nothing in the kernel read it.
+
 #### Known gaps deliberately accepted at the 2026-08-22 bump
 
 - **Metal TQ-weight `mul_mm` fast path dropped.** Upstream restructured the
@@ -133,7 +232,9 @@ product-affecting today.
 `tools/server/server-context.cpp`. Upstream clamps a requested slot context to
 the model's training context. localcode configures rope scaling
 (`--rope-scale` / `--rope-scaling yarn`) to run beyond it, so the clamp is
-replaced with a warning. No upstream equivalent.
+replaced with a warning. No upstream equivalent. Since the 2026-10-03 bump the
+clamp lives in `n_ctx_slot()` (the `std::min` against `n_ctx_train`), and
+`load_model()` only reports it; the patch edits both.
 
 ### `0003-hunyuan-ocr-mtmd.patch` — HunyuanOCR vision model
 
@@ -215,7 +316,8 @@ not product).
 - `diffusion-gemma-visual-server.cpp`: `chat.h` now takes `common_json`, not
   nlohmann; the request is parsed once more with `common_json::parse` for the
   chat-template calls.
-- `common/chat.cpp`: the Gemma 4 format's `preserved_tokens` gained `<|"|>`,
+- `common/parsers/gemma4.cpp` (was `common/chat.cpp` until upstream moved the
+  per-template inits into `common/parsers/`): the Gemma 4 format's `preserved_tokens` gained `<|"|>`,
   the string delimiter of the tool-call syntax (`call:f{path:<|"|>.<|"|>}`).
   The server renders a CONTROL token into the generated text only if the
   format preserves it. The official Gemma 4 GGUFs and our
@@ -226,6 +328,15 @@ not product).
   every tool turn (the model's own output was correct; the loss happened in
   token-to-text). Applies to the autoregressive path too. Suitable upstream.
 
+#### API drift fixed at the 2026-10-03 bump
+
+- `hparams.n_ff_exp` became per-layer (`n_ff_exp_arr` / `n_ff_exp()`);
+  `diffusion-gemma.cpp` now loads it with `get_key_or_arr(…, false)` exactly as
+  upstream `gemma4.cpp` does.
+- `llama_batch_allocr::init()` takes `(batch, vocab, output_all)` and
+  `llama_batch_ext` has no `n_tokens`; the memoryless-encode `output_all`
+  computation uses `batch_inp.tokens.size()`.
+
 #### Verified (2026-08-23, M-series, `diffusiongemma-26B-A4B-it-Q4_K_M.gguf`)
 
 `llama-server -m … -c 8192 -ngl 999 --jinja -fa on` loads in ~18 s and answers
@@ -234,6 +345,56 @@ OK` → `OK`, reproducible at temperature 0), a second request with no reload,
 streaming one SSE chunk per committed block, a `get_weather` tool call through
 the OpenAI `tools` key, `max_tokens` honoured exactly, ~55 tok/s over a
 4-block answer. `otool -L` shows only system frameworks.
+
+### `0006-kolibri1.patch` — Aleph Alpha Kolibri-1 (`kolibri1` architecture)
+
+**Status: not upstream.** Tracking issue
+[ggml-org/llama.cpp#29922](https://github.com/ggml-org/llama.cpp/issues/29922),
+no upstream PR at the time of the bump. **When upstream ships `kolibri1`,
+delete this patch** and re-verify the catalog GGUF against upstream's loader
+(metadata keys may differ; a re-converted GGUF may be needed).
+
+Source: the four-commit series published with the community quant at
+`Hob-forge/Kolibri-1-GGUF` (`kolibri1-llama.cpp.patch`, revision `b08405e1`),
+written against exactly the upstream commit this tree is pinned to. Carried
+here as one plain diff. It was read in full before adoption: it is a standard
+model addition with no build-system, network or filesystem side effects.
+
+What it adds:
+
+- `LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID_LOGIT_ADD = 5` in `build_moe_ffn`:
+  experts are selected on `logits + expert_bias` and weighted by the unbiased
+  `sigmoid(logits)`. The DeepSeek-V3 path selects on `sigmoid(logits) + bias`,
+  which picks different experts whenever the bias is non-zero.
+- `src/models/kolibri1.cpp`: Qwen3-MoE style GQA with q/k RMSNorm, sandwich
+  norms around attention and MoE, one ungated shared expert per layer, and
+  interleaved attention through iSWA (sliding-window layers use RoPE,
+  full-attention layers use no positional encoding).
+- `kolibri1` pre-tokenizer name (same split regex as `qwen2`), the GGUF
+  constants / tensor mapping, and `conversion/kolibri.py`.
+
+#### Verified (2026-10-04, shipped binary, `Kolibri-1-Q4_K_M.gguf`, sha256 `c2ac1301…`)
+
+- Loads in about 2 s; `Reply`-style generation correct; German output fluent.
+- Tool calling through the OpenAI `tools` key (Hermes `<tool_call>` JSON,
+  parsed by the stock chat parser): single call, tool selection between two
+  tools, and a two-step loop that reads a tool result and answers from it.
+- Reasoning: with `--reasoning off --reasoning-budget 0` the answer costs 2
+  completion tokens and the reasoning channel is empty; with reasoning on, the
+  `<think>` text arrives in `reasoning_content` and `content` stays clean.
+- Long context on Metal, which the quant's author had not tested beyond 8,192
+  tokens: exact recall of a planted string at 6K, 24K and 61,785 prompt tokens.
+  The last one ran under localcode's own generated command (`--ctx-size 131072`,
+  q8_0 KV, `--cache-reuse`, `--ctx-checkpoints 4`, `--context-shift`); the
+  follow-up turn re-read 25 tokens, so the prefix cache and checkpoints work
+  with the sliding-window / full-attention interleave.
+- Resident memory about 46 GB at that context.
+
+- turbo4 K + turbo4 V also passes the tool loop and the 6K / 24K recall checks
+  (the turbo Q pre-rotation runs through the iSWA attention path).
+
+Not verified: coding benchmarks, turbo2 / turbo3 KV with this architecture,
+the Q8_0 split files, CUDA.
 
 ---
 
