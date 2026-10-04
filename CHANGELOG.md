@@ -3,6 +3,32 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Added
+
+- **OpenJev 27B, a decision model.** It appears in the model list as `openjev`
+  with Q4, Q8 and BF16 quants and is never picked automatically. It is not a
+  coding model: it answers typed questions about a text, a web page or a
+  screenshot with a choice, a yes/no probability or a score, through the
+  bundled server's `/v1/systemone` endpoint. `localcode api` prints the
+  endpoint and key. The weights are CC BY-NC 4.0, non-commercial use only.
+
+### Fixed
+
+- **DiffusionGemma returned empty or cut-off replies.** The launcher passed the
+  reasoning-off switch to a model that has none, which ends generation at the
+  first position. Short answers came back empty and long ones lost their first
+  words. The launcher now sends that switch only to models that have it.
+- **`turbo2` as the key cache type** now runs with `q8_0` keys. Two-bit keys
+  are a precision limit of the format, measured the same on CPU and Metal, not
+  a kernel bug; `turbo2` stays available for values.
+
+### Changed
+
+- `ruff check src tests` now checks exactly what CI enforces, and
+  `pip install -e ".[dev]"` installs the tools the pre-PR checks need.
+
 ## 0.5.2 — 2026-10-04
 
 ### Added
