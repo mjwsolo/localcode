@@ -74,6 +74,7 @@ export default defineConfig({
             { label: 'Permissions', slug: 'start-here/permissions' },
             { label: 'Offline', slug: 'guides/offline' },
             { label: 'MCP', slug: 'guides/mcp' },
+            { label: 'Local API', slug: 'guides/local-api' },
             { label: 'Skills & Hooks', slug: 'guides/skills-and-hooks' },
           ],
         },
