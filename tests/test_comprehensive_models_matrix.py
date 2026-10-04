@@ -171,3 +171,18 @@ def test_every_catalog_reasoning_policy_resolves(choice):
     if choice.reasoning_control == "always":
         assert caps.control is ReasoningControl.ALWAYS
         assert not caps.supports_budget
+
+
+@pytest.mark.parametrize("choice", ALL_CHOICES, ids=_choice_ids)
+def test_launcher_only_silences_reasoning_where_a_switch_exists(choice, monkeypatch):
+    """The UI launcher may pass --reasoning off only to models that have the switch.
+
+    DiffusionGemma has none: with the flag it returns empty or head-truncated text.
+    """
+    from localcode.reasoning_capabilities import ReasoningControl, reasoning_capabilities
+    from localcode.ui.server_cmd import server_command
+
+    monkeypatch.delenv("LOCALCODE_INTERNAL_THINKING_MODE", raising=False)
+    cmd = server_command(f"/models/{choice.filename}", 8081, choice.key)
+    has_switch = reasoning_capabilities(choice.filename).control is ReasoningControl.CHAT_TEMPLATE
+    assert ("--reasoning" in cmd) == has_switch
