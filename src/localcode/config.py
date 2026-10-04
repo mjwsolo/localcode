@@ -129,7 +129,7 @@ class RuntimeConfig:
     llama_cpp_expert_offload: bool = False # offload MoE experts to CPU (-ot exps=CPU)
     llama_cpp_draft_model: str = ""       # path to draft GGUF for speculative decoding
     llama_cpp_lookup_cache: bool = False   # prompt lookup decoding (2-4x on code edits)
-    kv_cache_type_k: str = "q8_0"          # K cache type: q8_0, q4_0, f16, turbo2, turbo3, turbo4
+    kv_cache_type_k: str = "q8_0"          # K cache type: q8_0, q4_0, f16, turbo3, turbo4 (turbo2 is V-only; as K it runs as q8_0)
     kv_cache_type_v: str = "q8_0"          # V cache type: q8_0 default; q4_0, f16, turbo2, turbo3, turbo4 available
     llama_cpp_cache_reuse: int = 256       # --cache-reuse N: reuse KV chunks across partial prefix matches (0 = off). Recovers prefix-cache hits after mid-context edits/compaction shift the tail; the stable system-prompt prefix is already reused automatically per slot.
     llama_cpp_binary: str = ""             # custom llama-server path (e.g. TurboQuant fork)
