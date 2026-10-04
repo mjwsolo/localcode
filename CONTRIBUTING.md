@@ -7,8 +7,7 @@ Contributions are welcome. Good changes make the default local workflow better, 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e .
-pip install pytest ruff build
+pip install -e ".[dev]"
 ```
 
 ## Before opening a PR

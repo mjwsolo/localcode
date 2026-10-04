@@ -450,6 +450,35 @@ CHOICES: list[ModelChoice] = [
         # tokens, empty reasoning channel). That is the default policy
         # ("chat_template"), the same one the Gemma 4 and Qwen entries use.
     ),
+    ModelChoice(
+        key="openjev",
+        # Pinned to the revision and digest that were verified live.
+        revision="10840f375658dea7afc5ff4711127bca8218b560",
+        sha256="38b512277edaeec6cd251d146bff6d97bc328fa9db19755401d6e9ab1ccbcba5",
+        size_bytes=18973872288,
+        name="OpenJev 27B (Q4, decision model)",
+        hf_repo="ggml-org/OpenJev-GGUF",
+        filename="OpenJev-Q4_K_M.gguf",
+        size_gb=19.0,
+        active_params="27B dense (Qwen 3.5 base, tuned for typed decisions)",
+        architecture="qwen35",
+        license="CC BY-NC 4.0 (non-commercial use only)",
+        humaneval_pass_at_1=None,
+        notes=(
+            "A DECISION model, not a coding model. It answers typed questions "
+            "about a state (text, JSON, a web page, a screenshot) with a choice, "
+            "a yes/no probability or a score, in one forward pass per question, "
+            "through the bundled server's /v1/systemone endpoint; `localcode api` "
+            "prints the endpoint and key. It also answers on the chat endpoint, "
+            "but it was tuned for decisions and is not benchmarked for coding. "
+            "The weights are CC BY-NC 4.0: research and non-commercial use only. "
+            "Needs ~32 GB unified memory. Pair with the mmproj for screenshot "
+            "input. Never auto-recommended."
+        ),
+        mmproj_filename="mmproj-OpenJev-Q8_0.gguf",
+        mmproj_size_gb=0.6,
+        mmproj_hf_filename="mmproj-OpenJev-Q8_0.gguf",
+    ),
 ]
 
 
@@ -488,6 +517,14 @@ def _system_ram_gb() -> int:
 # it is not the coding-agent experience a first-run user should land on by
 # default. Owner can override by emptying this set.
 _NO_AUTO_RECOMMEND_ARCHS = {"diffusion_gemma", "kolibri1"}
+# Entries excluded by key, for models that share an architecture with a
+# recommended one: OpenJev is a qwen35 like Qwen 3.8, but it is a decision
+# model and must never be a first-run coding default.
+_NO_AUTO_RECOMMEND_KEYS = {"openjev"}
+
+
+def _auto_recommendable(c: "ModelChoice") -> bool:
+    return c.architecture not in _NO_AUTO_RECOMMEND_ARCHS and c.key not in _NO_AUTO_RECOMMEND_KEYS
 
 # Capability order for auto-recommend, best → worst for coding-agent use. This
 # is deliberately NOT raw file size: the big MoEs measure ~95% HumanEval here
@@ -526,14 +563,14 @@ def recommend(ram_gb: int | None = None) -> ModelChoice:
     budget = ram_gb * 0.55
     candidates = [
         c for c in CHOICES
-        if c.architecture not in _NO_AUTO_RECOMMEND_ARCHS and c.size_gb <= budget
+        if _auto_recommendable(c) and c.size_gb <= budget
     ]
     if candidates:
         # Most capable that fits; tie-break toward the larger (better-quant) file.
         return min(candidates, key=lambda c: (_capability_rank(c), -c.size_gb))
     # Nothing fits the budget — smallest production-ready model so the user still
     # gets something runnable rather than an impossible recommendation.
-    prod = [c for c in CHOICES if c.architecture not in _NO_AUTO_RECOMMEND_ARCHS]
+    prod = [c for c in CHOICES if _auto_recommendable(c)]
     return min(prod or CHOICES, key=lambda c: c.size_gb)
 
 
@@ -784,6 +821,23 @@ MODEL_GROUPS: list[ModelGroup] = [
             "community quant. Qwen-style reasoning tags and Hermes tool calls. "
             "Text-only."
         ),
+    ),
+    ModelGroup(
+        key="openjev",
+        display_name="OpenJev 27B (decision model)",
+        maker="OpenJev",
+        hf_repo="ggml-org/OpenJev-GGUF",
+        family="qwen",
+        architecture="qwen35",
+        license="CC BY-NC 4.0 (non-commercial use only)",
+        notes=(
+            "Decision model, not a coding model: typed choice / yes-no / score "
+            "answers about text, web pages and screenshots through /v1/systemone. "
+            "Q4_K_M, Q8_0 and BF16 quants. Non-commercial licence."
+        ),
+        mmproj_filename="mmproj-OpenJev-Q8_0.gguf",
+        mmproj_size_gb=0.6,
+        mmproj_hf_filename="mmproj-OpenJev-Q8_0.gguf",
     ),
 ]
 

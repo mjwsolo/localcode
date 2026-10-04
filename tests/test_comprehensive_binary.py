@@ -153,3 +153,14 @@ def test_bundled_binary_second_launch_is_fast(binary: Path):
     _version(binary)
     proc = _version(binary, timeout=30)
     assert proc.returncode == 0, proc.stderr[-400:]
+
+
+def test_turbo2_keys_fall_back_to_q8_0():
+    """turbo2 is a value-only cache type; as the key type the launcher uses q8_0."""
+    from localcode.config import RuntimeConfig
+    from localcode.runtime import LocalCodeRuntimeGateway
+
+    cfg = RuntimeConfig(kv_cache_type_k="turbo2", kv_cache_type_v="turbo2")
+    cmd = LocalCodeRuntimeGateway(cfg).llama_server_command("/path/model.gguf", 8081)
+    assert cmd[cmd.index("--cache-type-k") + 1] == "q8_0"
+    assert cmd[cmd.index("--cache-type-v") + 1] == "turbo2"
