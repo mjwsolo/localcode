@@ -52,6 +52,13 @@ voice = [
   "numpy>=1.26.0",
   "piper-tts>=1.2.0",         # natural neural TTS — default speaker
 ]
+# What the pre-PR checks in CONTRIBUTING.md need.
+dev = [
+  "pytest",
+  "pytest-timeout",
+  "ruff",
+  "build",
+]
 
 
 [project.urls]
@@ -98,3 +105,8 @@ markers = [
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+# The gate CI enforces: syntax errors, broken comparisons, undefined names.
+# Pinned here so a bare `ruff check src tests` checks the same thing locally.
+[tool.ruff.lint]
+select = ["E9", "F63", "F7", "F82"]

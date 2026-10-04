@@ -41,6 +41,14 @@ def server_command(gguf: str, port: int, alias: str | None = None) -> list[str]:
         choice = by_filename(Path(gguf).name)
         if choice is not None:
             control = choice.reasoning_control or "server"
+        # The capability registry has the last word. DiffusionGemma's catalog
+        # entry carries the default policy, but the model has no thinking
+        # toggle: with --reasoning off it ends generation at canvas position 0,
+        # so short answers come back empty and long ones lose their first
+        # words (found by the launcher-driven model gate, 2026-10-04).
+        from localcode.reasoning_capabilities import ReasoningControl, reasoning_capabilities
+        if reasoning_capabilities(Path(gguf).name).control is ReasoningControl.NONE:
+            control = "none"
     except Exception:  # noqa: BLE001, S110
         pass
     mode = os.environ.get("LOCALCODE_INTERNAL_THINKING_MODE") or cfg.runtime.internal_thinking_mode or "off"

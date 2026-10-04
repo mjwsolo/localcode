@@ -84,6 +84,7 @@ _EXPECTED_VISION = {
     "diffusiongemma": False,
     "north-mini-code": False,
     "kolibri": False,
+    "openjev": True,
 }
 
 
@@ -278,3 +279,29 @@ def test_kolibri_catalog_entry_is_pinned_and_never_auto_recommended() -> None:
     g = group_for_filename("Kolibri-1-Q4_K_M.gguf")
     assert g is not None and g.architecture == "kolibri1"
     assert infer_family_from_profile("kolibri-1-q4") == ModelFamily.QWEN
+
+
+def test_openjev_is_pinned_listed_with_quants_and_never_auto_recommended() -> None:
+    from localcode.models_catalog import group_for_filename, recommend
+    from localcode.model_families import ModelFamily, infer_family_from_profile
+
+    choice = by_key("openjev")
+    assert choice is not None
+    assert choice.architecture == "qwen35"
+    assert choice.revision != "main" and len(choice.revision) == 40
+    assert choice.sha256 and len(choice.sha256) == 64
+    assert choice.size_bytes == 18973872288
+    assert choice.supports_vision
+    # the licence restriction must be visible wherever the entry is shown
+    assert "non-commercial" in choice.license.lower()
+    assert "decision" in choice.name.lower()
+
+    # a decision model shares qwen35 with Qwen 3.8, so it is excluded by key
+    for ram in (16, 32, 64, 96, 128, 192, 512):
+        assert recommend(ram).key != "openjev"
+
+    # the other quants in the repo resolve to the group
+    for quant in ("OpenJev-Q8_0.gguf", "OpenJev-BF16.gguf"):
+        g = group_for_filename(quant)
+        assert g is not None and g.key == "openjev"
+    assert infer_family_from_profile("openjev-q4") == ModelFamily.QWEN

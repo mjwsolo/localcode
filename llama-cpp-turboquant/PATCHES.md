@@ -183,9 +183,38 @@ generated token's top-20 distribution against the same binary's f16 KV):
 | q8_0 / turbo2 | 0.0023 | 0.0017 |
 | turbo2 / turbo2 | 5.58 | 4.97 |
 
-**turbo2 as the K type is broken on both binaries** (top-1 agreement 2/16 and
-4/16): pre-existing, not introduced by the bump, and no shipped config uses it.
-turbo2 is only usable as the V type.
+**turbo2 as the K type is a precision limit, not a kernel bug** (re-measured
+2026-10-04). The first-token metric above is too weak to judge this: with short
+prompts the cache barely matters, and the same metric puts f16 on CPU 0.58 KL
+away from f16 on Metal. A teacher-forced run settles it (gemma-4-12b Q4_K_XL,
+96 positions of one passage, incremental decode so every step reads the cache):
+
+| K / V | backend | perplexity | top-1 same as f16 Metal |
+| --- | --- | --- | --- |
+| f16 / f16 | Metal | 24.7 | 96/96 |
+| f16 / f16 | CPU | 23.4 | 83/96 |
+| q8_0 / q8_0 | Metal | 24.0 | 93/96 |
+| turbo4 / turbo4 | Metal | 25.2 | 75/96 |
+| turbo3 / q8_0 | Metal | 38.8 | 69/96 |
+| turbo3 / turbo3 | Metal | 52.8 | 54/96 |
+| q8_0 / turbo2 | Metal | 67.1 | 50/96 |
+| turbo2 / q8_0 | Metal | 65.5 | 56/96 |
+| turbo2 / q8_0 | CPU | 55.3 | 52/96 |
+| turbo2 / turbo2 | Metal | 54.2 | 44/96 |
+| turbo2 / turbo2 | CPU | 72.5 | 40/96 |
+
+Metal and the CPU reference path lose the same amount, so the Metal kernels are
+doing what the design says. The design is the limit: a 2-bit Lloyd-Max code on
+the rotated unit vector reaches cosine 0.94 with the original (0.98 at 3 bits),
+about a third of each key's length in error, and attention logits take that
+error directly. There is nothing to repair in a kernel. localcode therefore
+never passes turbo2 as the key type: `kv_cache_type_k = "turbo2"` launches with
+q8_0 keys (`runtime.py`, covered by `test_turbo2_keys_fall_back_to_q8_0`).
+
+The same run shows every type below turbo4 costs real quality on this model,
+turbo2 and turbo3 values included. The shipped default (q8_0 / q8_0) and
+turbo4 are the only pairs within noise of f16. One passage of 96 tokens is a
+small sample; treat the ranking as solid and the exact numbers as rough.
 
 #### Known gaps deliberately accepted at the 2026-10-03 bump
 

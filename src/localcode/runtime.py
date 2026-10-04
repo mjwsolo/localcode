@@ -466,6 +466,12 @@ class LocalCodeRuntimeGateway:
         # KV cache compression (asymmetric: q8_0 K + turbo4 V recommended)
         ctk = self.config.kv_cache_type_k
         ctv = self.config.kv_cache_type_v
+        # turbo2 is a VALUE type only. Two bits per key leaves each key about a
+        # third off its true direction, which attention cannot absorb: measured
+        # perplexity roughly doubles, identically on the CPU reference and on
+        # Metal (llama-cpp-turboquant/PATCHES.md). Keys fall back to q8_0.
+        if (ctk or "").lower() == "turbo2":
+            ctk = "q8_0"
         if ctk and ctk != "f16":
             cmd.extend(["--cache-type-k", ctk])
         if ctv and ctv != "f16":
