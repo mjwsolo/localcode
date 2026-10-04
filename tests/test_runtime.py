@@ -55,7 +55,8 @@ class TestLlamaServerCommand:
         cmd = gw.llama_server_command("/path/model.gguf", port=8081)
         assert "--model" in cmd
         assert "/path/model.gguf" in cmd
-        assert "--mmap" in cmd
+        assert cmd[cmd.index("--load-mode") + 1] == "mmap"
+        assert "--mmap" not in cmd  # removed upstream; a hard argument error
         ngl_idx = cmd.index("-ngl")
         assert cmd[ngl_idx + 1] == "999"  # default branch hardcodes 999
 
@@ -71,7 +72,8 @@ class TestLlamaServerCommand:
         assert "-ngl" in cmd
         ngl_idx = cmd.index("-ngl")
         assert cmd[ngl_idx + 1] == "999"
-        assert "--mmap" in cmd
+        assert cmd[cmd.index("--load-mode") + 1] == "mmap"
+        assert "--mmap" not in cmd  # removed upstream; a hard argument error
         assert "-fit" in cmd
         assert "off" in cmd
 

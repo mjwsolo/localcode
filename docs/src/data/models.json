@@ -682,6 +682,20 @@
         "maker": "Alibaba",
         "logo": "qwen",
         "experimental": false
+      },
+      {
+        "name": "Kolibri 1 78B-A3B (Q4, experimental)",
+        "base": "Kolibri 1 78B-A3B",
+        "quant": "Q4, experimental",
+        "total": "78B",
+        "active": "3.5B active (78B total MoE)",
+        "kind": "MoE",
+        "detail": "78B total MoE",
+        "file": "Kolibri-1-Q4_K_M.gguf",
+        "size": 47.5,
+        "maker": "Aleph Alpha",
+        "logo": null,
+        "experimental": true
       }
     ]
   },
@@ -844,6 +858,20 @@
         "maker": "Alibaba",
         "logo": "qwen",
         "experimental": false
+      },
+      {
+        "name": "Kolibri 1 78B-A3B (Q4, experimental)",
+        "base": "Kolibri 1 78B-A3B",
+        "quant": "Q4, experimental",
+        "total": "78B",
+        "active": "3.5B active (78B total MoE)",
+        "kind": "MoE",
+        "detail": "78B total MoE",
+        "file": "Kolibri-1-Q4_K_M.gguf",
+        "size": 47.5,
+        "maker": "Aleph Alpha",
+        "logo": null,
+        "experimental": true
       },
       {
         "name": "Qwen 3.8 27B (BF16, full)",
