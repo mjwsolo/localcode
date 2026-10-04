@@ -21,7 +21,7 @@
 #   --vendor DIR       vendored fork dir (default: <repo>/llama-cpp-turboquant)
 #   --skip-build       replay + source assertions only, no cmake (fast dry run)
 #   --sync             on success, rsync the patched tree over the vendored dir
-#                      and update patches/PINNED_UPSTREAM
+#                      update patches/PINNED_UPSTREAM and the shipped binary
 #   --force            replay even when upstream already equals PINNED_UPSTREAM
 #   -j N               build parallelism (default: sysctl hw.ncpu, else 4)
 #
@@ -327,6 +327,12 @@ emit BINARY "$BIN"
 if [ "$DO_SYNC" -eq 1 ]; then
   log "Syncing the patched tree into $VENDOR_DIR"
   [ -d "$VENDOR_DIR" ] || die "vendor dir $VENDOR_DIR does not exist" 1
+  SHIPPED_BIN="$REPO_ROOT/src/localcode/bin/llama-server"
+  [ -d "$(dirname "$SHIPPED_BIN")" ] || die "shipped binary directory missing" 1
+  # Keep the exact artifact that passed the self-containment checks. Stage it
+  # beside the destination so the final replacement is atomic.
+  cp "$BIN" "$SHIPPED_BIN.new" || die "could not stage verified server binary" 1
+  chmod 755 "$SHIPPED_BIN.new"
   rm -rf "$SRC/build-ci"
   # Anchored excludes mirror "Vendoring exclusions" in llama-cpp-turboquant/PATCHES.md
   # (leading slash = transfer root, so src/models/ is still synced). PATCHES.md is
@@ -349,7 +355,9 @@ if [ "$DO_SYNC" -eq 1 ]; then
     --exclude '/ci/' \
     --exclude '/build-xcframework.sh' \
     "$SRC/" "$VENDOR_DIR/" || die "rsync into the vendored tree failed" 1
+  mv "$SHIPPED_BIN.new" "$SHIPPED_BIN" || die "could not install verified server binary" 1
   printf '%s\n' "$NEW_SHA" > "$PINNED_FILE"
+  emit SHIPPED_BINARY "$SHIPPED_BIN"
   echo "vendored tree updated; patches/PINNED_UPSTREAM -> $NEW_SHA"
   emit SYNCED 1
 fi
@@ -363,9 +371,9 @@ NOT VERIFIED BY THIS SCRIPT: whether the models still work.
 Loading a model needs a real Metal device and 7-38 GB of weights. Before this
 bump is merged, run locally and paste the output into the PR:
 
-    bash dev/verify_models.sh
+    pytest -m real_models -q tests/test_real_models.py
 
-That covers the 8 bundled-server configs - load, generate, tool-calling,
-including the turbo4 KV cache path.
+Check the output for skipped models: the pytest tier skips a GGUF that is not
+downloaded. The local 11-config gate also covers the turbo KV variants.
 EOF
 exit 0
