@@ -383,6 +383,9 @@ PRINT_ALLOWLIST = {
     # prints the restart/resume help banner. Not invoked from the
     # agent loop.
     "entrypoint.py",
+    # CLI entry point (`localcode api`): prints the local endpoint details
+    # to the terminal for other tools. Not invoked from the agent loop.
+    "api.py",
 }
 
 

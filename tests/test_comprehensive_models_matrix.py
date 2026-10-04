@@ -155,3 +155,19 @@ def test_every_picker_group_has_a_downloadable_quant():
     choice_repos = {c.hf_repo for c in catalog.CHOICES}
     empty = [g.key for g in catalog.MODEL_GROUPS if g.hf_repo not in choice_repos]
     assert not empty, f"picker groups with no downloadable quant: {empty}"
+
+
+@pytest.mark.parametrize("choice", ALL_CHOICES, ids=_choice_ids)
+def test_every_catalog_reasoning_policy_resolves(choice):
+    from localcode.reasoning_capabilities import ReasoningControl, reasoning_capabilities
+
+    caps = reasoning_capabilities(choice.filename)
+    if choice.architecture == "diffusion_gemma":
+        assert not caps.supported
+        assert caps.control is ReasoningControl.NONE
+        return
+    assert caps.family == choice.architecture
+    assert caps.supported == (choice.reasoning_control != "none")
+    if choice.reasoning_control == "always":
+        assert caps.control is ReasoningControl.ALWAYS
+        assert not caps.supports_budget
