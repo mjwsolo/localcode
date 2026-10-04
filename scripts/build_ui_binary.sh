@@ -15,14 +15,16 @@ mkdir -p "$WORK"
 if [ ! -d "$WORK/opencode/.git" ]; then git clone -q "$REPO" "$WORK/opencode"; fi
 git -C "$WORK/opencode" fetch -q origin
 git -C "$WORK/opencode" checkout -q "$COMMIT"
-( cd "$WORK/opencode" && bun install --frozen-lockfile >/dev/null )
+( cd "$WORK/opencode" && bun install --frozen-lockfile --ignore-scripts >/dev/null )
 # The runtime shows this in its footer; keep it equal to the wheel version (semver form).
 PYVER="$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/pyproject.toml" | head -1)"
 export OPENCODE_VERSION="$(echo "$PYVER" | sed -E 's/([0-9])(a|b|rc)([0-9]+)$/\1-\2\3/')"
 ( cd "$WORK/opencode/packages/opencode" && bun run script/build.ts --single --skip-install --skip-embed-web-ui >/dev/null )
 OUT="$(ls "$WORK"/opencode/packages/opencode/dist/*/bin/localcode | head -1)"
 file "$OUT" | grep -q 'arm64' || { echo "unexpected architecture: $(file "$OUT")"; exit 1; }
-if strings "$OUT" | grep -q "^/Users/[^r]"; then echo "developer path embedded in binary; build from a neutral directory"; exit 1; fi
+if strings "$OUT" | grep -E '/Users/[^/]+/' | grep -v '/Users/runner/' | grep -q .; then
+  echo "developer path embedded in binary; build from a neutral directory"; exit 1
+fi
 SHA="$(shasum -a 256 "$OUT" | cut -d' ' -f1)"
 echo "built $OUT"; echo "sha256 $SHA (fork $COMMIT)"
 if [ "${1:-}" = "--check" ]; then
