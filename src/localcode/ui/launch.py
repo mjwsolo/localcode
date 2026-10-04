@@ -11,12 +11,14 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import signal
 import subprocess
 import sys
 import time
 import urllib.request
 from pathlib import Path
+from urllib.parse import quote
 
 from localcode.ui import plugin_path, run_dir, ui_binary_path
 from localcode.ui.auth import KEY_ENV, TOKEN_ENV, control_headers, new_secret, read_auth_file, server_key
@@ -126,7 +128,35 @@ def write_config(path: Path, *, port: int, ctx: int, alias: str | None) -> None:
     os.replace(tmp, path)
 
 
-def attach(ctrl: int, status: dict, ui_bin: Path, project_dir: Path, alias: str | None) -> int:
+def _resume_args(resume: str | None) -> list[str]:
+    if not resume:
+        return []
+    return ["--continue"] if resume == "last" else ["--session", resume]
+
+
+def _session_directory(session_id: str) -> Path | None:
+    """Find the project recorded for a session in the local runtime database."""
+    if not session_id.startswith("ses_"):
+        return None
+    data_home = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+    for db in (data_home / "localcode-agent" / "opencode.db",
+               data_home / "localcode-agent" / "opencode-localcode.db"):
+        if not db.is_file():
+            continue
+        try:
+            with sqlite3.connect(f"file:{quote(str(db))}?mode=ro", uri=True) as conn:
+                row = conn.execute("SELECT directory FROM session WHERE id = ?", (session_id,)).fetchone()
+        except sqlite3.Error:
+            continue
+        if row and row[0]:
+            directory = Path(row[0]).expanduser()
+            if directory.is_dir():
+                return directory.resolve()
+    return None
+
+
+def attach(ctrl: int, status: dict, ui_bin: Path, project_dir: Path, alias: str | None,
+           resume: str | None = None) -> int:
     """Open another UI window on the model server a running session owns."""
     # The running session's secrets, left owner-only in the run directory.
     auth = read_auth_file(run_dir())
@@ -151,7 +181,7 @@ def attach(ctrl: int, status: dict, ui_bin: Path, project_dir: Path, alias: str 
     env["LOCALCODE_CONTROL_URL"] = f"http://127.0.0.1:{ctrl}"
     env["LOCALCODE_CONFIG"] = str(config_path)
     env.setdefault("OPENCODE_DISABLE_LSP_DOWNLOAD", "1")
-    argv = [str(ui_bin)] + (["-m", f"localcode/{current}"] if current else [])
+    argv = [str(ui_bin)] + (["-m", f"localcode/{current}"] if current else []) + _resume_args(resume)
     try:
         return subprocess.call(argv, cwd=str(project_dir), env=env)
     finally:
@@ -161,7 +191,8 @@ def attach(ctrl: int, status: dict, ui_bin: Path, project_dir: Path, alias: str 
             pass
 
 
-def main(model: str | None = None, project: str | None = None) -> int:
+def main(model: str | None = None, project: str | None = None,
+         resume: str | None = None) -> int:
     ui_bin = ui_binary_path()
     if ui_bin is None:
         print("localcode: the UI binary is missing from this install. "
@@ -179,13 +210,15 @@ def main(model: str | None = None, project: str | None = None) -> int:
         print(f"localcode: no downloaded model named {alias!r} in {models_dir}; opening the picker instead.",
               file=sys.stderr)
         alias = None
-    project_dir = Path(project).expanduser().resolve() if project else Path.cwd()
+    project_dir = Path(project).expanduser().resolve() if project else (
+        _session_directory(resume) if resume and resume != "last" else None
+    ) or Path.cwd()
 
     # A session already open in another terminal: attach to its model server
     # instead of refusing. One llama-server per machine, any number of windows.
     running = find_running()
     if running is not None:
-        return attach(running[0], running[1], ui_bin, project_dir, alias)
+        return attach(running[0], running[1], ui_bin, project_dir, alias, resume)
 
     try:
         port, ctrl = choose_ports()
@@ -256,6 +289,7 @@ def main(model: str | None = None, project: str | None = None) -> int:
         argv = [str(ui_bin)]
         if alias:
             argv += ["-m", f"localcode/{alias}"]
+        argv += _resume_args(resume)
         frontend = subprocess.Popen(argv, cwd=str(project_dir), env=env)
         # Watch both: if the supervisor dies (killed, crashed), the UI would
         # sit on "No model loaded" with a picker that never answers. End the

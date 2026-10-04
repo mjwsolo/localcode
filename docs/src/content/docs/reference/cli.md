@@ -4,7 +4,7 @@ description: Every flag localcode accepts.
 ---
 
 ```text
-localcode [DIR] [--model TAG]
+localcode [DIR] [--model TAG] [--resume SESSION_ID]
 localcode --version
 ```
 
@@ -14,8 +14,9 @@ Run `localcode` by itself to open the interface. Setup, the model picker, and se
 
 | Flag | Description |
 | --- | --- |
-| `DIR`, or `-c DIR` | Project directory. The default is the current directory |
+| `DIR` | Project directory. The default is the current directory |
 | `--model TAG` | Start with an already-downloaded model alias instead of the picker |
+| `-s SESSION_ID`, `--session SESSION_ID`, `--resume SESSION_ID` | Resume that session. If no directory is given, LocalCode opens the project saved with the session. Use `--resume last` for the latest session in the current project |
 | `--version` | Print the version and exit |
 
 A second `localcode` opens another interface session attached to the running model server. The windows share that model; closing the second window leaves the first session running. Use `/models` to switch the shared model.
