@@ -22,7 +22,6 @@ def test_parser_accepts_version_model_and_project():
     assert a.model == "x" and a.project == "somedir"
     for flag in ("-s", "--session", "--resume"):
         assert p.parse_args([flag, "ses_example"]).resume == "ses_example"
-    assert p.parse_args(["--continue"]).resume == "last"
     with pytest.raises(SystemExit):
         p.parse_args(["--classic"])  # the previous interface is gone
 

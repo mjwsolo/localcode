@@ -16,8 +16,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model", help="Model alias to load (otherwise the picker asks)")
     parser.add_argument("-s", "--session", "--resume", dest="resume", metavar="SESSION_ID",
                         help="Resume a session by ID; uses its saved project directory when no project is given")
-    parser.add_argument("--continue", dest="resume", action="store_const", const="last",
-                        help="Continue the latest session in this project")
     parser.add_argument("-c", "--cwd", type=str, default=None,
                         help="Working directory for the project (defaults to the current directory)")
     parser.add_argument("project", nargs="?", default=None,
