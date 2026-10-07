@@ -1,19 +1,14 @@
-name: Upstream bump
+name: OpenCode bump
 on:
   schedule:
-    - cron: '0 9 * * *'
+    - cron: '30 9 * * *'
   workflow_dispatch:
-    inputs:
-      ref:
-        description: llama.cpp ref to test
-        default: master
-        type: string
 permissions:
   contents: read
   pull-requests: write
   issues: write
 concurrency:
-  group: upstream-llama
+  group: upstream-opencode
   cancel-in-progress: false
 jobs:
   candidate:
@@ -23,5 +18,5 @@ jobs:
       issues: write
     uses: ./.github/workflows/upstream-candidate.yml
     with:
-      kind: llama
-      ref: ${{ inputs.ref || 'master' }}
+      kind: opencode
+      ref: localcode
