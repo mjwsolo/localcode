@@ -31,3 +31,18 @@ test("completion rules stay out of helper prompts and are constant for the build
     expect(nextTurn.system.join("\n")).not.toContain("YOUR OPEN TODOS");
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
+
+
+test("system instructions form one leading message for strict templates", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "system-prefix-"));
+  try {
+    const hooks = await (Plugin as any)({ directory, client: {} });
+    for (const agent of ["build", "compaction", "title"]) {
+      const output = { system: ["Provider instructions.", "Project instructions."] };
+      await hooks["experimental.chat.system.transform"]({ agent }, output);
+      expect(output.system).toHaveLength(1);
+      expect(output.system[0]).toStartWith("Provider instructions.\n\nProject instructions.");
+      expect(output.system[0].includes("WORKSPACE TASK COMPLETION")).toBe(agent === "build");
+    }
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});

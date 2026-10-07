@@ -1,0 +1,104 @@
+name: Build upstream candidate
+on:
+  workflow_call:
+    inputs:
+      kind:
+        required: true
+        type: string
+      ref:
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 120
+    outputs:
+      result: ${{ steps.build.outputs.result }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - name: Build without write credentials
+        id: build
+        env:
+          KIND: ${{ inputs.kind }}
+          REF: ${{ inputs.ref }}
+        run: |
+          set +e
+          if [ "$KIND" = llama ]; then
+            bash scripts/bump_upstream.sh --ref "$REF" --workdir "$RUNNER_TEMP/llama-bump" --sync > "$RUNNER_TEMP/build.log" 2>&1
+            rc=$?
+          elif [ "$KIND" = opencode ]; then
+            LOCALCODE_UI_BUILD_DIR="$RUNNER_TEMP/ui-bump" bash scripts/bump_opencode.sh "$REF" > "$RUNNER_TEMP/build.log" 2>&1
+            rc=$?
+          else
+            exit 1
+          fi
+          set -e
+          echo "result=$rc" >> "$GITHUB_OUTPUT"
+          # Only the expected source and runtime artifacts may reach the writer.
+          git add -N -- llama-cpp-turboquant patches/PINNED_UPSTREAM src/localcode/bin/llama-server src/localcode/bin/localcode-ui src/localcode/ui/FORK_COMMIT src/localcode/ui/UPSTREAM_COMMIT
+          git diff --binary -- llama-cpp-turboquant patches/PINNED_UPSTREAM src/localcode/bin/llama-server src/localcode/bin/localcode-ui src/localcode/ui/FORK_COMMIT src/localcode/ui/UPSTREAM_COMMIT > "$RUNNER_TEMP/candidate.patch"
+          tail -n 40 "$RUNNER_TEMP/build.log"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: upstream-candidate
+          path: |
+            ${{ runner.temp }}/candidate.patch
+            ${{ runner.temp }}/build.log
+  propose:
+    needs: build
+    if: needs.build.outputs.result != '10'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: upstream-candidate
+          path: candidate
+      - name: Propose candidate or report failure
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KIND: ${{ inputs.kind }}
+          RESULT: ${{ needs.build.outputs.result }}
+        run: |
+          set -euo pipefail
+          case "$KIND" in llama|opencode) ;; *) exit 1;; esac
+          if [ "$RESULT" != 0 ]; then
+            title="upstream-$KIND: candidate needs attention"
+            body="$RUNNER_TEMP/failure.md"
+            printf 'The upstream candidate build failed (exit %s). See the build log in this run: %s\n' "$RESULT" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > "$body"
+            existing=$(gh issue list --state open --search "$title in:title" --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -1)
+            if [ -n "$existing" ]; then gh issue edit "$existing" --body-file "$body"; else gh issue create --title "$title" --body-file "$body"; fi
+            exit 1
+          fi
+          # The build executed upstream code. Never trust its artifact to edit
+          # workflows/scripts or run anything in this job with write privileges.
+          git apply --include='llama-cpp-turboquant/*' --include='patches/PINNED_UPSTREAM' --include='src/localcode/bin/llama-server' --include='src/localcode/bin/localcode-ui' --include='src/localcode/ui/FORK_COMMIT' --include='src/localcode/ui/UPSTREAM_COMMIT' candidate/candidate.patch
+          branch="automation/$KIND-$GITHUB_RUN_ID"
+          git checkout -b "$branch"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add llama-cpp-turboquant patches/PINNED_UPSTREAM src/localcode/bin src/localcode/ui/FORK_COMMIT src/localcode/ui/UPSTREAM_COMMIT
+          git diff --cached --quiet && exit 0
+          git commit -m "$KIND: verified upstream build candidate"
+          # No stored checkout credential; the token exists only in this step.
+          git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push origin "$branch"
+          body="$RUNNER_TEMP/pr.md"
+          printf 'Upstream build candidate. Hosted CI proves build and static compatibility only.\n\nBefore merging, check out this exact commit on a real Apple Silicon Mac and run:\n\n```bash\npython scripts/verify_models.py --strict --publish-status\n```\n\nThen rerun the Model promotion gate workflow for this PR. No self-hosted runner or remote Mac connection is used. See docs/upstream-update-gates.md.\n' > "$body"
+          gh pr create --base main --head "$branch" --title "$KIND: update bundled upstream runtime" --body-file "$body"
+          pr=$(gh pr view "$branch" --json number --jq .number)
+          # Token-created pushes do not start CI; PR runs can need approval. Explicit
+          # dispatches do, and --ref attaches checks to the candidate commit.
+          gh workflow run ci.yml --ref "$branch"
+          gh workflow run model-gate.yml --ref "$branch" -f "pr=$pr"

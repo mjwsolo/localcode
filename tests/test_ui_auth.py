@@ -163,3 +163,10 @@ def test_server_command_carries_the_session_key(monkeypatch, tmp_path):
     assert cmd[cmd.index("--host") + 1] == "127.0.0.1"
     monkeypatch.delenv(auth.KEY_ENV)
     assert "--api-key" not in server_cmd.server_command(str(tmp_path / "m.gguf"), 8123, "m")
+
+
+def test_server_key_is_redacted_from_diagnostics():
+    from localcode.ui.auth import redact_command
+    command = ["server", "--api-key", "secret", "--port", "8081", "--api-key=other"]
+    assert redact_command(command) == ["server", "--api-key", "[redacted]", "--port", "8081", "--api-key=[redacted]"]
+    assert command[2] == "secret"

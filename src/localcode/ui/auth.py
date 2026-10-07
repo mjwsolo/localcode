@@ -92,3 +92,14 @@ def request_allowed(headers, expected_token: str, port: int, *, want_json: bool 
         if ctype != "application/json":
             return "Content-Type must be application/json"
     return None
+
+
+def redact_command(command: list[str]) -> list[str]:
+    """Keep the server key out of diagnostic logs."""
+    redacted = list(command)
+    for i, value in enumerate(redacted):
+        if value == "--api-key" and i + 1 < len(redacted):
+            redacted[i + 1] = "[redacted]"
+        elif value.startswith("--api-key="):
+            redacted[i] = "--api-key=[redacted]"
+    return redacted
