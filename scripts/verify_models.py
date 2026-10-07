@@ -23,6 +23,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+if not __debug__:
+    raise RuntimeError("Model verification requires assertions; do not run with python -O")
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from localcode import models_catalog as catalog
@@ -80,7 +83,7 @@ class Server:
         self.command[0] = str(ROOT / "src/localcode/bin/llama-server")
         self.log = (self.work / "server.log").open("wb")
         try:
-            self.proc = subprocess.Popen(self.command, stdout=self.log, stderr=subprocess.STDOUT)
+            self.proc = subprocess.Popen(self.command, stdout=self.log, stderr=subprocess.STDOUT, env={k: v for k, v in os.environ.items() if k not in {"GH_TOKEN", "GITHUB_TOKEN"}})
             deadline = time.monotonic() + 420
             while time.monotonic() < deadline:
                 if self.proc.poll() is not None:
@@ -144,7 +147,7 @@ def runtime_turn(server):
     with environment({auth.KEY_ENV: server.key}):
         ctx = int(server.command[server.command.index("--ctx-size") + 1])
         write_config(config, port=server.port, ctx=ctx, alias=server.choice.key)
-    env = {**os.environ, "OPENCODE_CONFIG": str(config), "XDG_DATA_HOME": str(server.work / "data"), "XDG_CONFIG_HOME": str(server.work / "config"), "XDG_CACHE_HOME": str(server.work / "cache"), "LOCALCODE_CONTROL_PORT": "1", "LOCALCODE_AUTO_CHECK": "0"}
+    env = {**{k: v for k, v in os.environ.items() if k not in {"GH_TOKEN", "GITHUB_TOKEN"}}, "OPENCODE_CONFIG": str(config), "XDG_DATA_HOME": str(server.work / "data"), "XDG_CONFIG_HOME": str(server.work / "config"), "XDG_CACHE_HOME": str(server.work / "cache"), "LOCALCODE_CONTROL_PORT": "1", "LOCALCODE_AUTO_CHECK": "0"}
     result = subprocess.run([str(ROOT / "src/localcode/bin/localcode-ui"), "run", "--format", "json", "Reply with exactly OK."], cwd=server.work, env=env, capture_output=True, text=True, timeout=240)
     events = [json.loads(line) for line in result.stdout.splitlines() if line.startswith("{")]
     assert result.returncode == 0, "bundled runtime failed"
@@ -186,7 +189,7 @@ def verify(server, *, runtime=False):
 
 
 def status(commit, state, description):
-    # gh uses the user's credentials locally; no credential enters a model process.
+    # gh uses local credentials; GitHub tokens are not passed to inference subprocesses.
     subprocess.run(["gh", "api", "repos/mjwsolo/localcode/statuses/" + commit, "-f", "state=" + state, "-f", "context=local model gate", "-f", "description=" + description], check=True, stdout=subprocess.DEVNULL)
 
 
@@ -198,7 +201,7 @@ def validate_receipt(receipt, commit, hashes, keys):
     assert set(normal) == keys and REQUIRED_KEYS <= keys, "model coverage changed"
     for key, checks in normal.items():
         expected = {"auth", "template", "chat", "systemone" if key == "openjev" else "tool-loop"}
-        if key in {"qwen38", "openjev"}:
+        if key in {"qwen38", "openjev", "diffusiongemma"}:
             expected.add("runtime")
         assert expected <= checks, "missing checks for " + key
     assert any(r["key"] == "qwen" and r["turbo4"] and "tool-loop" in r["checks"] for r in receipt["models"]), "turbo4 not verified"
@@ -241,7 +244,7 @@ def main(argv=None):
             print("VERIFY " + label, flush=True)
             with tempfile.TemporaryDirectory(prefix="localcode-gate-") as tmp:
                 with Server(choice, Path(tmp), turbo=turbo) as server:
-                    checks = verify(server, runtime=choice.key in {"qwen38", "openjev"} and not turbo)
+                    checks = verify(server, runtime=choice.key in {"qwen38", "openjev", "diffusiongemma"} and not turbo)
             receipt["models"].append({"key": choice.key, "turbo4": turbo, "checks": checks})
             print("PASS " + label + " " + ", ".join(checks), flush=True)
         receipt["success"] = True

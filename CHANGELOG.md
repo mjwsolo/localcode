@@ -3,7 +3,7 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## 0.5.3 — 2026-10-07
+## 0.5.3 — 2026-10-08
 
 ### Added
 
@@ -19,6 +19,10 @@ All notable changes to LocalCode will be documented here. The format follows
 - **OpenJev no longer fails on a second system message.** The plugin keeps all
   instructions, in order, in one leading system message. Verified through the
   shipping runtime against the model's strict template.
+- **DiffusionGemma's post-tool answer remains visible.** Automatic reasoning
+  extraction sometimes placed the whole answer in a hidden channel. The launcher
+  keeps its generated text in the content channel; it may include thought markers
+  because this experimental model has no reliable reasoning-off switch.
 - Server diagnostic logs redact the session API key.
 - The tracked local inference gate uses the shipping launcher and authenticated
   API, validates tool arguments and tool-result responses, and checks System One
