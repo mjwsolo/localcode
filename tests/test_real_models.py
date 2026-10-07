@@ -19,4 +19,4 @@ def test_shipping_model_contract(choice, tmp_path: Path):
     if choice is None:
         pytest.skip("no models downloaded; promotion uses the strict CLI gate")
     with Server(choice, tmp_path) as server:
-        verify(server, runtime=choice.key in {"qwen38", "openjev"})
+        verify(server, runtime=choice.key in {"qwen38", "openjev", "diffusiongemma"})

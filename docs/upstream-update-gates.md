@@ -27,7 +27,7 @@ Required keys: `gemma-12b`, `qwen`, `qwen38`, `diffusiongemma`, `north-mini-code
 Checks cover rejected unauthenticated inference, template rendering, chat,
 well-formed tool calls with correct arguments, consumption of tool results,
 System One choice/boolean/score response contracts, and an additional turbo4 run.
-Qwen 3.8 and OpenJev also run through the shipping OpenCode binary and plugin.
+Qwen 3.8, OpenJev and DiffusionGemma also run through the shipping OpenCode binary and plugin.
 Decision probabilities are checked for validity, not used as safety approvals.
 This is a compatibility gate, not a coding-quality benchmark or exhaustive eval.
 
@@ -44,7 +44,8 @@ Receipts go to `.localcode-gate/receipt.json` (gitignored), recording the exact
 commit, binary hashes and checks. `--publish-status` requires the full strict
 model set and a clean tracked checkout. It uses your local `gh` credentials to
 publish a `local model gate` commit status, never a remote runner. After publishing,
-rerun the **Model promotion gate** workflow for the PR. The check accepts only a
+rerun the failed **Model promotion gate** run for the PR (or dispatch it with
+`gh workflow run model-gate.yml --ref CANDIDATE_BRANCH -f pr=PR_NUMBER`). The check accepts only a
 successful status on the current head commit. A new commit needs a fresh gate.
 Maintainers should require **model promotion gate** in branch protection and
 merge only when the standard CI checks pass too. Statuses attest the local
@@ -62,7 +63,9 @@ operator's run; they are not cryptographic proof of hardware execution.
 
 The build job has read-only repository permissions and no stored checkout
 credential. The separate writer job applies only permitted runtime/vendor paths
-and creates a PR; it executes no upstream code. Build failures become a rolling
+and creates a PR; it executes no upstream code. It explicitly dispatches CI
+and the promotion check on the candidate branch because token-created pushes do not start new runs and token-created PR runs
+can require approval. See [GitHub's token event rules](https://docs.github.com/en/actions/concepts/security/github_token#when-github_token-triggers-workflow-runs). Build failures become a rolling
 issue with a link to the log. No candidate auto-merges on build success.
 
 ## Release

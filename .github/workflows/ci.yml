@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 # Cancel an in-progress run when a newer commit lands on the same ref, so a
 # superseded run can't linger and report a confusing red ✗.

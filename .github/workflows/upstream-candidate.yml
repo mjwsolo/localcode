@@ -57,6 +57,7 @@ jobs:
       contents: write
       pull-requests: write
       issues: write
+      actions: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -96,3 +97,8 @@ jobs:
           body="$RUNNER_TEMP/pr.md"
           printf 'Upstream build candidate. Hosted CI proves build and static compatibility only.\n\nBefore merging, check out this exact commit on a real Apple Silicon Mac and run:\n\n```bash\npython scripts/verify_models.py --strict --publish-status\n```\n\nThen rerun the Model promotion gate workflow for this PR. No self-hosted runner or remote Mac connection is used. See docs/upstream-update-gates.md.\n' > "$body"
           gh pr create --base main --head "$branch" --title "$KIND: update bundled upstream runtime" --body-file "$body"
+          pr=$(gh pr view "$branch" --json number --jq .number)
+          # Token-created pushes do not start CI; PR runs can need approval. Explicit
+          # dispatches do, and --ref attaches checks to the candidate commit.
+          gh workflow run ci.yml --ref "$branch"
+          gh workflow run model-gate.yml --ref "$branch" -f "pr=$pr"

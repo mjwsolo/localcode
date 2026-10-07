@@ -16,6 +16,7 @@ jobs:
       contents: write
       pull-requests: write
       issues: write
+      actions: write
     uses: ./.github/workflows/upstream-candidate.yml
     with:
       kind: opencode
