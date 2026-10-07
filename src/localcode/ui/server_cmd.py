@@ -47,8 +47,14 @@ def server_command(gguf: str, port: int, alias: str | None = None) -> list[str]:
         # so short answers come back empty and long ones lose their first
         # words (found by the launcher-driven model gate, 2026-10-04).
         from localcode.reasoning_capabilities import ReasoningControl, reasoning_capabilities
-        if reasoning_capabilities(Path(gguf).name).control is ReasoningControl.NONE:
+        capabilities = reasoning_capabilities(Path(gguf).name)
+        if capabilities.control is ReasoningControl.NONE:
             control = "none"
+        if capabilities.family == "diffusion":
+            # Auto extraction can put the entire post-tool answer in
+            # reasoning_content, leaving no visible text. Keep generated text
+            # in content without disabling this model's generation path.
+            cmd += ["--reasoning-format", "none"]
     except Exception:  # noqa: BLE001, S110
         pass
     mode = os.environ.get("LOCALCODE_INTERNAL_THINKING_MODE") or cfg.runtime.internal_thinking_mode or "off"

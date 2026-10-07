@@ -1,0 +1,23 @@
+name: OpenCode bump
+on:
+  schedule:
+    - cron: '30 9 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+concurrency:
+  group: upstream-opencode
+  cancel-in-progress: false
+jobs:
+  candidate:
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: write
+    uses: ./.github/workflows/upstream-candidate.yml
+    with:
+      kind: opencode
+      ref: localcode

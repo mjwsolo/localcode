@@ -44,18 +44,20 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.mark.parametrize("mode", ["turbo", "turbo-think", "context", "speed"])
-def test_every_emitted_flag_is_accepted_by_the_bundled_binary(mode: str) -> None:
-    from localcode.config import RuntimeConfig
-    from localcode.runtime import LocalCodeRuntimeGateway
+def test_every_emitted_flag_is_accepted_by_the_bundled_binary(mode, monkeypatch, tmp_path):
+    from localcode.config import AppConfig, RuntimeConfig, UIConfig
+    from localcode.models_catalog import CHOICES
+    from localcode.ui import server_cmd
 
     known = _help_flags()
     assert "--ctx-size" in known, "could not parse llama-server --help"
-
-    cfg = RuntimeConfig(provider="llama_cpp", base_url="http://127.0.0.1:8081", model="model.gguf")
-    cfg.laptop_26b_runtime_mode = mode
-    cmd = LocalCodeRuntimeGateway(cfg).llama_server_command("/path/model.gguf", 8081)
-    # flags the UI launcher appends on top of the gateway command (ui/server_cmd.py)
-    cmd += ["--host", "--api-key", "--alias", "--reasoning", "--reasoning-budget", "--mmproj", "--slot-save-path"]
-
-    unknown = sorted({f for f in _emitted(cmd) if f not in known})
-    assert not unknown, f"llama-server no longer accepts: {unknown}"
+    cfg = AppConfig(runtime=RuntimeConfig(provider="llama_cpp"), ui=UIConfig())
+    cfg.runtime.laptop_26b_runtime_mode = mode
+    monkeypatch.setattr(server_cmd, "load_config", lambda: cfg)
+    monkeypatch.setenv("LOCALCODE_SERVER_KEY", "test-key")
+    monkeypatch.setenv("LOCALCODE_AGENT_RUN_DIR", str(tmp_path / "run"))
+    monkeypatch.setattr(server_cmd, "mmproj_for", lambda gguf: tmp_path / "projector.gguf")
+    for choice in CHOICES:
+        cmd = server_cmd.server_command(str(tmp_path / choice.filename), 8081, choice.key)
+        unknown = sorted({f for f in _emitted(cmd) if f not in known})
+        assert not unknown, f"{choice.key}: llama-server no longer accepts: {unknown}"
