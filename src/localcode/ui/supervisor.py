@@ -203,7 +203,8 @@ class Supervisor:
         cmd[0] = self.server_bin
         self.ctx = self.ctx_total = int(cmd[cmd.index("--ctx-size") + 1])
         self.slots = int(cmd[cmd.index("--parallel") + 1]) if "--parallel" in cmd else 1
-        self.log.write(f"\n=== {time.ctime()} {' '.join(cmd)}\n".encode())
+        from localcode.ui.auth import redact_command
+        self.log.write(f"\n=== {time.ctime()} {' '.join(redact_command(cmd))}\n".encode())
         with self._budget_lock:
             from localcode.ui.context_budget import TimingTable
             self._timing = TimingTable()
