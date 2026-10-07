@@ -3,7 +3,7 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## Unreleased
+## 0.5.3 — 2026-10-07
 
 ### Added
 
@@ -16,6 +16,14 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ### Fixed
 
+- **OpenJev no longer fails on a second system message.** The plugin keeps all
+  instructions, in order, in one leading system message. Verified through the
+  shipping runtime against the model's strict template.
+- Server diagnostic logs redact the session API key.
+- The tracked local inference gate uses the shipping launcher and authenticated
+  API, validates tool arguments and tool-result responses, and checks System One
+  and the bundled runtime. Required models cannot silently skip a promotion.
+
 - **DiffusionGemma returned empty or cut-off replies.** The launcher passed the
   reasoning-off switch to a model that has none, which ends generation at the
   first position. Short answers came back empty and long ones lost their first
@@ -25,6 +33,11 @@ All notable changes to LocalCode will be documented here. The format follows
   a kernel bug; `turbo2` stays available for values.
 
 ### Changed
+
+- Daily llama.cpp and OpenCode candidate workflows build with read-only
+  credentials, then propose updates in a separate job. OpenCode candidates must
+  include current upstream dev. Runtime promotion checks require a local gate
+  on the exact candidate commit; no self-hosted Mac runner is used.
 
 - `ruff check src tests` now checks exactly what CI enforces, and
   `pip install -e ".[dev]"` installs the tools the pre-PR checks need.
