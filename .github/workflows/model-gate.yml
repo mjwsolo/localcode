@@ -1,0 +1,41 @@
+name: Model promotion gate
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number to verify after the local gate
+        required: true
+        type: string
+permissions:
+  contents: read
+  statuses: read
+  pull-requests: read
+jobs:
+  promotion:
+    name: model promotion gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require local gate for runtime changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ inputs.pr || github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          [[ "$PR" =~ ^[0-9]+$ ]] || exit 1
+          head=$(gh pr view "$PR" --json headRefOid --jq .headRefOid)
+          changed=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --jq '.[].filename')
+          if ! printf '%s\n' "$changed" | grep -qE '^(src/localcode/bin/|src/localcode/ui/(FORK_COMMIT|UPSTREAM_COMMIT|plugin/|server_cmd.py)|src/localcode/(models_catalog|runtime|reasoning_capabilities)\.py|patches/|llama-cpp-turboquant/|scripts/verify_models\.py)'; then
+            echo 'No model/runtime changes; hosted tests suffice.'
+            exit 0
+          fi
+          state=$(gh api "repos/$GITHUB_REPOSITORY/commits/$head/status" --jq '[.statuses[] | select(.context == "local model gate")][0].state // "missing"')
+          if [ "$state" != success ]; then
+            echo "::error::Exact commit $head needs a successful local model gate. Run scripts/verify_models.py --strict --publish-status on your Mac, then rerun this check."
+            exit 1
+          fi
+          echo "Local gate passed on exact candidate $head. No Mac runner used."

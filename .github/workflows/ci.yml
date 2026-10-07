@@ -26,7 +26,7 @@ jobs:
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
@@ -41,7 +41,7 @@ jobs:
         # --timeout turns any future hang into a diagnosable per-test failure
         # instead of an opaque runner SIGTERM (exit 143). Linux tests are all
         # fast (mocked/pure-Python); 120s is a generous ceiling.
-        run: pytest tests/test_comprehensive_*.py -v --timeout=120
+        run: pytest tests/test_comprehensive_*.py tests/test_server_flags_accepted.py tests/test_ui_auth.py tests/test_ui_api.py tests/test_ui_launch.py -v --timeout=120
 
   # ── Same gate on macOS arm64 — users run Apple Silicon, so we test the
   # real platform. Also exercises the REAL fresh-venv install (packaging)
@@ -58,7 +58,7 @@ jobs:
         os: [macos-14, macos-15]
         python-version: ["3.10", "3.13"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
@@ -70,18 +70,18 @@ jobs:
       - name: Comprehensive tests (+ real isolated install)
         env:
           LOCALCODE_RUN_INSTALL_TEST: "1"   # real pip-install-into-venv smoke
-        run: pytest tests/test_comprehensive_*.py -v
+        run: pytest tests/test_comprehensive_*.py tests/test_server_flags_accepted.py tests/test_ui_auth.py tests/test_ui_api.py tests/test_ui_launch.py -v
 
   # ── The default interface's plugin + supervisor contract (bun tests) ──
   ui-tests:
     name: ui plugin + supervisor (bun)
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
       - run: python -m pip install -e .
       - name: bun tests
         working-directory: tests/ui
@@ -94,7 +94,7 @@ jobs:
     name: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
