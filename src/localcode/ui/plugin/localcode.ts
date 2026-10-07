@@ -635,7 +635,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
           if (output.system[i].includes("__pending__")) output.system[i] = output.system[i].replaceAll("__pending__", loaded);
         }
       }
-      if (input.agent && input.agent !== "build") return;
+      const isBuild = !input.agent || input.agent === "build";
       // The system prompt must be IDENTICAL for every request of a session: it
       // is the cached prefix. This rule used to be added only once
       // workspaceActive flipped (after the first tool call of each turn), so the
@@ -643,7 +643,14 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
       // once per turn (15-23 s at 30k tokens). It is inert in plain chat (the
       // gates check workspaceActive in code), so always add it. The open-todo
       // list is not put here either: it rides on the user turn (chat.message).
-      output.system.push(PLANNING_RULE);
+      if (isBuild) output.system.push(PLANNING_RULE);
+      // The runtime maps every entry to a separate system message. OpenJev's
+      // template accepts exactly one, at the beginning; a second one raises
+      // "System message must be at the beginning" before inference. Preserve
+      // every instruction in order in a single prefix for every agent.
+      if (output.system.length > 1) {
+        output.system.splice(0, output.system.length, output.system.join("\n\n"));
+      }
     },
 
     "chat.message": async (input, output) => {
