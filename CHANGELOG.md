@@ -3,6 +3,22 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Added
+
+- A clickable model-server status dot in the session footer and `/server` for
+  connection details, explicit API-key copying, and a curl example.
+- Change the live API port through `/server` or `localcode api --port NUMBER`.
+  LocalCode windows keep their stable inference connection; existing external
+  streams drain on the old listener. Invalid/busy ports and persistence failures
+  preserve the current endpoint. `auto` restores automatic port selection.
+
+### Fixed
+
+- Server status detects an exited or unresponsive model process instead of
+  continuing to report the last successful load as ready.
+
 ## 0.5.6 — 2026-10-09
 
 ### Performance

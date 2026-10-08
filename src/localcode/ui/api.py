@@ -4,10 +4,12 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import urllib.request
+import urllib.error
 
 from . import run_dir
-from .auth import read_auth_file
-from .ports import find_running
+from .auth import read_auth_file, control_headers
+from .ports import find_running, save_port
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -17,7 +19,40 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--json", action="store_true", help="Print machine readable connection details")
     parser.add_argument("--show-key", action="store_true", help="Include the server API key in the output")
+    parser.add_argument("--port", help="Change the live API port, or save it for startup (1024–65535 or auto)")
     args = parser.parse_args(argv)
+    if args.port is not None:
+        try:
+            port = None if args.port == "auto" else int(args.port)
+            if port is not None and not 1024 <= port <= 65535:
+                raise ValueError("Port must be between 1024 and 65535, or auto")
+            running = find_running()
+            if running is None:
+                save_port(port)
+                print("API port saved for the next launch; no running LocalCode service was found.")
+                return 0
+            auth = read_auth_file(run_dir())
+            if not auth:
+                raise ValueError("Cannot authenticate to the running service; port unchanged")
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{running[0]}/server/port",
+                data=json.dumps({"port": port}).encode(),
+                headers={**control_headers(auth[0]), "Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                result = json.load(response)
+            print(f"API moved to {result['base_url']}. Update external clients to this address; LocalCode stays connected.")
+            return 0
+        except urllib.error.HTTPError as exc:
+            try:
+                message = json.loads(exc.read()).get("error", str(exc))
+            except (ValueError, OSError):
+                message = str(exc)
+            print(f"localcode: {message}", file=sys.stderr)
+            return 1
+        except (ValueError, OSError, KeyError) as exc:
+            print(f"localcode: {exc}. Run `localcode api` to check the current address.", file=sys.stderr)
+            return 1
 
     running = find_running()
     if running is None:

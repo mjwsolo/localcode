@@ -386,6 +386,9 @@ PRINT_ALLOWLIST = {
     # CLI entry point (`localcode api`): prints the local endpoint details
     # to the terminal for other tools. Not invoked from the agent loop.
     "api.py",
+    # CLI entry point (`localcode decide`): JSON results on stdout and errors
+    # on stderr. Its inference helpers do not print into the TUI.
+    "decision.py",
 }
 
 

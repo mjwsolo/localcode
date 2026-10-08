@@ -1,0 +1,27 @@
+diff --git a/packages/tui/src/component/dialog-localcode-model.tsx b/packages/tui/src/component/dialog-localcode-model.tsx
+index 9d1712651e..40c3bbda44 100644
+--- a/packages/tui/src/component/dialog-localcode-model.tsx
++++ b/packages/tui/src/component/dialog-localcode-model.tsx
+@@ -65,7 +65,7 @@ const tooBig = (fit: string) => fit === "too_big" || fit === "too big"
+ 
+ async function getJSON<T>(path: string): Promise<T> {
+   // Short: a dead supervisor must surface as an error, not a picker stuck on "loading…".
+-  const r = await controlFetch(path, { signal: AbortSignal.timeout(5_000) })
++  const r = await controlFetch(path, { signal: AbortSignal.timeout(path === "/status" ? 1_500 : 5_000) })
+   if (!r.ok) throw new Error(`${path}: HTTP ${r.status}`)
+   return (await r.json()) as T
+ }
+diff --git a/packages/tui/src/component/prompt/index.tsx b/packages/tui/src/component/prompt/index.tsx
+index 669ffdaacb..39d8bd2d21 100644
+--- a/packages/tui/src/component/prompt/index.tsx
++++ b/packages/tui/src/component/prompt/index.tsx
+@@ -1588,6 +1588,9 @@ export function Prompt(props: PromptProps) {
+           <box flexDirection="row" gap={1} flexShrink={1}>
+ 
+               <box flexDirection="row" gap={1}>
++                <Show when={controlUrl()}>
++                  <text fg={modelChanging() ? theme.warning : supervisorKnown() && modelLoaded() ? theme.success : theme.textMuted} onMouseDown={() => { void keymap.dispatchCommand("localcode.server") }}>●</text>
++                </Show>
+                 <text fg={theme.primary}><span style={{ bold: true }}>localcode</span></text>
+                 <text fg={theme.textMuted}>·</text>
+                 <Show when={local.agent.current()} fallback={<box height={1} />}>

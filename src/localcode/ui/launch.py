@@ -190,7 +190,7 @@ def attach(ctrl: int, status: dict, ui_bin: Path, project_dir: Path, alias: str 
     auth = read_auth_file(run_dir())
     if auth:
         os.environ[TOKEN_ENV], os.environ[KEY_ENV] = auth
-    port = int(status["port"])
+    port = int(status.get("inference_port") or status["port"])
     try:
         ctx = int(status.get("ctx") or 0)
     except (TypeError, ValueError):
@@ -303,9 +303,13 @@ def main(model: str | None = None, project: str | None = None,
                 return 1
             time.sleep(0.5)
 
+        status = _get_json(f"http://127.0.0.1:{ctrl}/status", timeout=2)
+        if not status or not status.get("inference_port"):
+            print("localcode: could not discover the model endpoint; relaunch LocalCode", file=sys.stderr)
+            return 1
         ctx = _context_size(models_dir, ctrl)
         config_path = rd / "session.json"
-        write_config(config_path, port=port, ctx=ctx, alias=alias)
+        write_config(config_path, port=int(status["inference_port"]), ctx=ctx, alias=alias)
 
         env = runtime_env(config_path, ctrl, trust_project=trust_project)
         argv = [str(ui_bin)]
