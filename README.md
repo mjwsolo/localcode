@@ -53,7 +53,7 @@ See [Chat and Decisions](https://mjwsolo.github.io/localcode/guides/decisions).
 
 Docs: [mjwsolo.github.io/localcode](https://mjwsolo.github.io/localcode/)
 
-To use the running model from another local app, run `localcode api` for its
+To use the running model from another local app, open `/server` or run `localcode api` for its
 OpenAI compatible endpoint. See the [Local API guide](https://mjwsolo.github.io/localcode/guides/local-api/).
 
 ## What it does
