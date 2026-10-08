@@ -3,7 +3,7 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## 0.5.6 — 2026-10-09
+## Unreleased
 
 ### Added
 
@@ -18,6 +18,8 @@ All notable changes to LocalCode will be documented here. The format follows
 
 - Server status detects an exited or unresponsive model process instead of
   continuing to report the last successful load as ready.
+
+## 0.5.6 — 2026-10-09
 
 ### Performance
 
