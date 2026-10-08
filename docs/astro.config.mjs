@@ -75,6 +75,7 @@ export default defineConfig({
             { label: 'Offline', slug: 'guides/offline' },
             { label: 'MCP', slug: 'guides/mcp' },
             { label: 'Local API', slug: 'guides/local-api' },
+            { label: 'Chat & Decisions', slug: 'guides/decisions' },
             { label: 'Skills & Hooks', slug: 'guides/skills-and-hooks' },
           ],
         },

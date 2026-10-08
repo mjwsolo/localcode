@@ -62,9 +62,9 @@ def test_shutdown_kills_then_waits_after_timeout(tmp_path):
     assert server.proc.wait.call_count == 2
 
 
-@pytest.mark.parametrize("mutation", ["commit", "binaries", "coverage", "runtime", "turbo"])
+@pytest.mark.parametrize("mutation", ["commit", "binaries", "coverage", "runtime", "decisions", "turbo"])
 def test_invalid_receipts_cannot_publish_a_promotion(mutation):
-    rows = [{"key": key, "turbo4": False, "checks": ["auth", "template", "chat", "tool-loop", "systemone", "runtime"]} for key in gate.REQUIRED_KEYS]
+    rows = [{"key": key, "turbo4": False, "checks": ["auth", "template", "chat", "tool-loop", "systemone", "decision-control", "runtime"]} for key in gate.REQUIRED_KEYS]
     rows.append({"key": "qwen", "turbo4": True, "checks": ["tool-loop"]})
     receipt = {"commit": "candidate", "dirty": False, "strict": True, "success": True, "binaries": {"server": "hash"}, "models": rows}
     gate.validate_receipt(receipt, "candidate", {"server": "hash"}, gate.REQUIRED_KEYS)
@@ -72,6 +72,7 @@ def test_invalid_receipts_cannot_publish_a_promotion(mutation):
     elif mutation == "binaries": receipt["binaries"] = {"server": "old"}
     elif mutation == "coverage": receipt["models"] = rows[1:]
     elif mutation == "runtime": next(r for r in rows if r["key"] == "openjev")["checks"].remove("runtime")
+    elif mutation == "decisions": next(r for r in rows if r["key"] == "openjev")["checks"].remove("decision-control")
     else: receipt["models"] = rows[:-1]
     with pytest.raises(AssertionError):
         gate.validate_receipt(receipt, "candidate", {"server": "hash"}, gate.REQUIRED_KEYS)

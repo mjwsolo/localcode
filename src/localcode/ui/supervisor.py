@@ -193,6 +193,20 @@ class Supervisor:
         except Exception as e:  # noqa: BLE001
             log(f"supervisor: vision projector step failed: {e}")
 
+    def decision(self, body) -> dict:
+        from localcode.decision import DecisionError, post, supported, validate_request, validate_response
+        data = validate_request(body)
+        if self.state.get("state") != "ready" or not self.current or self.proc is None:
+            raise DecisionError("Load a decision model before evaluating", 409)
+        if not supported(self.current):
+            raise DecisionError("This model does not support decisions. Select OpenJev with /models", 409)
+        model, process = self.current, self.proc
+        result = post(f"http://127.0.0.1:{self.port}/v1/systemone", data, server_headers())
+        if self.current != model or self.proc is not process or self.state.get("state") != "ready":
+            raise DecisionError("The model changed during the request; evaluate again", 409)
+        validate_response(result, data)
+        return {**result, "model": model}
+
     def start(self, alias: str, wait_s: int = 240) -> bool:
         gguf = self.models_dir / f"{alias}.gguf"
         self.stop()
@@ -792,8 +806,10 @@ def make_handler(sup: Supervisor):
                 key = parse_qs(u.query).get("group", [""])[0]
                 return self._json(sup.quants(key))
             if u.path == "/status":
+                from localcode.decision import supported
                 return self._json(dict(sup.state, current=sup.current, port=sup.port,
                                        group=sup.active.get("group"), filename=sup.active.get("filename"),
+                                       supports_systemone=supported(sup.current),
                                        **sup.context_info(), **sup.vision_info()))
             if u.path == "/models_dir":
                 return self._json(sup.models_dir_info())
@@ -808,11 +824,22 @@ def make_handler(sup: Supervisor):
             if why:
                 return self._refuse(why)
             u = urlparse(self.path)
-            n = int(self.headers.get("Content-Length") or 0)
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                return self._json({"error": "bad content length"}, 400)
+            if n < 0 or n > 8 * 1024 * 1024:
+                return self._json({"error": "request exceeds 8 MB"}, 413)
             try:
                 body = json.loads(self.rfile.read(n) or b"{}")
             except json.JSONDecodeError:
                 return self._json({"error": "bad json"}, 400)
+            if u.path == "/decision":
+                from localcode.decision import DecisionError
+                try:
+                    return self._json(sup.decision(body))
+                except DecisionError as exc:
+                    return self._json({"error": str(exc)}, exc.status)
             if u.path == "/select":
                 res = sup.select(str(body.get("group", "")), str(body.get("filename", "")))
                 return self._json(res, 200 if "error" not in res else 409)

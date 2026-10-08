@@ -126,6 +126,12 @@ def write_config(path: Path, *, port: int, ctx: int, alias: str | None) -> None:
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(cfg, indent=2))
     os.replace(tmp, path)
+    # Keep terminal-only UI extensions separate from server/tool hooks. The
+    # pinned runtime supports this through its native TUI plugin config.
+    tui_path = path.with_suffix(".tui.json")
+    tui_tmp = tui_path.with_suffix(".json.tmp")
+    tui_tmp.write_text(json.dumps({"plugin": [str(plugin_path().with_name("modes.ts"))]}))
+    os.replace(tui_tmp, tui_path)
 
 
 def _resume_args(resume: str | None) -> list[str]:
@@ -180,6 +186,7 @@ def attach(ctrl: int, status: dict, ui_bin: Path, project_dir: Path, alias: str 
     env = dict(os.environ)
     env["LOCALCODE_CONTROL_URL"] = f"http://127.0.0.1:{ctrl}"
     env["LOCALCODE_CONFIG"] = str(config_path)
+    env["OPENCODE_TUI_CONFIG"] = str(config_path.with_suffix(".tui.json"))
     env.setdefault("OPENCODE_DISABLE_LSP_DOWNLOAD", "1")
     argv = [str(ui_bin)] + (["-m", f"localcode/{current}"] if current else []) + _resume_args(resume)
     try:
@@ -284,6 +291,7 @@ def main(model: str | None = None, project: str | None = None,
         env = dict(os.environ)
         env["LOCALCODE_CONTROL_URL"] = f"http://127.0.0.1:{ctrl}"
         env["LOCALCODE_CONFIG"] = str(config_path)
+        env["OPENCODE_TUI_CONFIG"] = str(config_path.with_suffix(".tui.json"))
         # Language servers are installed only on request (/lsp), never silently.
         env.setdefault("OPENCODE_DISABLE_LSP_DOWNLOAD", "1")
         argv = [str(ui_bin)]

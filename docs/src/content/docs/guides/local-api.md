@@ -72,4 +72,4 @@ print(json.load(urllib.request.urlopen(request))["answers"])
 
 Each answer carries a probability for every option. With the vision projector downloaded, an `images` list of data URLs lets the questions refer to a screenshot. A model that is not a decision model answers this endpoint with a 501 error.
 
-LocalCode's own agent does not call this endpoint; it is there for your scripts and tools.
+LocalCode's [Decisions screen and CLI](/localcode/guides/decisions) call this endpoint through the authenticated supervisor. Normal Chat uses chat completions.
