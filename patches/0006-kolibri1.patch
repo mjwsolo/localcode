@@ -187,7 +187,7 @@ index cef04d082..b9a7a4db5 100644
              MODEL_TENSOR.FFN_NORM: (
                  "model.layers.{bid}.residual_layernorm",
 diff --git a/src/llama-arch.cpp b/src/llama-arch.cpp
-index aab463522..4c884e0da 100644
+index 564f6f84b..33965e937 100644
 --- a/src/llama-arch.cpp
 +++ b/src/llama-arch.cpp
 @@ -118,6 +118,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
@@ -199,7 +199,7 @@ index aab463522..4c884e0da 100644
      { LLM_ARCH_ERNIE4_5_MOE,     "ernie4_5-moe"     },
      { LLM_ARCH_HUNYUAN_MOE,      "hunyuan-moe"      },
 diff --git a/src/llama-arch.h b/src/llama-arch.h
-index c6160406d..da78509e1 100644
+index 93d0fa22f..967d44ba1 100644
 --- a/src/llama-arch.h
 +++ b/src/llama-arch.h
 @@ -123,6 +123,7 @@ enum llm_arch {
@@ -211,10 +211,10 @@ index c6160406d..da78509e1 100644
      LLM_ARCH_ERNIE4_5_MOE,
      LLM_ARCH_HUNYUAN_MOE,
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 604de1b90..dbea8b91a 100644
+index 6dadcb1ad..23d78ecf0 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
-@@ -2041,7 +2041,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+@@ -2074,7 +2074,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
  
      if (probs_in == nullptr) {
          logits = build_lora_mm(gate_inp, cur); // [n_expert, n_tokens]
@@ -224,7 +224,7 @@ index 604de1b90..dbea8b91a 100644
              ggml_prec_set_acc(logits, GGML_PREC_F32);
          }
          cb(logits, "ffn_moe_logits", il);
-@@ -2061,6 +2062,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+@@ -2094,6 +2095,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                  probs = ggml_soft_max(ctx0, logits); // [n_expert, n_tokens]
              } break;
          case LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID:
@@ -232,7 +232,7 @@ index 604de1b90..dbea8b91a 100644
              {
                  probs = ggml_sigmoid(ctx0, logits); // [n_expert, n_tokens]
              } break;
-@@ -2080,7 +2082,13 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+@@ -2113,7 +2115,13 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
      // add experts selection bias - introduced in DeepSeek V3
      // leave probs unbiased as it's later used to get expert weights
      ggml_tensor * selection_probs = probs;
@@ -541,7 +541,7 @@ index b69550f3a..62139eca1 100644
      llama_model_laguna(const struct llama_model_params & params) : llama_model_base(params) {}
      void load_arch_hparams(llama_model_loader & ml) override;
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index 93bf47baa..2677538f8 100644
+index 7a76efccc..029ffa0af 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
 @@ -143,7 +143,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
@@ -572,7 +572,7 @@ index 93bf47baa..2677538f8 100644
          ms.add_kv(LLM_KV_EXPERT_GROUP_SCALE,         1.0f);
          ms.add_kv(LLM_KV_EXPERTS_PER_GROUP,          uint32_t(1));
      }
-@@ -608,6 +609,7 @@ static bool moe_mandatory(const llm_arch arch) {
+@@ -652,6 +653,7 @@ static bool moe_mandatory(const llm_arch arch) {
          case LLM_ARCH_BAILINGMOE3:
          case LLM_ARCH_DOTS1:
          case LLM_ARCH_AFMOE:

@@ -39,6 +39,8 @@ def start(self, alias, wait_s=240):
     self.current = alias
     return True
 module.Supervisor.start = start
+# This ownership fixture uses a sleeping child, not an HTTP model server.
+module.Supervisor.healthy = lambda self: self.proc is not None and self.proc.poll() is None
 raise SystemExit(module.main())
 ''')
     env = dict(os.environ, QA_ROOT=directory, LOCALCODE_CONTROL_TOKEN='qa-token', LOCALCODE_SERVER_KEY='qa-key')

@@ -19,6 +19,32 @@ All notable changes to LocalCode will be documented here. The format follows
 - Server status detects an exited or unresponsive model process instead of
   continuing to report the last successful load as ready.
 
+### Performance
+
+- The system prompt no longer changes mid-session. The UI used to add the
+  workspace rules, instructions and skills on the first tool call, which
+  invalidated the server's KV cache from that point and re-read the whole
+  prompt (12k to 22k tokens, 15 to 20 s on a 27B model) on that step and again
+  on the next turn. Local models now get the same constant prompt as every
+  other provider; a tool turn reads under 60 new tokens.
+- Claude Code's skill directories (`~/.claude/skills`, `<project>/.claude/skills`)
+  are no longer listed in the system prompt by default. They are written for
+  Claude, and one install put 63 of them (~12k tokens) in front of a 12B model
+  on every session. `OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=0` opts back in.
+  Local skills (`.localcode-agent/skills`, `~/.agents/skills`, `skills.paths`)
+  are unaffected. The scan of those external directories is also one level
+  deep now, like Claude Code's own, so a package that keeps copies of each
+  skill for other agents no longer loads every copy.
+- Duplicate skill names resolve to the same file on every launch (by path);
+  previously the winner was random, so the warm-up prefix never matched.
+
+### Changed
+
+- Bundled llama.cpp bumped to upstream v0.6.0 (`d812350`, 2026-10-05) with the
+  six fork patches replayed. Brings the few-row Metal MMA mat-mul and the Metal
+  tensor-API flash-attention kernel. All 13 catalog model configurations pass the
+  live load + generate + tool-call gate on the new binary.
+
 ## 0.5.5 — 2026-10-08
 
 ### Security
