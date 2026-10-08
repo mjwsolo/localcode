@@ -1,8 +1,8 @@
 diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
-index 809be94cd..b851f9b07 100644
+index d1af984e6..cc024ccc0 100644
 --- a/tools/server/server-context.cpp
 +++ b/tools/server/server-context.cpp
-@@ -1297,7 +1297,9 @@ private:
+@@ -1363,7 +1363,9 @@ private:
                  std::min(n_ctx_seq, params_base.kv_unified_per_slot) : n_ctx_seq;
  
              if (n_ctx_capped > n_ctx_train) {
@@ -13,7 +13,7 @@ index 809be94cd..b851f9b07 100644
                          n_ctx_capped, n_ctx_train);
              }
          }
-@@ -4242,7 +4244,9 @@ private:
+@@ -4373,7 +4375,9 @@ private:
          });
      }
  
@@ -24,7 +24,7 @@ index 809be94cd..b851f9b07 100644
      int n_ctx_slot() const {
          int res = llama_n_ctx_seq(ctx_tgt);
  
-@@ -4250,7 +4254,7 @@ private:
+@@ -4381,7 +4385,7 @@ private:
              res = std::min(res, params_base.kv_unified_per_slot);
          }
  
