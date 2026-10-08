@@ -33,6 +33,7 @@ def control():
         models_dir_info=lambda: {"path": "/models"},
         cancel_warmup=lambda: (calls.append("warmup/cancel"), {"ok": True})[1],
         voice_stop=lambda: (calls.append("voice/stop"), {"text": "secret words"})[1],
+        decision=lambda body: (calls.append("decision"), {"answers": {"answer": {"noul": 0.9}}})[1],
     )
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), sv.make_handler(sup))
     sup.control_port = httpd.server_address[1]
@@ -106,6 +107,24 @@ def test_authorised_post_runs(control):
     headers = {**auth.control_headers(TOKEN), "Content-Type": "application/json"}
     code, body = _call(port, "/warmup/cancel", method="POST", headers=headers, body=b"{}")
     assert code == 200 and body == {"ok": True} and calls == ["warmup/cancel"]
+
+
+@pytest.mark.parametrize("extra", [{}, {"Origin": "https://evil.example"}, {"Host": "evil.example"}, {"Content-Type": "text/plain"}])
+def test_decision_route_requires_auth_and_browser_guards(control, extra):
+    port, calls = control
+    headers = {"Content-Type": "application/json"}
+    if extra:
+        headers.update(auth.control_headers(TOKEN))
+        headers.update(extra)
+    code, _ = _call(port, "/decision", method="POST", headers=headers, body=b"{}")
+    assert code == 403 and calls == []
+
+
+def test_authenticated_decision_route_reaches_inference(control):
+    port, calls = control
+    code, body = _call(port, "/decision", method="POST", headers={**auth.control_headers(TOKEN), "Content-Type": "application/json"}, body=b"{}")
+    assert code == 200 and body["answers"]["answer"]["noul"] == 0.9
+    assert calls == ["decision"]
 
 
 def test_empty_expected_token_refuses_everything():

@@ -194,3 +194,17 @@ def test_session_id_uses_its_saved_project(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     assert _session_directory("ses_example") == project
     assert _session_directory("ses_missing") is None
+
+
+def test_cli_accepts_an_explicit_decision_mode():
+    assert entrypoint.build_parser().parse_args(["--mode", "decisions"]).mode == "decisions"
+    with pytest.raises(SystemExit):
+        entrypoint.build_parser().parse_args(["--mode", "unknown"])
+
+
+def test_terminal_extension_is_separate_from_agent_tool_hooks(tmp_path):
+    path=tmp_path / "session.json"
+    write_config(path,port=8123,ctx=32768,alias="OpenJev-Q4_K_M")
+    terminal=json.loads(path.with_suffix(".tui.json").read_text())
+    assert terminal["plugin"][0].endswith("/modes.ts")
+    assert json.loads(path.read_text())["plugin"] == [str(plugin_path())]

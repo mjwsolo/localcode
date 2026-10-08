@@ -39,6 +39,11 @@ repository ships, with the size and whether it fits your Mac's memory. The
 recommended one for your machine is starred. Pick one, watch the download, and
 start typing. `/models` switches later.
 
+OpenJev also supports typed decisions: use `/mode` to choose **Chat** or
+**Decisions**, or run `localcode --mode decisions`. The decision screen returns
+choices, yes/no probabilities and scores without running coding tools.
+See [Chat and Decisions](https://mjwsolo.github.io/localcode/guides/decisions).
+
 ```
 > Implement the retry decorator in retry.py so every test in test_retry.py passes. Then run: pytest -q
 ```

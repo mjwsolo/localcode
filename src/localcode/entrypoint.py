@@ -11,9 +11,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="localcode",
         description="LocalCode — AI coding assistant running entirely on your machine",
-        epilog="Other command: localcode api [--json] [--show-key] shows the running model endpoint.",
+        epilog="Other commands: localcode api shows connection details; localcode decide asks a typed question.",
     )
     parser.add_argument("--version", action="store_true", help="Print the version and exit")
+    parser.add_argument("--mode", choices=["chat", "decisions"], default="chat", help="Start in normal chat or typed decision mode")
     parser.add_argument("--model", help="Model alias to load (otherwise the picker asks)")
     parser.add_argument("-s", "--session", "--resume", dest="resume", metavar="SESSION_ID",
                         help="Resume a session by ID; uses its saved project directory when no project is given")
@@ -34,6 +35,9 @@ def _unsupported_platform_message() -> str:
 
 def main(argv: list[str] | None = None) -> None:
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "decide":
+        from .decision import main as decide_main
+        sys.exit(decide_main(argv[1:]))
     if argv and argv[0] == "api":
         from .ui.api import main as api_main
         sys.exit(api_main(argv[1:]))
@@ -44,6 +48,7 @@ def main(argv: list[str] | None = None) -> None:
         os.environ.pop(var, None)
 
     args = build_parser().parse_args(argv)
+    os.environ["LOCALCODE_MODE"] = args.mode
 
     if args.version:
         from . import __version__
