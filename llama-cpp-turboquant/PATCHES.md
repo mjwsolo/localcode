@@ -12,11 +12,11 @@ The machine-readable form of this inventory lives at the repo root:
 | `patches/PINNED_UPSTREAM` | the upstream commit the series applies to |
 | `patches/000N-*.patch` | numbered patches, applied in order with `git apply` |
 
-**Pinned upstream:** `836d57176dc699a726c55418e4f96b8ca628e1bf` (2026-10-03,
-`mtmd : fix deprecated strdup warning on Windows (#29863)`).
+**Pinned upstream:** `d81235049384534c167caea52b85a694f6103d14` (2026-10-05,
+tag `v0.6.0`, `llama.cpp : bump version to 0.6.0 (#29997)`).
 
-**Previous pins:** `3f545beccee69d9975f466ec7e45fd9aacd8ba90` (2026-08-22), and
-before it `c08d28d08871715fd68accffaeeb76ddcaede658` (2026-04-05). That
+**Previous pins:** `836d57176dc699a726c55418e4f96b8ca628e1bf` (2026-10-03),
+`3f545beccee69d9975f466ec7e45fd9aacd8ba90` (2026-08-22), and before it `c08d28d08871715fd68accffaeeb76ddcaede658` (2026-04-05). That
 commit was never recorded anywhere; it was recovered for this bump by
 blob-matching the vendored tree against upstream history. Do not let that
 happen again — update `patches/PINNED_UPSTREAM` on every bump.
@@ -165,7 +165,10 @@ Host-side decisions that differ from the pre-bump fork:
   queries per threadgroup; the old check assumed one).
 - **`use_kv_f16`** (upstream's dequantize-KV-to-F16 prefill path, #27390) is
   disabled for mixed K/V pairs; it assumes one type for both.
-- **`FC_TURBO_WHT`** moved 1700 → 2300; upstream took 1700 (`FC_NORM`).
+- **`FC_TURBO_WHT`** moved 1700 → 2300 → 2400; upstream took 1700 (`FC_NORM`)
+  and then 2300 (`FC_MUL_MV_MMA`, the few-row MMA mat-mul added in v0.6.0).
+  The TQ3_1S / TQ4_1S dispatch condition in `ggml_metal_op_mul_mat_mv` is the
+  only other v0.6.0 touch point: upstream moved that body into a helper.
 - **Compile-time knobs** (`TURBO_USE_4MAG`, `TURBO_SPARSE_V`,
   `TURBO_PROFILE_MODE`) are set on the shared `prep` dictionary in
   `ggml_metal_library_init`, so every per-kind library sees them.
