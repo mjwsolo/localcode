@@ -10,8 +10,7 @@
 </p>
 
 <p align="center">
-  <strong>A coding agent that runs a local model on your Mac.</strong><br>
-  No cloud inference, no API key, no account.
+  <strong>Agentic coding. Local models. On your Mac.</strong>
 </p>
 
 <p align="center">
