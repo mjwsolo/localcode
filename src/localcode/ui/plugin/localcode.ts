@@ -170,6 +170,8 @@ const PLATEAU_NUDGE_AFTER = 6;      // consecutive no-progress rounds -> nudge o
 const PLATEAU_STOP_AFTER = 8;       // further no-progress rounds after the nudge -> stop
 const PLATEAU_RECENT_PASS = 2;      // a check that passed within this many rounds blocks the stop...
 const PLATEAU_PASS_GRACE = 3;       // ...and grants this many more rounds after a "finish now" nudge
+const SAME_CALL_NUDGE_AFTER = 3;    // identical call + identical result, consecutively -> nudge once
+const SAME_CALL_STOP_AFTER = 5;     // ... and still repeating -> stop (a loop burns minutes of GPU per round)
 const PLATEAU_STOP_DENIALS = 3;     // tool calls refused after a stop before the session is aborted as a last resort
 
 type ToolEvent = { tool: string; args: any; output?: string; metadata?: any };
@@ -181,7 +183,7 @@ type ProgressMemory = {
   lastCheckPassed: boolean | null; // null = no check run yet this session
   completedTodos: number;
 };
-type PlateauDecision = "none" | "nudge" | "repair-nudge" | "pass-nudge" | "stop";
+type PlateauDecision = "none" | "nudge" | "repair-nudge" | "same-call-nudge" | "pass-nudge" | "stop";
 
 function newProgressMemory(): ProgressMemory {
   return { changedPaths: new Set(), revisions: new Set(), failureSigs: new Set(), lastFailureCount: null, lastCheckPassed: null, completedTodos: 0 };
@@ -373,6 +375,11 @@ class PlateauTracker {
   private callSigs = new Set<string>();
   readonly repeated = new RepeatedCheckTracker();
   private repairDecision: PlateauDecision = "none";
+  // Exact same call returning the exact same result, back to back. A model
+  // in this state is not exploring or repairing, it is looping; todowrite is
+  // exempt because re-posting an unchanged plan is harmless bookkeeping.
+  private sameCall = { key: "", count: 0 };
+  sameCallEvidence = "";
 
   observe(ev: ToolEvent): void {
     if (this.stopped) return;
@@ -383,6 +390,17 @@ class PlateauTracker {
     if (r) this.reasons.push(r);
     const sig = callSignature(ev);
     if (!this.callSigs.has(sig)) { this.callSigs.add(sig); this.novel = true; }
+    const result = String(ev.output ?? "");
+    if (ev.tool !== "todowrite") {
+      // A call with no result to compare is a different call: it breaks the run.
+      const key = result.trim() ? sig + "\n" + createHash("sha256").update(result).digest("hex") : "";
+      this.sameCall = key && key === this.sameCall.key ? { key, count: this.sameCall.count + 1 } : { key, count: key ? 1 : 0 };
+      if (this.sameCall.count === SAME_CALL_NUDGE_AFTER || this.sameCall.count >= SAME_CALL_STOP_AFTER) {
+        const args = ev.tool === "bash" ? String(ev.args?.command ?? "") : JSON.stringify(ev.args ?? null);
+        this.sameCallEvidence = `${ev.tool} was called ${this.sameCall.count} times in a row with the same arguments and got the same result each time.\nCall: ${args.slice(0, 300)}`;
+        this.repairDecision = this.sameCall.count >= SAME_CALL_STOP_AFTER ? "stop" : "same-call-nudge";
+      }
+    }
     if (ev.tool === "bash" && isCheckCommand(String(ev.args?.command ?? "")) && this.mem.lastCheckPassed) this.lastPassRound = this.round + 1;
   }
 
@@ -582,6 +600,11 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
     if (decision === "repair-nudge") {
       plog(`round ${plateau.round}: ${plateau.repeated.evidence}`);
       nudgeAsync(sessionID, `${NUDGE_PREFIX} ${plateau.repeated.evidence}\nStop repeating this repair. Inspect the exact failing source and its configuration, then test one evidence-based fix. For a module-resolution error, resolve the import relative to the importing file and check that target first. Do not downgrade the toolchain, delete features, or replace components with stubs to make the error disappear. Run the same check unfiltered after the repair.`);
+      return decision;
+    }
+    if (decision === "same-call-nudge") {
+      plog(`round ${plateau.round}: ${plateau.sameCallEvidence}`);
+      nudgeAsync(sessionID, `${NUDGE_PREFIX} ${plateau.sameCallEvidence}\nRepeating it will give the same result again. Use what it already returned: either act on it, try a different approach, or finish and say what is blocking you.`);
       return decision;
     }
     if (decision === "nudge") {
@@ -823,5 +846,5 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
 // if one is not a function ("Plugin export is not a function") — which silently
 // disabled this whole plugin once test helpers were exported. Expose the helpers
 // as properties on the plugin function instead; tests read them from `default`.
-Object.assign(LocalcodePlugin, { PLATEAU_MIN_ROUND, PLATEAU_NUDGE_AFTER, PLATEAU_STOP_AFTER, PLATEAU_RECENT_PASS, PLATEAU_PASS_GRACE, PLATEAU_STOP_DENIALS, callSignature, newProgressMemory, projectCheck, checkDirectory, CHECK_CMD, isCheckCommand, filteredCheck, isTempPath, editedPaths, failureSignatures, checkPassed, progressOf, referenceOnlyTypecheck, RepeatedCheckTracker, PlateauTracker, plateauNudgeText, PLATEAU_PASS_TEXT });
+Object.assign(LocalcodePlugin, { PLATEAU_MIN_ROUND, PLATEAU_NUDGE_AFTER, PLATEAU_STOP_AFTER, PLATEAU_RECENT_PASS, PLATEAU_PASS_GRACE, PLATEAU_STOP_DENIALS, SAME_CALL_NUDGE_AFTER, SAME_CALL_STOP_AFTER, callSignature, newProgressMemory, projectCheck, checkDirectory, CHECK_CMD, isCheckCommand, filteredCheck, isTempPath, editedPaths, failureSignatures, checkPassed, progressOf, referenceOnlyTypecheck, RepeatedCheckTracker, PlateauTracker, plateauNudgeText, PLATEAU_PASS_TEXT });
 export default LocalcodePlugin;

@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test"
 import path from "node:path"
+import { python, pythonEnv } from "./support/python"
 
 test("an existing picker prevents a second launch, while unrelated listeners reserve ports", () => {
-  const result = Bun.spawnSync([process.env.LOCALCODE_PY ?? "python3", "-c", `
+  const result = Bun.spawnSync([python, "-c", `
 import json, socket, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from localcode.ui.ports import choose_ports
@@ -37,7 +38,7 @@ with socket.socket() as future, socket.socket() as busy, socket.socket() as free
     finally:
         server.shutdown()
         server.server_close()
-`], { cwd: path.resolve(import.meta.dir, "..") })
+`], { cwd: path.resolve(import.meta.dir, ".."), env: pythonEnv })
   expect(result.stderr.toString()).toBe("")
   expect(result.exitCode).toBe(0)
 })

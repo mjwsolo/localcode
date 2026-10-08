@@ -378,6 +378,18 @@ streaming one SSE chunk per committed block, a `get_weather` tool call through
 the OpenAI `tools` key, `max_tokens` honoured exactly, ~55 tok/s over a
 4-block answer. `otool -L` shows only system frameworks.
 
+**Thought-channel handling (2026-10-09).** DiffusionGemma opens `<|channel>thought`
+itself and cannot be told not to (`--reasoning off` ends generation at canvas
+position 0). Two server-side rules in `update_slots_diffusion` keep the reply
+usable with the Gemma 4 parser on (`--reasoning-format auto`): a leading EMPTY
+thought block (`<|channel>thought\n<channel|>`, what the model emits after a
+tool result) is dropped before parsing, since the parser otherwise filed the
+answer after it as reasoning; and a one-block reply that opens a thought and
+ends without closing it is treated as the answer. `server_chat_params::
+no_forced_thinking` additionally strips a thought opener the template appends
+after a tool response, so the model always decides itself. Verified: plain
+question, one-word reply, tool call, post-tool answer, streamed and not.
+
 ### `0006-kolibri1.patch` — Aleph Alpha Kolibri-1 (`kolibri1` architecture)
 
 **Status: not upstream.** Tracking issue
