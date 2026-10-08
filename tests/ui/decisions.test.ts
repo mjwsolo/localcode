@@ -58,6 +58,7 @@ function fakeTui() {
   const routes = new Map<string, (input: { params?: Record<string, unknown> }) => unknown>();
   const disposals: (() => void)[] = [];
   const navigations: Current[] = [];
+  const toasts: { message: string; variant: string }[] = [];
   const api = {
     state: { ready: true },
     route: {
@@ -79,7 +80,7 @@ function fakeTui() {
       Dialog(props: unknown) { return props; },
       DialogSelect(props: Select) { return props; },
       DialogPrompt(props: Prompt) { return props; },
-      toast() {},
+      toast(value: { message: string; variant: string }) { toasts.push(value); },
       dialog: {
         get open() { return dialog !== undefined; },
         clear() { dialog = undefined; },
@@ -89,7 +90,7 @@ function fakeTui() {
     lifecycle: { onDispose(callback: () => void) { disposals.push(callback); } },
   };
   return {
-    api, navigations,
+    api, navigations, toasts,
     current: () => current,
     dispose: () => disposals.forEach((callback) => callback()),
     command: (name: string) => commands.get(name)!(),
@@ -169,4 +170,64 @@ test("Back cancels image preparation before inference and repeated Run cannot du
     file.mockRestore();
     fetch.mockRestore();
   }
+});
+
+test("/server fetches authenticated connection info and changes the live API port without navigating", async () => {
+  const token = process.env.LOCALCODE_CONTROL_TOKEN;
+  process.env.LOCALCODE_CONTROL_TOKEN = "server-test-token";
+  const changes: unknown[] = [];
+  const requests: (string | null)[] = [];
+  const network = spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const request = new Request(input, init);
+    requests.push(request.headers.get("x-localcode-token"));
+    if (new URL(request.url).pathname === "/server/port") return request.json().then((body) => {
+      changes.push(body);
+      return Response.json({ok: true, restart_required: false, base_url: "http://127.0.0.1:9234/v1"});
+    });
+    return Response.json({state: "ready", port: 8123, base_url: "http://127.0.0.1:8123/v1", model: "localcode/test", preferred_port: null, server_ready: true});
+  });
+  try {
+    await withTui(async (host) => {
+      await host.command("localcode.server");
+      host.choose("port");
+      host.confirm("99");
+      expect(changes).toHaveLength(0);
+      host.confirm("9234");
+      for (let i = 0; i < 50 && changes.length === 0; i++) await Bun.sleep(10);
+      expect(changes).toEqual([{port: 9234}]);
+      expect(requests.every(token => token === "server-test-token")).toBe(true);
+      expect(host.navigations).toEqual([]);
+    }, "http://127.0.0.1:8323");
+  } finally {
+    network.mockRestore();
+    if (token === undefined) delete process.env.LOCALCODE_CONTROL_TOKEN;
+    else process.env.LOCALCODE_CONTROL_TOKEN = token;
+  }
+});
+
+test("/server rejects duplicate submissions and surfaces port errors without losing the session", async () => {
+  let changes = 0;
+  const network = spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    if (String(input).endsWith("/server/port")) {
+      changes++;
+      return Response.json({error: "Port occupied; current port unchanged"}, {status: 409});
+    }
+    return Response.json({state: "ready", port: 8123, base_url: "http://127.0.0.1:8123/v1", model: "localcode/test", preferred_port: null});
+  });
+  try {
+    await withTui(async (host) => {
+      await host.command("localcode.server");
+      host.choose("port");
+      host.confirm("9234");
+      host.confirm("9234");
+      for (let i = 0; i < 50 && host.toasts.length === 0; i++) await Bun.sleep(10);
+      expect(changes).toBe(1);
+      expect(host.toasts.some(t => t.variant === "error" && t.message.includes("Port occupied"))).toBe(true);
+      expect(host.toasts.some(t => t.message.includes("API moved"))).toBe(false);
+      expect(host.current()).toEqual({name: "session", params: {sessionID: "ses_first"}});
+      host.confirm("9234"); // failure released the UI guard, allowing a retry
+      for (let i = 0; i < 50 && changes < 2; i++) await Bun.sleep(10);
+      expect(changes).toBe(2);
+    }, "http://127.0.0.1:8323");
+  } finally { network.mockRestore(); }
 });

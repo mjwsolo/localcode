@@ -384,6 +384,16 @@ class Supervisor:
         except Exception:  # noqa: BLE001
             return False
 
+    def server_status(self) -> dict:
+        """Report current liveness, not just the last successful model load."""
+        state = dict(self.state)
+        process = self.proc
+        running = process is not None and process.poll() is None
+        ready = running and state["state"] == "ready" and self.healthy()
+        if state["state"] == "ready" and not ready:
+            state.update(state="error", detail="Model server is unavailable")
+        return dict(state, server_running=running, server_ready=ready)
+
     # ---- catalog ------------------------------------------------------------
     def _rec_repo(self) -> str | None:
         try:
@@ -807,10 +817,23 @@ def make_handler(sup: Supervisor):
                 return self._json(sup.quants(key))
             if u.path == "/status":
                 from localcode.decision import supported
-                return self._json(dict(sup.state, current=sup.current, port=sup.port,
+                return self._json(dict(sup.server_status(), current=sup.current,
+                                       port=sup.gateway.port if getattr(sup, "gateway", None) else sup.port,
+                                       inference_port=sup.port,
                                        group=sup.active.get("group"), filename=sup.active.get("filename"),
                                        supports_systemone=supported(sup.current),
                                        **sup.context_info(), **sup.vision_info()))
+            if u.path == "/server":
+                from localcode.ui.ports import preferred_port
+                try:
+                    preferred = preferred_port()
+                except RuntimeError:
+                    preferred = "invalid; choose a new port"
+                port = sup.gateway.port if getattr(sup, "gateway", None) else sup.port
+                return self._json(dict(sup.server_status(), port=port,
+                                       base_url=f"http://127.0.0.1:{port}/v1",
+                                       model=f"localcode/{sup.current}" if sup.current else None,
+                                       preferred_port=preferred))
             if u.path == "/models_dir":
                 return self._json(sup.models_dir_info())
             if u.path == "/voice/status":
@@ -834,6 +857,16 @@ def make_handler(sup: Supervisor):
                 body = json.loads(self.rfile.read(n) or b"{}")
             except json.JSONDecodeError:
                 return self._json({"error": "bad json"}, 400)
+            if u.path == "/server/port":
+                from localcode.ui.gateway import PortChangeError
+                if not isinstance(body, dict) or "port" not in body:
+                    return self._json({"error": "port is required"}, 400)
+                if not getattr(sup, "gateway", None):
+                    return self._json({"error": "Restart LocalCode once to enable live port changes"}, 409)
+                try:
+                    return self._json(sup.gateway.change(body["port"]))
+                except PortChangeError as exc:
+                    return self._json({"error": str(exc)}, exc.status)
             if u.path == "/decision":
                 from localcode.decision import DecisionError
                 try:
@@ -897,7 +930,24 @@ def main() -> int:
     except BlockingIOError:
         log("localcode is already running; refusing a second model supervisor")
         return 1
-    sup = Supervisor(a.server, a.port, Path(a.models_dir), 0)
+    from localcode.ui.gateway import ModelGateway
+    import socket
+    # The model and every LocalCode window use this stable private endpoint.
+    # Only the externally advertised API listener moves during a port change.
+    try:
+        for _ in range(10):
+            with socket.socket() as sock:
+                sock.bind(("127.0.0.1", 0))
+                inference_port = sock.getsockname()[1]
+            if inference_port not in (a.port, a.control_port):
+                break
+        else:
+            log("could not allocate an internal model port")
+            return 1
+    except OSError as exc:
+        log(f"could not allocate an internal model port: {exc}")
+        return 1
+    sup = Supervisor(a.server, inference_port, Path(a.models_dir), 0)
     sup.lease_fd = lease.fileno()
     # Session secrets: from the launcher's environment, else fresh. Written
     # owner-only into the run dir for a second `localcode` and dev tooling.
@@ -906,24 +956,37 @@ def main() -> int:
     if not server_key():
         os.environ[KEY_ENV] = new_secret()
     write_auth_file(HERE, sup.control_token, server_key())
-    httpd = ThreadingHTTPServer(("127.0.0.1", a.control_port), make_handler(sup))
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    httpd = None
+    try:
+        sup.gateway = ModelGateway(sup.port, a.port, a.control_port)
+        httpd = ThreadingHTTPServer(("127.0.0.1", a.control_port), make_handler(sup))
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    except (OSError, RuntimeError) as exc:
+        if httpd is not None:
+            httpd.server_close()
+        if getattr(sup, "gateway", None):
+            sup.gateway.close()
+        log(f"could not start local API services: {exc}")
+        return 1
 
     def bye(signum, frame):
         import traceback
         log(f"supervisor: got signal {signum}, exiting")
         log("".join(traceback.format_stack(frame)))
+        sup.gateway.close()
         sup.stop()
         with sup.speech_lock:
             if sup.speech_proc and sup.speech_proc.poll() is None:
                 sup.speech_proc.terminate()
         httpd.shutdown()
+        httpd.server_close()
         sys.exit(0)
     signal.signal(signal.SIGTERM, bye)
     signal.signal(signal.SIGINT, bye)
     signal.signal(signal.SIGHUP, bye)
     import atexit
     atexit.register(sup.stop)
+    atexit.register(sup.gateway.close)
     if a.parent_pid:
         def watch_launcher() -> None:
             while os.getppid() == a.parent_pid:

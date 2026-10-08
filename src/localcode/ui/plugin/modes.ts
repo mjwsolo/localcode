@@ -168,7 +168,53 @@ async function tui(api: TuiPluginApi) {
     if (api.route.current.name === route) return back();
     api.ui.dialog.clear();
   } }));
+  let changingPort = false;
+  async function server() {
+    if (!control) return error("Start LocalCode to manage its model server");
+    try {
+      const response = await fetch(control + "/server", { headers, signal: AbortSignal.timeout(3000) });
+      if (!response.ok) throw new Error(`Server status: HTTP ${response.status}`);
+      const info = await response.json() as { state: string; base_url: string; model?: string; port: number; preferred_port: number | string | null; server_ready: boolean };
+      const copy = async (value: string, secret = false) => {
+        const proc = Bun.spawn(["pbcopy"], { stdin: new Blob([value]), stdout: "ignore", stderr: "ignore" });
+        if (await proc.exited !== 0) throw new Error("Could not copy to clipboard");
+        api.ui.toast({ variant: "info", message: secret ? "Copied with API key. Keep the clipboard contents private." : "Copied to clipboard" });
+      };
+      api.ui.dialog.replace(() => api.ui.DialogSelect({ title: "Model server · " + info.state, options: [
+        { title: "Base URL", value: "url", description: info.base_url },
+        { title: "Model", value: "model", description: info.model ?? "No model loaded" },
+        { title: "Copy API key", value: "key", description: "Private · only for clients you trust" },
+        { title: "Copy curl example", value: "curl", description: "Includes your API key; lists available models" },
+        { title: "Change API port now", value: "port", description: `Current: ${info.port} · saved: ${info.preferred_port ?? "automatic"}` },
+        { title: "Refresh", value: "refresh", description: "Loopback only · available to tools on this Mac" },
+      ], onSelect(item) {
+        if (item.value === "refresh") return void server();
+        if (item.value === "port") return api.ui.dialog.replace(() => api.ui.DialogPrompt({
+          title: "New API port (1024–65535 or auto)", value: String(info.preferred_port ?? "auto"),
+          onConfirm(value) {
+            if (changingPort) return;
+            const input = value.trim();
+            if (input !== "auto" && (!/^\d+$/.test(input) || Number(input) < 1024 || Number(input) > 65535)) return error("Enter a port from 1024 to 65535, or auto");
+            changingPort = true;
+            void fetch(control + "/server/port", { method: "POST", headers, body: JSON.stringify({ port: input === "auto" ? null : Number(input) }), signal: AbortSignal.timeout(3000) })
+              .then(async (r) => {
+                if (!r.ok) throw new Error((await r.json() as { error: string }).error);
+                const result = await r.json() as { base_url: string };
+                api.ui.toast({ variant: "info", message: `API moved to ${result.base_url}. Update other apps to use this address; this chat stays connected.`, duration: 8000 });
+                await server();
+              }).catch((e) => error(`Could not confirm port change: ${String(e)}. Refresh /server to check the current address.`))
+              .finally(() => { changingPort = false; });
+          },
+        }));
+        const key = process.env.LOCALCODE_SERVER_KEY;
+        if ((item.value === "key" || item.value === "curl") && !key) return error("API key unavailable; use localcode api --show-key in a terminal");
+        const value = item.value === "url" ? info.base_url : item.value === "model" ? info.model : item.value === "key" ? key : `curl '${info.base_url}/models' -H 'Authorization: Bearer ${key}'`;
+        if (value) void copy(value, item.value === "key" || item.value === "curl").catch((e) => error(String(e)));
+      } }));
+    } catch (e) { error(String(e)); }
+  }
   api.keymap.registerLayer({ commands: [
+    { name: "localcode.server", title: "Model server connection and port", category: "LocalCode", slash: { name: "server" }, run: server },
     { name: "localcode.mode", title: "Choose Chat or Decisions", category: "LocalCode", slash: { name: "mode" }, run: choose },
     { name: "localcode.decide", title: "Open decision mode", category: "LocalCode", slash: { name: "decide" }, run: open },
   ] });

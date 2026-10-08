@@ -142,7 +142,8 @@ def test_supervisor_serves_every_route_the_ui_calls():
 
 
 
-def test_second_launch_attaches_to_running_session(monkeypatch, tmp_path):
+@pytest.mark.parametrize("inference_port", [None, 51234])
+def test_second_launch_attaches_to_running_session(monkeypatch, tmp_path, inference_port):
     """Another terminal reuses the running session's model server instead of being refused."""
     import json as _json
     from localcode.ui import launch
@@ -152,6 +153,8 @@ def test_second_launch_attaches_to_running_session(monkeypatch, tmp_path):
     monkeypatch.setattr(launch, "_llama_server", lambda: tmp_path / "ui")
     monkeypatch.setenv("LOCALCODE_AGENT_RUN_DIR", str(tmp_path / "run"))
     status = {"port": 8123, "ctx": 65536, "current": "gemma-4-12b-it-UD-Q4_K_XL", "state": "ready"}
+    if inference_port:
+        status["inference_port"] = inference_port
     monkeypatch.setattr(launch, "find_running", lambda: (8323, status))
     def fake_call(argv, cwd, env):
         calls["argv"] = argv; calls["env"] = env
@@ -164,7 +167,7 @@ def test_second_launch_attaches_to_running_session(monkeypatch, tmp_path):
     assert calls["env"]["LOCALCODE_DISABLE_PROJECT_CONFIG"] == "1"
     assert calls["env"]["OPENCODE_DISABLE_PROJECT_CONFIG"] == "1"
     assert calls["argv"][1:] == ["-m", "localcode/gemma-4-12b-it-UD-Q4_K_XL"]
-    assert calls["cfg"]["provider"]["localcode"]["options"]["baseURL"] == "http://127.0.0.1:8123/v1"
+    assert calls["cfg"]["provider"]["localcode"]["options"]["baseURL"] == f"http://127.0.0.1:{inference_port or 8123}/v1"
     assert calls["cfg"]["model"] == "localcode/gemma-4-12b-it-UD-Q4_K_XL"
 
 

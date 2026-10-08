@@ -9,6 +9,48 @@ While LocalCode is open, its model server offers an OpenAI compatible API on `12
 localcode api
 ```
 
+In a session, open `/server` or click the dot beside **localcode** in the bottom bar.
+The dot is green when the model server is ready, amber while downloading or loading,
+and grey when unavailable. Status refreshes every two seconds; a failed request
+can take another 1.5 seconds to time out. The menu shows the endpoint and model,
+and offers explicit actions to copy the API key or an authenticated curl example.
+Copying a key puts a secret on your system clipboard.
+
+### Choose a fixed port
+
+Use **Change API port now** in `/server`, or:
+
+```bash
+localcode api --port 9234
+# Restore automatic port selection:
+localcode api --port auto
+```
+
+With LocalCode running, the change takes effect immediately without reloading the
+model or closing your conversation. LocalCode windows use a stable internal
+connection. Existing external connections can finish on the old listener; new
+connections must use the new address. Update the base URL in other apps. The API
+key stays the same during a port change.
+
+Ports must be between 1024 and 65535. Invalid, occupied or internal service ports
+are rejected without changing the current endpoint. The new listener starts
+before the old one retires. If saving the preference fails, the new listener is
+closed and the original remains active. Concurrent changes are rejected; refresh
+`/server` before retrying. After a timeout, refresh to check whether the change
+completed before trying again.
+
+The preference is saved in `server-port.json` in LocalCode's runtime directory.
+When no LocalCode service is running, the CLI saves it for the next launch.
+An occupied saved port produces a startup error; `localcode api --port auto`
+restores automatic selection. The API key still changes between runs.
+
+The public API is a loopback TCP forwarding listener. It preserves the model
+server's authentication and streaming responses, with bounded buffers, up to 64
+simultaneous external connections and a 30-minute inactivity timeout. LocalCode's
+own inference does not pass through this listener.
+
+### Connect another application
+
 For an application that needs the key, request machine readable details explicitly:
 
 ```bash
@@ -33,7 +75,7 @@ answer = client.chat.completions.create(
 print(answer.choices[0].message.content)
 ```
 
-Start LocalCode and load a model before using the API. The endpoint ends when the LocalCode session closes, and its port and key can change on the next run. Keep the key private. The server listens only on your Mac, so another machine cannot connect to it.
+Start LocalCode and load a model before using the API. The first LocalCode window owns the model service. Closing that window stops the endpoint, even if other attached windows remain open. Closing an attached window does not stop the service. The port and key can change on the next run. Keep the key private. The server listens only on your Mac, so another machine cannot connect to it.
 
 This is the model inference API. LocalCode currently consumes MCP servers as a client; it does not expose its coding actions as an MCP server.
 
