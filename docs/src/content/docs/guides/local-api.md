@@ -75,7 +75,7 @@ answer = client.chat.completions.create(
 print(answer.choices[0].message.content)
 ```
 
-Start LocalCode and load a model before using the API. The endpoint ends when the LocalCode session closes, and its port and key can change on the next run. Keep the key private. The server listens only on your Mac, so another machine cannot connect to it.
+Start LocalCode and load a model before using the API. The first LocalCode window owns the model service. Closing that window stops the endpoint, even if other attached windows remain open. Closing an attached window does not stop the service. The port and key can change on the next run. Keep the key private. The server listens only on your Mac, so another machine cannot connect to it.
 
 This is the model inference API. LocalCode currently consumes MCP servers as a client; it does not expose its coding actions as an MCP server.
 
