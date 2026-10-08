@@ -164,3 +164,77 @@ def test_turbo2_keys_fall_back_to_q8_0():
     cmd = LocalCodeRuntimeGateway(cfg).llama_server_command("/path/model.gguf", 8081)
     assert cmd[cmd.index("--cache-type-k") + 1] == "q8_0"
     assert cmd[cmd.index("--cache-type-v") + 1] == "turbo2"
+
+
+def _gateway_with_mtp_layers(n: int, **cfg):
+    from localcode.config import RuntimeConfig
+    from localcode.runtime import LocalCodeRuntimeGateway
+
+    g = LocalCodeRuntimeGateway(RuntimeConfig(**cfg))
+    g._gguf_meta_cache = {"/path/model.gguf": {
+        "n_layers": 64, "n_kv_heads": 8, "head_dim": 128, "n_mtp_layers": n,
+    }}
+    return g
+
+
+def test_mtp_head_in_gguf_enables_draft_mtp_by_default():
+    """A GGUF with `nextn_predict_layers` > 0 (Qwen 3.8 27B) drafts from its
+    own MTP head: lossless, no second model, ~2x decode on Apple Silicon."""
+    cmd = _gateway_with_mtp_layers(1).llama_server_command("/path/model.gguf", 8081)
+    assert cmd[cmd.index("--spec-type") + 1] == "draft-mtp"
+    assert cmd[cmd.index("--spec-draft-n-max") + 1] == "4"
+    assert "--draft-max" not in cmd  # removed upstream; the server rejects it
+
+
+def test_no_mtp_head_means_no_speculation():
+    cmd = _gateway_with_mtp_layers(0).llama_server_command("/path/model.gguf", 8081)
+    assert "--spec-type" not in cmd
+    assert "--spec-draft-n-max" not in cmd
+
+
+def test_mtp_draft_can_be_switched_off():
+    cmd = _gateway_with_mtp_layers(1, llama_cpp_mtp_draft=0).llama_server_command("/path/model.gguf", 8081)
+    assert "--spec-type" not in cmd
+    cmd = _gateway_with_mtp_layers(1, llama_cpp_spec_type="none").llama_server_command("/path/model.gguf", 8081)
+    assert "--spec-type" not in cmd
+
+
+def test_explicit_spec_type_and_draft_model_use_the_current_flag():
+    cmd = _gateway_with_mtp_layers(1, llama_cpp_spec_type="ngram-mod", llama_cpp_draft_max=16
+                                   ).llama_server_command("/path/model.gguf", 8081)
+    assert cmd[cmd.index("--spec-type") + 1] == "ngram-mod"
+    assert cmd[cmd.index("--spec-draft-n-max") + 1] == "16"
+    assert "--draft-max" not in cmd
+    cmd = _gateway_with_mtp_layers(0, llama_cpp_draft_model="/path/draft.gguf", llama_cpp_draft_max=8
+                                   ).llama_server_command("/path/model.gguf", 8081)
+    assert cmd[cmd.index("--model-draft") + 1] == "/path/draft.gguf"
+    assert cmd[cmd.index("--spec-draft-n-max") + 1] == "8"
+    assert "--draft-max" not in cmd
+
+
+def test_mtp_layers_read_from_a_real_gguf_header(tmp_path):
+    """The metadata reader picks up `<arch>.nextn_predict_layers`."""
+    import struct
+    from localcode.config import RuntimeConfig
+    from localcode.runtime import LocalCodeRuntimeGateway
+
+    def _s(v: str) -> bytes:
+        b = v.encode()
+        return struct.pack("<Q", len(b)) + b
+
+    def _u32(k: str, v: int) -> bytes:
+        return _s(k) + struct.pack("<I", 4) + struct.pack("<I", v)
+
+    kv = [
+        _u32("qwen35.block_count", 64),
+        _u32("qwen35.attention.head_count", 32),
+        _u32("qwen35.attention.head_count_kv", 8),
+        _u32("qwen35.attention.key_length", 128),
+        _u32("qwen35.nextn_predict_layers", 1),
+    ]
+    p = tmp_path / "m.gguf"
+    p.write_bytes(b"GGUF" + struct.pack("<I", 3) + struct.pack("<Q", 0) + struct.pack("<Q", len(kv)) + b"".join(kv))
+    g = LocalCodeRuntimeGateway(RuntimeConfig())
+    assert g._gguf_mtp_layers(str(p)) == 1
+    cmd = g.llama_server_command(str(p), 8081)
+    assert cmd[cmd.index("--spec-type") + 1] == "draft-mtp"
