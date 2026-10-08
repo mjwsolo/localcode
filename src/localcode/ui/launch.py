@@ -173,6 +173,13 @@ def runtime_env(config_path: Path, ctrl: int, *, trust_project: bool = False) ->
     env["LOCALCODE_DISABLE_PROJECT_CONFIG"] = disabled
     env["OPENCODE_DISABLE_PROJECT_CONFIG"] = disabled
     env.setdefault("OPENCODE_DISABLE_LSP_DOWNLOAD", "1")
+    # Claude Code's skill directories (~/.claude/skills, <project>/.claude/skills)
+    # are written for Claude and listed in full in every request's system
+    # prompt: one install put 63 of them (~12k tokens) in front of a 12B
+    # model on every session. Local models keep their own skill dirs
+    # (.localcode-agent/skills, ~/.agents/skills, config `skills.paths`).
+    # Set OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=0 to opt back in.
+    env.setdefault("OPENCODE_DISABLE_CLAUDE_CODE_SKILLS", "1")
     return env
 
 

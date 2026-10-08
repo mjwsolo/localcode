@@ -221,3 +221,16 @@ def test_project_execution_requires_explicit_trust_even_with_an_inherited_alias(
     trusted = runtime_env(tmp_path / "session.json", 8323, trust_project=True)
     assert trusted["LOCALCODE_DISABLE_PROJECT_CONFIG"] == trusted["OPENCODE_DISABLE_PROJECT_CONFIG"] == "0"
     assert entrypoint.build_parser().parse_args(["--trust-project"]).trust_project is True
+
+
+def test_runtime_env_skips_claude_code_skill_dirs_unless_opted_in(monkeypatch, tmp_path):
+    """Claude Code's skill listings (~/.claude/skills) are not part of a local
+    model's system prompt by default: one install put 63 of them (~12k tokens)
+    in front of a 12B model on every session. The env var can opt back in."""
+    from localcode.ui.launch import runtime_env
+
+    monkeypatch.delenv("OPENCODE_DISABLE_CLAUDE_CODE_SKILLS", raising=False)
+    env = runtime_env(tmp_path / "runtime.json", 1)
+    assert env["OPENCODE_DISABLE_CLAUDE_CODE_SKILLS"] == "1"
+    monkeypatch.setenv("OPENCODE_DISABLE_CLAUDE_CODE_SKILLS", "0")
+    assert runtime_env(tmp_path / "runtime.json", 1)["OPENCODE_DISABLE_CLAUDE_CODE_SKILLS"] == "0"
