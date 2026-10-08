@@ -3,6 +3,18 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.5.5 — 2026-10-08
+
+### Security
+
+- Project configuration is disabled by default on both fresh and attached
+  launches. Repository plugins could otherwise execute code during startup,
+  before tool permissions apply. `--trust-project` explicitly enables a
+  reviewed project's configuration, plugins and MCP startup commands.
+  Global user configuration and LocalCode's packaged plugins remain available.
+- The launcher's branded and upstream configuration flags are both assigned
+  explicitly so an inherited alias cannot reopen project code loading.
+
 ## 0.5.4 — 2026-10-08
 
 ### Added

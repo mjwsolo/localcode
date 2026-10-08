@@ -39,6 +39,9 @@ repository ships, with the size and whether it fits your Mac's memory. The
 recommended one for your machine is starred. Pick one, watch the download, and
 start typing. `/models` switches later.
 
+Project plugins and configuration load only with `localcode --trust-project`.
+Use it after reviewing the project's startup code and settings.
+
 OpenJev also supports typed decisions: use `/mode` to choose **Chat** or
 **Decisions**, or run `localcode --mode decisions`. The decision screen returns
 choices, yes/no probabilities and scores without running coding tools.

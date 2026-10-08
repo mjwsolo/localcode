@@ -9,6 +9,11 @@ localcode is an MCP client. The servers you add give the agent access to their t
 
 Declare servers under the `mcp` key of `localcode.json` in the project root. A local server is a command to run; a remote server is a URL:
 
+Project configuration is ignored until you launch with `localcode --trust-project`.
+Review local server commands and plugin code before enabling it. For servers you
+want available in every project, use your user-global
+`~/.config/localcode-agent/localcode.json` instead.
+
 ```json
 {
   "$schema": "https://localcode.dev/schema/config.json",

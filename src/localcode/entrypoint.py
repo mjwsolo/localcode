@@ -15,6 +15,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="store_true", help="Print the version and exit")
     parser.add_argument("--mode", choices=["chat", "decisions"], default="chat", help="Start in normal chat or typed decision mode")
+    parser.add_argument("--trust-project", action="store_true", help="Allow this project's configuration, plugins and MCP startup commands to load")
     parser.add_argument("--model", help="Model alias to load (otherwise the picker asks)")
     parser.add_argument("-s", "--session", "--resume", dest="resume", metavar="SESSION_ID",
                         help="Resume a session by ID; uses its saved project directory when no project is given")
@@ -72,7 +73,7 @@ def main(argv: list[str] | None = None) -> None:
               "Reinstall with `pip install -U localcode`.", file=sys.stderr)
         sys.exit(1)
     from .ui.launch import main as ui_main
-    sys.exit(ui_main(args.model, project=project, resume=args.resume))
+    sys.exit(ui_main(args.model, project=project, resume=args.resume, trust_project=args.trust_project))
 
 
 if __name__ == "__main__":
