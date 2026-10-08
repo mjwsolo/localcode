@@ -98,6 +98,7 @@ class ModelChoice:
     reasoning_budget_tokens: int = 8192
     preserves_reasoning: bool = True
     supports_parallel_tools: bool = False
+    supports_systemone: bool = False
 
     @property
     def hf_url(self) -> str:
@@ -452,6 +453,7 @@ CHOICES: list[ModelChoice] = [
     ),
     ModelChoice(
         key="openjev",
+        supports_systemone=True,
         # Pinned to the revision and digest that were verified live.
         revision="10840f375658dea7afc5ff4711127bca8218b560",
         sha256="38b512277edaeec6cd251d146bff6d97bc328fa9db19755401d6e9ab1ccbcba5",
@@ -673,6 +675,8 @@ class ModelGroup:
     mmproj_size_gb: float = 0.0
     mmproj_hf_filename: str | None = None
 
+    supports_systemone: bool = False
+
     @property
     def supports_vision(self) -> bool:
         return self.mmproj_filename is not None
@@ -824,6 +828,7 @@ MODEL_GROUPS: list[ModelGroup] = [
     ),
     ModelGroup(
         key="openjev",
+        supports_systemone=True,
         display_name="OpenJev 27B (decision model)",
         maker="OpenJev",
         hf_repo="ggml-org/OpenJev-GGUF",
@@ -892,6 +897,7 @@ def choice_for_quant(group: ModelGroup, filename: str, size_gb: float) -> ModelC
         mmproj_filename=group.mmproj_filename,
         mmproj_size_gb=group.mmproj_size_gb,
         mmproj_hf_filename=group.mmproj_hf_filename,
+        supports_systemone=group.supports_systemone,
         reasoning_control=canonical.reasoning_control if canonical else "chat_template",
         reasoning_budget_tokens=canonical.reasoning_budget_tokens if canonical else 8192,
         preserves_reasoning=canonical.preserves_reasoning if canonical else True,

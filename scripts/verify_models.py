@@ -19,8 +19,11 @@ import subprocess
 import sys
 import tempfile
 import time
+import threading
+import types
 import urllib.error
 import urllib.request
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 if not __debug__:
@@ -155,6 +158,31 @@ def runtime_turn(server):
     assert any(e.get("type") == "text" and e.get("part", {}).get("text", "").strip() for e in events), "bundled runtime returned no text"
 
 
+def decision_control(server, body):
+    """Verify the shipped authenticated bridge, not only the model endpoint."""
+    from localcode.decision import post, validate_response
+    from localcode.ui.supervisor import Supervisor, make_handler
+    token = secrets.token_urlsafe(32)
+    sup = types.SimpleNamespace(control_token=token, control_port=0,
+                                current=server.choice.filename.removesuffix(".gguf"),
+                                proc=server.proc, port=server.port, state={"state": "ready"})
+    sup.decision = lambda request: Supervisor.decision(sup, request)
+    with environment({auth.KEY_ENV: server.key}):
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(sup))
+        sup.control_port = httpd.server_address[1]
+        worker = threading.Thread(target=httpd.serve_forever, daemon=True)
+        worker.start()
+        try:
+            url = f"http://127.0.0.1:{sup.control_port}/decision"
+            result = post(url, body, auth.control_headers(token))
+            validate_response(result, body)
+            assert result["model"] == sup.current
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            worker.join(timeout=5)
+
+
 def verify(server, *, runtime=False):
     messages = [{"role": "system", "content": "You are a helpful assistant.\n\nAnswer briefly."}, {"role": "user", "content": "Reply with exactly OK."}]
     body = {"model": server.choice.key, "messages": messages, "temperature": 0, "max_tokens": 8192, "cache_prompt": True}
@@ -170,9 +198,12 @@ def verify(server, *, runtime=False):
     assert (message.get("content") or "").strip(), "empty chat response"
     checks = ["auth", "template", "chat"]
     if server.choice.key == "openjev":
-        data = server.request("/v1/systemone", {"state": "The customer was charged twice.", "questions": {"route": {"type": "choice", "instructions": "Which team should handle this?", "criteria": {"billing": None, "shipping": None, "technical": None}}, "angry": {"type": "noul", "instructions": "Is the customer angry?"}, "urgency": {"type": "score", "instructions": "How urgent?", "criteria": ["low", "medium", "high"]}}})
+        decision_body = {"state": "The customer was charged twice.", "questions": {"route": {"type": "choice", "instructions": "Which team should handle this?", "criteria": {"billing": None, "shipping": None, "technical": None}}, "angry": {"type": "noul", "instructions": "Is the customer angry?"}, "urgency": {"type": "score", "instructions": "How urgent?", "criteria": ["low", "medium", "high"]}}}
+        data = server.request("/v1/systemone", decision_body)
         validate_decisions(data)
         checks.append("systemone")
+        decision_control(server, decision_body)
+        checks.append("decision-control")
     else:
         body["messages"][-1]["content"] = "What is the weather in Paris? Use get_weather."
         body["tools"] = [TOOL]
@@ -203,6 +234,8 @@ def validate_receipt(receipt, commit, hashes, keys):
         expected = {"auth", "template", "chat", "systemone" if key == "openjev" else "tool-loop"}
         if key in {"qwen38", "openjev", "diffusiongemma"}:
             expected.add("runtime")
+        if key == "openjev":
+            expected.add("decision-control")
         assert expected <= checks, "missing checks for " + key
     assert any(r["key"] == "qwen" and r["turbo4"] and "tool-loop" in r["checks"] for r in receipt["models"]), "turbo4 not verified"
 

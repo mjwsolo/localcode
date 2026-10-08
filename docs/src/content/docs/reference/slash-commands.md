@@ -10,6 +10,7 @@ Type `/` in the prompt to open the command palette. Text that starts with `/` is
 | `/compact` | Compact session |
 | `/copy` | Copy session transcript |
 | `/debug` | View debug info |
+| `/decide` | Open typed System One decisions |
 | `/diff` | Open diff viewer |
 | `/editor` | Open the external editor for the prompt (falls back to `nano`) |
 | `/exit` | Exit the app |
@@ -18,6 +19,7 @@ Type `/` in the prompt to open the command palette. Text that starts with `/` is
 | `/lsp` | Language servers: install or start one |
 | `/mcps` | Toggle MCPs |
 | `/models` | Switch model |
+| `/mode` | Choose Chat or Decisions |
 | `/move` | Move to another project dir |
 | `/new` | New session |
 | `/permissions` | Permissions |
