@@ -51,10 +51,14 @@ def server_command(gguf: str, port: int, alias: str | None = None) -> list[str]:
         if capabilities.control is ReasoningControl.NONE:
             control = "none"
         if capabilities.family == "diffusion":
-            # Auto extraction can put the entire post-tool answer in
-            # reasoning_content, leaving no visible text. Keep generated text
-            # in content without disabling this model's generation path.
-            cmd += ["--reasoning-format", "none"]
+            # The model always opens a `<|channel>thought` block itself and
+            # cannot be told not to (see above). With the parser off that
+            # block leaked into every reply as literal `<|channel>thought ...`
+            # text; with it on, the thought goes to reasoning_content and the
+            # answer after `<channel|>` is the content, like every other model.
+            # A reply cut off by max_tokens before `<channel|>` has no content
+            # either way: the model had not answered yet.
+            cmd += ["--reasoning-format", "auto"]
     except Exception:  # noqa: BLE001, S110
         pass
     mode = os.environ.get("LOCALCODE_INTERNAL_THINKING_MODE") or cfg.runtime.internal_thinking_mode or "off"

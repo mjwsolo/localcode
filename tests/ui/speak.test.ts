@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test"
 import path from "node:path"
+import { python, pythonEnv } from "./support/python"
 
 test("read aloud toggles its owned process without stopping unrelated processes", () => {
-  const python = process.env.LOCALCODE_PY ?? "python3"
   const result = Bun.spawnSync([python, "-c", `
 import os, pathlib, subprocess, tempfile, threading
 from localcode.ui.supervisor import Supervisor
@@ -32,7 +32,7 @@ with tempfile.TemporaryDirectory() as directory:
     finally:
         other.terminate()
         other.wait()
-`], { cwd: path.resolve(import.meta.dir, "..") })
+`], { cwd: path.resolve(import.meta.dir, ".."), env: pythonEnv })
   expect(result.stderr.toString()).toBe("")
   expect(result.exitCode).toBe(0)
 })

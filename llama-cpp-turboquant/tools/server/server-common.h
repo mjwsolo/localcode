@@ -348,6 +348,11 @@ struct server_chat_params {
     std::string reasoning_budget_message;
     std::string media_path;
     bool force_pure_content = false;
+    // fork-local (PATCHES.md 0005): canvas diffusion models decide themselves whether to open a
+    // thought block. A thought opener the template appends after a tool response is never closed
+    // by DiffusionGemma, so the parser filed the whole answer as reasoning and the client saw
+    // nothing. Strip such an opener from the prompt and the parser's generation prompt.
+    bool no_forced_thinking = false;
 };
 
 // used by /completions endpoint

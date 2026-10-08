@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test"
 import path from "node:path"
+import { python, pythonEnv } from "./support/python"
 
 test("catalog groups installed model files without counting projectors or broken links", () => {
-  const result = Bun.spawnSync([process.env.LOCALCODE_PY ?? "python3", "-c", `
+  const result = Bun.spawnSync([python, "-c", `
 import pathlib, tempfile
 from localcode.ui.supervisor import Supervisor, MODEL_GROUPS
 with tempfile.TemporaryDirectory() as directory:
@@ -27,7 +28,7 @@ with tempfile.TemporaryDirectory() as directory:
     assert sum(row['installed_count'] for row in rows) == 2
     first.unlink()
     assert sum(row['installed_count'] for row in supervisor.catalog()['groups']) == 1
-`], { cwd: path.resolve(import.meta.dir, "..") })
+`], { cwd: path.resolve(import.meta.dir, ".."), env: pythonEnv })
   expect(result.stderr.toString()).toBe("")
   expect(result.exitCode).toBe(0)
 })
