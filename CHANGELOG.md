@@ -3,6 +3,34 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.5.4 — 2026-10-08
+
+### Added
+
+- Choose **Chat** or **Decisions** with `/mode`. `/decide` opens the decision
+  screen directly; `localcode --mode decisions` starts there. OpenJev returns
+  typed choices, yes/no probabilities and ordered scores through System One,
+  without running coding tools. Returning to Chat preserves the active session.
+- `localcode decide` evaluates a question about text, a UTF-8 file or an image
+  using the running OpenJev model and prints JSON. Requests and responses are
+  validated; unsupported models and model switches produce explicit errors.
+- The local model promotion gate verifies the authenticated decision bridge
+  for all three answer types, in addition to raw model inference.
+
+### Changed
+
+- The README uses the dark SVG lockup and the single-line tagline,
+  “Agentic coding. Local models. On your Mac.”
+- Unused JPEG/PDF logo exports are preserved locally and ignored by Git.
+- The obsolete classic-runtime dependency lockfile is preserved locally and
+  ignored; package installation and release gates use `pyproject.toml`.
+
+### Security
+
+- Updated the documentation builder's Astro and Sharp dependencies beyond the
+  affected versions in the AVIF image processing advisory GHSA-26w7-cxv4-gfx2.
+  The published documentation remains a static site.
+
 ## 0.5.3 — 2026-10-08
 
 ### Added
