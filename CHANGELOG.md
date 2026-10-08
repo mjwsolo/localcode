@@ -3,6 +3,15 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Changed
+
+- Bundled llama.cpp bumped to upstream v0.6.0 (`d812350`, 2026-10-05) with the
+  six fork patches replayed. Brings the few-row Metal MMA mat-mul and the Metal
+  tensor-API flash-attention kernel. All 13 catalog model configurations pass the
+  live load + generate + tool-call gate on the new binary.
+
 ## 0.5.5 — 2026-10-08
 
 ### Security
