@@ -64,7 +64,7 @@ def test_entrypoint_forwards_session_to_launcher(monkeypatch):
     with pytest.raises(SystemExit) as exc:
         entrypoint.main(["-s", "ses_example"])
     assert exc.value.code == 0
-    assert calls == [((None,), {"project": None, "resume": "ses_example"})]
+    assert calls == [((None,), {"project": None, "resume": "ses_example", "trust_project": False})]
 
 
 def test_write_config_points_at_local_server_and_plugin(tmp_path):
@@ -161,6 +161,8 @@ def test_second_launch_attaches_to_running_session(monkeypatch, tmp_path):
     monkeypatch.setattr(launch.subprocess, "call", fake_call)
     assert launch.main(None, str(tmp_path)) == 0
     assert calls["env"]["LOCALCODE_CONTROL_URL"] == "http://127.0.0.1:8323"
+    assert calls["env"]["LOCALCODE_DISABLE_PROJECT_CONFIG"] == "1"
+    assert calls["env"]["OPENCODE_DISABLE_PROJECT_CONFIG"] == "1"
     assert calls["argv"][1:] == ["-m", "localcode/gemma-4-12b-it-UD-Q4_K_XL"]
     assert calls["cfg"]["provider"]["localcode"]["options"]["baseURL"] == "http://127.0.0.1:8123/v1"
     assert calls["cfg"]["model"] == "localcode/gemma-4-12b-it-UD-Q4_K_XL"
@@ -208,3 +210,14 @@ def test_terminal_extension_is_separate_from_agent_tool_hooks(tmp_path):
     terminal=json.loads(path.with_suffix(".tui.json").read_text())
     assert terminal["plugin"][0].endswith("/modes.ts")
     assert json.loads(path.read_text())["plugin"] == [str(plugin_path())]
+
+
+def test_project_execution_requires_explicit_trust_even_with_an_inherited_alias(monkeypatch, tmp_path):
+    from localcode.ui.launch import runtime_env
+    monkeypatch.setenv("LOCALCODE_DISABLE_PROJECT_CONFIG", "0")
+    monkeypatch.setenv("OPENCODE_DISABLE_PROJECT_CONFIG", "0")
+    env = runtime_env(tmp_path / "session.json", 8323)
+    assert env["LOCALCODE_DISABLE_PROJECT_CONFIG"] == env["OPENCODE_DISABLE_PROJECT_CONFIG"] == "1"
+    trusted = runtime_env(tmp_path / "session.json", 8323, trust_project=True)
+    assert trusted["LOCALCODE_DISABLE_PROJECT_CONFIG"] == trusted["OPENCODE_DISABLE_PROJECT_CONFIG"] == "0"
+    assert entrypoint.build_parser().parse_args(["--trust-project"]).trust_project is True

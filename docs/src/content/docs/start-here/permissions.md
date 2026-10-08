@@ -3,6 +3,24 @@ title: Permissions
 description: What the agent does on its own, what it asks about, and where the boundary is.
 ---
 
+## Project startup code
+
+LocalCode ignores repository configuration by default. This includes discovered
+plugins and project MCP startup commands, which can execute code before tool
+permissions apply. User-global configuration and LocalCode's packaged plugins
+still load.
+
+For a project whose configuration you have reviewed, explicitly enable it:
+
+```bash
+localcode --trust-project
+```
+
+Trust applies to that launch, including a second window attached to an existing
+model server. Repository settings can also change tool permissions. Review them
+before enabling trust; ordinary code files remain available for the agent to read
+and edit without this flag.
+
 Inside the project you opened, the agent works on its own. It reads files, edits files and runs shell commands without asking first. That is the default, and it is what lets a task run to the end unattended.
 
 A few actions stop and ask. The prompt shows what the agent is about to do and offers three answers:

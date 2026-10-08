@@ -161,8 +161,23 @@ def _session_directory(session_id: str) -> Path | None:
     return None
 
 
+def runtime_env(config_path: Path, ctrl: int, *, trust_project: bool = False) -> dict[str, str]:
+    """Project configuration can execute code before tool permissions apply."""
+    env = dict(os.environ)
+    env["LOCALCODE_CONTROL_URL"] = f"http://127.0.0.1:{ctrl}"
+    env["LOCALCODE_CONFIG"] = str(config_path)
+    env["OPENCODE_TUI_CONFIG"] = str(config_path.with_suffix(".tui.json"))
+    # The branded alias takes precedence in the fork. Set both explicitly so
+    # an inherited alias cannot accidentally reopen project code loading.
+    disabled = "0" if trust_project else "1"
+    env["LOCALCODE_DISABLE_PROJECT_CONFIG"] = disabled
+    env["OPENCODE_DISABLE_PROJECT_CONFIG"] = disabled
+    env.setdefault("OPENCODE_DISABLE_LSP_DOWNLOAD", "1")
+    return env
+
+
 def attach(ctrl: int, status: dict, ui_bin: Path, project_dir: Path, alias: str | None,
-           resume: str | None = None) -> int:
+           resume: str | None = None, *, trust_project: bool = False) -> int:
     """Open another UI window on the model server a running session owns."""
     # The running session's secrets, left owner-only in the run directory.
     auth = read_auth_file(run_dir())
@@ -183,11 +198,7 @@ def attach(ctrl: int, status: dict, ui_bin: Path, project_dir: Path, alias: str 
     rd.mkdir(parents=True, exist_ok=True)
     config_path = rd / f"session-{os.getpid()}.json"
     write_config(config_path, port=port, ctx=ctx, alias=current)
-    env = dict(os.environ)
-    env["LOCALCODE_CONTROL_URL"] = f"http://127.0.0.1:{ctrl}"
-    env["LOCALCODE_CONFIG"] = str(config_path)
-    env["OPENCODE_TUI_CONFIG"] = str(config_path.with_suffix(".tui.json"))
-    env.setdefault("OPENCODE_DISABLE_LSP_DOWNLOAD", "1")
+    env = runtime_env(config_path, ctrl, trust_project=trust_project)
     argv = [str(ui_bin)] + (["-m", f"localcode/{current}"] if current else []) + _resume_args(resume)
     try:
         return subprocess.call(argv, cwd=str(project_dir), env=env)
@@ -199,7 +210,7 @@ def attach(ctrl: int, status: dict, ui_bin: Path, project_dir: Path, alias: str 
 
 
 def main(model: str | None = None, project: str | None = None,
-         resume: str | None = None) -> int:
+         resume: str | None = None, *, trust_project: bool = False) -> int:
     ui_bin = ui_binary_path()
     if ui_bin is None:
         print("localcode: the UI binary is missing from this install. "
@@ -225,7 +236,8 @@ def main(model: str | None = None, project: str | None = None,
     # instead of refusing. One llama-server per machine, any number of windows.
     running = find_running()
     if running is not None:
-        return attach(running[0], running[1], ui_bin, project_dir, alias, resume)
+        return attach(running[0], running[1], ui_bin, project_dir, alias, resume,
+                      trust_project=trust_project)
 
     try:
         port, ctrl = choose_ports()
@@ -288,12 +300,7 @@ def main(model: str | None = None, project: str | None = None,
         config_path = rd / "session.json"
         write_config(config_path, port=port, ctx=ctx, alias=alias)
 
-        env = dict(os.environ)
-        env["LOCALCODE_CONTROL_URL"] = f"http://127.0.0.1:{ctrl}"
-        env["LOCALCODE_CONFIG"] = str(config_path)
-        env["OPENCODE_TUI_CONFIG"] = str(config_path.with_suffix(".tui.json"))
-        # Language servers are installed only on request (/lsp), never silently.
-        env.setdefault("OPENCODE_DISABLE_LSP_DOWNLOAD", "1")
+        env = runtime_env(config_path, ctrl, trust_project=trust_project)
         argv = [str(ui_bin)]
         if alias:
             argv += ["-m", f"localcode/{alias}"]

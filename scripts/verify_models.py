@@ -145,12 +145,12 @@ def validate_decisions(data):
 
 def runtime_turn(server):
     """Drive the actual bundled OpenCode client and plugin in a disposable project."""
-    from localcode.ui.launch import write_config
+    from localcode.ui.launch import write_config, runtime_env
     config = server.work / "runtime.json"
     with environment({auth.KEY_ENV: server.key}):
         ctx = int(server.command[server.command.index("--ctx-size") + 1])
         write_config(config, port=server.port, ctx=ctx, alias=server.choice.key)
-    env = {**{k: v for k, v in os.environ.items() if k not in {"GH_TOKEN", "GITHUB_TOKEN"}}, "OPENCODE_CONFIG": str(config), "XDG_DATA_HOME": str(server.work / "data"), "XDG_CONFIG_HOME": str(server.work / "config"), "XDG_CACHE_HOME": str(server.work / "cache"), "LOCALCODE_CONTROL_PORT": "1", "LOCALCODE_AUTO_CHECK": "0"}
+    env = {**{k: v for k, v in runtime_env(config, 1).items() if k not in {"GH_TOKEN", "GITHUB_TOKEN"}}, "OPENCODE_CONFIG": str(config), "XDG_DATA_HOME": str(server.work / "data"), "XDG_CONFIG_HOME": str(server.work / "config"), "XDG_CACHE_HOME": str(server.work / "cache"), "LOCALCODE_CONTROL_PORT": "1", "LOCALCODE_AUTO_CHECK": "0"}
     result = subprocess.run([str(ROOT / "src/localcode/bin/localcode-ui"), "run", "--format", "json", "Reply with exactly OK."], cwd=server.work, env=env, capture_output=True, text=True, timeout=240)
     events = [json.loads(line) for line in result.stdout.splitlines() if line.startswith("{")]
     assert result.returncode == 0, "bundled runtime failed"
