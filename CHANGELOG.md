@@ -31,6 +31,22 @@ All notable changes to LocalCode will be documented here. The format follows
   tensor-API flash-attention kernel. All 13 catalog model configurations pass the
   live load + generate + tool-call gate on the new binary.
 
+### Performance
+
+- Models that ship their own multi-token-prediction head (`<arch>.nextn_predict_layers`
+  in the GGUF, e.g. Qwen 3.8 27B) now launch with `--spec-type draft-mtp` and four
+  draft tokens. Drafting from the model's own head is lossless and needs no second
+  model. Measured on Qwen 3.8 27B Q4_K_XL (Apple Silicon): 24-26 → 43-49 tok/s
+  decode with identical output. Set `llama_cpp_mtp_draft = 0` or
+  `llama_cpp_spec_type = "none"` to turn it off. Models without the metadata are
+  unaffected.
+
+### Fixed
+
+- The speculative-decoding launch path emitted `--draft-max`, which the bundled
+  server no longer accepts, so any `llama_cpp_spec_type` or `llama_cpp_draft_model`
+  setting failed to start the server. It now emits `--spec-draft-n-max`.
+
 ## 0.5.5 — 2026-10-08
 
 ### Security
