@@ -38,6 +38,11 @@ The runtime reads project instructions from `LOCALCODE.md` in the project root: 
 
 An optional `localcode.json` in the project root follows the opencode config schema. Use it for MCP servers, permission rules, keybinds, and the theme:
 
+Project configuration and discovered project plugins are disabled by default.
+Launch with `localcode --trust-project` after reviewing them. User-global
+configuration remains enabled. The flag is required on each fresh or attached
+launch that should use repository settings.
+
 ```json
 {
   "$schema": "https://localcode.dev/schema/config.json",
