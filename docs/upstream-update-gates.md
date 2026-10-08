@@ -27,6 +27,8 @@ Required keys: `gemma-12b`, `qwen`, `qwen38`, `diffusiongemma`, `north-mini-code
 Checks cover rejected unauthenticated inference, template rendering, chat,
 well-formed tool calls with correct arguments, consumption of tool results,
 System One choice/boolean/score response contracts, and an additional turbo4 run.
+OpenJev also verifies all three answer types through the authenticated supervisor
+bridge; its receipt must include `decision-control`.
 Qwen 3.8, OpenJev and DiffusionGemma also run through the shipping OpenCode binary and plugin.
 Decision probabilities are checked for validity, not used as safety approvals.
 This is a compatibility gate, not a coding-quality benchmark or exhaustive eval.
