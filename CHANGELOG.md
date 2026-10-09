@@ -3,7 +3,7 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## 0.5.7 — 2026-10-09
+## Unreleased
 
 ### Performance
 
@@ -24,6 +24,7 @@ All notable changes to LocalCode will be documented here. The format follows
   `llama_cpp_spec_type` or `llama_cpp_draft_model` setting failed to start the
   server. It now emits `--spec-draft-n-max`.
 
+## 0.5.7 — 2026-10-09
 
 ### Added
 
