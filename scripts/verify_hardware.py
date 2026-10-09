@@ -142,6 +142,8 @@ def main():
         p.error(diagnostics.platform_problem())
     if a.cycles < 1 or a.prompt_tokens < 1:
         p.error('cycles and prompt-tokens must be positive')
+    if any(v is not None and v < 0 for v in (a.max_rss_gb, a.max_swap_growth_gb)):
+        p.error('memory thresholds cannot be negative')
     choices = {c.key: c for c in catalog.CHOICES}
     for key in a.models:
         if key not in choices or not choices[key].local_path.is_file():

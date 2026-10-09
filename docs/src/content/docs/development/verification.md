@@ -6,7 +6,9 @@ description: What CI proves, how to test a physical Mac, and how to diagnose ins
 ## Automated checks
 
 Every pull request runs the full non-model Python suite, including previously
-excluded runtime, KV memory, thermal, and recovery tests. Real-model and
+excluded runtime, KV memory, thermal, recovery and loopback download tests.
+Only the four external Hugging Face tests in `test_download.py` remain opt-in;
+its five local tests run by default, including genuine skip-existing assertions. Real-model and
 explicit opt-in network/audio tests remain separate. A stale speculative-decoding
 flag assertion was corrected against the current shipped server flag.
 
