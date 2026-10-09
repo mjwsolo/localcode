@@ -26,7 +26,8 @@ macOS 14 is scheduled for retirement on November 2, 2026; remove that hosted
 row when retired and retain local evidence if it remains supported. macOS 13
 is the binary deployment target but has no hosted row here: it requires local
 verification. Hosted macOS versions are not a matrix of all M-series chips.
-Intel is unsupported; Rosetta and old macOS receive explicit errors.
+An actual Intel macOS runner verifies wheel rejection and the launcher error.
+Rosetta and old macOS error paths are tested with simulated platform probes.
 
 ## Physical Mac gate (local only)
 
