@@ -5,6 +5,26 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## 0.5.7 — 2026-10-09
 
+### Performance
+
+- Vendor-trained speculative drafters ship with the model. Gemma 4 12B and
+  26B-A4B (Google's MTP heads, 0.5 GB), Qwen 3.6 35B-A3B and Muse Glimmer 30B
+  (DFlash block drafters, 0.4 and 1.5 GB) are downloaded with the model, pinned
+  by exact size and sha256 like the model, counted in the size the picker shows,
+  and loaded with `--model-draft`. Qwen 3.8 27B uses the head inside its GGUF.
+  Every drafted token is verified by the model, so the answer is the model's
+  own. Measured decode on Apple Silicon: Gemma 12B 55 → 120-139 tok/s, Qwen 3.6
+  129 → 224, Muse 30 → 45, Qwen 3.8 24 → 47. `llama_cpp_mtp_draft = 0` turns
+  it off. Only drafters trained for the exact model are used, never a generic
+  small model.
+
+### Fixed
+
+- The opt-in speculative path emitted the removed `--draft-max` flag, so any
+  `llama_cpp_spec_type` or `llama_cpp_draft_model` setting failed to start the
+  server. It now emits `--spec-draft-n-max`.
+
+
 ### Added
 
 - A clickable model-server status dot in the session footer and `/server` for

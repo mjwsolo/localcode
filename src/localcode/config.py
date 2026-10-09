@@ -41,6 +41,7 @@ llama_cpp_threads = 10
 llama_cpp_batch_size = 2048
 llama_cpp_spec_type = ""
 llama_cpp_draft_max = 64
+llama_cpp_mtp_draft = 4
 llama_cpp_expert_offload = false
 llama_cpp_draft_model = ""
 llama_cpp_lookup_cache = false
@@ -125,7 +126,8 @@ class RuntimeConfig:
     llama_cpp_batch_size: int = -1  # -1 = auto-detect from platform at startup
     # Speed optimizations
     llama_cpp_spec_type: str = ""         # "ngram-mod", "ngram-simple" — speculative decoding (1.5-2x)
-    llama_cpp_draft_max: int = 64         # max draft tokens for speculation
+    llama_cpp_draft_max: int = 64         # max draft tokens for an explicit spec_type / draft model
+    llama_cpp_mtp_draft: int = 4          # draft tokens from the model's vendor-trained drafter (catalog Drafter or in-GGUF MTP head); 0 = off
     llama_cpp_expert_offload: bool = False # offload MoE experts to CPU (-ot exps=CPU)
     llama_cpp_draft_model: str = ""       # path to draft GGUF for speculative decoding
     llama_cpp_lookup_cache: bool = False   # prompt lookup decoding (2-4x on code edits)
@@ -276,6 +278,7 @@ def save_config(config: AppConfig) -> Path:
         f"llama_cpp_batch_size = {config.runtime.llama_cpp_batch_size}\n"
         f'llama_cpp_spec_type = {_toml_str(config.runtime.llama_cpp_spec_type)}\n'
         f"llama_cpp_draft_max = {config.runtime.llama_cpp_draft_max}\n"
+        f"llama_cpp_mtp_draft = {config.runtime.llama_cpp_mtp_draft}\n"
         f"llama_cpp_expert_offload = {'true' if config.runtime.llama_cpp_expert_offload else 'false'}\n"
         f'llama_cpp_draft_model = {_toml_str(config.runtime.llama_cpp_draft_model)}\n'
         f"llama_cpp_lookup_cache = {'true' if config.runtime.llama_cpp_lookup_cache else 'false'}\n"
@@ -389,6 +392,7 @@ def load_config() -> AppConfig:
         # unless the user EXPLICITLY opts in via env var.
         llama_cpp_spec_type=os.environ.get("LOCALCODE_LLAMA_CPP_SPEC_TYPE", ""),
         llama_cpp_draft_max=int(os.environ.get("LOCALCODE_LLAMA_CPP_DRAFT_MAX", runtime_data.get("llama_cpp_draft_max", 64))),
+        llama_cpp_mtp_draft=int(os.environ.get("LOCALCODE_LLAMA_CPP_MTP_DRAFT", runtime_data.get("llama_cpp_mtp_draft", 4))),
         llama_cpp_expert_offload=str(os.environ.get("LOCALCODE_LLAMA_CPP_EXPERT_OFFLOAD", runtime_data.get("llama_cpp_expert_offload", False))).lower() in {"1", "true", "yes", "on"},
         llama_cpp_draft_model=os.environ.get("LOCALCODE_LLAMA_CPP_DRAFT_MODEL", runtime_data.get("llama_cpp_draft_model", "")),
         # `llama_cpp_lookup_cache` migration (2026-04-26): old configs
