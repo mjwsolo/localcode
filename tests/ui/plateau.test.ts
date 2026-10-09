@@ -546,8 +546,11 @@ describe("repeated check failures", () => {
 
 test("a gate's fresh instruction resets the no-progress budget instead of stopping seconds later", () => {
   const tracker = new PlateauTracker();
-  const noop = { tool: "grep", args: { pattern: "placeholder" }, output: "x", metadata: {} };
-  const rounds = (n: number) => { const out: string[] = []; for (let k = 0; k < n; k++) { tracker.observe(noop); out.push(tracker.endRound()); } return out; };
+  // The result changes each round (a file that keeps changing under the same
+  // search), so this exercises the no-progress budget, not the identical-call rule.
+  let seq = 0;
+  const noop = () => ({ tool: "grep", args: { pattern: "placeholder" }, output: `x${seq++}`, metadata: {} });
+  const rounds = (n: number) => { const out: string[] = []; for (let k = 0; k < n; k++) { tracker.observe(noop()); out.push(tracker.endRound()); } return out; };
   const first = rounds(PLATEAU_MIN_ROUND + PLATEAU_NUDGE_AFTER + 2);
   expect(first).toContain("nudge");
   expect(first).not.toContain("stop");
@@ -564,4 +567,33 @@ test("a gate's fresh instruction resets the no-progress budget instead of stoppi
   const control = new PlateauTracker();
   const c = (n: number) => { const out: string[] = []; for (let k = 0; k < n; k++) { control.observe(noop); out.push(control.endRound()); } return out; };
   expect(c(PLATEAU_MIN_ROUND + PLATEAU_NUDGE_AFTER + 2 + PLATEAU_STOP_AFTER + PLATEAU_STOP_AFTER)).toContain("stop");
+});
+
+describe("identical call, identical result", () => {
+  const { SAME_CALL_NUDGE_AFTER, SAME_CALL_STOP_AFTER } = LocalcodePluginDefault as any;
+  const same = (): ToolEvent => ({ tool: "bash", args: { command: "curl -s http://x/api" }, output: "null" });
+  test("three in a row nudge once, five stop", () => {
+    const t = new PlateauTracker();
+    const out: string[] = [];
+    for (let i = 0; i < SAME_CALL_STOP_AFTER; i++) { t.observe(same()); out.push(t.endRound()); }
+    expect(out.slice(0, SAME_CALL_NUDGE_AFTER - 1).every((d) => d === "none")).toBe(true);
+    expect(out[SAME_CALL_NUDGE_AFTER - 1]).toBe("same-call-nudge");
+    expect(out[SAME_CALL_STOP_AFTER - 1]).toBe("stop");
+    expect(t.sameCallEvidence).toContain("curl -s http://x/api");
+  });
+  test("a different result or a different call resets the count", () => {
+    const t = new PlateauTracker();
+    t.observe(same()); t.endRound();
+    t.observe(same()); t.endRound();
+    t.observe({ tool: "bash", args: { command: "curl -s http://x/api" }, output: "{\"ok\":true}" }); t.endRound();
+    t.observe(same()); t.endRound();
+    expect(t.observe(same()) ?? t.endRound()).not.toBe("same-call-nudge");
+  });
+  test("re-posting an unchanged todo list is not a loop", () => {
+    const t = new PlateauTracker();
+    const out: string[] = [];
+    for (let i = 0; i < SAME_CALL_STOP_AFTER; i++) { t.observe(todo(0)); out.push(t.endRound()); }
+    expect(out.includes("same-call-nudge")).toBe(false);
+    expect(out.includes("stop")).toBe(false);
+  });
 });

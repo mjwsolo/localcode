@@ -4012,8 +4012,46 @@ index 70b8d7da8..dea14d125 100644
  
  # llama-server-impl: server logic, reusable by app
  
+diff --git a/tools/server/server-common.cpp b/tools/server/server-common.cpp
+index 4b73aa908..ff25383a0 100644
+--- a/tools/server/server-common.cpp
++++ b/tools/server/server-common.cpp
+@@ -1426,6 +1426,17 @@ json oaicompat_chat_params_parse(
+     // Apply chat template to the list of messages
+     auto chat_params = common_chat_templates_apply(opt.tmpls.get(), inputs);
+ 
++    if (opt.no_forced_thinking && !chat_params.thinking_start_tag.empty()) {
++        // see server_chat_params::no_forced_thinking
++        for (const std::string & opener : { chat_params.thinking_start_tag + "\n", chat_params.thinking_start_tag }) {
++            if (string_ends_with(chat_params.generation_prompt, opener) && string_ends_with(chat_params.prompt, opener)) {
++                chat_params.generation_prompt.resize(chat_params.generation_prompt.size() - opener.size());
++                chat_params.prompt.resize(chat_params.prompt.size() - opener.size());
++                break;
++            }
++        }
++    }
++
+     llama_params["chat_format"] = static_cast<int>(chat_params.format);
+     llama_params["prompt"]      = chat_params.prompt;
+     if (!chat_params.grammar.empty()) {
+diff --git a/tools/server/server-common.h b/tools/server/server-common.h
+index 6165d871c..6cc05157b 100644
+--- a/tools/server/server-common.h
++++ b/tools/server/server-common.h
+@@ -348,6 +348,11 @@ struct server_chat_params {
+     std::string reasoning_budget_message;
+     std::string media_path;
+     bool force_pure_content = false;
++    // fork-local (PATCHES.md 0005): canvas diffusion models decide themselves whether to open a
++    // thought block. A thought opener the template appends after a tool response is never closed
++    // by DiffusionGemma, so the parser filed the whole answer as reasoning and the client saw
++    // nothing. Strip such an opener from the prompt and the parser's generation prompt.
++    bool no_forced_thinking = false;
+ };
+ 
+ // used by /completions endpoint
 diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
-index cc024ccc0..66dd89a0f 100644
+index cc024ccc0..773f747c9 100644
 --- a/tools/server/server-context.cpp
 +++ b/tools/server/server-context.cpp
 @@ -17,6 +17,7 @@
@@ -4069,7 +4107,17 @@ index cc024ccc0..66dd89a0f 100644
          if (has_spec) {
              // spec_mtp doesn't use load a model internally, so we report 0.0 and 1.0 manually
              load_progress_callback(0.0f, &load_progress_spec);
-@@ -2997,6 +3022,321 @@ private:
+@@ -1621,7 +1646,8 @@ private:
+                 /* reasoning_budget      */ params_base.sampling.reasoning_budget_tokens,
+                 /* reasoning_budget_msg  */ params_base.sampling.reasoning_budget_message,
+                 /* media_path            */ params_base.media_path,
+-                /* force_pure_content    */ params_base.force_pure_content_parser
++                /* force_pure_content    */ params_base.force_pure_content_parser,
++                /* no_forced_thinking    */ diffusion.enabled
+             };
+ 
+             {
+@@ -2997,6 +3023,341 @@ private:
      };
  #endif
  
@@ -4348,6 +4396,26 @@ index cc024ccc0..66dd89a0f 100644
 +                }
 +            }
 +
++            if (b == 0) {
++                // DiffusionGemma answers a tool result with an EMPTY thought block
++                // ("<|channel>thought\n<channel|>" + answer). The Gemma 4 parser files
++                // the text after an empty block as reasoning, so the client saw no
++                // answer at all. An empty block carries nothing: drop it before parsing.
++                static const std::string open_tag = "<|channel>thought";
++                static const std::string close_tag = "<channel|>";
++                if (string_starts_with(block_text, open_tag)) {
++                    size_t i = open_tag.size();
++                    while (i < block_text.size() && (block_text[i] == '\n' || block_text[i] == ' ')) i++;
++                    if (block_text.compare(i, close_tag.size(), close_tag) == 0) {
++                        block_text.erase(0, i + close_tag.size());
++                    } else if ((ended_on_eog || block_complete) && block_text.find(close_tag, i) == std::string::npos) {
++                        // The whole reply fits one block and the thought is never closed:
++                        // the model wrote its answer inside the block. It is the answer.
++                        block_text.erase(0, i);
++                    }
++                }
++            }
++
 +            slot.stats.n_gen += cut;
 +            if (b == 0) {
 +                slot.t_print_last = ggml_time_us();
@@ -4391,7 +4459,7 @@ index cc024ccc0..66dd89a0f 100644
      void update_slots() {
  #ifdef DEBUG_TIMINGS
          static int64_t t_prev = 0;
-@@ -3038,6 +3378,12 @@ private:
+@@ -3038,6 +3399,12 @@ private:
              }
          }
  

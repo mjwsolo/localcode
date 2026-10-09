@@ -1426,6 +1426,17 @@ json oaicompat_chat_params_parse(
     // Apply chat template to the list of messages
     auto chat_params = common_chat_templates_apply(opt.tmpls.get(), inputs);
 
+    if (opt.no_forced_thinking && !chat_params.thinking_start_tag.empty()) {
+        // see server_chat_params::no_forced_thinking
+        for (const std::string & opener : { chat_params.thinking_start_tag + "\n", chat_params.thinking_start_tag }) {
+            if (string_ends_with(chat_params.generation_prompt, opener) && string_ends_with(chat_params.prompt, opener)) {
+                chat_params.generation_prompt.resize(chat_params.generation_prompt.size() - opener.size());
+                chat_params.prompt.resize(chat_params.prompt.size() - opener.size());
+                break;
+            }
+        }
+    }
+
     llama_params["chat_format"] = static_cast<int>(chat_params.format);
     llama_params["prompt"]      = chat_params.prompt;
     if (!chat_params.grammar.empty()) {

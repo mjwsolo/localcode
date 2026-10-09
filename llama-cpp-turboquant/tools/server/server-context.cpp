@@ -1646,7 +1646,8 @@ private:
                 /* reasoning_budget      */ params_base.sampling.reasoning_budget_tokens,
                 /* reasoning_budget_msg  */ params_base.sampling.reasoning_budget_message,
                 /* media_path            */ params_base.media_path,
-                /* force_pure_content    */ params_base.force_pure_content_parser
+                /* force_pure_content    */ params_base.force_pure_content_parser,
+                /* no_forced_thinking    */ diffusion.enabled
             };
 
             {
@@ -3294,6 +3295,26 @@ private:
                 block_text += common_token_to_piece(ctx_tgt, canvas[i], accept_special_token(canvas[i]));
                 if (slot.task->params.return_tokens) {
                     slot.generated_tokens.push_back(canvas[i]);
+                }
+            }
+
+            if (b == 0) {
+                // DiffusionGemma answers a tool result with an EMPTY thought block
+                // ("<|channel>thought\n<channel|>" + answer). The Gemma 4 parser files
+                // the text after an empty block as reasoning, so the client saw no
+                // answer at all. An empty block carries nothing: drop it before parsing.
+                static const std::string open_tag = "<|channel>thought";
+                static const std::string close_tag = "<channel|>";
+                if (string_starts_with(block_text, open_tag)) {
+                    size_t i = open_tag.size();
+                    while (i < block_text.size() && (block_text[i] == '\n' || block_text[i] == ' ')) i++;
+                    if (block_text.compare(i, close_tag.size(), close_tag) == 0) {
+                        block_text.erase(0, i + close_tag.size());
+                    } else if ((ended_on_eog || block_complete) && block_text.find(close_tag, i) == std::string::npos) {
+                        // The whole reply fits one block and the thought is never closed:
+                        // the model wrote its answer inside the block. It is the answer.
+                        block_text.erase(0, i);
+                    }
                 }
             }
 

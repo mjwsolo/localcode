@@ -42,7 +42,7 @@ jobs:
         # --timeout turns any future hang into a diagnosable per-test failure
         # instead of an opaque runner SIGTERM (exit 143). Linux tests are all
         # fast (mocked/pure-Python); 120s is a generous ceiling.
-        run: pytest tests/test_comprehensive_*.py tests/test_server_flags_accepted.py tests/test_ui_auth.py tests/test_ui_api.py tests/test_ui_launch.py tests/test_ui_server.py tests/test_ui_gateway_live.py -v --timeout=120
+        run: pytest tests/test_comprehensive_*.py tests/test_server_flags_accepted.py tests/test_ui_auth.py tests/test_ui_api.py tests/test_ui_launch.py tests/test_ui_server.py tests/test_ui_gateway_live.py -v --timeout=120 tests/test_architecture.py tests/test_models_catalog.py
 
   # ── Same gate on macOS arm64 — users run Apple Silicon, so we test the
   # real platform. Also exercises the REAL fresh-venv install (packaging)
@@ -71,7 +71,7 @@ jobs:
       - name: Comprehensive tests (+ real isolated install)
         env:
           LOCALCODE_RUN_INSTALL_TEST: "1"   # real pip-install-into-venv smoke
-        run: pytest tests/test_comprehensive_*.py tests/test_server_flags_accepted.py tests/test_ui_auth.py tests/test_ui_api.py tests/test_ui_launch.py tests/test_ui_server.py tests/test_ui_gateway_live.py -v
+        run: pytest tests/test_comprehensive_*.py tests/test_server_flags_accepted.py tests/test_ui_auth.py tests/test_ui_api.py tests/test_ui_launch.py tests/test_ui_server.py tests/test_ui_gateway_live.py -v tests/test_architecture.py tests/test_models_catalog.py
 
   # ── The default interface's plugin + supervisor contract (bun tests) ──
   ui-tests:
