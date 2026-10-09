@@ -187,6 +187,7 @@ def test_launcher_only_silences_reasoning_where_a_switch_exists(choice, monkeypa
     has_switch = reasoning_capabilities(choice.filename).control is ReasoningControl.CHAT_TEMPLATE
     assert ("--reasoning" in cmd) == has_switch
     if choice.architecture == "diffusion_gemma":
-        assert cmd[cmd.index("--reasoning-format") + 1] == "none"
+        # The thought block the model always emits is parsed out, not leaked.
+        assert cmd[cmd.index("--reasoning-format") + 1] == "auto"
     else:
         assert "--reasoning-format" not in cmd
