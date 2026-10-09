@@ -51,7 +51,8 @@ def ui_binary_path() -> Path | None:
 
 
 def platform_supported() -> bool:
-    return platform.system() == "Darwin" and platform.machine().lower() == "arm64"
+    from localcode.diagnostics import platform_problem
+    return platform_problem() is None
 
 
 def plugin_path() -> Path:

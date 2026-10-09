@@ -11,7 +11,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="localcode",
         description="LocalCode — AI coding assistant running entirely on your machine",
-        epilog="Other commands: localcode api shows connection details; localcode decide asks a typed question.",
+        epilog="Other commands: localcode doctor diagnoses installation; localcode api shows connection details; localcode decide asks a typed question.",
     )
     parser.add_argument("--version", action="store_true", help="Print the version and exit")
     parser.add_argument("--mode", choices=["chat", "decisions"], default="chat", help="Start in normal chat or typed decision mode")
@@ -26,9 +26,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _unsupported_platform_message() -> str:
     import platform
+    from .diagnostics import platform_problem
+    detail = platform_problem() or ""
     return (
         f"localcode: this release runs on Apple silicon Macs (macOS 13 or newer); "
         f"this machine reports {platform.system()} {platform.machine()}.\n"
+        f"{detail}\n"
         "Earlier releases installed on other platforms but bundled an Apple silicon "
         "model server, so they did not work there either."
     )
@@ -36,6 +39,9 @@ def _unsupported_platform_message() -> str:
 
 def main(argv: list[str] | None = None) -> None:
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv == ["doctor"]:
+        from .diagnostics import main as doctor_main
+        sys.exit(doctor_main())
     if argv and argv[0] == "decide":
         from .decision import main as decide_main
         sys.exit(decide_main(argv[1:]))

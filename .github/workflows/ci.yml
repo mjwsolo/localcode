@@ -1,5 +1,8 @@
 name: CI
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main]
@@ -14,7 +17,8 @@ concurrency:
 
 jobs:
   # ── Required gate: the comprehensive suite must pass on every push ──
-  # Fast, deterministic, no model download. Covers agent loop + tools,
+  # Full non-model Python suite, including RAM/KV and failure recovery.
+  # No model downloads. Covers agent loop + tools,
   # CLI, live TUI, vision, audio logic, the RAM-size matrix, and download
   # orchestration. Linux-safe (TUI headless; voice/Metal mocked; the
   # real-whisper / real-install / real-download tests are gated off here).
@@ -25,7 +29,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-python@v5
@@ -42,7 +46,7 @@ jobs:
         # --timeout turns any future hang into a diagnosable per-test failure
         # instead of an opaque runner SIGTERM (exit 143). Linux tests are all
         # fast (mocked/pure-Python); 120s is a generous ceiling.
-        run: pytest tests/test_comprehensive_*.py tests/test_server_flags_accepted.py tests/test_ui_auth.py tests/test_ui_api.py tests/test_ui_launch.py tests/test_ui_server.py tests/test_ui_gateway_live.py -v --timeout=120 tests/test_architecture.py tests/test_models_catalog.py
+        run: pytest tests -v --timeout=120
 
   # ── Same gate on macOS arm64 — users run Apple Silicon, so we test the
   # real platform. Also exercises the REAL fresh-venv install (packaging)
@@ -56,8 +60,8 @@ jobs:
       matrix:
         # Apple Silicon runners across macOS versions; oldest and newest
         # supported Python. Both shipped binaries must exec on every row.
-        os: [macos-14, macos-15]
-        python-version: ["3.10", "3.13"]
+        os: [macos-14, macos-15, macos-26]
+        python-version: ["3.10", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-python@v5
@@ -67,11 +71,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e .
-          python -m pip install pytest
+          python -m pip install pytest pytest-timeout
       - name: Comprehensive tests (+ real isolated install)
         env:
           LOCALCODE_RUN_INSTALL_TEST: "1"   # real pip-install-into-venv smoke
-        run: pytest tests/test_comprehensive_*.py tests/test_server_flags_accepted.py tests/test_ui_auth.py tests/test_ui_api.py tests/test_ui_launch.py tests/test_ui_server.py tests/test_ui_gateway_live.py -v tests/test_architecture.py tests/test_models_catalog.py
+        run: pytest tests -v --timeout=120
 
   # ── The default interface's plugin + supervisor contract (bun tests) ──
   ui-tests:
@@ -113,9 +117,38 @@ jobs:
           print("ok")
           PY
 
-  # NOTE: the old "legacy suite (non-blocking)" job was removed — even with
-  # continue-on-error it surfaced a red ✗ in the checks list (noise). The 8
-  # remaining pre-existing failures (test_runtime 16 GB-context / custom-
-  # binary, test_architecture guardrails) are tracked in TESTING.md "Legacy
-  # test triage" and can be run locally with:
-  #   pytest --ignore-glob='tests/test_comprehensive_*.py' tests/
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: candidate-wheel
+          path: dist/*.whl
+
+  install-upgrade:
+    name: install (${{ matrix.os }}, ${{ matrix.installer }}, ${{ matrix.previous }})
+    needs: packaging
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15, macos-26]
+        installer: [pip, uv]
+        previous: [fresh, "0.4.9", "0.5.2"]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: candidate-wheel
+          path: dist
+      - run: python -m pip install uv
+      - name: Install candidate wheel outside checkout
+        env:
+          INSTALLER: ${{ matrix.installer }}
+          PREVIOUS: ${{ matrix.previous }}
+        run: |
+          version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          args=()
+          if [ "$PREVIOUS" != fresh ]; then args+=(--from-version "$PREVIOUS"); fi
+          python scripts/verify_install.py --target dist/*.whl --expected "$version" --installer "$INSTALLER" "${args[@]}"

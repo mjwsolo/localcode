@@ -179,7 +179,8 @@ class TestLlamaServerCommand:
         cmd = gw.llama_server_command("/path/model.gguf")
         assert "--model-draft" in cmd
         assert "/path/draft.gguf" in cmd
-        assert "--draft-max" in cmd
+        assert "--spec-draft-n-max" in cmd
+        assert cmd[cmd.index("--spec-draft-n-max") + 1] == "64"
 
     def test_lookup_cache_adds_flag(self) -> None:
         gw = self._make_gw(llama_cpp_lookup_cache=True)
