@@ -32,7 +32,7 @@ def verify(target: str, expected: str, installer: str, previous: str | None):
     if Path(target).exists():
         target = str(Path(target).resolve())
     with tempfile.TemporaryDirectory(prefix='localcode-install-') as tmp:
-        work = Path(tmp)
+        work = Path(tmp).resolve()
         env = {k: v for k, v in os.environ.items() if k not in (
             'PYTHONPATH', 'PYTHONHOME', 'VIRTUAL_ENV', 'LOCALCODE_UI_BIN', 'LOCALCODE_HOME')}
         env.update(HOME=str(work / 'home'), LOCALCODE_HOME=str(work / 'state'),
@@ -70,7 +70,7 @@ def verify(target: str, expected: str, installer: str, previous: str | None):
                  'p=Path(localcode.__file__).parent; '
                  'assert all((p/x).is_file() for x in '
                  '["bin/llama-server","bin/localcode-ui","ui/plugin/localcode.ts"]); print(p)')
-        package = Path(run([py, '-c', check], work, env))
+        package = Path(run([py, '-c', check], work, env)).resolve()
         assert work in package.parents, 'package was imported from outside isolated install'
         for binary in ('llama-server', 'localcode-ui'):
             # llama-server may silence version logs via inherited logging settings.
