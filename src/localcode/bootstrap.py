@@ -1060,6 +1060,55 @@ def download_mmproj(
     return ok, result
 
 
+def download_drafter(
+    choice,
+    on_progress: Callable[[str], None] | None = None,
+    cancel_event: "threading.Event | None" = None,
+) -> tuple[bool, str]:
+    """Download the vendor-trained speculative drafter a catalog entry ships
+    with (`choice.drafter`, see models_catalog.Drafter). Idempotent. Reuses
+    download_model via a proxy entry pointing at the drafter file in its own
+    repo, with the drafter's exact size and sha256 so it is verified like a
+    model. Returns (ok, path_or_error); a model without a drafter is not an
+    error (True, "")."""
+    drafter = getattr(choice, "drafter", None)
+    if drafter is None:
+        return True, ""
+    dest = drafter.local_path
+    if dest.is_file() and dest.stat().st_size == drafter.size_bytes:
+        return True, str(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    from dataclasses import replace
+    proxy = replace(
+        choice,
+        hf_repo=drafter.hf_repo,
+        revision=drafter.revision,
+        filename=drafter.hf_filename,
+        size_gb=drafter.size_gb,
+        size_bytes=drafter.size_bytes,
+        sha256=drafter.sha256,
+        mmproj_filename=None, mmproj_size_gb=0.0, mmproj_hf_filename=None,
+        drafter=None,
+    )
+    ok, result = download_model(proxy, on_progress=on_progress, cancel_event=cancel_event)
+    if not ok:
+        return ok, result
+    downloaded = Path(result)
+    if downloaded != dest:
+        try:
+            if dest.exists():
+                dest.unlink()
+            downloaded.rename(dest)
+            # the HF path may have put it in a subfolder (MTP/...); drop it if empty
+            try:
+                downloaded.parent.rmdir()
+            except OSError:
+                pass
+        except Exception as e:  # noqa: BLE001
+            return False, f"Couldn't rename drafter to {dest.name}: {e}"
+    return True, str(dest)
+
+
 def _is_mmproj_complete(p: Path, choice) -> bool:
     """Cheap completeness check for the mmproj sidecar — like
     `_is_complete_download` but with 10% slack since catalog mmproj

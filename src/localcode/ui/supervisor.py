@@ -439,11 +439,15 @@ class Supervisor:
         rows.sort(key=lambda q: q.size_gb)
         rec_idx = self._recommended_quant_idx(rows, g.display_name)
         out = []
+        # A vendor-trained drafter ships with the model (downloaded with it,
+        # loaded with it), so the size the user sees and the RAM fit include it.
+        draft_gb = float(getattr(getattr(g, "drafter", None), "size_gb", 0.0) or 0.0)
         for i, q in enumerate(rows):
             spd = estimate_decode_tok_s(q.size_gb, g.display_name, self.bandwidth)
+            total_gb = q.size_gb + draft_gb
             out.append({
                 "filename": q.filename, "alias": _alias(q.filename), "label": q.label,
-                "size_gb": round(q.size_gb, 1), "fit": fit_badge(q.size_gb, self.ram_gb),
+                "size_gb": round(total_gb, 1), "fit": fit_badge(total_gb, self.ram_gb),
                 "tok_s": spd, "recommended": i == rec_idx,
                 "downloaded": (self.models_dir / q.filename).exists(),
                 "current": _alias(q.filename) == self.current,
@@ -452,6 +456,7 @@ class Supervisor:
             })
         return {"group": g.key, "display_name": g.display_name, "maker": g.maker,
                 "license": g.license, "ram_gb": self.ram_gb, "quants": out,
+                "drafter_size_gb": round(draft_gb, 2),
                 "vision_size_gb": round(float(getattr(g, "mmproj_size_gb", 0.0) or 0.0), 2) if getattr(g, "mmproj_filename", None) else 0.0}
 
     def _recommended_quant_idx(self, rows, name: str) -> int | None:
@@ -526,6 +531,25 @@ class Supervisor:
                 if got.parent != self.models_dir and not (self.models_dir / filename).exists():
                     # download_model saved under localcode's model_dir(); link it here.
                     os.symlink(got, self.models_dir / filename)
+            # The drafter that ships with this model (its size was part of the
+            # figure the user picked). Missing it is not fatal: the model runs
+            # without speculation and the next select retries.
+            drafter = getattr(g, "drafter", None)
+            if drafter is not None and not drafter.local_path.is_file():
+                def on_draft_progress(msg: str) -> None:
+                    pct = None
+                    if "(" in msg and "%)" in msg:
+                        try:
+                            pct = int(msg.rsplit("(", 1)[1].split("%")[0])
+                        except ValueError:
+                            pct = None
+                    self.state = {"state": "downloading", "model": alias, "detail": f"drafter: {msg}", "pct": pct}
+                ok, res = bootstrap.download_drafter(choice_for_quant(g, filename, 0.0), on_progress=on_draft_progress, cancel_event=self.cancel)
+                if self.cancel.is_set():
+                    self.state = {"state": "idle", "model": self.current, "detail": "download cancelled", "pct": None}
+                    return
+                if not ok:
+                    log(f"supervisor: drafter download failed for {alias}: {res}")
             self.state = {"state": "loading", "model": alias, "detail": "loading model…", "pct": None}
             if self.start(alias):
                 self.state = {"state": "ready", "model": alias, "detail": "", "pct": None}
