@@ -36,6 +36,65 @@ CANONICAL_MODEL_DIR = DEFAULT_MODEL_DIR
 
 
 @dataclass(frozen=True)
+class Drafter:
+    """A vendor-trained speculative drafter for ONE target model (MTP head or
+    DFlash block drafter). It ships with the model: the download that installs
+    the model installs the drafter too, and the launcher passes it as
+    `--model-draft` with its `--spec-type`. Every drafted token is verified by
+    the target, so the output is the target's own; measured 1.5x to 2.3x decode
+    on Apple Silicon. Only drafters trained for the exact model are listed:
+    a generic small model as drafter is what failed in the past.
+    """
+    filename: str          # local name (unique across families)
+    hf_repo: str           # repo that ships it (may differ from the model's)
+    hf_filename: str       # path inside that repo
+    spec_type: str         # llama-server --spec-type: "draft-mtp" | "draft-dflash"
+    size_gb: float
+    size_bytes: int        # exact, from the HF API (download completeness)
+    sha256: str            # verified after download
+    revision: str = "main"
+
+    @property
+    def local_path(self) -> Path:
+        return model_dir() / self.filename
+
+
+# Verified live 2026-10-09 (greedy, same coding prompt, bundled v0.6.0 server):
+# gemma-4-12b Q4_K_XL 55 -> 120-139 tok/s; Qwen3.6-35B IQ2_M 129 -> 224 (DFlash);
+# Muse Glimmer Q4_K_XL 30 -> 45 (DFlash). Qwen 3.8 27B carries its head inside
+# the GGUF (`nextn_predict_layers`) and needs no file.
+DRAFTER_GEMMA_12B = Drafter(
+    filename="mtp-gemma-4-12b-it-Q8_0.gguf", hf_repo="unsloth/gemma-4-12b-it-GGUF",
+    hf_filename="MTP/mtp-gemma-4-12b-it-Q8_0.gguf", spec_type="draft-mtp",
+    size_gb=0.47, size_bytes=465109248,
+    sha256="145db9094bc0f85f1701e255a2ed216dcc9800fc8bc8631ad00905b456bd451b",
+    revision="fc034cfff751157913579611efad8462ac1be606",
+)
+DRAFTER_GEMMA_26B = Drafter(
+    filename="mtp-gemma-4-26B-A4B-it-Q8_0.gguf", hf_repo="unsloth/gemma-4-26B-A4B-it-GGUF",
+    hf_filename="MTP/mtp-gemma-4-26B-A4B-it-Q8_0.gguf", spec_type="draft-mtp",
+    size_gb=0.46, size_bytes=461766816,
+    sha256="6326fb9f5e487aa8dcdd313a091e3c67724cb2a666ec3b7d2895b5b26d93ed1b",
+    revision="c099eb48e663fd284577b04978a94ffccb261841",
+)
+DRAFTER_QWEN36 = Drafter(
+    filename="dflash-Qwen3.6-35B-A3B-Q8_0.gguf", hf_repo="ggml-org/Qwen3.6-35B-A3B-GGUF",
+    hf_filename="dflash-Qwen3.6-35B-A3B-Q8_0.gguf", spec_type="draft-dflash",
+    size_gb=0.42, size_bytes=421060800,
+    sha256="339030c9dad4f410c7ef2d6cbd6e38251a84fabb59c44db992538c2451a0efee",
+    revision="baec3ebee244827cda0f4557eafa8b28f7545fa6",
+)
+DRAFTER_MUSE = Drafter(
+    filename="dflash-Muse-Glimmer-30B-Q4_0.gguf", hf_repo="ggml-org/Muse-Glimmer-30B-GGUF",
+    hf_filename="dflash-Muse-Glimmer-30B-Q4_0.gguf", spec_type="draft-dflash",
+    size_gb=1.45, size_bytes=1451096896,
+    sha256="048242c69254627fc11226c9f68dc34fbc82eac1c026ef148c9dbd2f90686db2",
+    revision="c286f180ef572621f5395b55da2d3e3d53d5972e",
+)
+DRAFTERS: list[Drafter] = [DRAFTER_GEMMA_12B, DRAFTER_GEMMA_26B, DRAFTER_QWEN36, DRAFTER_MUSE]
+
+
+@dataclass(frozen=True)
 class ModelChoice:
     key: str               # short id used in config (e.g. "gemma", "qwen")
     name: str              # display name
@@ -99,6 +158,8 @@ class ModelChoice:
     preserves_reasoning: bool = True
     supports_parallel_tools: bool = False
     supports_systemone: bool = False
+    # Vendor-trained speculative drafter shipped with the model (see Drafter).
+    drafter: Drafter | None = None
 
     @property
     def hf_url(self) -> str:
@@ -213,6 +274,7 @@ CHOICES: list[ModelChoice] = [
         mmproj_filename="mmproj-gemma-4-26B-A4B-F16.gguf",
         mmproj_size_gb=1.2,
         mmproj_hf_filename="mmproj-F16.gguf",
+        drafter=DRAFTER_GEMMA_26B,
     ),
     ModelChoice(
         key="gemma-12b",
@@ -237,6 +299,7 @@ CHOICES: list[ModelChoice] = [
         mmproj_filename="mmproj-gemma-4-12b-F16.gguf",
         mmproj_size_gb=0.18,  # 175 MB on HF as of 2026-09 (repo re-exported the projector)
         mmproj_hf_filename="mmproj-F16.gguf",
+        drafter=DRAFTER_GEMMA_12B,
     ),
     ModelChoice(
         key="gemma-12b-bf16",
@@ -262,6 +325,7 @@ CHOICES: list[ModelChoice] = [
         mmproj_filename="mmproj-gemma-4-12b-F16.gguf",
         mmproj_size_gb=0.18,  # 175 MB on HF as of 2026-09
         mmproj_hf_filename="mmproj-F16.gguf",
+        drafter=DRAFTER_GEMMA_12B,
     ),
     ModelChoice(
         key="qwen",
@@ -279,6 +343,7 @@ CHOICES: list[ModelChoice] = [
         mmproj_filename="mmproj-Qwen3.6-35B-A3B-F16.gguf",
         mmproj_size_gb=0.9,
         mmproj_hf_filename="mmproj-F16.gguf",
+        drafter=DRAFTER_QWEN36,
     ),
     ModelChoice(
         key="diffusiongemma",
@@ -350,6 +415,7 @@ CHOICES: list[ModelChoice] = [
         mmproj_hf_filename="mmproj-Muse-Glimmer-30B-BF16.gguf",
         reasoning_control="always",
         reasoning_budget_tokens=0,
+        drafter=DRAFTER_MUSE,
     ),
     ModelChoice(
         key="gemma-q8",
@@ -367,6 +433,7 @@ CHOICES: list[ModelChoice] = [
         mmproj_filename="mmproj-gemma-4-26B-A4B-F16.gguf",
         mmproj_size_gb=1.2,
         mmproj_hf_filename="mmproj-F16.gguf",
+        drafter=DRAFTER_GEMMA_26B,
     ),
     ModelChoice(
         key="qwen-q8",
@@ -384,6 +451,7 @@ CHOICES: list[ModelChoice] = [
         mmproj_filename="mmproj-Qwen3.6-35B-A3B-F16.gguf",
         mmproj_size_gb=0.9,
         mmproj_hf_filename="mmproj-F16.gguf",
+        drafter=DRAFTER_QWEN36,
     ),
     ModelChoice(
         key="qwen38",
@@ -676,6 +744,8 @@ class ModelGroup:
     mmproj_hf_filename: str | None = None
 
     supports_systemone: bool = False
+    # Vendor-trained speculative drafter, same file for every quant of the model.
+    drafter: Drafter | None = None
 
     @property
     def supports_vision(self) -> bool:
@@ -699,6 +769,7 @@ MODEL_GROUPS: list[ModelGroup] = [
         mmproj_filename="mmproj-gemma-4-26B-A4B-F16.gguf",
         mmproj_size_gb=1.2,
         mmproj_hf_filename="mmproj-F16.gguf",
+        drafter=DRAFTER_GEMMA_26B,
     ),
     ModelGroup(
         key="gemma-4-12b",
@@ -716,6 +787,7 @@ MODEL_GROUPS: list[ModelGroup] = [
         mmproj_filename="mmproj-gemma-4-12b-F16.gguf",
         mmproj_size_gb=0.18,  # 175 MB on HF as of 2026-09 (repo re-exported the projector)
         mmproj_hf_filename="mmproj-F16.gguf",
+        drafter=DRAFTER_GEMMA_12B,
     ),
     ModelGroup(
         key="qwen-3.6-35b-a3b",
@@ -734,6 +806,7 @@ MODEL_GROUPS: list[ModelGroup] = [
         mmproj_filename="mmproj-Qwen3.6-35B-A3B-F16.gguf",
         mmproj_size_gb=0.9,
         mmproj_hf_filename="mmproj-F16.gguf",
+        drafter=DRAFTER_QWEN36,
     ),
     ModelGroup(
         key="qwen-3.8-27b",
@@ -789,6 +862,7 @@ MODEL_GROUPS: list[ModelGroup] = [
         mmproj_filename="mmproj-Muse-Glimmer-30B-BF16.gguf",
         mmproj_size_gb=3.85,
         mmproj_hf_filename="mmproj-Muse-Glimmer-30B-BF16.gguf",
+        drafter=DRAFTER_MUSE,
     ),
     ModelGroup(
         key="diffusiongemma-26b-a4b",
@@ -898,6 +972,7 @@ def choice_for_quant(group: ModelGroup, filename: str, size_gb: float) -> ModelC
         mmproj_size_gb=group.mmproj_size_gb,
         mmproj_hf_filename=group.mmproj_hf_filename,
         supports_systemone=group.supports_systemone,
+        drafter=group.drafter,
         reasoning_control=canonical.reasoning_control if canonical else "chat_template",
         reasoning_budget_tokens=canonical.reasoning_budget_tokens if canonical else 8192,
         preserves_reasoning=canonical.preserves_reasoning if canonical else True,

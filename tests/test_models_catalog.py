@@ -305,3 +305,27 @@ def test_openjev_is_pinned_listed_with_quants_and_never_auto_recommended() -> No
         g = group_for_filename(quant)
         assert g is not None and g.key == "openjev"
     assert infer_family_from_profile("openjev-q4") == ModelFamily.QWEN
+
+
+def test_drafters_are_pinned_and_attached_to_every_quant_of_their_model():
+    """A vendor-trained drafter ships with the model: exact size and sha256
+    like a model, same file on every quant and on browsed quants of the group."""
+    from localcode.models_catalog import CHOICES, DRAFTERS, MODEL_GROUPS, choice_for_quant
+
+    for d in DRAFTERS:
+        assert d.spec_type in {"draft-mtp", "draft-dflash"}
+        assert len(d.sha256) == 64 and d.size_bytes > 100_000_000
+        assert abs(d.size_bytes / 1e9 - d.size_gb) < 0.05
+        assert "/" not in d.filename  # local name is flat and unique
+    assert len({d.filename for d in DRAFTERS}) == len(DRAFTERS)
+    with_drafter = {c.key: c.drafter.filename for c in CHOICES if c.drafter}
+    assert with_drafter == {
+        "gemma": "mtp-gemma-4-26B-A4B-it-Q8_0.gguf", "gemma-q8": "mtp-gemma-4-26B-A4B-it-Q8_0.gguf",
+        "gemma-12b": "mtp-gemma-4-12b-it-Q8_0.gguf", "gemma-12b-bf16": "mtp-gemma-4-12b-it-Q8_0.gguf",
+        "qwen": "dflash-Qwen3.6-35B-A3B-Q8_0.gguf", "qwen-q8": "dflash-Qwen3.6-35B-A3B-Q8_0.gguf",
+        "muse-glimmer": "dflash-Muse-Glimmer-30B-Q4_0.gguf",
+    }
+    # Qwen 3.8 carries its head in the GGUF; the others have no vendor drafter.
+    assert all(c.drafter is None for c in CHOICES if c.key in {"qwen38", "qwen38-q8", "kolibri", "openjev", "north-mini-code", "diffusiongemma"})
+    g = next(g for g in MODEL_GROUPS if g.key == "gemma-4-12b")
+    assert choice_for_quant(g, "gemma-4-12b-it-UD-IQ2_M.gguf", 4.2).drafter is g.drafter

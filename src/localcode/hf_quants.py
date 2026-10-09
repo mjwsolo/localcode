@@ -98,8 +98,9 @@ def _quant_from_entry(entry: dict) -> Quant | None:
     # selectable weights.
     if "/" in path:
         return None
-    # Vision projectors and MTP draft heads are sidecars, not pickable models.
-    if lowered.startswith("mmproj") or lowered.startswith("mtp-") or lowered.startswith("mtp_"):
+    # Vision projectors and speculative drafters (MTP heads, DFlash) are
+    # sidecars, not pickable models.
+    if lowered.startswith(("mmproj", "mtp-", "mtp_", "dflash-", "dflash_")):
         return None
     label = _parse_label(path)
     # Real weight quants carry a quant code (Q4_K_M, IQ3_S, BF16, …). Anything
