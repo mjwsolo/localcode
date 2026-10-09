@@ -179,7 +179,8 @@ class TestLlamaServerCommand:
         cmd = gw.llama_server_command("/path/model.gguf")
         assert "--model-draft" in cmd
         assert "/path/draft.gguf" in cmd
-        assert "--draft-max" in cmd
+        assert "--spec-draft-n-max" in cmd
+        assert cmd[cmd.index("--spec-draft-n-max") + 1] == "64"
 
     def test_lookup_cache_adds_flag(self) -> None:
         gw = self._make_gw(llama_cpp_lookup_cache=True)
@@ -219,11 +220,13 @@ class TestLlamaServerCommand:
         ub_idx = cmd.index("-ub")
         assert cmd[ub_idx + 1] == "128"
 
-    def test_turbo_mode_defaults_to_large_batch_for_non_qwen(self) -> None:
+    @pytest.mark.parametrize("system,expected", [("Darwin", "2048"), ("Linux", "128")])
+    def test_turbo_mode_defaults_to_platform_batch_for_non_qwen(self, system, expected) -> None:
         gw = self._make_gw(laptop_26b_runtime_mode="turbo", llama_cpp_batch_size=-1)
-        cmd = gw.llama_server_command("/path/gemma-model.gguf")
+        with patch("platform.system", return_value=system):
+            cmd = gw.llama_server_command("/path/gemma-model.gguf")
         b_idx = cmd.index("-b")
-        assert cmd[b_idx + 1] == "2048"
+        assert cmd[b_idx + 1] == expected
 
     def test_large_qwen_on_16gb_uses_safer_batch(self) -> None:
         gw = self._make_gw(laptop_26b_runtime_mode="turbo", llama_cpp_batch_size=-1)

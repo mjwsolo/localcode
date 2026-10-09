@@ -13,10 +13,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from localcode.bootstrap import _download_parallel, download_model, get_model_path
 from localcode.models_catalog import CHOICES
 
-# Download/socket integration tests are opt-in: restricted CI sandboxes cannot
-# resolve Hugging Face or bind loopback sockets. Unit coverage for download
-# planning lives elsewhere and remains in the default suite.
-pytestmark = pytest.mark.skipif(
+# Only external Hugging Face checks are opt-in. Loopback failure/integrity
+# checks run in ordinary CI.
+external_network = pytest.mark.skipif(
     os.environ.get("LOCALCODE_RUN_NETWORK_TESTS") != "1",
     reason="set LOCALCODE_RUN_NETWORK_TESTS=1 to run network/socket integration tests",
 )
@@ -29,6 +28,7 @@ _MODEL_URL = f"https://huggingface.co/{_CATALOG_ENTRY.hf_repo}/resolve/main/{_CA
 
 
 # ── Test 1: HEAD request to HuggingFace actually works ──
+@external_network
 def test_hf_head_request():
     """Verify HF returns Content-Length and Accept-Ranges."""
     import urllib.request
@@ -48,6 +48,7 @@ def test_hf_head_request():
 
 
 # ── Test 2: Range request actually works (download first 1MB) ──
+@external_network
 def test_hf_range_request():
     """Verify partial content download works."""
     import urllib.request
@@ -68,6 +69,7 @@ def test_hf_range_request():
 
 
 # ── Test 3: Parallel download on a small real file ──
+@external_network
 def test_parallel_small_file():
     """Download a small file from HF in parallel to verify chunk assembly."""
     import urllib.request
@@ -96,6 +98,7 @@ def test_parallel_small_file():
 
 
 # ── Test 4: Parallel download with 8 threads on first 10MB of model ──
+@external_network
 def test_parallel_chunked_model_fragment():
     """Download first 10MB of the actual model using range requests to verify chunking."""
     import urllib.request
@@ -154,6 +157,8 @@ def test_parallel_chunked_model_fragment():
             print("  ✓ PASS — chunks assembled correctly")
         finally:
             server.shutdown()
+            server.server_close()
+            server_thread.join(timeout=5)
 
 
 # ── Test 5: Fallback when server doesn't support ranges ──
@@ -192,6 +197,8 @@ def test_fallback_no_ranges():
             print("  ✓ PASS")
         finally:
             server.shutdown()
+            server.server_close()
+            server_thread.join(timeout=5)
 
 
 # ── Test 6: Error handling — bad URL ──
@@ -199,14 +206,9 @@ def test_bad_url():
     """Verify clean error on unreachable URL."""
     with tempfile.TemporaryDirectory() as tmpdir:
         dest = Path(tmpdir) / "bad.bin"
-        try:
+        with pytest.raises(Exception):
             _download_parallel("http://127.0.0.1:1/nonexistent", dest, num_threads=4)
-            print("  ✗ FAIL — should have raised")
-            assert False
-        except Exception as e:
-            print(f"  Error (expected): {type(e).__name__}: {str(e)[:80]}")
-            assert not dest.exists() or dest.stat().st_size == 0, "Partial file should be cleaned up"
-            print("  ✓ PASS")
+        assert not dest.exists() or dest.stat().st_size == 0
 
 
 # ── Test 7: Partial failure — one chunk fails ──
@@ -259,24 +261,20 @@ def test_partial_chunk_failure():
             print("  ✓ PASS")
         finally:
             server.shutdown()
+            server.server_close()
+            server_thread.join(timeout=5)
 
 
 # ── Test 8: download_model skips if file exists ──
-def test_download_model_skip_existing():
-    """Verify download_model returns immediately if model already exists."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        model_dir = Path(tmpdir) / "models"
-        model_dir.mkdir()
-        fake_model = model_dir / "gemma-4-26B-A4B-it-UD-IQ3_S.gguf"
-        fake_model.write_bytes(b"fake model data")
-
-        with patch("localcode.bootstrap.Path.home", return_value=Path(tmpdir) / "fake_home"):
-            # This won't match because the path construction uses home()
-            pass
-
-        # Simpler: just test get_model_path with the real path
-        print(f"  Existing model check works: get_model_path returns None for missing = {get_model_path() is not None or 'correct'}")
-        print("  ✓ PASS (skip-existing logic verified by inspection)")
+def test_download_model_skip_existing(tmp_path):
+    """An existing verified model returns without network work."""
+    model = tmp_path / "existing.gguf"
+    model.write_bytes(b"fixture")
+    with patch("localcode.bootstrap.get_model_path", return_value=model), \
+         patch("localcode.bootstrap._download_parallel") as download:
+        ok, path = download_model(_CATALOG_ENTRY)
+    assert ok and path == str(model)
+    download.assert_not_called()
 
 
 # ── Test 9: Verify concurrent file writes don't corrupt ──
@@ -329,6 +327,8 @@ def test_concurrent_writes_integrity():
             print("  ✓ PASS")
         finally:
             server.shutdown()
+            server.server_close()
+            server_thread.join(timeout=5)
 
 
 if __name__ == "__main__":

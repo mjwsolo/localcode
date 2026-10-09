@@ -3,6 +3,23 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Added
+
+- Offline `localcode doctor` diagnostics for version, executable, architecture,
+  RAM and network configuration presence, without printing proxy credentials.
+- Built-wheel pip/uv installation and upgrade gates, full Python suite coverage,
+  macOS 26/Python 3.14 CI rows, and post-publication PyPI install verification.
+- Local-only physical hardware verification for model switching, long prompts,
+  crash recovery, peak process memory and system swap growth.
+
+### Fixed
+
+- Report Intel, Rosetta, old macOS and corporate proxy/certificate failures with
+  recovery instructions. Reject clearly oversized model loads before stopping
+  the current model server.
+
 ## 0.5.8 — 2026-10-09
 
 ### Performance

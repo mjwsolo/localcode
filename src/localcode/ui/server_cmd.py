@@ -18,6 +18,7 @@ from localcode.runtime import LocalCodeRuntimeGateway
 def server_command(gguf: str, port: int, alias: str | None = None) -> list[str]:
     cfg = load_config()
     g = LocalCodeRuntimeGateway(cfg.runtime)
+    validate_model_memory(gguf, g._system_ram_gb())
     cmd = g.llama_server_command(gguf, port)
     cmd[1:1] = ["--host", "127.0.0.1"]
     # Any web page can reach a localhost port; the key makes the model and its
@@ -112,6 +113,33 @@ def mmproj_for(gguf: str) -> Path | None:
 def context_size(gguf: str) -> int:
     cmd = server_command(gguf, 0)
     return int(cmd[cmd.index("--ctx-size") + 1])
+
+
+def validate_model_memory(gguf: str, ram_gb: float) -> None:
+    """Reject definite over-capacity loads; passing is not a fit guarantee.
+
+    Include installed projector/drafter weights and OS reserve. Actual KV and
+    Metal workspace peaks are measured by the local hardware gate.
+    """
+    paths = {Path(gguf)}
+    projector = mmproj_for(gguf)
+    if projector:
+        paths.add(projector)
+    choice = catalog_choice(gguf)
+    drafter = getattr(choice, "drafter", None)
+    if drafter:
+        paths.add(Path(drafter.local_path))
+    weights = sum(p.stat().st_size for p in paths if p.is_file())
+    total = int(ram_gb * 1024 ** 3)
+    if total <= 0:
+        raise ValueError("Could not determine RAM; run `localcode doctor` before loading a model.")
+    reserve = max(3 * 1024 ** 3, int(total * 0.15))
+    if weights and weights + reserve >= total:
+        raise ValueError(
+            f"Insufficient RAM: model weights require {weights / 1024**3:.1f} GiB "
+            f"on this {ram_gb:g} GiB Mac before KV cache and Metal workspace. "
+            "Choose a smaller model or quantization in /models; close other apps."
+        )
 
 
 if __name__ == "__main__":
