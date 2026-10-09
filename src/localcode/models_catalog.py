@@ -84,12 +84,15 @@ DRAFTER_QWEN36 = Drafter(
     sha256="339030c9dad4f410c7ef2d6cbd6e38251a84fabb59c44db992538c2451a0efee",
     revision="baec3ebee244827cda0f4557eafa8b28f7545fa6",
 )
+# DFlash 2 from the DFlash authors (z-lab mirror of incoai). Measured against
+# ggml-org's DFlash v1 on the same Q4_K_XL Muse, greedy, 600 tokens: accept
+# rate 0.74 vs 0.60, decode +12%, identical output, vision unaffected.
 DRAFTER_MUSE = Drafter(
-    filename="dflash-Muse-Glimmer-30B-Q4_0.gguf", hf_repo="ggml-org/Muse-Glimmer-30B-GGUF",
-    hf_filename="dflash-Muse-Glimmer-30B-Q4_0.gguf", spec_type="draft-dflash",
-    size_gb=1.45, size_bytes=1451096896,
-    sha256="048242c69254627fc11226c9f68dc34fbc82eac1c026ef148c9dbd2f90686db2",
-    revision="c286f180ef572621f5395b55da2d3e3d53d5972e",
+    filename="dflash2-Muse-Glimmer-30B-Q4_K_M.gguf", hf_repo="z-lab/Muse-Glimmer-30B-DFlash2-GGUF",
+    hf_filename="Muse-Glimmer-30B-DFlash2-Q4_K_M.gguf", spec_type="draft-dflash",
+    size_gb=1.65, size_bytes=1645657280,
+    sha256="93dbfb6f88e4645dec1347cf93f9d6fc80b90d413038722385b2a8e53565c949",
+    revision="880882627431093d99d3b2368efb4a6fcf12d4cb",
 )
 DRAFTERS: list[Drafter] = [DRAFTER_GEMMA_12B, DRAFTER_GEMMA_26B, DRAFTER_QWEN36, DRAFTER_MUSE]
 

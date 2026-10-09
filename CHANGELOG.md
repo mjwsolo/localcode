@@ -5,6 +5,17 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
+### Changed
+
+- **Muse Glimmer 30B drafts with DFlash 2.** The drafter is now the DFlash 2
+  block drafter published by the DFlash authors (1.6 GB, Q4_K_M) instead of
+  the first-generation DFlash. Measured on the same Q4_K_XL Muse, greedy,
+  600 tokens: 74% of drafted tokens accepted versus 60%, decode about 12%
+  faster, identical output, image requests unaffected. Qwen 3.8 27B was
+  measured with the DFlash 2 drafter as well and stays on the MTP head inside
+  its GGUF: acceptance rose from 83% to 91% but decode speed was identical,
+  so the extra 1.1 GB buys nothing.
+
 ### Added
 
 - Offline `localcode doctor` diagnostics for version, executable, architecture,
