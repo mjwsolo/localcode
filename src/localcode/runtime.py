@@ -489,17 +489,43 @@ class LocalCodeRuntimeGateway:
         # Speculative decoding (mutual exclusion: draft model > lookup > ngram).
         # Speculative decoding is LOSSLESS — every drafted token is verified
         # against the real model, so output is identical, just faster.
+        # `--draft-max` was removed upstream (2026); the flag is `--spec-draft-n-max`.
+        spec_type = (self.config.llama_cpp_spec_type or "").strip()
         if self.config.llama_cpp_draft_model:
             draft_path = self.config.llama_cpp_draft_model
             cmd.extend(["--model-draft", draft_path,
-                        "--draft-max", str(self.config.llama_cpp_draft_max)])
+                        "--spec-draft-n-max", str(self.config.llama_cpp_draft_max)])
         elif self.config.llama_cpp_lookup_cache:
             # Prompt lookup decoding: matches n-grams from input in output (2-4x on edits)
             cmd.extend(["--lookup-cache-dynamic", "/tmp/localcode-lookup.bin"])
-        elif self.config.llama_cpp_spec_type and self.config.llama_cpp_spec_type != "none":
-            cmd.extend(["--spec-type", self.config.llama_cpp_spec_type,
-                        "--draft-max", str(self.config.llama_cpp_draft_max)])
-        # NO speculative decoding by default. An empty `llama_cpp_spec_type`
+        elif spec_type and spec_type != "none":
+            cmd.extend(["--spec-type", spec_type,
+                        "--spec-draft-n-max", str(self.config.llama_cpp_draft_max)])
+        elif (not spec_type and self.config.llama_cpp_mtp_draft > 0
+              and self._catalog_drafter_path(model_path) is not None):
+            # A vendor-trained drafter shipped with the model (catalog
+            # `Drafter`: Gemma 4 MTP heads, Qwen 3.6 / Muse DFlash). Downloaded
+            # with the model; only used when the file is present and complete.
+            drafter, path = self._catalog_drafter_path(model_path)
+            cmd.extend(["--model-draft", str(path), "--spec-type", drafter.spec_type])
+            if drafter.spec_type == "draft-mtp":
+                # A DFlash drafter emits a whole block per step; its length is
+                # the drafter's own. MTP drafts token by token: 4 measured best.
+                cmd.extend(["--spec-draft-n-max", str(self.config.llama_cpp_mtp_draft)])
+        elif (not spec_type and self.config.llama_cpp_mtp_draft > 0
+              and self._gguf_mtp_layers(model_path) > 0):
+            # The model ships its own multi-token-prediction head(s)
+            # (`<arch>.nextn_predict_layers` > 0, e.g. Qwen 3.8 27B). Drafting
+            # from that head is lossless (every draft token is verified by the
+            # target) and needs no second model. Measured on Qwen 3.8 27B
+            # Q4_K_XL, Apple Silicon: 24-26 tok/s -> 43-49 tok/s at 4 draft
+            # tokens (89% accepted), identical output; 8 tokens is slower
+            # (30 tok/s) because the misses cost more than the hits save.
+            # `llama_cpp_spec_type = "none"` or `llama_cpp_mtp_draft = 0`
+            # turns it off. Models without the metadata are untouched.
+            cmd.extend(["--spec-type", "draft-mtp",
+                        "--spec-draft-n-max", str(self.config.llama_cpp_mtp_draft)])
+        # Otherwise NO speculative decoding. An empty `llama_cpp_spec_type`
         # means OFF — NOT a cue to fall back to in-context n-gram decoding.
         # The previous default here emitted `--spec-type ngram-mod`, which
         # directly contradicted config.py's force-disable of spec_type (added
@@ -789,7 +815,7 @@ class LocalCodeRuntimeGateway:
                         wanted = (
                             ".block_count", ".attention.head_count_kv",
                             ".attention.head_count", ".attention.key_length",
-                            ".embedding_length",
+                            ".embedding_length", ".nextn_predict_layers",
                         )
                         for _ in range(n_kv):
                             k = _rs()
@@ -809,11 +835,54 @@ class LocalCodeRuntimeGateway:
                                 "n_layers": n_layers,
                                 "n_kv_heads": n_kv_heads,
                                 "head_dim": head_dim,
+                                # Multi-token-prediction heads shipped inside
+                                # the GGUF (Qwen 3.6+/3.8 `nextn_predict_layers`).
+                                "n_mtp_layers": found.get(".nextn_predict_layers", 0),
                             }
         except Exception:
             meta = None
         cache[path] = meta
         return meta
+
+    def _catalog_drafter_path(self, model_path: str | None):
+        """(Drafter, path) for the catalog drafter of this GGUF when the file is
+        on disk with its exact size, else None."""
+        try:
+            from pathlib import Path as _P
+            from .models_catalog import by_filename, MODEL_GROUPS, choice_for_quant
+            name = _P(str(model_path or "")).name
+            choice = by_filename(name)
+            drafter = getattr(choice, "drafter", None) if choice is not None else None
+            if drafter is None:
+                # a browsed quant of a group that ships a drafter
+                for g in MODEL_GROUPS:
+                    if getattr(g, "drafter", None) is not None and self._gguf_in_group(name, g):
+                        drafter = g.drafter
+                        break
+            if drafter is None:
+                return None
+            path = drafter.local_path
+            if not path.is_file() or path.stat().st_size != drafter.size_bytes:
+                return None
+            return drafter, path
+        except Exception:
+            return None
+
+    @staticmethod
+    def _gguf_in_group(name: str, group) -> bool:
+        """Does a (browsed) quant filename belong to this group's repo listing?
+        Cheap heuristic on the repo's model name prefix."""
+        stem = group.hf_repo.split("/", 1)[-1].removesuffix("-GGUF").lower()
+        return name.lower().startswith(stem.lower())
+
+    def _gguf_mtp_layers(self, model_path: str | None = None) -> int:
+        """Number of multi-token-prediction (MTP) draft layers stored in the
+        GGUF, 0 when there are none or the file can't be read."""
+        meta = self._gguf_kv_meta(model_path)
+        try:
+            return int((meta or {}).get("n_mtp_layers", 0) or 0)
+        except (TypeError, ValueError):
+            return 0
 
     def _kv_bytes_per_token(self, model_path: str | None = None) -> float | None:
         """KV-cache bytes per token = n_layers × n_kv_heads × head_dim ×
