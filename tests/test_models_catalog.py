@@ -323,7 +323,7 @@ def test_drafters_are_pinned_and_attached_to_every_quant_of_their_model():
         "gemma": "mtp-gemma-4-26B-A4B-it-Q8_0.gguf", "gemma-q8": "mtp-gemma-4-26B-A4B-it-Q8_0.gguf",
         "gemma-12b": "mtp-gemma-4-12b-it-Q8_0.gguf", "gemma-12b-bf16": "mtp-gemma-4-12b-it-Q8_0.gguf",
         "qwen": "dflash-Qwen3.6-35B-A3B-Q8_0.gguf", "qwen-q8": "dflash-Qwen3.6-35B-A3B-Q8_0.gguf",
-        "muse-glimmer": "dflash-Muse-Glimmer-30B-Q4_0.gguf",
+        "muse-glimmer": "dflash2-Muse-Glimmer-30B-Q4_K_M.gguf",
     }
     # Qwen 3.8 carries its head in the GGUF; the others have no vendor drafter.
     assert all(c.drafter is None for c in CHOICES if c.key in {"qwen38", "qwen38-q8", "kolibri", "openjev", "north-mini-code", "diffusiongemma"})
