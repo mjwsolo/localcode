@@ -719,6 +719,10 @@ def _classify_download_error(e: Exception) -> str:
     et = type(e).__name__
     if "no space" in msg or "disk full" in msg or "enospc" in msg or et == "OSError" and "28" in msg:
         return "disk_full"
+    if "ssl" in msg or "certificate" in msg:
+        return "ssl"
+    if "proxy" in msg or "407" in msg:
+        return "proxy"
     if "401" in msg or "403" in msg or "gated" in msg or "permission" in msg:
         return "auth"
     if "404" in msg or "not found" in msg:
@@ -727,8 +731,6 @@ def _classify_download_error(e: Exception) -> str:
         return "timeout"
     if "connection" in msg or "network" in msg or "dns" in msg or "resolve" in msg:
         return "network"
-    if "ssl" in msg or "certificate" in msg:
-        return "ssl"
     return "unknown"
 
 
@@ -740,8 +742,9 @@ def _format_download_error(category: str, e: Exception) -> str:
         "auth":       f"Hugging Face rejected the request — model may be gated or require a token.\n[{raw}]",
         "not_found":  f"Model file not found on Hugging Face — the catalog entry's filename may be stale.\n[{raw}]",
         "timeout":    f"Download timed out. Check your connection and retry.\n[{raw}]",
+        "proxy":      "Proxy blocked the download. Ask IT for the approved proxy configuration; do not share proxy credentials.",
         "network":    f"Network error during download. Check your connection and retry.\n[{raw}]",
-        "ssl":        f"SSL/TLS error during download — your system trust store may be out of date.\n[{raw}]",
+        "ssl":        f"SSL/TLS error during download — ask your IT team to configure the corporate CA in your Python trust store. Do not disable TLS verification.\n[{raw}]",
         "unknown":    f"Model download failed: {raw}",
     }
     return by_cat.get(category, by_cat["unknown"])

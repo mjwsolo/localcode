@@ -209,11 +209,11 @@ class Supervisor:
 
     def start(self, alias: str, wait_s: int = 240) -> bool:
         gguf = self.models_dir / f"{alias}.gguf"
-        self.stop()
         # localcode's own per-machine server command (RAM-tier context, KV
         # compression, flash-attn, checkpoints) — nothing hardcoded here.
         from localcode.ui.server_cmd import server_command
         cmd = server_command(str(gguf), self.port, alias)
+        self.stop()
         cmd[0] = self.server_bin
         self.ctx = self.ctx_total = int(cmd[cmd.index("--ctx-size") + 1])
         self.slots = int(cmd[cmd.index("--parallel") + 1]) if "--parallel" in cmd else 1

@@ -104,6 +104,8 @@ Powerful, personal AI should work for everyone, on any device, anywhere. That me
 
 To sponsor localcode, [reach out](https://github.com/mjwsolo/localcode).
 
+Installation diagnostics: `localcode doctor`. See [compatibility tests and local hardware verification](docs/src/content/docs/development/verification.md).
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
