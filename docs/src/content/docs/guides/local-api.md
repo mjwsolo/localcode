@@ -16,6 +16,26 @@ can take another 1.5 seconds to time out. The menu shows the endpoint and model,
 and offers explicit actions to copy the API key or an authenticated curl example.
 Copying a key puts a secret on your system clipboard.
 
+### Stop and start the model server
+
+Open `/server` and choose **Stop model server** to release the model's memory.
+Your chat history and the LocalCode interface stay open. This stops inference
+for **all LocalCode windows and API clients sharing that server**.
+
+Stop is refused if a request is active or the server's activity cannot be
+verified. Cancel requests in the other clients before retrying. Do not submit
+new requests while stopping. Downloads and model switches must finish first.
+
+Choose **Start model server** to reload the previously selected model. No new
+model download is triggered. If no previous model exists, or its file was
+removed, use `/model` to select one. Reloading the weights and processing the
+conversation can take time; this is not instant resume of the inference cache.
+
+The menu shows stopped, stopping, loading, ready or error status. Use **Refresh**
+to check progress or the result after a timeout. A failed load can be retried.
+The supervisor and API listener stay alive, and the port and key remain unchanged.
+Inference requests while the model is stopped receive an unavailable response.
+
 ### Choose a fixed port
 
 Use **Change API port now** in `/server`, or:

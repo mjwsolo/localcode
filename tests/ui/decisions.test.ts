@@ -231,3 +231,37 @@ test("/server rejects duplicate submissions and surfaces port errors without los
     }, "http://127.0.0.1:8323");
   } finally { network.mockRestore(); }
 });
+
+test("/server stops and starts without leaving the session and reports rejected operations", async () => {
+  let running = true;
+  let reject = false;
+  const actions: string[] = [];
+  const fetcher = spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const path = new URL(String(input)).pathname;
+    if (path === "/server/stop" || path === "/server/start") {
+      expect(init?.method).toBe("POST");
+      expect(init?.body).toBe("{}");
+      actions.push(path);
+      if (reject) return Response.json({error:"A request is active"},{status:409});
+      running = path.endsWith("start");
+      return Response.json({ok:true,state:running ? "loading" : "stopped"});
+    }
+    return Response.json({state:running ? "ready" : "stopped", server_running:running, server_ready:running, port:8123, base_url:"http://127.0.0.1:8123/v1",model:"localcode/test"});
+  });
+  try {
+    await withTui(async host => {
+      await host.command("localcode.server");
+      host.choose("stop");
+      await Bun.sleep(20);
+      expect(actions).toEqual(["/server/stop"]);
+      host.choose("start");
+      await Bun.sleep(20);
+      expect(actions).toEqual(["/server/stop","/server/start"]);
+      reject = true;
+      host.choose("stop");
+      await Bun.sleep(20);
+      expect(host.toasts.some(t=>t.variant === "error" && t.message.includes("A request is active"))).toBe(true);
+      expect(host.navigations).toEqual([]);
+    }, "http://127.0.0.1:8323");
+  } finally { fetcher.mockRestore(); }
+});
