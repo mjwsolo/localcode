@@ -97,7 +97,7 @@ jobs:
   # ── Evals: the no-model parts (Checks drive the real UI against canned servers) ──
   evals-checks:
     name: evals checks (no model)
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
