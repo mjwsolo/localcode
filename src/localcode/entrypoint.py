@@ -48,6 +48,9 @@ def main(argv: list[str] | None = None) -> None:
     if argv and argv[0] == "api":
         from .ui.api import main as api_main
         sys.exit(api_main(argv[1:]))
+    if argv and argv[0] == "mcp":
+        from .ui.launch import mcp_main
+        sys.exit(mcp_main(argv[1:]))
     os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
     # macOS malloc-warning silencer: these variables make every subprocess
     # print "can't turn off malloc stack logging" into stderr.
