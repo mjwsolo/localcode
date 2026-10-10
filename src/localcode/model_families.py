@@ -251,8 +251,8 @@ def infer_family_from_profile(profile_id: str) -> ModelFamily:
     # Hermes <tool_call> JSON. Same adapter.
     if "kolibri" in low:
         return ModelFamily.QWEN
-    # OpenJev is a Qwen 3.5 fine-tune and keeps its chat template.
-    if "openjev" in low:
+    # OpenJev and Saluki keep their Qwen base models' chat templates.
+    if "openjev" in low or "saluki" in low:
         return ModelFamily.QWEN
     if low.startswith("llama") or "llama" in low:
         return ModelFamily.LLAMA

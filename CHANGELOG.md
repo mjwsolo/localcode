@@ -5,6 +5,12 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
+### Added
+
+- Underdog Saluki 27B 1.0 in the model picker: pinned 7.9 GB IQ2-mix
+  weights, Qwen reasoning controls and optional vision. Opt-in while LocalCode
+  coding quality remains unmeasured.
+
 ## 0.5.11 — 2026-10-10
 
 ### Added
