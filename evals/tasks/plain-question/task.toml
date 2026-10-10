@@ -1,0 +1,12 @@
+id = "plain-question"
+quality = "fidelity"          # capability | reliability | safety_scope | efficiency | fidelity
+component = "harness"
+purpose = "regression"          # regression | tracking
+turns = 1
+trials = 1
+require_all_trials = false
+budget_steps = 2
+budget_seconds = 900
+allowed_paths = ['**']
+null_passes = false
+notes = ""
