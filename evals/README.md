@@ -49,3 +49,52 @@ python3 evals/gate.py evals/runs/*-nodraft-*/results.jsonl evals/runs/*-draft-*/
 `nightly.sh <checkout> [alias ...]` strings the whole thing together for a machine that has
 the models downloaded, and refuses to run while an interactive localcode session holds the
 supervisor port.
+
+## Speed and quality experiments
+
+The existing OpenCode runtime owns pruning/compaction; the plugin already guards
+repeated calls and repairs. This suite measures those paths rather than introducing
+another agent loop.
+
+Preview a controlled local sweep (does not start any model):
+
+```
+python3 evals/sweep.py --repo . --model <installed-alias> --profiles baseline,no-vendor-draft,batch-512 --repetitions 3
+```
+
+Add `--execute` to run. Profiles are sequential, order reverses on alternate
+repetitions, each gets a fresh supervisor, and all use the same named tasks. Results
+and manifests stay under ignored `evals/runs/`. Comparison refuses missing/duplicate
+trials and highlights any previously passing trial that fails. It never changes
+user defaults or claims statistical significance. User launcher configuration still
+applies: `no-vendor-draft` controls MTP/catalog drafters, not a manually configured
+external draft model. Check `runtime.json` and server logs to confirm a setting
+actually took effect. Slot tuning is intentionally not exposed: a UI slot environment
+variable alone does not prove a matching server allocation.
+
+Available experiments: vendor drafter off, 16K context, 512 batch, q8 KV cache,
+reasoning on, and a compaction checklist. Context limits can make some tasks
+impossible; those failures belong in the results. Run one profile against baseline
+first, then validate combinations. Match chip, RAM, model quantization and background
+load when comparing machines. No hardware profile is promoted automatically.
+
+`LOCALCODE_COMPACTION_CHECKLIST=1` appends retention guidance through OpenCode's
+compaction hook. It preserves the default summary prompt and stable system prefix.
+The forced-compaction Check verifies that the original constraint and checklist
+reach the real runtime's summarization request; its canned model does **not** prove
+that an actual local model retains constraints. Real-model retention remains an
+experiment before enabling this by default.
+
+Task results now include provider input/output/cache counters when available,
+per-request prefill/decode timings from the server log, tool counts/errors/durations,
+and repeated tool+argument calls. Repetition is not necessarily wasted work (files
+may have changed). Summary measurements exclude tool arguments/content. Existing
+raw eval traces still contain synthetic task prompts and outputs and remain local.
+RSS samples cover the owned supervisor process tree, and swap growth is system-wide,
+so background apps can affect it. These are samples, not guaranteed peak allocation.
+True streaming TTFT is currently unavailable and recorded as null; prefill time is
+not mislabeled as TTFT. Compaction and error counts are scoped to each trial.
+
+A timed-out task cannot pass. Existing result directories cannot be appended to
+accidentally. Use paired task correctness and completion time to select candidates;
+then inspect memory, failures, and long-session results before changing defaults.
