@@ -32,8 +32,8 @@ tool_calls, wall_s, reread_tokens per turn, binary_sha.
 
 Taxonomy: every task is tagged with a quality (capability, reliability, safety_scope,
 efficiency, fidelity), a component (model, harness, runtime, ui) and a purpose
-(regression, tracking). Regression tasks are expected near 100% and gate a release;
-tracking tasks show where to work next.
+(regression, tracking). Regression tasks are expected near 100% and support local release comparisons;
+they are not yet a required publish gate. Tracking tasks show where to work next.
 
 The comparison gate requires identical, nonempty task/model/trial coverage and
 boolean outcomes. Missing or duplicate trials fail the gate. Nightly runs use
