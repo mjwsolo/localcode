@@ -237,3 +237,60 @@ def test_runtime_env_skips_claude_code_skill_dirs_unless_opted_in(monkeypatch, t
     assert env["OPENCODE_DISABLE_CLAUDE_CODE_SKILLS"] == "1"
     monkeypatch.setenv("OPENCODE_DISABLE_CLAUDE_CODE_SKILLS", "0")
     assert runtime_env(tmp_path / "runtime.json", 1)["OPENCODE_DISABLE_CLAUDE_CODE_SKILLS"] == "0"
+
+
+def test_mcp_command_forwards_to_the_runtime_with_session_env(monkeypatch, tmp_path):
+    """`localcode mcp add|list|auth ...` runs the runtime's own MCP commands with
+    this install's config and trust environment; nobody edits JSON by hand."""
+    from localcode.ui import launch
+
+    calls: list[tuple[list[str], dict]] = []
+    monkeypatch.setattr(launch, "ui_binary_path", lambda: tmp_path / "localcode-ui")
+    monkeypatch.setattr(launch, "run_dir", lambda: tmp_path / "run")
+    monkeypatch.setattr(launch.subprocess, "call", lambda argv, cwd, env: (calls.append((argv, env)), 0)[1])
+    monkeypatch.chdir(tmp_path)
+
+    assert launch.mcp_main(["list"]) == 0
+    argv, env = calls[-1]
+    assert argv[0].endswith("localcode-ui") and argv[1:] == ["mcp", "list"]
+    assert env["LOCALCODE_DISABLE_PROJECT_CONFIG"] == "1"
+    assert env["LOCALCODE_CONFIG"].endswith(".json") and not Path(env["LOCALCODE_CONFIG"]).exists()  # removed afterwards
+
+    assert launch.mcp_main(["auth", "mail", "--trust-project"]) == 0
+    argv, env = calls[-1]
+    assert argv[1:] == ["mcp", "auth", "mail"] and env["LOCALCODE_DISABLE_PROJECT_CONFIG"] == "0"
+
+    assert launch.mcp_main([]) == 0 and launch.mcp_main(["--help"]) == 0   # usage, no subprocess
+    assert len(calls) == 2
+
+
+def test_mcp_add_explains_project_scope_trust(monkeypatch, tmp_path, capsys):
+    from localcode.ui import launch
+
+    monkeypatch.setattr(launch, "ui_binary_path", lambda: tmp_path / "localcode-ui")
+    monkeypatch.setattr(launch, "run_dir", lambda: tmp_path / "run")
+    monkeypatch.chdir(tmp_path)
+
+    def fake_add(argv, cwd, env):   # the runtime writes the server into the project config
+        (tmp_path / "localcode.json").write_text(json.dumps({"mcp": {"mail": {"type": "remote", "url": "https://x"}}}))
+        return 0
+    monkeypatch.setattr(launch.subprocess, "call", fake_add)
+    assert launch.mcp_main(["add"]) == 0
+    assert "--trust-project" in capsys.readouterr().err
+
+    monkeypatch.setattr(launch.subprocess, "call", lambda argv, cwd, env: 0)
+    launch.mcp_main(["list"])
+    assert "hidden" in capsys.readouterr().err
+    launch.mcp_main(["list", "--trust-project"])
+    assert capsys.readouterr().err == ""
+
+
+def test_entrypoint_routes_mcp(monkeypatch):
+    seen = {}
+    def fake(argv):
+        seen["argv"] = argv
+        return 0
+    monkeypatch.setattr("localcode.ui.launch.mcp_main", fake)
+    with pytest.raises(SystemExit) as e:
+        entrypoint.main(["mcp", "list"])
+    assert e.value.code == 0 and seen["argv"] == ["list"]
