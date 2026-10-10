@@ -1112,6 +1112,24 @@ def download_drafter(
     return True, str(dest)
 
 
+def remove_retired_sidecars(models_dir: Path) -> list[str]:
+    """Delete drafter files a previous release downloaded that the catalog has
+    since replaced (models_catalog.RETIRED_SIDECARS). Only exact names from
+    that list are touched; models and anything the user chose are never
+    candidates. Returns the names removed."""
+    from .models_catalog import RETIRED_SIDECARS
+    removed: list[str] = []
+    for name in RETIRED_SIDECARS:
+        p = Path(models_dir) / name
+        try:
+            if p.is_file() or p.is_symlink():
+                p.unlink()
+                removed.append(name)
+        except OSError:
+            continue
+    return removed
+
+
 def _is_mmproj_complete(p: Path, choice) -> bool:
     """Cheap completeness check for the mmproj sidecar — like
     `_is_complete_download` but with 10% slack since catalog mmproj

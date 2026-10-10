@@ -3,6 +3,20 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Fixed
+
+- **Publish verification waits for PyPI.** The post-publish install check ran
+  seconds after upload, before the index served the new version, and failed on
+  0.5.9. It now polls the simple index and JSON API for the exact release for
+  up to ten minutes first.
+- **Replaced drafters are removed.** When a release swaps a model's drafter
+  (0.5.9 moved Muse Glimmer to DFlash 2), the supervisor now deletes the file
+  the previous release downloaded on the user's behalf, at startup and after
+  the new one arrives. Only names in the catalog's retired list are touched,
+  never a model or anything the user picked.
+
 ## 0.5.9 — 2026-10-09
 
 ### Changed
