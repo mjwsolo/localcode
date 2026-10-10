@@ -1,0 +1,12 @@
+id = "compaction-depth"
+quality = "reliability"          # capability | reliability | safety_scope | efficiency | fidelity
+component = "runtime"
+purpose = "tracking"          # regression | tracking
+turns = 14
+trials = 1
+require_all_trials = false
+budget_steps = 60
+budget_seconds = 2400
+allowed_paths = ['app/**']
+null_passes = false
+notes = ""

@@ -8,6 +8,11 @@ import json
 import re
 
 
+def _median(xs):
+    xs = sorted(x for x in xs if isinstance(x, (int, float)))
+    return None if not xs else (xs[len(xs) // 2] if len(xs) % 2 else (xs[len(xs) // 2 - 1] + xs[len(xs) // 2]) / 2)
+
+
 def summarize(events, server_log):
     calls, seen, repeats, failures, durations = {}, set(), 0, 0, []
     tokens = {k: 0 for k in ('input', 'output', 'cache_read', 'cache_write')}
@@ -55,6 +60,11 @@ def summarize(events, server_log):
         'tool_calls_by_name': calls, 'repeated_tool_calls': repeats,
         'tool_errors': failures, 'tool_duration_s': sum(durations) if durations else None,
         'server_requests': list(requests.values()),
+        # Medians over this trial's requests, from the server's own timing lines.
+        'decode_tps': _median([r['decode_tokens'] / (r['decode_ms'] / 1000) for r in requests.values()
+                               if r.get('decode_ms') and r.get('decode_tokens', 0) >= 16]),
+        'prefill_tps': _median([r['prefill_tokens'] / (r['prefill_ms'] / 1000) for r in requests.values()
+                                if r.get('prefill_ms') and r.get('prefill_tokens', 0) >= 64]),
         # Timing lines do not include queue/transport time: do not call this TTFT.
         'time_to_first_token_s': None,
     }
@@ -87,9 +97,32 @@ class ResourceMeter:
         self.peak = None
         self.swap_start = self.swap()
         self.swap_peak = self.swap_start
+        self.limit_min, self.batt_start, self.on_battery = self.power()
+        self.batt_end = self.batt_start
+        self.ticks = 0
         self.stop = threading.Event()
         self.thread = threading.Thread(target=self.sample, daemon=True)
         self.thread.start()
+
+    @staticmethod
+    def power():
+        """(cpu_speed_limit_pct, battery_pct, on_battery) from pmset; None when unknown."""
+        import subprocess
+        limit = pct = None; on_batt = None
+        try:
+            raw = subprocess.check_output(['pmset', '-g', 'therm'], text=True, stderr=subprocess.DEVNULL, timeout=2)
+            m = re.search(r'CPU_Speed_Limit\s*=\s*(\d+)', raw)
+            limit = int(m[1]) if m else 100   # no limit line means no throttling recorded
+        except (OSError, subprocess.SubprocessError):
+            pass
+        try:
+            raw = subprocess.check_output(['pmset', '-g', 'batt'], text=True, stderr=subprocess.DEVNULL, timeout=2)
+            m = re.search(r'(\d+)%', raw)
+            pct = int(m[1]) if m else None
+            on_batt = "'Battery Power'" in raw
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return limit, pct, on_batt
 
     @staticmethod
     def swap():
@@ -114,10 +147,25 @@ class ResourceMeter:
             swap = self.swap()
             if swap is not None:
                 self.swap_peak = max(self.swap_peak or 0, swap)
+            self.ticks += 1
+            if self.ticks % 20 == 0:          # pmset every ~10 s; it is not free
+                limit, pct, on_batt = self.power()
+                if limit is not None:
+                    self.limit_min = limit if self.limit_min is None else min(self.limit_min, limit)
+                if pct is not None:
+                    self.batt_end = pct
+                if on_batt:
+                    self.on_battery = True
             self.stop.wait(0.5)
 
     def finish(self):
         self.stop.set()
         self.thread.join(timeout=5)
         return {'peak_supervisor_tree_rss_bytes': self.peak,
-                'system_swap_growth_bytes': None if self.swap_start is None or self.swap_peak is None else max(0,self.swap_peak-self.swap_start)}
+                'system_swap_growth_bytes': None if self.swap_start is None or self.swap_peak is None else max(0,self.swap_peak-self.swap_start),
+                # Thermal: the lowest CPU speed limit pmset reported during the trial
+                # (100 = never throttled). Battery: percentage points lost, only
+                # meaningful when on_battery is true.
+                'cpu_speed_limit_min_pct': self.limit_min,
+                'battery_drop_pct': None if self.batt_start is None or self.batt_end is None else max(0, self.batt_start - self.batt_end),
+                'on_battery': self.on_battery}

@@ -31,6 +31,7 @@ TOOL_SCHEMA_BYTES = 9_000                 # today: 7,142 for 10 tools (lean defi
 def _run(slots: int, plugin: str | None = None, force_compaction: bool = False) -> dict:
     out = Path(tempfile.mkdtemp(prefix=f"lc-checks-{slots}-"))
     cmd = [sys.executable, str(DRIVER), str(REPO), str(out), "--slots", str(slots)] + (["--plugin", plugin] if plugin else [])
+    if os.environ.get("LOCALCODE_CHECK_INSTALLED") == "1": cmd.append("--installed")
     if force_compaction: cmd.append("--force-compaction")
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
     assert r.returncode == 0, r.stderr[-2000:]
