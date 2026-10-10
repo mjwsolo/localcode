@@ -13,6 +13,7 @@ commands.log, metrics.json, ui_errors.txt), run the hidden grader, append one ro
 import argparse, json, os, re, shutil, signal, socket, subprocess, sys, tempfile, time, tomllib, urllib.request
 from pathlib import Path
 from performance import summarize, ResourceMeter
+from process import run_bounded
 
 HERE = Path(__file__).resolve().parent; TASKS = HERE / "tasks"
 ap = argparse.ArgumentParser()
@@ -25,12 +26,21 @@ if a.trials < 1: ap.error("--trials must be positive")
 REPO = Path(a.repo).resolve(); UI = REPO / "src/localcode/bin/localcode-ui"; SERVER = REPO / "src/localcode/bin/llama-server"
 PY = Path(os.environ.get("LOCALCODE_PY") or (REPO / ".venv/bin/python" if (REPO / ".venv/bin/python").exists() else sys.executable))
 label = a.label or subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=REPO, capture_output=True, text=True).stdout.strip() or "local"
-OUT = Path(a.out or (HERE / "runs" / f"{time.strftime('%Y%m%d-%H%M')}-{label}-{a.model}")).resolve(); OUT.mkdir(parents=True, exist_ok=True)
-if (OUT / "results.jsonl").exists(): sys.exit("output already contains results; choose a fresh --out")
+OUT = Path(a.out or (HERE / "runs" / f"{time.strftime('%Y%m%d-%H%M')}-{label}-{a.model}")).resolve(); OUT.mkdir(parents=True, exist_ok=False, mode=0o700)
 HOME = OUT / "home"; HOME.mkdir(exist_ok=True); RUN_DIR = HOME / "run"; RUN_DIR.mkdir(exist_ok=True)
 MODELS_DIR = Path.home() / ".local/share/localcode/models"   # the real models, read-only for us
-(HOME / ".local/share").mkdir(parents=True, exist_ok=True)
-if not (HOME / ".local/share/localcode").exists(): os.symlink(Path.home() / ".local/share/localcode", HOME / ".local/share/localcode")
+if Path(a.model).name != a.model or not (MODELS_DIR / f"{a.model}.gguf").is_file():
+    sys.exit("--model must name an already-installed GGUF (without .gguf)")
+# Only model files are shared; caches, history, configuration and warm-up state
+# live in this run's own HOME. Do not link the user's entire application folder.
+model_links = HOME / ".local/share/localcode/models"
+model_links.mkdir(parents=True)
+for model_file in MODELS_DIR.glob("*.gguf"):
+    if model_file.is_file(): (model_links / model_file.name).symlink_to(model_file)
+
+isolated_env = {"HOME": str(HOME), "XDG_CONFIG_HOME": str(HOME / ".config"),
+                "XDG_DATA_HOME": str(HOME / ".local/share"), "XDG_CACHE_HOME": str(HOME / ".cache"),
+                "XDG_STATE_HOME": str(HOME / ".local/state")}
 
 def log(*x): print(time.strftime("%H:%M:%S"), *x, flush=True)
 def free_port():
@@ -46,12 +56,25 @@ def post(url, body):
     req = urllib.request.Request(url, json.dumps(body).encode(), {"Content-Type": "application/json", **_CTL})
     with urllib.request.urlopen(req, timeout=10) as r: return json.load(r)
 
+# ── task selection ────────────────────────────────────────────────────────────────
+wanted = set(filter(None, a.tasks.split(",")))
+tasks = []
+for d in sorted(p for p in TASKS.iterdir() if p.is_dir()):
+    meta = tomllib.loads((d / "task.toml").read_text())
+    if "kind=check" in meta.get("notes", ""): continue
+    if wanted and d.name not in wanted: continue
+    if not wanted and a.set != "all" and meta["purpose"] != a.set: continue
+    tasks.append((d, meta))
+if not tasks or (wanted and wanted != {d.name for d, _ in tasks}):
+    sys.exit("select valid model tasks; empty/unknown/check-only task selections are rejected")
+
+
 # ── one supervisor + model for the whole run ──────────────────────────────────────
 mport, cport = free_port(), free_port()
-sup_env = {**os.environ, "PYTHONPATH": str(REPO / "src"), "HOME": str(HOME), "LOCALCODE_AGENT_RUN_DIR": str(RUN_DIR), "LOCALCODE_PARALLEL": "1"}
+sup_env = {**os.environ, **isolated_env, "PYTHONPATH": str(REPO / "src"), "HOME": str(HOME), "LOCALCODE_AGENT_RUN_DIR": str(RUN_DIR), "LOCALCODE_PARALLEL": "1"}
 sup_log = open(OUT / "supervisor.log", "ab")
-sup = subprocess.Popen([str(PY), "-m", "localcode.ui.supervisor", "--model", "", "--port", str(mport), "--control-port", str(cport),
-                        "--server", str(SERVER), "--models-dir", str(MODELS_DIR), "--parent-pid", str(os.getpid())],
+sup = subprocess.Popen([str(PY), "-m", "localcode.ui.supervisor", "--model", a.model, "--port", str(mport), "--control-port", str(cport),
+                        "--server", str(SERVER), "--models-dir", str(model_links), "--parent-pid", str(os.getpid())],
                        env=sup_env, stdout=sup_log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
 import atexit
 def _stop():
@@ -64,19 +87,9 @@ for _ in range(100):
     try: get(f"http://127.0.0.1:{cport}/status"); break
     except Exception: time.sleep(0.3)
 else: sys.exit("supervisor did not start (is another localcode running under this HOME?)")
-# find the group that owns this alias, then select it
-group = None
-cat = get(f"http://127.0.0.1:{cport}/catalog", 10)
-groups = cat if isinstance(cat, list) else (cat.get("models") or cat.get("groups") or [])
-for g in groups:
-    key = g["key"]
-    for q in get(f"http://127.0.0.1:{cport}/quants?group={key}", 10).get("quants", []):
-        if q["alias"] == a.model: group, filename = key, q["filename"]
-if not group: sys.exit(f"alias {a.model} not in the catalog")
-log(f"loading {a.model} ({group}/{filename}) on port {mport}")
-r = post(f"http://127.0.0.1:{cport}/select", {"group": group, "filename": filename})
-if "error" in r: sys.exit(f"select failed: {r}")
+log(f"loading installed {a.model} on port {mport}")
 for _ in range(600):
+    if sup.poll() is not None: sys.exit("supervisor exited; inspect supervisor.log")
     st = get(f"http://127.0.0.1:{cport}/status")
     if st.get("state") == "ready" and st.get("current") == a.model: break
     if st.get("state") == "error": sys.exit(f"model failed to load: {st}")
@@ -92,17 +105,6 @@ except (OSError, ValueError):
 binary_sha = subprocess.run(["shasum", "-a", "256", str(UI)], capture_output=True, text=True).stdout[:12]
 cfg = HOME / "session.json"
 subprocess.run([str(PY), "-c", f"import sys; sys.path.insert(0, {str(REPO / 'src')!r}); from pathlib import Path; from localcode.ui.launch import write_config; write_config(Path({str(cfg)!r}), port={mport}, ctx={int(st.get('ctx') or 32768)}, alias={a.model!r})"], check=True)
-
-# ── task selection ────────────────────────────────────────────────────────────────
-wanted = set(filter(None, a.tasks.split(",")))
-tasks = []
-for d in sorted(p for p in TASKS.iterdir() if p.is_dir()):
-    meta = tomllib.loads((d / "task.toml").read_text())
-    if "kind=check" in meta.get("notes", ""): continue
-    if wanted and d.name not in wanted: continue
-    if not wanted and a.set != "all" and meta["purpose"] != a.set: continue
-    tasks.append((d, meta))
-log(f"{len(tasks)} tasks x {a.trials} trials -> {OUT}")
 
 def turns_of(task: Path):
     text = (task / "instruction.md").read_text()
@@ -142,8 +144,8 @@ def run_trial(task: Path, meta: dict, trial: int) -> dict:
     g = lambda *x: subprocess.run(["git", "-c", "user.email=e@x", "-c", "user.name=e", *x], cwd=ws, capture_output=True)
     g("init", "-q"); g("add", "-A"); g("commit", "-qm", "init", "--allow-empty")
     ev = ws / ".eval"; ev.mkdir()
-    env = {**os.environ, "HOME": str(HOME), "LOCALCODE_TEST_HOME": str(HOME), "PWD": str(ws), "LOCALCODE_CONFIG": str(cfg),
-           "LOCALCODE_CONTROL_URL": f"http://127.0.0.1:{cport}", "OPENCODE_DISABLE_LSP_DOWNLOAD": "1", "LOCALCODE_PARALLEL": "1",
+    env = {**os.environ, **isolated_env, "HOME": str(HOME), "LOCALCODE_TEST_HOME": str(HOME), "PWD": str(ws), "LOCALCODE_CONFIG": str(cfg),
+           "LOCALCODE_CONTROL_URL": f"http://127.0.0.1:{cport}", "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS": "1", "OPENCODE_DISABLE_LSP_DOWNLOAD": "1", "LOCALCODE_PARALLEL": "1",
            "LOCALCODE_AGENT_RUN_DIR": str(RUN_DIR)}
     steps = tool_calls = 0; commands = []; final = ""; reread = []; wall = 0.0; ui_errors = []; timed_out = False; runtime_failed = False; calls_per_turn = []
     lengths_before = len(server_prompt_lengths()); budgets = []
@@ -160,7 +162,7 @@ def run_trial(task: Path, meta: dict, trial: int) -> dict:
         args = [str(UI), "run", "--format", "json", "-m", f"localcode/{a.model}"] + (["--continue"] if i > 1 else []) + [text]
         t0 = time.time()
         try:
-            r = subprocess.run(args, cwd=ws, env=env, capture_output=True, text=True, timeout=max(0.1, budget - wall), stdin=subprocess.DEVNULL)
+            r = run_bounded(args, cwd=ws, env=env, text=True, timeout=budget - wall, stdin=subprocess.DEVNULL)
             out = r.stdout
             runtime_failed = runtime_failed or r.returncode != 0
             (ev / f"stderr-turn{i}.txt").write_text(r.stderr)
