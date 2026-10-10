@@ -497,6 +497,23 @@ CHOICES: list[ModelChoice] = [
         mmproj_hf_filename="mmproj-F16.gguf",
     ),
     ModelChoice(
+        key="saluki",
+        name="Underdog Saluki 27B 1.0 (IQ2-mix)",
+        hf_repo="ConwayResearch/Underdog-Saluki-27B-1.0",
+        filename="Underdog-Saluki-27B-1.0-IQ2-mix.gguf",
+        revision="4f60eba09f4b6db63c72915d328d97e1d93edb8c",
+        sha256="4a673518b11b1c4445f9b9a9d3c40356f5ba39f6a6260dcb25f3fbfd475d9efb",
+        size_bytes=7898369152,
+        size_gb=7.9,
+        active_params="27B dense",
+        architecture="qwen35",
+        license="Apache 2.0",
+        humaneval_pass_at_1=None,
+        notes="Mixed 2-bit quantization of Qwen 3.8 27B by Underdog. 7.9 GB weights plus context, runtime and OS memory; file size is not total RAM use. Coding quality has not been benchmarked on LocalCode; opt-in, not an automatic recommendation. Optional F16 projector adds image input. No speculative drafter is bundled.",
+        mmproj_filename="mmproj-Underdog-Saluki-27B-1.0-F16.gguf",
+        mmproj_size_gb=0.928,
+    ),
+    ModelChoice(
         key="kolibri",
         # Pinned: a community quant under a mutable `main`. A re-upload must be
         # a visible change here, never a silent swap under the same filename.
@@ -598,8 +615,9 @@ def _system_ram_gb() -> int:
 _NO_AUTO_RECOMMEND_ARCHS = {"diffusion_gemma", "kolibri1"}
 # Entries excluded by key, for models that share an architecture with a
 # recommended one: OpenJev is a qwen35 like Qwen 3.8, but it is a decision
-# model and must never be a first-run coding default.
-_NO_AUTO_RECOMMEND_KEYS = {"openjev"}
+# model and must never be a first-run coding default. Saluki remains opt-in
+# until coding quality has been measured on this stack.
+_NO_AUTO_RECOMMEND_KEYS = {"openjev", "saluki"}
 
 
 def _auto_recommendable(c: "ModelChoice") -> bool:
@@ -895,6 +913,18 @@ MODEL_GROUPS: list[ModelGroup] = [
         # Text-only: no vision sidecar.
     ),
     ModelGroup(
+        key="saluki-27b",
+        display_name="Underdog Saluki 27B 1.0",
+        maker="Underdog",
+        hf_repo="ConwayResearch/Underdog-Saluki-27B-1.0",
+        family="qwen",
+        architecture="qwen35",
+        license="Apache 2.0",
+        notes="Mixed 2-bit Qwen 3.8 27B: 7.9 GB weights, with additional RAM needed for context and runtime. Coding quality unmeasured on LocalCode; opt-in. Optional F16 projector enables images. No bundled speculative drafter.",
+        mmproj_filename="mmproj-Underdog-Saluki-27B-1.0-F16.gguf",
+        mmproj_size_gb=0.928,
+    ),
+    ModelGroup(
         key="kolibri-1",
         display_name="Kolibri 1 78B-A3B",
         maker="Aleph Alpha",
@@ -945,7 +975,7 @@ def _quant_label(filename: str) -> str:
     # Match a trailing quant descriptor: optional UD-/IQ/Q tier with K/_ parts,
     # or a plain precision tag like BF16 / F16 / F32.
     m = re.search(
-        r"(?:^|[-_.])((?:UD-)?(?:I?Q\d+[A-Z0-9_]*|BF16|F16|F32))$",
+        r"(?:^|[-_.])((?:UD-)?(?:I?Q\d+[A-Z0-9_]*(?:-mix)?|BF16|F16|F32))$",
         stem,
     )
     if m:
@@ -968,6 +998,9 @@ def choice_for_quant(group: ModelGroup, filename: str, size_gb: float) -> ModelC
     canonical = next((c for c in CHOICES if c.hf_repo == group.hf_repo), None)
     return ModelChoice(
         key=f"{group.key}:{label}",
+        revision=canonical.revision if canonical and canonical.filename == filename else "main",
+        sha256=canonical.sha256 if canonical and canonical.filename == filename else None,
+        size_bytes=canonical.size_bytes if canonical and canonical.filename == filename else None,
         name=f"{group.display_name} ({label})",
         hf_repo=group.hf_repo,
         filename=filename,
