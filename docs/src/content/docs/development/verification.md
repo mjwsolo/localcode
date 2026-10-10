@@ -13,8 +13,8 @@ explicit opt-in network/audio tests remain separate. A stale speculative-decodin
 flag assertion was corrected against the current shipped server flag.
 
 - Linux: Python 3.10–3.14.
-- Apple silicon hosted runners: macOS 14, 15 and 26 with Python 3.10, 3.13 and 3.14.
-- Built-wheel installations on all three macOS images: pip and uv tool, fresh and
+- Apple silicon hosted runners: macOS 15 and 26 with Python 3.10, 3.13 and 3.14.
+- Built-wheel installations on both macOS images: pip and uv tool, fresh and
   upgrades from 0.4.9 and 0.5.2. Tests run outside the checkout, verify the resolved
   executable and package version, and execute both installed binaries.
 - After publishing: pip and uv install the exact PyPI version, upgrading 0.4.9.
@@ -24,10 +24,10 @@ flag assertion was corrected against the current shipped server flag.
   They verify configuration and definite over-capacity rejection, not physical fit.
 
 The available images are listed in [GitHub's runner documentation](https://github.com/actions/runner-images).
-macOS 14 is scheduled for retirement on November 2, 2026; remove that hosted
-row when retired and retain local evidence if it remains supported. macOS 13
-is the binary deployment target but has no hosted row here: it requires local
-verification. Hosted macOS versions are not a matrix of all M-series chips.
+The macOS 14 hosted jobs have been retired ahead of GitHub's November 2, 2026
+shutdown. Standalone plugin, upstream-candidate and published-package checks
+now run on macOS 15. macOS 13 remains the binary deployment target; macOS 13
+and 14 require local verification because neither has a hosted row here. Hosted macOS versions are not a matrix of all M-series chips.
 An actual Intel macOS runner verifies wheel rejection and the launcher error.
 Rosetta and old macOS error paths are tested with simulated platform probes.
 
