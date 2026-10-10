@@ -28,9 +28,10 @@ SYSTEM_CHARS = 12_000                     # today: 8,882 (planning rules include
 TOOL_SCHEMA_BYTES = 9_000                 # today: 7,142 for 10 tools (lean definitions, 0.5.10)
 
 
-def _run(slots: int, plugin: str | None = None) -> dict:
+def _run(slots: int, plugin: str | None = None, force_compaction: bool = False) -> dict:
     out = Path(tempfile.mkdtemp(prefix=f"lc-checks-{slots}-"))
     cmd = [sys.executable, str(DRIVER), str(REPO), str(out), "--slots", str(slots)] + (["--plugin", plugin] if plugin else [])
+    if force_compaction: cmd.append("--force-compaction")
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
     assert r.returncode == 0, r.stderr[-2000:]
     reqs = []
@@ -141,3 +142,12 @@ def test_prefix_check_detects_a_changing_prompt():
     run = _run(4, plugin=str(tmp))
     shas = [r["sys_sha"] for r in _agent_requests(run)]
     assert len(set(shas)) == len(shas), "mutant went undetected: prefixes were identical"
+
+
+def test_forced_compaction_receives_constraints_and_checklist():
+    run = _run(1, force_compaction=True)
+    requests = [json.dumps(r["body"]) for r in run["reqs"]]
+    compact = [r for r in requests if "Preserve in the summary:" in r]
+    assert compact, "the runtime never invoked the compaction hook"
+    assert any("do not edit a.py" in r for r in compact)
+    assert all(t["rc"] == 0 for t in run["summary"]["turns"])

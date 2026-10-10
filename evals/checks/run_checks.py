@@ -12,6 +12,7 @@ import argparse, json, os, shutil, signal, subprocess, sys, tempfile, time, urll
 from pathlib import Path
 
 ap = argparse.ArgumentParser(); ap.add_argument("repo"); ap.add_argument("out"); ap.add_argument("--slots", type=int, default=1); ap.add_argument("--plugin"); ap.add_argument("--keep", action="store_true")
+ap.add_argument("--force-compaction", action="store_true")
 a = ap.parse_args()
 REPO = Path(a.repo).resolve(); OUT = Path(a.out).resolve(); OUT.mkdir(parents=True, exist_ok=True)
 for f in OUT.glob("req-*.json"): f.unlink()
@@ -29,6 +30,7 @@ def free_port():
     import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); p = s.getsockname()[1]; s.close(); return p
 mport, cport = free_port(), free_port(); alias = "canned-model"
 env0 = {**os.environ, "CANNED_SLOTS": str(a.slots), "CANNED_WORKSPACE": str(ws)}
+if a.force_compaction: env0["CANNED_FORCE_COMPACTION"] = "1"
 import atexit
 srv_log = open(OUT / "servers.log", "ab")
 model = subprocess.Popen([sys.executable, str(HERE / "canned_server.py"), str(mport), str(OUT)], env=env0, stdout=srv_log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
@@ -41,14 +43,12 @@ def _cleanup():
             except Exception: p.kill()
 atexit.register(_cleanup)
 def wait(url):
-    # Hosted macOS runners take a while to start a Python process; wait up to 60 s
-    # and, on failure, show the servers' own log so the cause is visible.
-    for _ in range(300):
+    # Allow slow process startup on hosted macOS runners.
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
         try: urllib.request.urlopen(url, timeout=0.5); return
         except Exception: time.sleep(0.2)
-    srv_log.flush()
-    tail = (OUT / "servers.log").read_text(errors="replace")[-3000:] if (OUT / "servers.log").exists() else "(no servers.log)"
-    raise SystemExit(f"server not up: {url}\n--- servers.log ---\n{tail}")
+    raise SystemExit(f"server not up: {url}\n" + (OUT / "servers.log").read_text(errors="replace")[-4000:])
 wait(f"http://127.0.0.1:{mport}/health"); wait(f"http://127.0.0.1:{cport}/status")
 
 cfg = home / "session.json"
@@ -67,8 +67,10 @@ subprocess.run([str(PY), "-c", code], check=True)
 
 env = {**os.environ, "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS": "1", "HOME": str(home), "LOCALCODE_CONFIG": str(cfg), "LOCALCODE_CONTROL_URL": f"http://127.0.0.1:{cport}",
        "OPENCODE_DISABLE_LSP_DOWNLOAD": "1", "LOCALCODE_PARALLEL": str(a.slots), "LOCALCODE_TEST_HOME": str(home), "PWD": str(ws), "LOCALCODE_AGENT_RUN_DIR": str(home / "run")}
+if a.force_compaction: env["LOCALCODE_COMPACTION_CHECKLIST"] = "1"
 turns = ["Read README.md and tell me in one sentence what this project is.",
          "Now plan two steps with todowrite: add a docstring to add() in a.py, then run the tests. Do step 1."]
+if a.force_compaction: turns[0] += " Constraint: do not edit a.py."
 summary = {"turns": [], "slots": a.slots}
 for i, text in enumerate(turns, 1):
     args = [str(UI), "run", "--format", "json", "-m", f"localcode/{alias}"] + (["--continue"] if i > 1 else []) + [text]

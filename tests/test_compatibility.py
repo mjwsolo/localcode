@@ -54,6 +54,8 @@ RAM = [8, 16, 18, 24, 32, 36, 48, 64, 96, 128, 192]
 @pytest.mark.parametrize('ram', RAM)
 @pytest.mark.parametrize('choice', models_catalog.CHOICES, ids=lambda c: c.key)
 def test_shipping_command_model_ram_matrix(monkeypatch, tmp_path, ram, choice):
+    # Matrix inputs must not include sidecars installed on the developer's Mac.
+    monkeypatch.setattr(models_catalog, 'model_dir', lambda: tmp_path)
     config = AppConfig(runtime=RuntimeConfig(), ui=UIConfig())
     config.runtime.llama_cpp_binary = str(tmp_path / 'llama-server')
     Path(config.runtime.llama_cpp_binary).touch()
