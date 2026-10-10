@@ -35,7 +35,7 @@ from localcode import models_catalog as catalog
 from localcode.ui import auth
 from localcode.ui.server_cmd import server_command
 
-REQUIRED_KEYS = {"gemma-12b", "qwen", "qwen38", "diffusiongemma", "north-mini-code", "muse-glimmer", "kolibri", "openjev"}
+REQUIRED_KEYS = {"gemma-12b", "qwen", "qwen38", "diffusiongemma", "north-mini-code", "muse-glimmer", "kolibri", "openjev", "saluki"}
 TOOL = {"type": "function", "function": {"name": "get_weather", "description": "Get weather in a city.", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}}
 
 
@@ -241,7 +241,7 @@ def validate_receipt(receipt, commit, hashes, keys):
     assert set(normal) == keys and REQUIRED_KEYS <= keys, "model coverage changed"
     for key, checks in normal.items():
         expected = {"auth", "template", "chat", "systemone" if key == "openjev" else "tool-loop"}
-        if key in {"qwen38", "openjev", "diffusiongemma"}:
+        if key in {"qwen38", "openjev", "diffusiongemma", "saluki"}:
             expected.add("runtime")
         if key == "openjev":
             expected.add("decision-control")
@@ -286,7 +286,7 @@ def main(argv=None):
             print("VERIFY " + label, flush=True)
             with tempfile.TemporaryDirectory(prefix="localcode-gate-") as tmp:
                 with Server(choice, Path(tmp), turbo=turbo) as server:
-                    checks = verify(server, runtime=choice.key in {"qwen38", "openjev", "diffusiongemma"} and not turbo)
+                    checks = verify(server, runtime=choice.key in {"qwen38", "openjev", "diffusiongemma", "saluki"} and not turbo)
             receipt["models"].append({"key": choice.key, "turbo4": turbo, "checks": checks})
             print("PASS " + label + " " + ", ".join(checks), flush=True)
         receipt["success"] = True
