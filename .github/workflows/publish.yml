@@ -135,7 +135,7 @@ jobs:
   verify-published:
     name: Verify published PyPI install
     needs: [publish]
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 20
     strategy:
       fail-fast: false
