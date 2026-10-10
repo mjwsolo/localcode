@@ -1,0 +1,1 @@
+Create a package inventory/ with three modules: models.py (an Item dataclass with name, qty, price), store.py (an in-memory Store with add(item), total_value()), and report.py (render(store) returning one line per item and a TOTAL line). Modules must import each other, not duplicate code. Add tests and run them.

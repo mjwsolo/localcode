@@ -1,0 +1,12 @@
+id = "cli-subcommand"
+quality = "capability"          # capability | reliability | safety_scope | efficiency | fidelity
+component = "harness"
+purpose = "tracking"          # regression | tracking
+turns = 1
+trials = 1
+require_all_trials = false
+budget_steps = 30
+budget_seconds = 900
+allowed_paths = ['app/**', 'tests/**']
+null_passes = false
+notes = ""

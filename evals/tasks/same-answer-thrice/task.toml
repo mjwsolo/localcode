@@ -1,0 +1,12 @@
+id = "same-answer-thrice"
+quality = "reliability"          # capability | reliability | safety_scope | efficiency | fidelity
+component = "harness"
+purpose = "tracking"          # regression | tracking
+turns = 1
+trials = 3
+require_all_trials = true
+budget_steps = 20
+budget_seconds = 900
+allowed_paths = ['app/**']
+null_passes = false
+notes = "pass^3: all three trials must pass"
