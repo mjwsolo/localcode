@@ -154,6 +154,17 @@ def run_trial(task: Path, meta: dict, trial: int) -> dict:
     env = {**os.environ, **isolated_env, "HOME": str(HOME), "LOCALCODE_TEST_HOME": str(HOME), "PWD": str(ws), "LOCALCODE_CONFIG": str(cfg),
            "LOCALCODE_CONTROL_URL": f"http://127.0.0.1:{cport}", "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS": "1", "OPENCODE_DISABLE_LSP_DOWNLOAD": "1", "LOCALCODE_PARALLEL": "1",
            "LOCALCODE_AGENT_RUN_DIR": str(RUN_DIR)}
+    # Task-level MCP servers (task.toml [mcp]) go into the session config for
+    # this trial only; the task's setup command runs in the workspace first.
+    session = json.loads(cfg.read_text())
+    session.pop("mcp", None)
+    if meta.get("mcp"):
+        session["mcp"] = meta["mcp"]
+    cfg.write_text(json.dumps(session, indent=2))
+    setup_proc = None
+    if meta.get("setup"):
+        setup_proc = subprocess.Popen(["bash", "-lc", meta["setup"]], cwd=ws, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, start_new_session=True)
+        time.sleep(1.5)
     steps = tool_calls = 0; commands = []; final = ""; reread = []; wall = 0.0; ui_errors = []; timed_out = False; runtime_failed = False; calls_per_turn = []
     tool_invalid = tool_rejected = tool_guarded = tool_narrated = 0; tool_invalid_samples: list[str] = []
     lengths_before = len(server_prompt_lengths()); budgets = []
@@ -222,6 +233,11 @@ def run_trial(task: Path, meta: dict, trial: int) -> dict:
         if timed_out: break
     resources = meter.finish()
     atexit.unregister(meter.finish)
+    if meta.get("teardown"):
+        subprocess.run(["bash", "-lc", meta["teardown"]], cwd=ws, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
+    if setup_proc is not None and setup_proc.poll() is None:
+        try: os.killpg(setup_proc.pid, signal.SIGTERM)
+        except OSError: pass
     # the .eval contract
     st = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=ws, capture_output=True, text=True).stdout
     paths = sorted({l[3:].split(" -> ")[-1] for l in st.splitlines() if l.strip() and not l[3:].startswith(".eval/") and not l[3:].startswith(".localcode-agent/") and not re.search(r"(^|/)(__pycache__/|\.pytest_cache/|\.mypy_cache/)|\.pyc$", l[3:])})

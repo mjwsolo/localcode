@@ -10,3 +10,6 @@ budget_seconds = 900
 allowed_paths = ['tests/README.md']
 null_passes = false
 notes = ""
+setup = ""
+teardown = ""
+mcp = {}

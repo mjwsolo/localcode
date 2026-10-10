@@ -10,3 +10,6 @@ budget_seconds = 900
 allowed_paths = ['app/**']
 null_passes = false
 notes = "pass^3: all three trials must pass"
+setup = ""
+teardown = ""
+mcp = {}
