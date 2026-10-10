@@ -171,6 +171,30 @@ jobs:
           if [ "$PREVIOUS" != fresh ]; then args+=(--from-version "$PREVIOUS"); fi
           python scripts/verify_install.py --target dist/*.whl --expected "$version" --installer "$INSTALLER" "${args[@]}"
 
+  evals-field:
+    name: evals field (installed wheel drives the UI)
+    needs: packaging
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/download-artifact@v4
+        with:
+          name: candidate-wheel
+          path: dist
+      - name: Install the candidate wheel into a clean environment
+        run: |
+          python -m venv "$RUNNER_TEMP/field"
+          "$RUNNER_TEMP/field/bin/python" -m pip install -q dist/*.whl pytest pytest-timeout
+      - name: Checks against the installed package, not the checkout
+        env:
+          LOCALCODE_CHECK_INSTALLED: "1"
+        run: |
+          LOCALCODE_PY="$RUNNER_TEMP/field/bin/python" "$RUNNER_TEMP/field/bin/python" -m pytest evals/checks -q -p no:cacheprovider --timeout=600
+
   unsupported-intel:
     name: Intel Mac rejection
     needs: packaging

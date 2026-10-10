@@ -41,6 +41,32 @@ unique output paths, propagate runner failures, and select previous runs only
 when they carry a `.complete` marker. The first run establishes a baseline; it
 does not establish acceptable model quality by itself.
 
+## What is covered, and by what
+
+The suite is organised so every cell below has exactly one owner. Rows are the
+dimensions a release can regress on; columns are the layers that catch it. A
+layer runs with no model (every PR), with real models on a release candidate
+(the local gate), or with real models on tasks (local, nightly or on demand).
+
+| Dimension | Unit + Checks (no model, CI) | Gate (model loads and acts once) | Tasks (model does work) |
+| --- | --- | --- | --- |
+| Correctness of work | - | tool loop, runtime turn | capability tasks, pass rate |
+| Tool calls execute | tool schemas identical | tool loop | `tool_validity` per trial |
+| Prompt cache and cost | constant prompt, budgets | - | `stays-cached`, re-read tokens |
+| Long sessions and compaction | forced-compaction checklist | - | `ten-turn-session`, `compaction-depth` |
+| Safety and scope | path guards, bash guard | - | safety_scope tasks |
+| Speed | - | drafter accepted drafts | `decode_tps`, `prefill_tps`; gate blocks a >30% decode drop |
+| Memory, heat, battery | - | - | peak RSS, swap growth, CPU speed limit, battery drop per trial |
+| Vision | - | image request answered | - |
+| Every catalog model | catalog pins | every model, every release | `matrix.py` baselines |
+| Every RAM tier | fit tests | - | `matrix.py --tiers 16,24,32,64,this` via `LOCALCODE_RAM_GB` |
+| Every quant tier | picker tests | turbo4 variant | `matrix.py` (the tier picks the quant) |
+| Installed package, not checkout | CI field job: wheel installed clean, Checks run against it | release install matrix | - |
+
+Known gaps: real 16 and 24 GB hardware (the tier runs emulate the choices, not
+the memory pressure); vision inside a task; more than one trial per cell in the
+matrix. `dashboard.py` shows the same matrix filled in from the runs on disk.
+
 ## Seeing the results
 
 Two views, both local, nothing leaves the machine.
