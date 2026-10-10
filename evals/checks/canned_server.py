@@ -14,9 +14,12 @@ Usage: canned_server.py <port> <outdir>
 """
 import http.server, json, os, sys, time, uuid
 
+from http_fixture import LoopbackHTTPServer
+
 PORT = int(sys.argv[1]); OUT = sys.argv[2]; os.makedirs(OUT, exist_ok=True)
 SLOTS = int(os.environ.get("CANNED_SLOTS", "1")); WS = os.environ.get("CANNED_WORKSPACE", "/tmp")
 N = 0
+FORCED = False
 
 def script(body):
     msgs = body.get("messages", [])
@@ -37,6 +40,11 @@ def script(body):
     return {"text": "Canned answer."}
 
 def chunks(rid, model, action):
+    global FORCED
+    prompt_tokens = 100
+    if "tool" in action and not FORCED and os.environ.get("CANNED_FORCE_COMPACTION") == "1":
+        prompt_tokens = 32700
+        FORCED = True
     base = {"id": rid, "object": "chat.completion.chunk", "created": int(time.time()), "model": model}
     if "text" in action:
         yield {**base, "choices": [{"index": 0, "delta": {"role": "assistant", "content": action["text"]}, "finish_reason": None}]}
@@ -45,7 +53,7 @@ def chunks(rid, model, action):
     call = {"index": 0, "id": "call_" + uuid.uuid4().hex[:8], "type": "function", "function": {"name": action["tool"], "arguments": ""}}
     yield {**base, "choices": [{"index": 0, "delta": {"role": "assistant", "tool_calls": [call]}, "finish_reason": None}]}
     yield {**base, "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "function": {"arguments": json.dumps(action["args"])}}]}, "finish_reason": None}]}
-    yield {**base, "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}], "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120}}
+    yield {**base, "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}], "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": 20, "total_tokens": prompt_tokens + 20}}
 
 class H(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -81,4 +89,4 @@ class H(http.server.BaseHTTPRequestHandler):
                     "choices": [{"index": 0, "message": msg, "finish_reason": "tool_calls" if "tool" in action else "stop"}],
                     "usage": {"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110}})
 
-http.server.ThreadingHTTPServer(("127.0.0.1", PORT), H).serve_forever()
+LoopbackHTTPServer(("127.0.0.1", PORT), H).serve_forever()

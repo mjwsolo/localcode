@@ -46,3 +46,25 @@ test("system instructions form one leading message for strict templates", async 
     }
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
+
+test("compaction checklist is opt-in, additive and leaves the stable prompt untouched", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "compaction-checklist-"));
+  const original = process.env.LOCALCODE_COMPACTION_CHECKLIST;
+  try {
+    const hooks = await (Plugin as any)({ directory, client: {} });
+    const output = { context: ["Existing summary context"], prompt: "Custom prompt" };
+    delete process.env.LOCALCODE_COMPACTION_CHECKLIST;
+    await hooks["experimental.session.compacting"]({}, output);
+    expect(output.context).toHaveLength(1);
+    process.env.LOCALCODE_COMPACTION_CHECKLIST = "1";
+    await hooks["experimental.session.compacting"]({}, output);
+    expect(output.context).toHaveLength(2);
+    expect(output.context[1]).toContain("exact constraints");
+    expect(output.context[1]).toContain("checks actually run");
+    expect(output.prompt).toBe("Custom prompt");
+  } finally {
+    if (original === undefined) delete process.env.LOCALCODE_COMPACTION_CHECKLIST;
+    else process.env.LOCALCODE_COMPACTION_CHECKLIST = original;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

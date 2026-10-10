@@ -2,6 +2,7 @@
 """A canned localcode supervisor (control server) for Checks: always 'ready'.
 Usage: control_server.py <port> <model-port> <alias>"""
 import http.server, json, sys
+from http_fixture import LoopbackHTTPServer
 PORT, MPORT, ALIAS = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
 class H(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -17,4 +18,4 @@ class H(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         ln = int(self.headers.get("Content-Length") or 0); self.rfile.read(ln) if ln else None
         return self._json({"ok": True})
-http.server.ThreadingHTTPServer(("127.0.0.1", PORT), H).serve_forever()
+LoopbackHTTPServer(("127.0.0.1", PORT), H).serve_forever()
