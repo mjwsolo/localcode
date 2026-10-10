@@ -88,6 +88,8 @@ localcode recommends a model by your Mac's memory and marks it with a star. You 
 | Gemma 4 26B-A4B | 28.0 GB | UD-Q8_K_XL | 3.8B (MoE) | 64 GB |
 | Qwen 3.6 35B-A3B | 38.5 GB | UD-Q8_K_XL | 3.0B (MoE) | 96 GB |
 
+[Underdog Saluki 27B 1.0](https://huggingface.co/ConwayResearch/Underdog-Saluki-27B-1.0) is also available as an opt-in IQ2-mix model: 7.9 GB of weights, plus memory for context and runtime, with an optional 0.93 GB vision projector. Coding quality and minimum RAM have not been benchmarked on LocalCode.
+
 Min RAM is the memory at which localcode will recommend the model. You can pick a heavier one by hand. DiffusionGemma is a research model that is never recommended automatically.
 
 Measured on a top-memory Apple Silicon laptop with Qwen 3.6 35B-A3B UD-IQ2_M at a 131072-token context: about 89 tokens/s generation, about 1174 tokens/s prompt processing, and 12 to 15 seconds for a typical four-tool-call task.

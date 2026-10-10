@@ -36,7 +36,7 @@ _TIMEOUT_SEC = 15.0
 # We grab the trailing quant token: an optional UD- prefix, then a quant code
 # (Q/IQ/BF/F + digits + optional _K / _XL / _S / _M / _0 / _1 suffixes).
 _QUANT_RE = re.compile(
-    r"(UD-)?((?:IQ|Q|BF|F)\d+(?:_[A-Z0-9]+)*)\.gguf$", re.IGNORECASE
+    r"(UD-)?((?:IQ|Q|BF|F)\d+(?:_[A-Z0-9]+)*(?:-mix)?)\.gguf$", re.IGNORECASE
 )
 
 
