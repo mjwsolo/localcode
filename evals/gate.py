@@ -4,7 +4,7 @@
   gate.py <baseline.jsonl> <candidate.jsonl> [--min-drop 5] [--se-mult 2] [--set regression]
 
 Per task: pass rate over trials (pass@1 estimate). Paired difference = candidate - baseline
-on tasks present in both. Standard error of the mean paired difference across tasks.
+on identical, nonempty task/model/trial sets. Invalid or incomplete inputs fail closed. Standard error of the mean paired difference across tasks.
 Blocks when the mean drop exceeds max(min_drop points, se_mult * SE) AND at least one task
 went from all-pass to all-fail (a reproducible regression, not noise). Exit 1 = blocked.
 Also lists tasks that regressed, improved, or are new, and the efficiency medians.
@@ -18,15 +18,30 @@ a = ap.parse_args()
 
 def load(path):
     by = defaultdict(list)
+    seen = set()
     for line in open(path):
         line = line.strip()
         if not line: continue
         r = json.loads(line)
         if a.set != "all" and r.get("purpose") != a.set: continue
-        by[(r["task"], r["model"])].append(r)
+        key = (r["task"], r["model"], r["trial"])
+        if key in seen:
+            raise ValueError(f"duplicate trial: {key}")
+        if not isinstance(r.get("pass"), bool):
+            raise ValueError(f"pass must be a boolean: {key}")
+        seen.add(key)
+        by[key[:2]].append(r)
     return by
 
-B, C = load(a.baseline), load(a.candidate)
+try:
+    B, C = load(a.baseline), load(a.candidate)
+    def coverage(data):
+        return {(task, model, row["trial"]) for (task, model), rows in data.items() for row in rows}
+    if not B or coverage(B) != coverage(C):
+        raise ValueError("comparison requires identical, nonempty task/model/trial sets")
+except (OSError, ValueError, KeyError, TypeError) as error:
+    print(f"RESULT: BLOCKED (invalid evaluation input: {error})", file=sys.stderr)
+    sys.exit(1)
 def rate(rows): return 100.0 * sum(r["pass"] for r in rows) / len(rows)
 common = sorted(set(B) & set(C)); new = sorted(set(C) - set(B)); gone = sorted(set(B) - set(C))
 diffs = [rate(C[k]) - rate(B[k]) for k in common]

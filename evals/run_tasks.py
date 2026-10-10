@@ -169,7 +169,7 @@ def run_trial(task: Path, meta: dict, trial: int) -> dict:
             r = run_bounded(args, cwd=ws, env=env, text=True, timeout=budget - wall, stdin=subprocess.DEVNULL)
             out = r.stdout
             runtime_failed = runtime_failed or r.returncode != 0
-            (ev / f"stderr-turn{i}.txt").write_text(r.stderr)
+            _write(ev / f"stderr-turn{i}.txt", r.stderr)
         except subprocess.TimeoutExpired as e:
             out = e.stdout or ""; timed_out = True
             if isinstance(out, bytes): out = out.decode(errors="replace")
