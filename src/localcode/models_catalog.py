@@ -95,6 +95,12 @@ DRAFTER_MUSE = Drafter(
     revision="880882627431093d99d3b2368efb4a6fcf12d4cb",
 )
 DRAFTERS: list[Drafter] = [DRAFTER_GEMMA_12B, DRAFTER_GEMMA_26B, DRAFTER_QWEN36, DRAFTER_MUSE]
+# Sidecar files earlier releases downloaded on the user's behalf (the user never
+# picked them) that a newer Drafter record has replaced. The supervisor deletes
+# them from the models directory; nothing else ever references these names.
+RETIRED_SIDECARS: tuple[str, ...] = (
+    "dflash-Muse-Glimmer-30B-Q4_0.gguf",   # DFlash v1, replaced by DFlash 2 in 0.5.9
+)
 
 
 @dataclass(frozen=True)
