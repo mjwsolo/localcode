@@ -43,9 +43,11 @@ def _cleanup():
             except Exception: p.kill()
 atexit.register(_cleanup)
 def wait(url):
-    for _ in range(50):
+    # Allow slow process startup on hosted macOS runners.
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
         try: urllib.request.urlopen(url, timeout=0.5); return
-        except Exception: time.sleep(0.1)
+        except Exception: time.sleep(0.2)
     raise SystemExit(f"server not up: {url}\n" + (OUT / "servers.log").read_text(errors="replace")[-4000:])
 wait(f"http://127.0.0.1:{mport}/health"); wait(f"http://127.0.0.1:{cport}/status")
 
