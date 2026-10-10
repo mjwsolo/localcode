@@ -12,7 +12,7 @@ permissions:
   contents: read
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 120
     outputs:
       result: ${{ steps.build.outputs.result }}
