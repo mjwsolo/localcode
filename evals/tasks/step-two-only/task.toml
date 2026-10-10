@@ -1,0 +1,12 @@
+id = "step-two-only"
+quality = "fidelity"          # capability | reliability | safety_scope | efficiency | fidelity
+component = "harness"
+purpose = "regression"          # regression | tracking
+turns = 2
+trials = 1
+require_all_trials = false
+budget_steps = 20
+budget_seconds = 900
+allowed_paths = ['app/calc.py']
+null_passes = false
+notes = ""

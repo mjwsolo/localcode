@@ -1,0 +1,1 @@
+Refactor app/report.py: extract the total computation into a function named total(rows) and the line formatting into format_line(row). report() must keep the exact same output. Tests must stay unchanged and green.

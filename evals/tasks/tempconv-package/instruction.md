@@ -1,0 +1,1 @@
+Create a small Python package called tempconv with a src layout: functions c_to_f, f_to_c, c_to_k, k_to_c; raise ValueError below absolute zero; a pyproject.toml; and pytest tests covering every function and the error. Run the tests.
