@@ -108,11 +108,7 @@ except (OSError, ValueError):
 (OUT / "runtime.json").write_text(json.dumps({"model": a.model, "context": st.get("ctx"), "slots": props.get("total_slots"), "generation_context": (props.get("default_generation_settings") or {}).get("n_ctx")}, indent=2))
 binary_sha = subprocess.run(["shasum", "-a", "256", str(UI)], capture_output=True, text=True).stdout[:12]
 cfg = HOME / "session.json"
-subprocess.run([str(PY), "-c", f"import sys; sys.path.insert(0, {str(REPO / 'src')!r}); from pathlib import Path
-try:
-    import tomllib
-except ModuleNotFoundError:
-    import tomli as tomllib; from localcode.ui.launch import write_config; write_config(Path({str(cfg)!r}), port={mport}, ctx={int(st.get('ctx') or 32768)}, alias={a.model!r})"], check=True)
+subprocess.run([str(PY), "-c", f"import sys; sys.path.insert(0, {str(REPO / 'src')!r}); from pathlib import Path; from localcode.ui.launch import write_config; write_config(Path({str(cfg)!r}), port={mport}, ctx={int(st.get('ctx') or 32768)}, alias={a.model!r})"], check=True)
 
 def turns_of(task: Path):
     text = (task / "instruction.md").read_text()
