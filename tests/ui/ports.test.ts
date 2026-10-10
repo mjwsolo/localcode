@@ -4,6 +4,8 @@ import { python, pythonEnv } from "./support/python"
 
 test("an existing picker prevents a second launch, while unrelated listeners reserve ports", () => {
   const result = Bun.spawnSync([python, "-c", `
+import faulthandler
+faulthandler.dump_traceback_later(3, exit=True)
 import json, socket, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from localcode.ui.ports import choose_ports

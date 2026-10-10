@@ -1,4 +1,6 @@
 """Exercise real process ownership without loading model weights."""
+import faulthandler
+faulthandler.dump_traceback_later(10, exit=True)
 import json
 import os
 from pathlib import Path
