@@ -73,6 +73,10 @@ OpenAI compatible endpoint. See the [Local API guide](https://mjwsolo.github.io/
 
 ## Models
 
+Model downloads run in parallel and keep verified chunks after cancellation or
+interruption. Select the same model again to resume. Resume requires HTTP range
+support and a stable server ETag; otherwise the download restarts safely.
+
 localcode recommends a model by your Mac's memory and marks it with a star. You choose; nothing is selected for you. Every quant the model's repository ships is listed, with a fit badge for your machine. Every model runs on binaries shipped in the package.
 
 | Model | Weights | Quant | Active params | Min RAM |

@@ -5,11 +5,20 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
+## 0.5.12 — 2026-10-11
+
 ### Added
 
 - Underdog Saluki 27B 1.0 in the model picker: pinned 7.9 GB IQ2-mix
   weights, Qwen reasoning controls and optional vision. Opt-in while LocalCode
   coding quality remains unmeasured.
+
+### Changed
+
+- Model downloads use parallel HTTP ranges with verified chunk checkpoints.
+  Cancelled and interrupted transfers keep completed chunks for the next attempt;
+  servers without range support fall back to a full transfer.
+- Download progress includes transfer speed.
 
 ## 0.5.11 — 2026-10-10
 
