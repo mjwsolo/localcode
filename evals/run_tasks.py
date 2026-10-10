@@ -20,6 +20,9 @@ from performance import summarize, ResourceMeter
 from process import run_bounded
 
 HERE = Path(__file__).resolve().parent; TASKS = HERE / "tasks"
+# Text that is a tool call the model wrote out instead of emitting: JSON with a
+# tool name and arguments, or the XML-ish wrappers some chat templates use.
+NARRATED_CALL_RE = re.compile(r'<(?:tool_call|function_call|invoke|function=)[\s>]|"(?:name|tool_name|function)"\s*:\s*"[a-z_]+"\s*,\s*"(?:arguments|parameters|input)"\s*:', re.I)
 ap = argparse.ArgumentParser()
 ap.add_argument("--repo", required=True); ap.add_argument("--model", required=True)
 ap.add_argument("--tasks", default=""); ap.add_argument("--set", default="regression", choices=["regression", "tracking", "all"])
@@ -152,6 +155,7 @@ def run_trial(task: Path, meta: dict, trial: int) -> dict:
            "LOCALCODE_CONTROL_URL": f"http://127.0.0.1:{cport}", "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS": "1", "OPENCODE_DISABLE_LSP_DOWNLOAD": "1", "LOCALCODE_PARALLEL": "1",
            "LOCALCODE_AGENT_RUN_DIR": str(RUN_DIR)}
     steps = tool_calls = 0; commands = []; final = ""; reread = []; wall = 0.0; ui_errors = []; timed_out = False; runtime_failed = False; calls_per_turn = []
+    tool_invalid = tool_rejected = tool_guarded = tool_narrated = 0; tool_invalid_samples: list[str] = []
     lengths_before = len(server_prompt_lengths()); budgets = []
     server_log = RUN_DIR / "server.log"
     log_offset = server_log.stat().st_size if server_log.exists() else 0
@@ -191,8 +195,23 @@ def run_trial(task: Path, meta: dict, trial: int) -> dict:
             if t == "step_start": steps += 1
             elif t == "tool_use":
                 tool_calls += 1; turn_calls += 1
+                st = p.get("state") or {}
+                if st.get("status") == "error":
+                    msg = str(st.get("error", ""))
+                    # Harness-caused refusals (headless permission policy, the plugin's
+                    # own guards) are not the model's fault; everything else is a call
+                    # the model emitted that could not execute (bad arguments, unknown
+                    # tool, truncated JSON, ...).
+                    if "rejected permission" in msg: tool_rejected += 1
+                    elif msg.startswith("SYSTEM:") or "LocalCode" in msg or "head, tail" in msg: tool_guarded += 1
+                    else: tool_invalid += 1; tool_invalid_samples.append(msg[:160])
                 if p.get("tool") == "bash": commands.append(str((p.get("state") or {}).get("input", {}).get("command", "")))
-            elif t == "text": turn_text.append(str(p.get("text") or e.get("text") or ""))
+            elif t == "text":
+                txt = str(p.get("text") or e.get("text") or "")
+                turn_text.append(txt)
+                # A tool call written out as prose instead of emitted as a call: the
+                # model meant to act and nothing ran. Counted, never executed.
+                if NARRATED_CALL_RE.search(txt): tool_narrated += 1
         final = "\n".join(turn_text).strip() or final
         calls_per_turn.append(turn_calls)
         _write(ev / f"final_turn{i}.txt", "\n".join(turn_text).strip())
@@ -220,7 +239,13 @@ def run_trial(task: Path, meta: dict, trial: int) -> dict:
     with server_log.open("rb") as stream:
         stream.seek(log_offset)
         performance = summarize(all_events, stream.read().decode(errors="replace"))
+    # Tool-call validity: of the calls the model meant to make, how many executed.
+    # Harness refusals (permission policy, plugin guards) are reported but excluded.
+    counted = tool_calls + tool_narrated - tool_rejected - tool_guarded
+    tool_validity = round((counted - tool_invalid - tool_narrated) / counted, 3) if counted > 0 else None
     metrics = {"steps": steps, "tool_calls": tool_calls, "tool_calls_per_turn": calls_per_turn, "wall_s": round(wall, 1), "reread_tokens": reread,
+               "tool_invalid": tool_invalid, "tool_narrated": tool_narrated, "tool_rejected": tool_rejected, "tool_guarded": tool_guarded,
+               "tool_validity": tool_validity, "tool_invalid_samples": tool_invalid_samples[:5],
                "prompt_tokens_max": max(lengths) if lengths else 0, "prompt_tokens_by_request": lengths, "budget_by_turn": budgets,
                **resources, **performance, "compactions": compactions, "context": control_budget(), "timed_out": timed_out, "runtime_failed": runtime_failed}
     (ev / "metrics.json").write_text(json.dumps(metrics))
@@ -244,9 +269,14 @@ with open(OUT / "results.jsonl", "a") as f:
                        "model": a.model, "trial": trial, "pass": False, "notes": f"runner error: {type(e).__name__}: {e}"[:300], "steps": 0, "tool_calls": 0,
                        "wall_s": 0.0, "reread_tokens": [], "binary_sha": binary_sha, "ts": time.strftime("%Y-%m-%dT%H:%M:%S")}
             rows.append(row); f.write(json.dumps(row) + "\n"); f.flush()
-            log(f"{task.name:<20} trial {trial}  {'PASS' if row['pass'] else 'FAIL'}  steps={row['steps']} tools={row['tool_calls']} wall={row['wall_s']}s reread={row['reread_tokens']}  {row['notes'][:70]}")
+            log(f"{task.name:<20} trial {trial}  {'PASS' if row['pass'] else 'FAIL'}  steps={row['steps']} tools={row['tool_calls']} valid={row.get('tool_validity')} wall={row['wall_s']}s reread={row['reread_tokens']}  {row['notes'][:70]}")
 by = {}
 for r in rows: by.setdefault(r["task"], []).append(r["pass"])
+_calls = sum(r.get("tool_calls", 0) + r.get("tool_narrated", 0) - r.get("tool_rejected", 0) - r.get("tool_guarded", 0) for r in rows)
+_bad = sum(r.get("tool_invalid", 0) + r.get("tool_narrated", 0) for r in rows)
+print(f"\ntool-call validity: {_calls - _bad}/{_calls} executed" + (f" ({(_calls - _bad) / _calls * 100:.1f}%)" if _calls else "") +
+      f"; invalid={sum(r.get('tool_invalid', 0) for r in rows)} narrated={sum(r.get('tool_narrated', 0) for r in rows)} "
+      f"rejected-by-harness={sum(r.get('tool_rejected', 0) for r in rows)} guarded={sum(r.get('tool_guarded', 0) for r in rows)}")
 print(f"\n{'task':<20}{'trials':>7}{'pass@k':>8}{'pass^k':>8}")
 for t, ps in by.items(): print(f"{t:<20}{len(ps):>7}{('yes' if any(ps) else 'no'):>8}{('yes' if all(ps) else 'no'):>8}")
 tot = sum(r["pass"] for r in rows); print(f"\n{tot}/{len(rows)} trials passed  ->  {OUT / 'results.jsonl'}")
