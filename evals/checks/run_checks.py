@@ -46,7 +46,7 @@ def wait(url):
     for _ in range(50):
         try: urllib.request.urlopen(url, timeout=0.5); return
         except Exception: time.sleep(0.1)
-    raise SystemExit(f"server not up: {url}")
+    raise SystemExit(f"server not up: {url}\n" + (OUT / "servers.log").read_text(errors="replace")[-4000:])
 wait(f"http://127.0.0.1:{mport}/health"); wait(f"http://127.0.0.1:{cport}/status")
 
 cfg = home / "session.json"

@@ -14,6 +14,8 @@ Usage: canned_server.py <port> <outdir>
 """
 import http.server, json, os, sys, time, uuid
 
+from http_fixture import LoopbackHTTPServer
+
 PORT = int(sys.argv[1]); OUT = sys.argv[2]; os.makedirs(OUT, exist_ok=True)
 SLOTS = int(os.environ.get("CANNED_SLOTS", "1")); WS = os.environ.get("CANNED_WORKSPACE", "/tmp")
 N = 0
@@ -87,4 +89,4 @@ class H(http.server.BaseHTTPRequestHandler):
                     "choices": [{"index": 0, "message": msg, "finish_reason": "tool_calls" if "tool" in action else "stop"}],
                     "usage": {"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110}})
 
-http.server.ThreadingHTTPServer(("127.0.0.1", PORT), H).serve_forever()
+LoopbackHTTPServer(("127.0.0.1", PORT), H).serve_forever()

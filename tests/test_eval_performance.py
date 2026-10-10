@@ -79,3 +79,16 @@ def test_eval_cli_help_starts_without_loading_models(name):
     result = subprocess.run([sys.executable, str(script), '--help'], capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr
     assert '--model' in result.stdout
+
+
+def test_loopback_fixture_never_uses_reverse_dns(monkeypatch):
+    from http.server import BaseHTTPRequestHandler
+    spec = importlib.util.spec_from_file_location('http_fixture', Path(__file__).resolve().parents[1]/'evals/checks/http_fixture.py')
+    fixture = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fixture)
+    def forbidden(*args):
+        raise AssertionError('fixture attempted reverse DNS')
+    monkeypatch.setattr('socket.getfqdn', forbidden)
+    with fixture.LoopbackHTTPServer(('127.0.0.1', 0), BaseHTTPRequestHandler) as server:
+        assert server.server_name == '127.0.0.1'
+        assert server.server_port > 0
