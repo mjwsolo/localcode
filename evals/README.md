@@ -41,6 +41,20 @@ unique output paths, propagate runner failures, and select previous runs only
 when they carry a `.complete` marker. The first run establishes a baseline; it
 does not establish acceptable model quality by itself.
 
+## Seeing the results
+
+Two views, both local, nothing leaves the machine.
+
+- `python3 evals/dashboard.py [--open]` renders every run on disk as one HTML page
+  (`evals/runs/dashboard.html`): the coverage matrix per catalog model (which layers of
+  evidence exist), the latest run per model, a task-by-model heatmap, tool-call validity,
+  decode speed, and pass-rate history. No dependencies.
+- `pip install inspect-ai && python3 evals/export_inspect.py --view` exports each run as an
+  [Inspect AI](https://inspect.aisi.org.uk) log and opens `inspect view`: per-trial
+  transcripts rebuilt from the saved UI events (every tool call and result), the grader's
+  verdict and note, the runner's metrics as sample metadata, and side-by-side comparison
+  across runs. Use it to read what a model actually did on a failing task.
+
 ## A/B on one model
 
 Any launcher setting with an environment override can be compared with the gate. Example,
