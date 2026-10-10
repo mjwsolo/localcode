@@ -10,3 +10,6 @@ budget_seconds = 900
 allowed_paths = ['**']
 null_passes = true
 notes = "kind=check; the Tasks runner skips it"
+setup = ""
+teardown = ""
+mcp = {}

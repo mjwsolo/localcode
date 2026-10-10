@@ -10,3 +10,6 @@ budget_seconds = 900
 allowed_paths = ['SUMMARY.md']
 null_passes = true
 notes = ""
+setup = ""
+teardown = ""
+mcp = {}
