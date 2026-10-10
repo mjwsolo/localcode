@@ -5,6 +5,19 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
+### Changed
+
+- **Smaller tool schemas on every new session.** The first request of a
+  session carried about 12.6k characters of tool definitions (roughly 3,300
+  tokens, most of the request). The bash description was 4.7k characters of
+  upstream text about quoting and directory checks; it is now a 750-character
+  statement of what the model needs (the pre-approved temp directory, the
+  default timeout, the truncation limits, when to use the other tools, the
+  git rules). The runtime no longer sends a meta-schema line or sentinel
+  integer bounds in each schema, websearch no longer exposes provider tuning
+  knobs, and glob's path hint is one line. Tool definitions are 7.1k
+  characters now, about 1,360 tokens less per session.
+
 ### Fixed
 
 - **Publish verification waits for PyPI.** The post-publish install check ran

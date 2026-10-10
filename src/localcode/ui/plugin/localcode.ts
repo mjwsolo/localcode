@@ -165,6 +165,35 @@ function renderTodos(todos: Todo[]): string {
 // Plateau breaker: pure parts (exported for tests).
 // ---------------------------------------------------------------------------
 
+// ── Tool definitions the model sees ────────────────────────────────────────────
+// Tool schemas are most of every session's first request, and the bash
+// description alone was 1,340 tokens of upstream text (quoting lessons, a
+// directory-verification ritual, "AVOID find/grep" lists). Local models read it
+// on every new session, so the runtime's tool.definition hook replaces it. The
+// facts the model needs (the pre-approved temp dir, the default timeout, the
+// truncation limits) are lifted out of the original text so they stay exact.
+// Schema-level noise is trimmed in the runtime itself (fork: tool/json-schema.ts).
+function bashDescription(original: string): string {
+  const tmp = /Use `([^`]+)` for temporary work/.exec(original)?.[1];
+  const timeout = /time out after (\d+)ms/.exec(original)?.[1];
+  const limits = /exceeds (\d+) lines or (\d+) bytes/.exec(original);
+  const lines: string[] = [
+    "Runs a bash command in a persistent shell. Commands run in the project directory; pass `workdir` to run elsewhere instead of `cd`.",
+    tmp ? `Use \`${tmp}\` for temporary files; it exists and is pre-approved.` : "",
+    "For file work use the dedicated tools (read, edit, write, glob, grep), not cat/sed/find/grep.",
+    timeout ? `Default timeout ${Math.round(Number(timeout) / 1000)} s; set \`timeout\` (ms) for longer runs.` : "",
+    limits ? `Output over ${limits[1]} lines or ${limits[2]} bytes is truncated and saved to a file you can read.` : "",
+    "Run independent commands as separate tool calls in one message; chain dependent ones with `&&`.",
+    "Git: only commit, push or open PRs when asked. Check `git status` and `git diff` first, stage only intended files, never commit secrets, use `gh` for GitHub.",
+  ];
+  return lines.filter(Boolean).join("\n");
+}
+function trimToolDefinition(toolID: string, output: { description: string }): void {
+  if (toolID === "bash" && typeof output.description === "string" && output.description.length > 1200) {
+    output.description = bashDescription(output.description);
+  }
+}
+
 const PLATEAU_MIN_ROUND = 4;        // never act before this many tool rounds
 const PLATEAU_NUDGE_AFTER = 6;      // consecutive no-progress rounds -> nudge once
 const PLATEAU_STOP_AFTER = 8;       // further no-progress rounds after the nudge -> stop
@@ -647,6 +676,10 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
   }
 
   return {
+    "tool.definition": async (input: { toolID: string }, output: { description: string }) => {
+      trimToolDefinition(input.toolID, output);
+    },
+
     "experimental.chat.system.transform": async (input, output) => {
       // A session opened through the picker keeps the launcher's "__pending__"
       // placeholder as the wire id, and the runtime quotes that id in its
@@ -846,5 +879,5 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
 // if one is not a function ("Plugin export is not a function") — which silently
 // disabled this whole plugin once test helpers were exported. Expose the helpers
 // as properties on the plugin function instead; tests read them from `default`.
-Object.assign(LocalcodePlugin, { PLATEAU_MIN_ROUND, PLATEAU_NUDGE_AFTER, PLATEAU_STOP_AFTER, PLATEAU_RECENT_PASS, PLATEAU_PASS_GRACE, PLATEAU_STOP_DENIALS, SAME_CALL_NUDGE_AFTER, SAME_CALL_STOP_AFTER, callSignature, newProgressMemory, projectCheck, checkDirectory, CHECK_CMD, isCheckCommand, filteredCheck, isTempPath, editedPaths, failureSignatures, checkPassed, progressOf, referenceOnlyTypecheck, RepeatedCheckTracker, PlateauTracker, plateauNudgeText, PLATEAU_PASS_TEXT });
+Object.assign(LocalcodePlugin, { PLATEAU_MIN_ROUND, PLATEAU_NUDGE_AFTER, PLATEAU_STOP_AFTER, PLATEAU_RECENT_PASS, PLATEAU_PASS_GRACE, PLATEAU_STOP_DENIALS, SAME_CALL_NUDGE_AFTER, SAME_CALL_STOP_AFTER, callSignature, newProgressMemory, projectCheck, checkDirectory, CHECK_CMD, isCheckCommand, filteredCheck, isTempPath, editedPaths, failureSignatures, checkPassed, progressOf, referenceOnlyTypecheck, RepeatedCheckTracker, PlateauTracker, plateauNudgeText, PLATEAU_PASS_TEXT, bashDescription, trimToolDefinition });
 export default LocalcodePlugin;
