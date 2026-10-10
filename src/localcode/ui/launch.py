@@ -183,6 +183,82 @@ def runtime_env(config_path: Path, ctrl: int, *, trust_project: bool = False) ->
     return env
 
 
+MCP_HELP = """usage: localcode mcp <add|list|auth|logout|debug> [args] [--trust-project]
+
+Manage the MCP servers the agent can use. The commands are the runtime's own:
+  add       interactive: scope (this project or your user config), name, type,
+            command or URL; writes the server into localcode.json
+  list      servers and their status (OAuth state for remote servers)
+  auth      sign in to a remote server that uses OAuth: localcode mcp auth <name>
+  logout    forget a remote server's OAuth tokens
+  debug     connect to a server and print what it exposes
+
+Servers declared in the project's localcode.json load only when you launch
+with --trust-project (project configuration can run code). Pass the same flag
+here to see them in `list`. Servers in ~/.config/localcode-agent/localcode.json
+always load. In a session, /mcps toggles servers on and off.
+"""
+
+
+def _project_mcp_names(project_dir: Path) -> list[str]:
+    """Server names declared in the project's own config, if any."""
+    for name in ("localcode.json", "localcode.jsonc", "opencode.json", "opencode.jsonc"):
+        f = project_dir / name
+        if not f.is_file():
+            continue
+        try:
+            # .jsonc: drop whole-line // comments only; a "//" inside a URL stays.
+            text = "\n".join(line for line in f.read_text().splitlines() if not line.lstrip().startswith("//"))
+            data = json.loads(text)
+        except (OSError, ValueError):
+            continue
+        if isinstance(data.get("mcp"), dict):
+            return sorted(data["mcp"])
+    return []
+
+
+def mcp_main(argv: list[str]) -> int:
+    """`localcode mcp ...`: run the runtime's own MCP commands with this
+    install's config and trust environment, so a user never edits JSON by hand
+    to add a server."""
+    args = list(argv)
+    trust = "--trust-project" in args
+    args = [a for a in args if a != "--trust-project"]
+    if not args or args[0] in {"-h", "--help", "help"}:
+        print(MCP_HELP, end="")
+        return 0
+    ui_bin = ui_binary_path()
+    if ui_bin is None:
+        print("localcode: the UI binary is missing from this install. Reinstall with `pip install -U localcode`.", file=sys.stderr)
+        return 1
+    project_dir = Path.cwd()
+    rd = run_dir()
+    rd.mkdir(parents=True, exist_ok=True)
+    config_path = rd / f"mcp-{os.getpid()}.json"
+    # No model is involved; the session config only carries the provider wiring
+    # the runtime expects to find, plus the plugin, and is removed afterwards.
+    write_config(config_path, port=0, ctx=0, alias=None)
+    env = runtime_env(config_path, 0, trust_project=trust)
+    before = set(_project_mcp_names(project_dir))
+    try:
+        code = subprocess.call([str(ui_bin), "mcp", *args], cwd=str(project_dir), env=env)
+    finally:
+        try:
+            config_path.unlink()
+        except OSError:
+            pass
+    after = _project_mcp_names(project_dir)
+    added = [n for n in after if n not in before]
+    if args[0] == "add" and added:
+        print(f"localcode: {', '.join(added)} is declared in this project's localcode.json. "
+              "Project servers load only when you launch with `localcode --trust-project`; "
+              "for every project, add it to your user config instead (scope: user).", file=sys.stderr)
+    elif args[0] == "list" and after and not trust:
+        print(f"localcode: this project also declares {', '.join(after)}; they are hidden here and in sessions "
+              "until you pass --trust-project.", file=sys.stderr)
+    return code
+
+
 def attach(ctrl: int, status: dict, ui_bin: Path, project_dir: Path, alias: str | None,
            resume: str | None = None, *, trust_project: bool = False) -> int:
     """Open another UI window on the model server a running session owns."""
