@@ -578,10 +578,30 @@ CHOICES: list[ModelChoice] = [
 ]
 
 
+def _forced_ram_gb() -> int | None:
+    import os
+    raw = os.environ.get("LOCALCODE_RAM_GB", "").strip()
+    if not raw:
+        return None
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return None
+
+
 def _system_ram_gb() -> int:
     """Standalone RAM probe — mirrors LocalCodeRuntimeGateway._system_ram_gb so
     the picker doesn't need a runtime instance. Falls back to 16 on any failure
-    (conservative — favors the lightweight model)."""
+    (conservative — favors the lightweight model).
+
+    LOCALCODE_RAM_GB makes the probe report that figure instead, so the evals
+    can run the choices a 16 or 24 GB Mac would make on a larger machine. It
+    is an eval knob, not a setting: every RAM-derived choice (quant fit,
+    context ceiling, slots) follows it, so set it only on a machine that can
+    actually hold what the smaller tier would pick."""
+    forced = _forced_ram_gb()
+    if forced is not None:
+        return forced
     try:
         import platform, subprocess
         if platform.system() == "Darwin":

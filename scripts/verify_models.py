@@ -183,6 +183,20 @@ def decision_control(server, body):
             worker.join(timeout=5)
 
 
+VISION_KEYS = {c.key for c in catalog.CHOICES if getattr(c, "mmproj_filename", None)}
+
+
+def _red_png_data_uri():
+    """A 64x64 solid red PNG, built here so the gate needs no fixture file."""
+    import base64, struct, zlib
+    w = h = 64
+    raw = b"".join(b"\x00" + bytes((220, 30, 30)) * w for _ in range(h))
+    def chunk(tag, data):
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+    png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
+    return "data:image/png;base64," + base64.b64encode(png).decode()
+
+
 def verify(server, *, runtime=False):
     messages = [{"role": "system", "content": "You are a helpful assistant.\n\nAnswer briefly."}, {"role": "user", "content": "Reply with exactly OK."}]
     body = {"model": server.choice.key, "messages": messages, "temperature": 0, "max_tokens": 8192, "cache_prompt": True}
@@ -197,6 +211,15 @@ def verify(server, *, runtime=False):
     message = server.request("/v1/chat/completions", body)["choices"][0]["message"]
     assert (message.get("content") or "").strip(), "empty chat response"
     checks = ["auth", "template", "chat"]
+    if "--mmproj" in server.command:
+        # The shipping launch includes the vision projector: an image request
+        # must be answered from the image, not refused or ignored.
+        vision_body = {**body, "max_tokens": 64, "messages": [body["messages"][0], {"role": "user", "content": [
+            {"type": "text", "text": "What colour is this image? Answer with one word."},
+            {"type": "image_url", "image_url": {"url": _red_png_data_uri()}}]}]}
+        answer = (server.request("/v1/chat/completions", vision_body)["choices"][0]["message"].get("content") or "").lower()
+        assert "red" in answer, f"vision answer did not name the colour: {answer[:80]!r}"
+        checks.append("vision")
     if server.choice.key == "openjev":
         decision_body = {"state": "The customer was charged twice.", "questions": {"route": {"type": "choice", "instructions": "Which team should handle this?", "criteria": {"billing": None, "shipping": None, "technical": None}}, "angry": {"type": "noul", "instructions": "Is the customer angry?"}, "urgency": {"type": "score", "instructions": "How urgent?", "criteria": ["low", "medium", "high"]}}}
         data = server.request("/v1/systemone", decision_body)
@@ -245,6 +268,8 @@ def validate_receipt(receipt, commit, hashes, keys):
             expected.add("runtime")
         if key == "openjev":
             expected.add("decision-control")
+        if key in VISION_KEYS:
+            expected.add("vision")
         assert expected <= checks, "missing checks for " + key
     assert any(r["key"] == "qwen" and r["turbo4"] and "tool-loop" in r["checks"] for r in receipt["models"]), "turbo4 not verified"
 
