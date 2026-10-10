@@ -119,3 +119,6 @@ llama-cpp-turboquant/.github/
 /docs/assets/logo/light.jpg
 # Obsolete classic-runtime lockfile; shipping installs use pyproject.toml
 /uv.lock
+
+# Eval results (per-run model outputs, logs, throwaway homes)
+/evals/runs/
