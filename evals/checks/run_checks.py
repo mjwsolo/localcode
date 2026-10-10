@@ -12,11 +12,19 @@ import argparse, json, os, shutil, signal, subprocess, sys, tempfile, time, urll
 from pathlib import Path
 
 ap = argparse.ArgumentParser(); ap.add_argument("repo"); ap.add_argument("out"); ap.add_argument("--slots", type=int, default=1); ap.add_argument("--plugin"); ap.add_argument("--keep", action="store_true")
-ap.add_argument("--force-compaction", action="store_true")
+ap.add_argument("--force-compaction", action="store_true"); ap.add_argument("--installed", action="store_true")
 a = ap.parse_args()
 REPO = Path(a.repo).resolve(); OUT = Path(a.out).resolve(); OUT.mkdir(parents=True, exist_ok=True)
 for f in OUT.glob("req-*.json"): f.unlink()
 UI = REPO / "src/localcode/bin/localcode-ui"
+# --installed: exercise the package the interpreter has installed (a wheel in a
+# clean environment) instead of the checkout, so a release candidate is checked
+# the way a user gets it.
+if a.installed:
+    import importlib.util
+    spec = importlib.util.find_spec("localcode")
+    assert spec and spec.origin, "localcode is not installed in this interpreter"
+    UI = Path(spec.origin).parent / "bin" / "localcode-ui"
 # The python that can import localcode from <repo>/src: LOCALCODE_PY, else the
 # checkout's .venv, else the interpreter running this script (CI installs -e .).
 PY = Path(os.environ.get("LOCALCODE_PY") or (REPO / ".venv/bin/python" if (REPO / ".venv/bin/python").exists() else sys.executable))
@@ -55,7 +63,7 @@ cfg = home / "session.json"
 code = f"""
 import json, sys
 from pathlib import Path
-sys.path.insert(0, {str(REPO / 'src')!r})
+sys.path.insert(0, {str(REPO / 'src')!r}) if not {a.installed!r} else None
 from localcode.ui.launch import write_config
 write_config(Path({str(cfg)!r}), port={mport}, ctx=32768, alias={alias!r})
 c = json.load(open({str(cfg)!r}))

@@ -554,4 +554,61 @@ echo '{"steps": 6, "tool_calls": 5, "tool_calls_per_turn": [3, 0, 2]}' > .eval/m
 echo "A monad is a wrapper for computations that lets you chain operations while handling context like state or failure." > .eval/final_turn2.txt
 ''')
 
+
+# 23 compaction-depth (reliability, runtime, tracking) ----------------------------------
+# A long session that must cross at least one compaction and still finish the
+# job it was given at the start. The regression set runs with the machine's
+# full context, where this rarely compacts, so it is a tracking task; matrix.py
+# runs it with LOCALCODE_OVERRIDE_NCTX=16384 where it always does.
+DEPTH = {**TEN, "app/geo.py": "def area(w, h):\n    return w * h\n\n\ndef perimeter(w, h):\n    return 2 * (w + h)\n",
+         "app/units.py": "def km_to_miles(km):\n    return km * 0.621371\n\n\ndef c_to_f(c):\n    return c * 9 / 5 + 32\n",
+         "NOTES.md": "# Notes\n\nThe word of the day is PELICAN. Keep it in mind for later.\n"}
+_DEPTH_FUNCS = [("app/calc.py", "add"), ("app/calc.py", "div"), ("app/fmt.py", "money"), ("app/text.py", "title"),
+                ("app/geo.py", "area"), ("app/geo.py", "perimeter"), ("app/units.py", "km_to_miles"), ("app/units.py", "c_to_f")]
+task("compaction-depth", quality="reliability", purpose="tracking", component="runtime", steps=60, seconds=2400,
+     turns=["Read NOTES.md and remember the word of the day. Then read every file under app/ and list the functions in one line each."]
+           + [f"Add a one-line docstring to {fn}() in {f}. Reply with one short line when done." for f, fn in _DEPTH_FUNCS]
+           + ["Run the tests and report the result in one line.",
+              "Read app/geo.py again and explain perimeter() in one sentence.",
+              "Read app/units.py again and explain c_to_f() in one sentence.",
+              "List every function that now has a docstring, one per line.",
+              "Without opening any file, what was the word of the day in NOTES.md? Answer with just the word."],
+     workspace=DEPTH, allowed=["app/**"],
+     test=diff_ok("app/.*") + '''
+[ -s .eval/ui_errors.txt ] && { pass_json false "runtime errors: $(head -c 160 .eval/ui_errors.txt)"; exit 0; }
+python3 - <<'PY' > .eval/check.txt 2>&1; ok=$?
+import ast, json, os, glob
+m=json.load(open(".eval/metrics.json")) if os.path.exists(".eval/metrics.json") else {}
+assert not m.get("timed_out"), "session timed out"
+assert (m.get("compactions") or 0) >= 1, "no compaction happened: run with LOCALCODE_OVERRIDE_NCTX=16384 or a smaller context"
+turns=sorted(glob.glob(".eval/final_turn*.txt"), key=lambda p: int(p.split("final_turn")[1].split(".")[0]))
+assert len(turns) >= 14, f"only {len(turns)} turns completed"
+last=open(turns[-1]).read().upper()
+assert "PELICAN" in last, f"lost the word of the day after compaction: {last[:80]!r}"
+for f, fn in [("app/calc.py","add"),("app/calc.py","div"),("app/fmt.py","money"),("app/text.py","title"),("app/geo.py","area"),("app/geo.py","perimeter"),("app/units.py","km_to_miles"),("app/units.py","c_to_f")]:
+    t=ast.parse(open(f).read()); fns={n.name:n for n in t.body if isinstance(n,ast.FunctionDef)}
+    assert ast.get_docstring(fns[fn]), f"{f}:{fn} has no docstring"
+PY
+''' + verdict(f"[ $ok = 0 ] && {PYTEST} tests >/dev/null 2>&1", "crossed a compaction, kept the early fact, all eight edits landed, tests green", "$(tail -1 .eval/check.txt)"),
+     solve='''
+mkdir -p .eval && python3 - <<'PY'
+import json
+json.dump({"steps": 30, "tool_calls": 28, "compactions": 1, "timed_out": False}, open(".eval/metrics.json", "w"))
+for i in range(1, 15): open(f".eval/final_turn{i}.txt", "w").write("done")
+open(".eval/final_turn14.txt", "w").write("PELICAN")
+def doc(path, pairs):
+    s = open(path).read()
+    for fn, d in pairs:
+        head, sep, rest = s.partition(f"def {fn}(")
+        line, nl, tail = rest.partition("\\n")
+        s = head + sep + line + nl + f'    """{d}"""' + nl + tail
+    open(path, "w").write(s)
+doc("app/calc.py", [("add", "Return a plus b."), ("div", "Return a divided by b.")])
+doc("app/fmt.py", [("money", "Format x as dollars.")])
+doc("app/text.py", [("title", "Title-case s.")])
+doc("app/geo.py", [("area", "Return w times h."), ("perimeter", "Return the perimeter.")])
+doc("app/units.py", [("km_to_miles", "Convert km to miles."), ("c_to_f", "Convert Celsius to Fahrenheit.")])
+PY
+''')
+
 print("generated", len(list(ROOT.iterdir())) - 1, "tasks")
