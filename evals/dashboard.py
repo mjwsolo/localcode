@@ -94,14 +94,21 @@ def catalog_models() -> list[tuple[str, str, bool]]:
         return []
 
 
-def gate_receipt() -> dict:
-    for p in (HERE.parent / ".localcode-agent" / "verify_models.json", HERE.parent / "dev" / "verify_models.json"):
-        if p.is_file():
+def gate_receipt(dirs: list[Path]) -> dict:
+    """The newest local-gate receipt: scripts/verify_models.py writes it to
+    <checkout>/.localcode-gate/receipt.json; a copy kept as <runs>/gate-<sha>.json
+    survives the checkout being deleted."""
+    candidates = [HERE.parent / ".localcode-gate" / "receipt.json"]
+    for d in dirs:
+        candidates += sorted(d.glob("gate-*.json"))
+    best, best_t = {}, -1.0
+    for p in candidates:
+        if p.is_file() and p.stat().st_mtime > best_t:
             try:
-                return json.loads(p.read_text())
+                best, best_t = json.loads(p.read_text()), p.stat().st_mtime
             except Exception:
-                pass
-    return {}
+                continue
+    return best
 
 
 def model_key(alias: str) -> str:
@@ -216,7 +223,8 @@ def bars(items: list[tuple[str, float | None]], kind: str, vmax: float | None = 
     return "".join(rows)
 
 
-def render(runs: list[dict]) -> str:
+def render(runs: list[dict], dirs: list[Path]) -> str:
+    receipt = gate_receipt(dirs)
     latest: dict[str, dict] = {}
     for r in sorted(runs, key=lambda r: r["date"]):
         # The newest full run per model; a smoke run of a few tasks never
@@ -227,32 +235,43 @@ def render(runs: list[dict]) -> str:
             latest[r["model"]] = r
     models = sorted(latest, key=lambda m: -summarize(latest[m])["pass_rate"])
     tasks = sorted({row["task"] for r in runs for row in r["rows"]})
-    receipt = gate_receipt()
-    gated = {m["key"] for m in receipt.get("models", [])} if receipt else set()
-    vision_gated = {m["key"] for m in receipt.get("models", []) if "vision" in m.get("checks", [])} if receipt else set()
     covered = {model_key(m) for m in latest}
     validity_by_model = {m: summarize(latest[m])["validity"] for m in models}
 
-    # Coverage matrix: catalog model x evidence layer.
+    # Coverage: for each catalog model, which evidence layer has a result, and
+    # what it says. One axis only; metrics live inside the cell, not as columns.
     cat = catalog_models() or [(model_key(m), m, False) for m in models]
-    layers = ["Unit + Checks (no model)", "Gate: loads, chats, tool loop", "Gate: vision", "Tasks: baseline", "Tasks: tool-call validity", "Tasks: 2+ quants", "Tasks: 16/24 GB hardware"]
-    def mark(ok: bool | None, note: str = "") -> str:
-        if ok is None:
-            return f'<td class="cov na" title="{esc(note)}">n/a</td>'
-        return f'<td class="cov {"yes" if ok else "no"}" title="{esc(note)}">{"covered" if ok else "missing"}</td>'
+    layers = ["No-model checks (CI)", "Gate (loads, acts once)", "Tasks on this machine", "Tasks as a 24 GB Mac", "Tasks as a 16 GB Mac", "Tasks on real 16/24 GB hardware"]
+    gate_rows = {m["key"]: m for m in receipt.get("models", []) if not m.get("turbo4")} if receipt else {}
+    gate_when = (receipt.get("verified_at") or receipt.get("commit", ""))[:10] if receipt else ""
+    def cell(kind: str, text: str, tip: str = "") -> str:
+        return f'<td class="cov {kind}" title="{esc(tip)}">{text}</td>'
+    def task_cell(key: str, label_prefix: str | None) -> str:
+        cands = [r for r in runs if model_key(r["model"]) == key and (label_prefix is None and not r["label"].startswith("tier") or label_prefix and r["label"].startswith(label_prefix))]
+        full = [r for r in cands if len({x["task"] for x in r["rows"]}) >= 10]
+        if not (full or cands):
+            return cell("no", "no run")
+        r = sorted(full or cands, key=lambda r: r["date"])[-1]
+        sm = summarize(r)
+        bits = [f"{sm['pass_rate']*100:.0f}% pass"]
+        if sm["validity"] is not None: bits.append(f"{sm['validity']*100:.0f}% valid calls")
+        if sm["decode"]: bits.append(f"{sm['decode']:.0f} tok/s")
+        kind = "yes" if sm["pass_rate"] >= 0.9 else "part"
+        return cell(kind, f"{esc(r['model'].split('-UD-')[-1] if '-UD-' in r['model'] else r['model'][-10:])}<br>" + ", ".join(bits), f"{r['name']}: {sm['trials']} trials over {sm['tasks']} tasks")
     cov_rows = []
-    quant_count = defaultdict(set)
-    for r in runs:
-        quant_count[model_key(r["model"])].add(r["model"])
     for key, name, vision in cat:
+        g = gate_rows.get(key)
+        if g:
+            checks = g.get("checks", [])
+            gtxt = f"pass {esc(gate_when)}<br>" + ", ".join(esc(c) for c in checks)
+            gcell = cell("yes" if (not vision or "vision" in checks) else "part", gtxt, "from the newest gate receipt on disk")
+        else:
+            gcell = cell("no", "no receipt on disk", "the gate ran on earlier checkouts that were deleted; receipts are now copied into runs/")
         cov_rows.append("<tr><th class=\"rowhead\">" + esc(name) + "</th>"
-                        + mark(True, "every PR, CI")
-                        + mark(key in gated if receipt else None, "from the last local gate receipt" if receipt else "no gate receipt found")
-                        + (mark(key in vision_gated if receipt else None, "image request answered") if vision else mark(None, "text-only model"))
-                        + mark(key in covered, "latest task run on disk")
-                        + mark(any(validity_by_model.get(m) is not None for m in latest if model_key(m) == key), "runs recorded with the validity metric")
-                        + mark(len(quant_count.get(key, ())) >= 2, ", ".join(sorted(quant_count.get(key, ()))))
-                        + mark(False, "needs a 16 or 24 GB machine")
+                        + cell("yes", "every PR", "unit tests, bun tests, Checks against canned servers")
+                        + gcell
+                        + task_cell(key, None) + task_cell(key, "tier24") + task_cell(key, "tier16")
+                        + cell("no", "needs the hardware", "tier runs emulate the picker's choices, not memory pressure")
                         + "</tr>")
     coverage = ('<table class="covtab"><tr><th></th>' + "".join(f"<th>{esc(l)}</th>" for l in layers) + "</tr>" + "".join(cov_rows) + "</table>")
 
@@ -283,7 +302,7 @@ def render(runs: list[dict]) -> str:
     .dot{{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:8px;vertical-align:middle}} .dot.none{{background:var(--axis)}}
     .heat{{width:auto}} .heat .cell{{width:22px;height:22px;padding:0;border:2px solid var(--surface)}} .heat .cell.none{{background:var(--grid)}}
     .heat .colhead div{{writing-mode:vertical-rl;transform:rotate(180deg);font-size:11px;white-space:nowrap;max-height:160px;overflow:hidden}} .rowhead{{font-size:12px;white-space:nowrap}}
-    .covtab td.cov{{font-size:12px;text-align:center}} .cov.yes{{background:rgba(12,163,12,.18)}} .cov.no{{background:rgba(208,59,59,.18)}} .cov.na{{color:var(--muted)}}
+    .covtab td.cov{{font-size:12px;text-align:center}} .cov.yes{{background:rgba(12,163,12,.18)}} .cov.no{{background:rgba(208,59,59,.18)}} .cov.part{{background:rgba(250,178,25,.22)}} .cov.na{{color:var(--muted)}}
     .bar{{display:grid;grid-template-columns:220px 1fr 70px;align-items:center;gap:8px;margin:4px 0}} .barlabel{{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
     .track{{height:10px;background:var(--grid);border-radius:4px;overflow:hidden}} .fill{{display:block;height:100%;border-radius:4px}} .barval{{text-align:right;font-variant-numeric:tabular-nums;font-size:12px}}
     svg .grid{{stroke:var(--grid)}} svg .axis{{fill:var(--muted);font-size:11px}} svg .label{{fill:var(--ink2);font-size:11px}}
@@ -295,7 +314,7 @@ def render(runs: list[dict]) -> str:
 <div class="tiles">
  <div class="tile"><div class="v">{overall*100:.0f}%</div><div class="k">pass rate, all trials</div></div>
  <div class="tile"><div class="v">{len([m for m in models if summarize(latest[m])['pass_rate']==1])}/{len(models)}</div><div class="k">models at 100% on latest run</div></div>
- <div class="tile"><div class="v">{sum(1 for v in validity_by_model.values() if v is not None)}</div><div class="k">models with a validity number</div></div>
+ <div class="tile"><div class="v">{sum(1 for v in validity_by_model.values() if v is not None)}</div><div class="k">models with a tool-call validity number</div></div>
  <div class="tile"><div class="v">{len(cat) - len(covered & {k for k,_,_ in cat})}</div><div class="k">catalog models with no task run</div></div>
 </div>
 <h2>Coverage: evidence per catalog model</h2><div class="wrap">{coverage}</div>
@@ -320,7 +339,7 @@ def main() -> None:
         sys.exit("no runs found")
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(render(runs))
+    out.write_text(render(runs, [Path(p) for p in a.runs if Path(p).is_dir()]))
     print(f"{len(runs)} runs -> {out}")
     if a.open:
         subprocess.run(["open", str(out)], check=False)
