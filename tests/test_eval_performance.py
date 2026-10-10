@@ -69,3 +69,13 @@ def test_timeout_retains_output_and_stops_child_group():
     # A dead child may briefly remain as a zombie until reparented/reaped.
     state = subprocess.run(['ps','-o','stat=','-p',str(pid)], capture_output=True,text=True).stdout.strip()
     assert not state or state.startswith('Z')
+
+
+@pytest.mark.parametrize('name', ['run_tasks.py', 'sweep.py'])
+def test_eval_cli_help_starts_without_loading_models(name):
+    import subprocess
+    import sys
+    script = Path(__file__).resolve().parents[1]/'evals'/name
+    result = subprocess.run([sys.executable, str(script), '--help'], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert '--model' in result.stdout
