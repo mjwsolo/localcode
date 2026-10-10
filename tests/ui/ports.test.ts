@@ -4,9 +4,8 @@ import { python, pythonEnv } from "./support/python"
 
 test("an existing picker prevents a second launch, while unrelated listeners reserve ports", () => {
   const result = Bun.spawnSync([python, "-c", `
-import faulthandler
-faulthandler.dump_traceback_later(3, exit=True)
 import json, socket, threading
+from unittest.mock import patch
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from localcode.ui.ports import choose_ports
 with socket.socket() as future, socket.socket() as busy, socket.socket() as free:
@@ -24,7 +23,9 @@ with socket.socket() as future, socket.socket() as busy, socket.socket() as free
             self.end_headers()
             self.wfile.write(json.dumps({'state': 'idle', 'port': reserved}).encode())
         def log_message(self, *args): pass
-    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    # The HTTPServer hostname label does not need runner reverse DNS.
+    with patch('socket.getfqdn', return_value='localhost'):
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     with socket.socket() as control:

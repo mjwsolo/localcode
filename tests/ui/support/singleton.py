@@ -1,6 +1,4 @@
 """Exercise real process ownership without loading model weights."""
-import faulthandler
-faulthandler.dump_traceback_later(10, exit=True)
 import json
 import os
 from pathlib import Path
@@ -33,6 +31,7 @@ with tempfile.TemporaryDirectory() as directory:
     worker = root / 'worker.py'
     worker.write_text('''import os, pathlib, subprocess, sys, time
 from localcode.ui import supervisor as module
+from unittest.mock import patch
 module.Path.home = staticmethod(lambda: pathlib.Path(os.environ['QA_ROOT']))
 def start(self, alias, wait_s=240):
     self.proc = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'],
@@ -43,7 +42,9 @@ def start(self, alias, wait_s=240):
 module.Supervisor.start = start
 # This ownership fixture uses a sleeping child, not an HTTP model server.
 module.Supervisor.healthy = lambda self: self.proc is not None and self.proc.poll() is None
-raise SystemExit(module.main())
+# Fix the HTTPServer hostname label; process ownership needs no reverse DNS.
+with patch('socket.getfqdn', return_value='localhost'):
+    raise SystemExit(module.main())
 ''')
     env = dict(os.environ, QA_ROOT=directory, LOCALCODE_CONTROL_TOKEN='qa-token', LOCALCODE_SERVER_KEY='qa-key')
     args = [sys.executable, str(worker), '--server', sys.executable, '--model', 'test',
