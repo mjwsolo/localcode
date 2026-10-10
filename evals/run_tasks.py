@@ -120,6 +120,13 @@ def control_budget():
     except Exception:
         return {}
 
+def _write(path: Path, text: str) -> None:
+    """The .eval/ folder lives in the workspace, and a model told to clean caches
+    may delete it mid-run (seen on forbidden-commands). Recreate it on every write."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+
+
 def run_trial(task: Path, meta: dict, trial: int) -> dict:
     ws = Path(tempfile.mkdtemp(prefix=f"lc-task-{task.name}-")).resolve()
     shutil.copytree(task / "workspace", ws, dirs_exist_ok=True)
@@ -149,7 +156,7 @@ def run_trial(task: Path, meta: dict, trial: int) -> dict:
             txt = (RUN_DIR / "server.log").read_text(errors="replace") if (RUN_DIR / "server.log").exists() else ""
             if txt.count("launch_slot_: id") <= txt.count("stop processing: n_tokens"): break
             time.sleep(0.05)
-        (ev / f"events-turn{i}.jsonl").write_text(out)
+        _write(ev / f"events-turn{i}.jsonl", out)
         turn_text = []; turn_calls = 0
         for line in out.splitlines():
             try: e = json.loads(line)
@@ -162,7 +169,7 @@ def run_trial(task: Path, meta: dict, trial: int) -> dict:
             elif t == "text": turn_text.append(str(p.get("text") or e.get("text") or ""))
         final = "\n".join(turn_text).strip() or final
         calls_per_turn.append(turn_calls)
-        (ev / f"final_turn{i}.txt").write_text("\n".join(turn_text).strip())
+        _write(ev / f"final_turn{i}.txt", "\n".join(turn_text).strip())
         toks = server_prompt_tokens()[before:]
         agent_toks = [n for n in toks if n > 20]        # drop the tiny title/side requests
         reread.append(agent_toks[0] if agent_toks else 0)
@@ -171,8 +178,8 @@ def run_trial(task: Path, meta: dict, trial: int) -> dict:
     # the .eval contract
     st = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=ws, capture_output=True, text=True).stdout
     paths = sorted({l[3:].split(" -> ")[-1] for l in st.splitlines() if l.strip() and not l[3:].startswith(".eval/") and not l[3:].startswith(".localcode-agent/") and not re.search(r"(^|/)(__pycache__/|\.pytest_cache/|\.mypy_cache/)|\.pyc$", l[3:])})
-    (ev / "diff.txt").write_text("\n".join(paths) + ("\n" if paths else ""))
-    (ev / "final.txt").write_text(final); (ev / "commands.log").write_text("\n".join(commands) + ("\n" if commands else ""))
+    _write(ev / "diff.txt", "\n".join(paths) + ("\n" if paths else ""))
+    _write(ev / "final.txt", final); _write(ev / "commands.log", "\n".join(commands) + ("\n" if commands else ""))
     logf = next(iter((HOME / ".local/share/localcode-agent/log").glob("*.log")), None) if (HOME / ".local/share/localcode-agent/log").exists() else None
     if logf:
         ui_errors = [l for l in logf.read_text(errors="replace").splitlines()[-400:] if "level=ERROR" in l]
@@ -198,7 +205,13 @@ rows = []
 with open(OUT / "results.jsonl", "a") as f:
     for task, meta in tasks:
         for trial in range(1, max(a.trials, int(meta.get("trials", 1))) + 1):
-            row = run_trial(task, meta, trial); rows.append(row); f.write(json.dumps(row) + "\n"); f.flush()
+            try:
+                row = run_trial(task, meta, trial)
+            except Exception as e:  # noqa: BLE001 - one broken trial must not end the run
+                row = {"label": label, "task": task.name, "quality": meta["quality"], "component": meta.get("component", "harness"), "purpose": meta["purpose"],
+                       "model": a.model, "trial": trial, "pass": False, "notes": f"runner error: {type(e).__name__}: {e}"[:300], "steps": 0, "tool_calls": 0,
+                       "wall_s": 0.0, "reread_tokens": [], "binary_sha": binary_sha, "ts": time.strftime("%Y-%m-%dT%H:%M:%S")}
+            rows.append(row); f.write(json.dumps(row) + "\n"); f.flush()
             log(f"{task.name:<20} trial {trial}  {'PASS' if row['pass'] else 'FAIL'}  steps={row['steps']} tools={row['tool_calls']} wall={row['wall_s']}s reread={row['reread_tokens']}  {row['notes'][:70]}")
 by = {}
 for r in rows: by.setdefault(r["task"], []).append(r["pass"])
