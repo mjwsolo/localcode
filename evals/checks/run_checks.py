@@ -41,10 +41,14 @@ def _cleanup():
             except Exception: p.kill()
 atexit.register(_cleanup)
 def wait(url):
-    for _ in range(50):
+    # Hosted macOS runners take a while to start a Python process; wait up to 60 s
+    # and, on failure, show the servers' own log so the cause is visible.
+    for _ in range(300):
         try: urllib.request.urlopen(url, timeout=0.5); return
-        except Exception: time.sleep(0.1)
-    raise SystemExit(f"server not up: {url}")
+        except Exception: time.sleep(0.2)
+    srv_log.flush()
+    tail = (OUT / "servers.log").read_text(errors="replace")[-3000:] if (OUT / "servers.log").exists() else "(no servers.log)"
+    raise SystemExit(f"server not up: {url}\n--- servers.log ---\n{tail}")
 wait(f"http://127.0.0.1:{mport}/health"); wait(f"http://127.0.0.1:{cport}/status")
 
 cfg = home / "session.json"
