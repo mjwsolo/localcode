@@ -5,6 +5,23 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
+## 0.5.10 — 2026-10-10
+
+### Added
+
+- Local coding-task evaluations and no-model runtime checks, with paired
+  experiments for context size, drafting, batch size, reasoning and KV cache.
+  Results include task correctness, token usage, tool calls, server timings and
+  sampled memory. Results and raw traces stay local and gitignored.
+- An optional compaction checklist to preserve constraints and unfinished work.
+  It remains off by default until real-model evaluations establish its benefit.
+
+### Fixed
+
+- Evaluation runs reject missing or duplicate trials, enforce timeouts and
+  runtime failures, isolate session data, and stop their own child processes.
+  Nightly evaluations propagate runner failures instead of comparing stale runs.
+
 ### Changed
 
 - **Smaller tool schemas on every new session.** The first request of a
