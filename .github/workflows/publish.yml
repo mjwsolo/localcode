@@ -147,6 +147,19 @@ jobs:
         with:
           python-version: "3.13"
       - run: python -m pip install uv
+      - name: Wait for PyPI to index the release
+        # Upload returns before the index and CDN serve the new version; a
+        # fresh pip/uv resolve a few seconds later still sees the old one.
+        run: |
+          version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          for i in $(seq 1 40); do
+            if curl -fsS "https://pypi.org/simple/localcode/" | grep -q "localcode-${version}-" \
+               && curl -fsS "https://pypi.org/pypi/localcode/${version}/json" >/dev/null; then
+              echo "localcode ${version} is on the index after $((i * 15 - 15))s"; exit 0
+            fi
+            sleep 15
+          done
+          echo "::error::localcode ${version} not on the PyPI index after 10 minutes"; exit 1
       - name: Verify exact published version and upgrade
         env:
           INSTALLER: ${{ matrix.installer }}

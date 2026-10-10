@@ -329,3 +329,25 @@ def test_drafters_are_pinned_and_attached_to_every_quant_of_their_model():
     assert all(c.drafter is None for c in CHOICES if c.key in {"qwen38", "qwen38-q8", "kolibri", "openjev", "north-mini-code", "diffusiongemma"})
     g = next(g for g in MODEL_GROUPS if g.key == "gemma-4-12b")
     assert choice_for_quant(g, "gemma-4-12b-it-UD-IQ2_M.gguf", 4.2).drafter is g.drafter
+
+
+def test_retired_sidecars_are_names_nothing_current_uses(tmp_path):
+    from localcode import bootstrap
+    from localcode.models_catalog import CHOICES, DRAFTERS, RETIRED_SIDECARS
+
+    live = {d.filename for d in DRAFTERS} | {c.filename for c in CHOICES} | {c.mmproj_filename for c in CHOICES if c.mmproj_filename}
+    assert RETIRED_SIDECARS and not (set(RETIRED_SIDECARS) & live)
+    for name in RETIRED_SIDECARS:   # only sidecars are ever retired, never a model
+        assert name.startswith(("mtp-", "dflash"))
+    # Only exact retired names are removed; models and current drafters stay.
+    keep = tmp_path / DRAFTERS[0].filename
+    keep.write_bytes(b"x")
+    model = tmp_path / "Some-Model-Q4_K_M.gguf"
+    model.write_bytes(b"x")
+    for name in RETIRED_SIDECARS:
+        (tmp_path / name).write_bytes(b"old")
+    assert sorted(bootstrap.remove_retired_sidecars(tmp_path)) == sorted(RETIRED_SIDECARS)
+    assert keep.exists() and model.exists()
+    assert not any((tmp_path / n).exists() for n in RETIRED_SIDECARS)
+    assert bootstrap.remove_retired_sidecars(tmp_path) == []   # idempotent
+    assert bootstrap.remove_retired_sidecars(tmp_path / "missing") == []

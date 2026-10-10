@@ -93,6 +93,7 @@ class Supervisor:
         self.ram_gb = _system_ram_gb()
         self.bandwidth = _bandwidth()
         self.log = open(HERE / "server.log", "ab", buffering=0)  # noqa: SIM115 (lives with the server)
+        self._drop_retired_sidecars()
         # Context budget (ui/context_budget.py): the per-slot context the server
         # really loaded, and how much of it this machine can use at speed.
         self.ctx_total = ctx
@@ -107,6 +108,17 @@ class Supervisor:
         self._warm_replay = None  # warmup.Replay while the prefix is being pre-read
 
     # ---- llama-server lifecycle -------------------------------------------
+    def _drop_retired_sidecars(self) -> None:
+        """Delete drafter files an earlier release downloaded that the catalog
+        has since replaced. Only names in models_catalog.RETIRED_SIDECARS."""
+        try:
+            removed = bootstrap.remove_retired_sidecars(self.models_dir)
+        except Exception as e:  # noqa: BLE001
+            log(f"supervisor: retired sidecar cleanup skipped: {e}")
+            return
+        for name in removed:
+            log(f"supervisor: removed retired drafter {name} (replaced by a newer catalog drafter)")
+
     def progress(self) -> dict:
         """What the server is doing right now: reading the prompt (with a fraction) or
         generating. Lets the TUI show 'reading context 40%' instead of a bare spinner."""
@@ -550,6 +562,8 @@ class Supervisor:
                     return
                 if not ok:
                     log(f"supervisor: drafter download failed for {alias}: {res}")
+                else:
+                    self._drop_retired_sidecars()
             self.state = {"state": "loading", "model": alias, "detail": "loading model…", "pct": None}
             if self.start(alias):
                 self.state = {"state": "ready", "model": alias, "detail": "", "pct": None}
