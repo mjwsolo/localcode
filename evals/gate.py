@@ -14,6 +14,7 @@ from collections import defaultdict
 
 ap = argparse.ArgumentParser(); ap.add_argument("baseline"); ap.add_argument("candidate")
 ap.add_argument("--min-drop", type=float, default=5.0); ap.add_argument("--se-mult", type=float, default=2.0); ap.add_argument("--set", default="regression")
+ap.add_argument('--max-speed-drop', type=float, default=0.30, help='block when median decode tok/s falls by more than this fraction (default 0.30)')
 a = ap.parse_args()
 
 def load(path):
@@ -63,6 +64,19 @@ for label, keys in (("regressed (all-pass -> all-fail)", regressed), ("worse", [
 allB = [r for k in common for r in B[k]]; allC = [r for k in common for r in C[k]]
 for key in ("steps", "wall_s"):
     print(f"  median {key}: baseline {med(allB, key)} -> candidate {med(allC, key)}")
-blocked = (-mean > threshold) and bool(regressed)
+# Speed: a candidate that decodes much slower than the baseline on the same
+# model is a regression even when every task still passes (the Ollama 0.3x
+# upgrade halved Qwen 3.6 decode; pass rates would not have caught it).
+dB, dC = med(allB, "decode_tps"), med(allC, "decode_tps")
+speed_blocked = False
+if dB and dC:
+    print(f"  median decode tok/s: baseline {dB:.1f} -> candidate {dC:.1f} ({(dC / dB - 1) * 100:+.0f}%)")
+    speed_blocked = dC < dB * (1 - a.max_speed_drop)
+    if speed_blocked: print(f"  decode fell more than {a.max_speed_drop * 100:.0f}%: BLOCKED")
+pB, pC = med(allB, "prefill_tps"), med(allC, "prefill_tps")
+if pB and pC: print(f"  median prefill tok/s: baseline {pB:.1f} -> candidate {pC:.1f} ({(pC / pB - 1) * 100:+.0f}%)")
+vB, vC = med(allB, "tool_validity"), med(allC, "tool_validity")
+if vB is not None and vC is not None: print(f"  median tool-call validity: baseline {vB:.2f} -> candidate {vC:.2f}")
+blocked = ((-mean > threshold) and bool(regressed)) or speed_blocked
 print("\nRESULT:", "BLOCKED" if blocked else "OK", "(reproducible regressions confirmed)" if regressed and blocked else "")
 sys.exit(1 if blocked else 0)
