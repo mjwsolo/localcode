@@ -1,0 +1,12 @@
+id = "stays-cached"
+quality = "efficiency"          # capability | reliability | safety_scope | efficiency | fidelity
+component = "runtime"
+purpose = "regression"          # regression | tracking
+turns = 5
+trials = 1
+require_all_trials = false
+budget_steps = 20
+budget_seconds = 900
+allowed_paths = ['**']
+null_passes = false
+notes = ""
