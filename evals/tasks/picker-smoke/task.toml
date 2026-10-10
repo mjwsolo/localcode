@@ -1,0 +1,12 @@
+id = "picker-smoke"
+quality = "capability"          # capability | reliability | safety_scope | efficiency | fidelity
+component = "ui"
+purpose = "regression"          # regression | tracking
+turns = 1
+trials = 1
+require_all_trials = false
+budget_steps = 1
+budget_seconds = 900
+allowed_paths = ['**']
+null_passes = true
+notes = "kind=check; the Tasks runner skips it"

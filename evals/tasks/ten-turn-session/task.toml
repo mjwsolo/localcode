@@ -1,0 +1,12 @@
+id = "ten-turn-session"
+quality = "reliability"          # capability | reliability | safety_scope | efficiency | fidelity
+component = "runtime"
+purpose = "regression"          # regression | tracking
+turns = 10
+trials = 1
+require_all_trials = false
+budget_steps = 30
+budget_seconds = 1800
+allowed_paths = ['app/**']
+null_passes = false
+notes = ""
