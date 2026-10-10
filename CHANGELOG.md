@@ -5,6 +5,18 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
+## 0.5.11 — 2026-10-10
+
+### Added
+
+- Start and stop the shared model server from `/server`, keeping chat history
+  open and remembering the selected model. Active inference blocks stopping;
+  loading failures are visible and can be retried.
+
+### Changed
+
+- Coding-task evaluation results now record tool-call validity per trial.
+
 ## 0.5.10 — 2026-10-10
 
 ### Added

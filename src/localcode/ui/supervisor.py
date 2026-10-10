@@ -331,6 +331,7 @@ class Supervisor:
                 self.proc.wait(timeout=15)
             except subprocess.TimeoutExpired:
                 self.proc.kill()
+                self.proc.wait(timeout=5)
         self.proc = None
 
     def _probe_props(self) -> None:
@@ -405,6 +406,70 @@ class Supervisor:
         if state["state"] == "ready" and not ready:
             state.update(state="error", detail="Model server is unavailable")
         return dict(state, server_running=running, server_ready=ready)
+
+    def server_action(self, action: str) -> dict:
+        """Queue an explicit lifecycle action; retain session and selected model."""
+        if action not in ("start", "stop"):
+            return {"error": "Unknown server action"}
+        if not self.lock.acquire(blocking=False):
+            return {"error": "A model operation is in progress; wait and refresh /server"}
+        queued = False
+        previous = dict(self.state)
+        try:
+            if self.state["state"] in ("loading", "downloading", "stopping"):
+                return {"error": "A model operation is in progress; wait and refresh /server"}
+            running = self.proc is not None and self.proc.poll() is None
+            if action == "stop":
+                if running:
+                    phase = self.progress().get("phase")
+                    if phase != "idle":
+                        return {"error": "A request is active or server activity cannot be verified. Cancel requests in all clients, then retry."}
+                else:
+                    self.state = {"state": "stopped", "model": self.current, "detail": "Model server stopped. Use /server to start it.", "pct": None}
+                    return {"ok": True, "state": "stopped"}
+                self.state = {"state": "stopping", "model": self.current, "detail": "Stopping model server…", "pct": None}
+            else:
+                if running:
+                    return {"error": "Model server is already running. Stop it first to restart."}
+                if not self.current:
+                    return {"error": "No previous model. Select a model using /model first."}
+                if not _safe_filename(self.current + ".gguf") or not (self.models_dir / (self.current + ".gguf")).is_file():
+                    return {"error": "The previous model file is missing. Select an installed model using /model."}
+                self.state = {"state": "loading", "model": self.current, "detail": "Reloading model…", "pct": None}
+            threading.Thread(target=self._server_action_worker, args=(action,), daemon=True).start()
+            queued = True
+            return {"ok": True, "state": self.state["state"]}
+        except Exception:
+            self.state = previous
+            log("Could not start server lifecycle worker")
+            return {"error": "Could not begin the operation. Refresh /server and retry."}
+        finally:
+            if not queued:
+                self.lock.release()
+
+    def _server_action_worker(self, action: str) -> None:
+        try:
+            if action == "stop":
+                # Recheck immediately before stopping, including other API clients.
+                if self.proc is not None and self.proc.poll() is None and self.progress().get("phase") != "idle":
+                    self.state = {"state": "ready", "model": self.current, "detail": "Stop cancelled: a request started. Cancel it and retry.", "pct": None}
+                    return
+                self.stop()
+                self.state = {"state": "stopped", "model": self.current, "detail": "Model server stopped. Use /server to start it.", "pct": None}
+            elif self.start(self.current):
+                self.state = {"state": "ready", "model": self.current, "detail": "", "pct": None}
+            else:
+                self.stop()
+                self.state = {"state": "error", "model": self.current, "detail": "Model failed to load. Retry Start or select another model with /model.", "pct": None}
+        except Exception as exc:
+            log(f"Server {action} failed: {exc}")
+            try:
+                self.stop()
+            except Exception:
+                log("Could not clean up model process after lifecycle failure")
+            self.state = {"state": "error", "model": self.current, "detail": "Model operation failed. Refresh /server and retry; see supervisor.log.", "pct": None}
+        finally:
+            self.lock.release()
 
     # ---- catalog ------------------------------------------------------------
     def _rec_repo(self) -> str | None:
@@ -895,6 +960,11 @@ def make_handler(sup: Supervisor):
                 body = json.loads(self.rfile.read(n) or b"{}")
             except json.JSONDecodeError:
                 return self._json({"error": "bad json"}, 400)
+            if u.path in ("/server/start", "/server/stop"):
+                if not isinstance(body, dict):
+                    return self._json({"error": "Expected a JSON object"}, 400)
+                res = sup.server_action(u.path.rsplit("/", 1)[1])
+                return self._json(res, 409 if "error" in res else 200)
             if u.path == "/server/port":
                 from localcode.ui.gateway import PortChangeError
                 if not isinstance(body, dict) or "port" not in body:

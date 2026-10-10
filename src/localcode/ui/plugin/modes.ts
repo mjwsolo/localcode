@@ -169,26 +169,46 @@ async function tui(api: TuiPluginApi) {
     api.ui.dialog.clear();
   } }));
   let changingPort = false;
+  let changingServer = false;
   async function server() {
     if (!control) return error("Start LocalCode to manage its model server");
     try {
       const response = await fetch(control + "/server", { headers, signal: AbortSignal.timeout(3000) });
       if (!response.ok) throw new Error(`Server status: HTTP ${response.status}`);
-      const info = await response.json() as { state: string; base_url: string; model?: string; port: number; preferred_port: number | string | null; server_ready: boolean };
+      const info = await response.json() as { state: string; base_url: string; model?: string; port: number; preferred_port: number | string | null; server_ready: boolean; server_running?: boolean; detail?: string };
       const copy = async (value: string, secret = false) => {
         const proc = Bun.spawn(["pbcopy"], { stdin: new Blob([value]), stdout: "ignore", stderr: "ignore" });
         if (await proc.exited !== 0) throw new Error("Could not copy to clipboard");
         api.ui.toast({ variant: "info", message: secret ? "Copied with API key. Keep the clipboard contents private." : "Copied to clipboard" });
       };
       api.ui.dialog.replace(() => api.ui.DialogSelect({ title: "Model server · " + info.state, options: [
+        { title: "Status", value: "status", description: info.detail || info.state },
         { title: "Base URL", value: "url", description: info.base_url },
         { title: "Model", value: "model", description: info.model ?? "No model loaded" },
         { title: "Copy API key", value: "key", description: "Private · only for clients you trust" },
         { title: "Copy curl example", value: "curl", description: "Includes your API key; lists available models" },
         { title: "Change API port now", value: "port", description: `Current: ${info.port} · saved: ${info.preferred_port ?? "automatic"}` },
+        ...(!["loading", "downloading", "stopping"].includes(info.state) ? [{
+          title: info.server_running ? "Stop model server" : "Start model server",
+          value: info.server_running ? "stop" : "start",
+          description: info.server_running ? "Frees model memory · affects all windows and API clients · chat stays open" : "Reloads the previous model · loading and context processing take time",
+        }] : []),
         { title: "Refresh", value: "refresh", description: "Loopback only · available to tools on this Mac" },
       ], onSelect(item) {
-        if (item.value === "refresh") return void server();
+        if (item.value === "refresh" || item.value === "status") return void server();
+        if (item.value === "start" || item.value === "stop") {
+          if (changingServer) return;
+          changingServer = true;
+          void fetch(control + "/server/" + item.value, { method: "POST", headers, body: "{}", signal: AbortSignal.timeout(5000) })
+            .then(async (r) => {
+              const result = await r.json() as { error?: string; state?: string };
+              if (!r.ok) throw new Error(result.error || `HTTP ${r.status}`);
+              api.ui.toast({ variant: "info", message: item.value === "stop" ? "Stopping shared model server. Chat history stays available." : "Loading model. Refresh /server to check progress.", duration: 8000 });
+              await server();
+            }).catch((e) => error(`Could not confirm server operation: ${String(e)}. Refresh /server before retrying.`))
+            .finally(() => { changingServer = false; });
+          return;
+        }
         if (item.value === "port") return api.ui.dialog.replace(() => api.ui.DialogPrompt({
           title: "New API port (1024–65535 or auto)", value: String(info.preferred_port ?? "auto"),
           onConfirm(value) {
