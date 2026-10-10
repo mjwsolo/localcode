@@ -66,8 +66,8 @@ Add `--execute` to run. Profiles are sequential, order reverses on alternate
 repetitions, each gets a fresh supervisor, and all use the same named tasks. Results
 and manifests stay under ignored `evals/runs/`. Comparison refuses missing/duplicate
 trials and highlights any previously passing trial that fails. It never changes
-user defaults or claims statistical significance. User launcher configuration still
-applies: `no-vendor-draft` controls MTP/catalog drafters, not a manually configured
+user defaults or claims statistical significance. Runs use a fresh home and launcher defaults plus inherited environment overrides;
+they do not import your global configuration. In particular, `no-vendor-draft` controls MTP/catalog drafters, not a manually configured
 external draft model. Check `runtime.json` and server logs to confirm a setting
 actually took effect. Slot tuning is intentionally not exposed: a UI slot environment
 variable alone does not prove a matching server allocation.
@@ -76,7 +76,9 @@ Available experiments: vendor drafter off, 16K context, 512 batch, q8 KV cache,
 reasoning on, and a compaction checklist. Context limits can make some tasks
 impossible; those failures belong in the results. Run one profile against baseline
 first, then validate combinations. Match chip, RAM, model quantization and background
-load when comparing machines. No hardware profile is promoted automatically.
+load when comparing machines. No hardware profile is promoted automatically. Startup uses only an installed model;
+it does not query the online catalogue. Only GGUF files are linked into the test
+home, leaving user caches, history and settings separate.
 
 `LOCALCODE_COMPACTION_CHECKLIST=1` appends retention guidance through OpenCode's
 compaction hook. It preserves the default summary prompt and stable system prefix.
@@ -98,3 +100,9 @@ not mislabeled as TTFT. Compaction and error counts are scoped to each trial.
 A timed-out task cannot pass. Existing result directories cannot be appended to
 accidentally. Use paired task correctness and completion time to select candidates;
 then inspect memory, failures, and long-session results before changing defaults.
+
+The runner bounds each UI process group and kills that group on timeout or
+interruption. Runtime failures cannot pass even if a grader reports success.
+Run directories must be new and are owner-only; XDG directories are isolated too.
+Sweep comparisons require every requested task and its configured trial count.
+The manifest records whether the evaluated checkout contained uncommitted changes.

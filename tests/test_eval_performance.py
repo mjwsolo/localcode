@@ -53,3 +53,19 @@ def test_resource_sampling_excludes_unrelated_processes():
     rss=module('performance').tree_rss
     assert rss('10 1 20\n11 10 30\n12 11 40\n99 1 1000000',10)==90*1024
     assert rss('99 1 1000000',10) is None
+
+
+def test_timeout_retains_output_and_stops_child_group():
+    import os
+    import signal
+    import subprocess
+    import sys
+    import time
+    run = module('process').run_bounded
+    script = "import subprocess,sys,time; p=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)']); print(p.pid,flush=True); time.sleep(60)"
+    with pytest.raises(subprocess.TimeoutExpired) as failure:
+        run([sys.executable,'-c',script], timeout=0.5, text=True)
+    pid = int(failure.value.stdout.strip())
+    # A dead child may briefly remain as a zombie until reparented/reaped.
+    state = subprocess.run(['ps','-o','stat=','-p',str(pid)], capture_output=True,text=True).stdout.strip()
+    assert not state or state.startswith('Z')
