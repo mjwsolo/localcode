@@ -12,6 +12,13 @@ All notable changes to LocalCode will be documented here. The format follows
 - Underdog Saluki 27B 1.0 in the model picker: pinned 7.9 GB IQ2-mix
   weights, Qwen reasoning controls and optional vision. Opt-in while LocalCode
   coding quality remains unmeasured.
+- **`localcode mcp add | list | auth | logout | debug`.** The runtime's own MCP
+  commands are now reachable from the `localcode` command with this install's
+  config and trust environment, so adding a server is an interactive prompt,
+  not a JSON edit. `add` explains that a project-scoped server loads only with
+  `--trust-project`, and `list` names project servers it is hiding without it.
+  The MCP guide is rewritten around these commands and shows how to put a
+  mail or calendar server's tools behind a permission prompt.
 
 ### Changed
 
