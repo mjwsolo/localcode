@@ -5,6 +5,16 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
+## 0.5.21 — 2026-10-12
+
+### Fixed
+
+- A turn made only of web searches could loop forever. The guards that stop
+  a repeated call were switched on by the first file or shell tool call, so a
+  research question never switched them on: one session ran the same search
+  162 times. They now start with any tool call. The same query returning the
+  same result three times gets a nudge, and five times stops the turn.
+
 ## 0.5.20 — 2026-10-12
 
 ### Fixed
