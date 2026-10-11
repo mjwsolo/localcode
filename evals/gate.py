@@ -15,6 +15,7 @@ from collections import defaultdict
 ap = argparse.ArgumentParser(); ap.add_argument("baseline"); ap.add_argument("candidate")
 ap.add_argument("--min-drop", type=float, default=5.0); ap.add_argument("--se-mult", type=float, default=2.0); ap.add_argument("--set", default="regression")
 ap.add_argument('--max-speed-drop', type=float, default=0.30, help='block when median decode tok/s falls by more than this fraction (default 0.30)')
+ap.add_argument('--require-performance', action='store_true', help='fail closed when any model lacks finite positive decode measurements')
 a = ap.parse_args()
 
 def load(path):
@@ -67,12 +68,19 @@ for key in ("steps", "wall_s"):
 # Speed: a candidate that decodes much slower than the baseline on the same
 # model is a regression even when every task still passes (the Ollama 0.3x
 # upgrade halved Qwen 3.6 decode; pass rates would not have caught it).
-dB, dC = med(allB, "decode_tps"), med(allC, "decode_tps")
 speed_blocked = False
-if dB and dC:
-    print(f"  median decode tok/s: baseline {dB:.1f} -> candidate {dC:.1f} ({(dC / dB - 1) * 100:+.0f}%)")
-    speed_blocked = dC < dB * (1 - a.max_speed_drop)
-    if speed_blocked: print(f"  decode fell more than {a.max_speed_drop * 100:.0f}%: BLOCKED")
+# Keep model populations separate: a fast MoE must not hide a dense-model regression.
+for model in sorted({key[1] for key in common}):
+    rows_b = [r for key in common if key[1] == model for r in B[key]]
+    rows_c = [r for key in common if key[1] == model for r in C[key]]
+    dB, dC = med(rows_b, "decode_tps"), med(rows_c, "decode_tps")
+    valid = all(isinstance(v, (int, float)) and math.isfinite(v) and v > 0 for v in (dB, dC))
+    if not valid:
+        print(f"  {model}: decode speed unknown")
+        speed_blocked |= a.require_performance
+        continue
+    print(f"  {model} median decode tok/s: {dB:.1f} -> {dC:.1f} ({(dC/dB-1)*100:+.0f}%)")
+    speed_blocked |= dC < dB * (1 - a.max_speed_drop)
 pB, pC = med(allB, "prefill_tps"), med(allC, "prefill_tps")
 if pB and pC: print(f"  median prefill tok/s: baseline {pB:.1f} -> candidate {pC:.1f} ({(pC / pB - 1) * 100:+.0f}%)")
 vB, vC = med(allB, "tool_validity"), med(allC, "tool_validity")

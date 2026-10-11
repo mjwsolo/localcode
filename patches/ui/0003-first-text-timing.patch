@@ -1,0 +1,19 @@
+diff --git a/packages/opencode/src/cli/cmd/run.ts b/packages/opencode/src/cli/cmd/run.ts
+index 3b749e7e8e..df2e48fd43 100644
+--- a/packages/opencode/src/cli/cmd/run.ts
++++ b/packages/opencode/src/cli/cmd/run.ts
+@@ -717,6 +717,14 @@ export const RunCommand = effectCmd({
+               toggles.set("start", true)
+             }
+ 
++            // A content-free timestamp for local end-to-end latency measurement.
++            // Completed text parts arrive too late to represent first-text time.
++            if (event.type === "message.part.delta" && event.properties.sessionID === sessionID &&
++                event.properties.delta && toggles.get("first_text_delta") !== true) {
++              toggles.set("first_text_delta", true)
++              emit("first_text_delta", {})
++            }
++
+             if (event.type === "message.part.updated") {
+               const part = event.properties.part
+               if (part.sessionID !== sessionID) continue
