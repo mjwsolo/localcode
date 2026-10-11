@@ -5,7 +5,23 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
+## 0.5.18 — 2026-10-11
+
+### Fixed
+
+- A miscopied project path no longer ends the turn. When a model drops or
+  changes a character in the project's own absolute path, or invents a root
+  such as `/home/user/project`, the file tool used to be refused as a path
+  outside the project. The path is now corrected when the rest of it names
+  something in the project, and otherwise the model is told the project root
+  and retries with a relative path. Real locations outside the project are
+  untouched. North Mini Code went from 6 of 16 to 16 of 16 on the regression
+  tasks with this and readable eval workspaces.
+
 ### Changed
+
+- Bundled llama.cpp updated to upstream 5c8854f, with the fork's patches
+  replayed and the server rebuilt.
 
 - The task evals run on Inspect AI itself. `pip install -e evals`, then
   `inspect eval localcode_evals/regression --model localcode/<model>` and

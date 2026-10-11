@@ -36,9 +36,9 @@
  */
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Plugin } from "@opencode-ai/plugin";
 
 type Todo = { content: string; status: string };
@@ -242,6 +242,46 @@ function isTempPath(p: string, directory?: string): boolean {
   if (TEMP_RE.test(norm)) return true;
   try { const t = tmpdir().replace(/\\/g, "/"); if (t && norm.startsWith(t)) return true; } catch {}
   return false;
+}
+
+// A model that miscopies the project's own absolute path (a dropped or changed
+// character in a long directory name) asks for a file in a directory that does
+// not exist. The runtime sees a path outside the project and asks permission to
+// leave it; a refusal ends the turn, and an approval reads nothing. Measured on
+// a 30-character directory name: one small model got three of four paths wrong.
+//
+// Only that exact case is handled: an absolute path outside the project, whose
+// own directory does not exist, and which leaves the project's path at a
+// component that does not exist (an invented root such as /home/user/project
+// is the same case: it leaves at the first component). A real location outside the project is left to
+// the normal permission flow. When the rest of the path names something in the
+// project it is used; a read or edit that matches nothing gets the project root
+// back as an error the model can retry from.
+function isInside(root: string, target: string): boolean {
+  const rel = relative(root, target);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+function real(p: string): string { try { return realpathSync(p); } catch { return p; } }
+function isDir(p: string): boolean { try { return statSync(p).isDirectory(); } catch { return false; } }
+function repairProjectPath(value: string, directory: string, mustExist: boolean): { path?: string; error?: string } {
+  if (!isAbsolute(value)) return {};
+  const root = resolve(directory), target = resolve(value);
+  if (isInside(root, target) || isInside(real(root), target)) return {};
+  if (existsSync(dirname(target))) return {};
+  let ancestor = dirname(target);
+  while (!existsSync(ancestor) && dirname(ancestor) !== ancestor) ancestor = dirname(ancestor);
+  if (!isInside(real(ancestor), real(root))) return {};
+  const rest = target.slice(ancestor.length).split(sep).filter(Boolean);     // rest[0] is the component that does not exist
+  for (let k = 1; k < rest.length; k++) {
+    const candidate = join(root, ...rest.slice(k));
+    if (existsSync(candidate) || (!mustExist && rest.length - k > 1 && isDir(join(root, rest[k])))) return { path: candidate };
+  }
+  // Nothing in the project matches. Say so only when a refusal cannot cost anything:
+  // the tool needs the path to exist, and the model had started down a real
+  // directory toward the project. A new file somewhere else, or an invented
+  // root that matches nothing, is left to the normal flow.
+  if (!mustExist || dirname(ancestor) === ancestor) return {};
+  return { error: `That path is not inside the project: the directory ${dirname(target)} does not exist. The project root is ${root}. Retry with a path relative to the project root${rest.length ? `, for example ${JSON.stringify(rest[rest.length - 1])}` : ""}.` };
 }
 
 const EDIT_TOOLS = new Set(["edit", "write", "multiedit", "apply_patch", "patch"]);
@@ -785,6 +825,18 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
           }
         }
       }
+      if (["read", "write", "edit", "multiedit", "glob", "grep"].includes(input.tool)) {
+        for (const name of ["filePath", "file_path", "path"]) {
+          const value = output.args?.[name];
+          if (typeof value !== "string" || !value) continue;
+          const fixed = repairProjectPath(value, directory, input.tool !== "write");
+          if (fixed.error) throw new Error(fixed.error);
+          if (fixed.path) {
+            log(`miscopied project path corrected: ${value} -> ${fixed.path}`);
+            output.args[name] = fixed.path;
+          }
+        }
+      }
       if (input.tool !== "bash") return;
       const cmd = String(output.args?.command ?? "");
       if (filteredCheck(cmd)) {
@@ -922,5 +974,5 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
 // if one is not a function ("Plugin export is not a function") — which silently
 // disabled this whole plugin once test helpers were exported. Expose the helpers
 // as properties on the plugin function instead; tests read them from `default`.
-Object.assign(LocalcodePlugin, { PLATEAU_MIN_ROUND, PLATEAU_NUDGE_AFTER, PLATEAU_STOP_AFTER, PLATEAU_RECENT_PASS, PLATEAU_PASS_GRACE, PLATEAU_STOP_DENIALS, SAME_CALL_NUDGE_AFTER, SAME_CALL_STOP_AFTER, callSignature, newProgressMemory, projectCheck, checkDirectory, CHECK_CMD, isCheckCommand, filteredCheck, isTempPath, editedPaths, failureSignatures, checkPassed, progressOf, referenceOnlyTypecheck, RepeatedCheckTracker, PlateauTracker, plateauNudgeText, PLATEAU_PASS_TEXT, bashDescription, trimToolDefinition });
+Object.assign(LocalcodePlugin, { PLATEAU_MIN_ROUND, PLATEAU_NUDGE_AFTER, PLATEAU_STOP_AFTER, PLATEAU_RECENT_PASS, PLATEAU_PASS_GRACE, PLATEAU_STOP_DENIALS, SAME_CALL_NUDGE_AFTER, SAME_CALL_STOP_AFTER, callSignature, newProgressMemory, projectCheck, checkDirectory, CHECK_CMD, isCheckCommand, filteredCheck, isTempPath, editedPaths, failureSignatures, checkPassed, progressOf, referenceOnlyTypecheck, RepeatedCheckTracker, PlateauTracker, plateauNudgeText, PLATEAU_PASS_TEXT, bashDescription, trimToolDefinition, repairProjectPath });
 export default LocalcodePlugin;
