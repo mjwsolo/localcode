@@ -13,7 +13,6 @@ There is nothing to configure before the first run. Most day-to-day settings liv
 | `LOCALCODE_MODELS_DIR` | Older override name; `LOCALCODE_MODEL_DIR` takes precedence |
 | `LOCALCODE_AGENT_RUN_DIR` | Supervisor logs, the per-session runtime config, and the voice runtime. Default `~/.local/share/localcode-agent/run` |
 | `LOCALCODE_MIC` | Microphone device for voice input |
-| `LOCALCODE_VOICE_LIVE=0` | Transcribe once on release instead of as you speak |
 | `LOCALCODE_ENABLE_EXA=1` + `EXA_API_KEY` | Web search through Exa instead of the keyless DuckDuckGo backend |
 | `LOCALCODE_ENABLE_PARALLEL=1` + `PARALLEL_API_KEY` | Web search through Parallel instead of the keyless DuckDuckGo backend |
 | `LOCALCODE_WEBFETCH_MAX_CHARS` | Cap on text returned by a page fetch. Default `20000` |
