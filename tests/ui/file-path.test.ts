@@ -60,7 +60,9 @@ test("a miscopied project path is corrected, a real outside path is left alone, 
 
     // nothing in the project matches: the model is told the root and can retry, instead of a permission prompt
     await expect(before("read", path.join(parent, "cd6dvv2519-x", "T", "project", "nope.py"))).rejects.toThrow("relative to the project root")
-    await expect(before("write", path.join(parent, "cd6dvv2519-x", "brand", "new.py"))).rejects.toThrow("is not inside the project")
+    // never refused: a new file in a new place (the user may have asked for it), and an invented root that matches nothing
+    expect(await before("write", path.join(parent, "cd6dvv2519-x", "brand", "new.py"))).toBe(path.join(parent, "cd6dvv2519-x", "brand", "new.py"))
+    expect(await before("read", "/nonexistent-root-dir/nope.py")).toBe("/nonexistent-root-dir/nope.py")
   } finally {
     await fs.rm(parent, { recursive: true, force: true })
   }
