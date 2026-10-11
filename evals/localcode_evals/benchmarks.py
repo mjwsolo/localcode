@@ -115,7 +115,7 @@ def harnessbench_samples(ids=None, domains=None, difficulty=None, limit: int | N
         out.append(Sample(
             id=tid, input=(d / str(t.get("prompt_file") or "instruction.md")).read_text(encoding="utf-8").strip(), target="task_success",
             files={str(f.relative_to(workspace)): str(f) for f in sorted(workspace.rglob("*")) if f.is_file()},
-            metadata={"benchmark": "harnessbench", "title": t.get("title"), "domain": t.get("domain"), "difficulty": t.get("difficulty"),
+            metadata={"benchmark": "harnessbench", "id": tid, "title": t.get("title"), "domain": t.get("domain"), "difficulty": t.get("difficulty"),
                       "category": t.get("task_category"), "subcategory": t.get("task_subcategory"), "task_dir": str(d),
                       "outcome_test": str(t.get("outcome_test") or "tests/test_outcome.py"), "cases_file": str(t.get("cases_file") or "tests/cases.yaml"),
                       "official_timeout_sec": official, "budget_seconds": min(official, budget_seconds or LOCAL_BUDGET_SECONDS)}))
@@ -179,5 +179,5 @@ def harnessbench(ids: str | None = None, domains: str | None = None, difficulty:
     if not data:
         raise ValueError("harnessbench: the selection is empty")
     # One task whose grader cannot run must not end a run of hundreds.
-    return Task(dataset=data, solver=localcode_ui(ram_gb=ram_gb, env=env), scorer=[harnessbench_outcome(), measurements()], sandbox="local",
+    return Task(dataset=data, solver=localcode_ui(ram_gb=ram_gb, env=env), scorer=[harnessbench_outcome(), measurements()], sandbox="workspace",
                 fail_on_error=False, name="harnessbench", tags=["harnessbench"] + ([f"ram{ram_gb}"] if ram_gb else []), metadata={"left_out": left_out})
