@@ -597,3 +597,15 @@ describe("identical call, identical result", () => {
     expect(out.includes("stop")).toBe(false);
   });
 });
+
+test("targeted verification prompts once through tools and never executes a repository script", async () => {
+  delete process.env.LOCALCODE_AUTO_CHECK;
+  const h = await boot();
+  await h.userMessage("fix the function");
+  const file = join(h.dir, "app.ts");
+  writeFileSync(file, "export const answer = 42");
+  await h.toolRound(write(file));
+  await h.idle();
+  await h.idle();
+  expect(h.prompts.filter((p: string) => p.includes("smallest relevant existing check"))).toHaveLength(1);
+});

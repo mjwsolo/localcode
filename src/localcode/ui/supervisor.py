@@ -941,6 +941,7 @@ def make_handler(sup: Supervisor):
                                        **sup.context_info(), **sup.vision_info()))
             if u.path == "/server":
                 from localcode.ui.ports import preferred_port
+                from localcode.ui.diagnostics import machine_observations, timing_summary
                 try:
                     preferred = preferred_port()
                 except RuntimeError:
@@ -949,7 +950,10 @@ def make_handler(sup: Supervisor):
                 return self._json(dict(sup.server_status(), port=port,
                                        base_url=f"http://127.0.0.1:{port}/v1",
                                        model=f"localcode/{sup.current}" if sup.current else None,
-                                       preferred_port=preferred))
+                                       preferred_port=preferred,
+                                       **sup.context_info(),
+                                       performance=timing_summary(sup._timing.samples if sup._timing else []),
+                                       machine=machine_observations()))
             if u.path == "/models_dir":
                 return self._json(sup.models_dir_info())
             if u.path == "/voice/status":

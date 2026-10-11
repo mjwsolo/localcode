@@ -22,7 +22,9 @@ except ModuleNotFoundError:  # Python 3.10, supported by LocalCode
 HERE = Path(__file__).resolve().parent
 PROFILES = {
     'baseline': {},
-    'compaction-checklist': {'LOCALCODE_COMPACTION_CHECKLIST': '1'},
+    'no-checklist': {'LOCALCODE_COMPACTION_CHECKLIST': '0'},
+    'no-pruning': {'LOCALCODE_PRUNE': '0'},
+    'no-targeted-verification': {'LOCALCODE_TARGETED_VERIFY': '0'},
     'no-vendor-draft': {'LOCALCODE_LLAMA_CPP_MTP_DRAFT': '0'},
     'context-16k': {'LOCALCODE_OVERRIDE_NCTX': '16384'},
     'batch-512': {'LOCALCODE_OVERRIDE_BATCH': '512'},
