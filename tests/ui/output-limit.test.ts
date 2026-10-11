@@ -13,8 +13,11 @@ test("actual length finish continues once; guessed limits and interruption do no
     await hooks["chat.message"]({sessionID:"s",agent:"build"}, {parts:[{type:"text",text:"Write the complete answer"}]});
     await hooks.event({event:{type:"session.idle",properties:{sessionID:"s"}}});
     expect(prompts).toHaveLength(0);
+    await hooks.event({event:{type:"message.updated",properties:{info:{id:"summary",role:"assistant",agent:"compaction",finish:"length",sessionID:"s"}}}});
+    await hooks.event({event:{type:"session.idle",properties:{sessionID:"s"}}});
+    expect(prompts).toHaveLength(0);
     for (const id of ["one", "two"]) {
-      await hooks.event({event:{type:"message.part.updated",properties:{part:{id,type:"step-finish",reason:"length",sessionID:"s"}}}});
+      await hooks.event({event:{type:"message.updated",properties:{info:{id,role:"assistant",agent:"build",finish:"length",sessionID:"s"}}}});
       await hooks.event({event:{type:"session.idle",properties:{sessionID:"s"}}});
     }
     expect(prompts).toHaveLength(1);
@@ -23,7 +26,7 @@ test("actual length finish continues once; guessed limits and interruption do no
     expect(prompts[0].body.parts[0].text).toContain("runtime reported");
     await hooks["chat.message"]({sessionID:"s",agent:"build"}, {parts:[{type:"text",text:"next"}]});
     await hooks.event({event:{type:"session.error",properties:{sessionID:"s",error:{name:"MessageAbortedError"}}}});
-    await hooks.event({event:{type:"message.part.updated",properties:{part:{id:"three",type:"step-finish",reason:"length",sessionID:"s"}}}});
+    await hooks.event({event:{type:"message.updated",properties:{info:{id:"three",role:"assistant",agent:"build",finish:"length",sessionID:"s"}}}});
     await hooks.event({event:{type:"session.idle",properties:{sessionID:"s"}}});
     expect(prompts).toHaveLength(1);
   } finally {rmSync(directory,{recursive:true,force:true})}

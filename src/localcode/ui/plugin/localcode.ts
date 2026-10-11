@@ -810,6 +810,16 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
         }
         return;
       }
+      if (event.type === "message.updated") {
+        const info = (event.properties as any).info;
+        // Compaction/title helpers can share the session. Only the primary
+        // assistant's finish reason may trigger answer continuation.
+        if (info?.role === "assistant" && info.sessionID === activeSession &&
+            info.agent === (currentAgent ?? "build") && info.finish) {
+          outputLimited = info.finish === "length";
+        }
+        return;
+      }
       if (event.type === "todo.updated") {
         if (activeSession && (event.properties as any).sessionID && (event.properties as any).sessionID !== activeSession) return;
         todos = (event.properties as any).todos ?? [];
@@ -821,7 +831,6 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
         const part = (event.properties as any).part;
         if (part?.type === "step-finish" && part.sessionID && !seenSteps.has(part.id)) {
           seenSteps.add(part.id);
-          if (!activeSession || part.sessionID === activeSession) outputLimited = part.reason === "length";
           await onRoundEnd(part.sessionID);
         }
         return;
