@@ -72,7 +72,7 @@ def test_already_downloaded_short_circuits(isolated_model_dir, monkeypatch):
     (isolated_model_dir / choice.filename).write_bytes(b"fake gguf")
     monkeypatch.setattr(bootstrap, "_is_complete_download", lambda p, e: True)
     called = {"net": False}
-    monkeypatch.setattr(bootstrap, "_try_hub_download",
+    monkeypatch.setattr(bootstrap, "_download_parallel",
                         lambda *a, **k: called.__setitem__("net", True) or True)
 
     ok, path = bootstrap.download_model(choice)
@@ -84,30 +84,32 @@ def test_already_downloaded_short_circuits(isolated_model_dir, monkeypatch):
 def test_fast_path_success(isolated_model_dir, monkeypatch):
     choice = _unpinned(catalog.by_key("gemma-12b"))
 
-    def _fake_hf(c, model_file, on_progress=None, cancel_event=None):
+    def _fake_hf(c, model_file, **kwargs):
         Path(model_file).write_bytes(b"downloaded")
         return True
 
-    monkeypatch.setattr(bootstrap, "_try_hub_download", _fake_hf)
+    monkeypatch.setattr(bootstrap, "_download_parallel", _fake_hf)
     ok, path = bootstrap.download_model(choice)
     assert ok is True
     assert Path(path).exists()
 
 
-def test_falls_back_to_urllib_when_fast_path_fails(isolated_model_dir, monkeypatch):
+def test_parallel_transport_retries_without_deleting_partial(isolated_model_dir, monkeypatch):
     choice = _unpinned(catalog.by_key("gemma-12b"))
-
-    def _hf_boom(*a, **k):
-        raise ConnectionError("transient network blip")  # retryable category
-
-    def _fake_parallel(url, dest, **k):
-        Path(dest).write_bytes(b"via urllib")
-
-    monkeypatch.setattr(bootstrap, "_try_hub_download", _hf_boom)
-    monkeypatch.setattr(bootstrap, "_download_parallel", _fake_parallel)
+    attempts = []
+    def transfer(url, dest, **kwargs):
+        partial = dest.with_name(dest.name + ".part")
+        attempts.append(url)
+        if len(attempts) == 1:
+            partial.write_bytes(b"checkpoint")
+            raise ConnectionError("temporary network interruption")
+        assert partial.read_bytes() == b"checkpoint"
+        dest.write_bytes(b"complete")
+    monkeypatch.setattr(bootstrap, "_download_parallel", transfer)
+    monkeypatch.setattr(bootstrap.time, "sleep", lambda _: None)
     ok, path = bootstrap.download_model(choice)
-    assert ok is True
-    assert Path(path).read_bytes() == b"via urllib"
+    assert ok and Path(path).read_bytes() == b"complete"
+    assert len(attempts) == 2
 
 
 def test_fatal_error_fails_fast_without_retry(isolated_model_dir, monkeypatch):
@@ -118,10 +120,7 @@ def test_fatal_error_fails_fast_without_retry(isolated_model_dir, monkeypatch):
         attempts["n"] += 1
         raise Exception("401 Unauthorized")
 
-    monkeypatch.setattr(bootstrap, "_try_hub_download", _hf_auth_fail)
-    # If urllib were tried it would also count — assert it's NOT reached.
-    monkeypatch.setattr(bootstrap, "_download_parallel",
-                        lambda *a, **k: pytest.fail("urllib should not run on auth error"))
+    monkeypatch.setattr(bootstrap, "_download_parallel", _hf_auth_fail)
 
     ok, msg = bootstrap.download_model(choice)
     assert ok is False
@@ -158,14 +157,14 @@ def test_partial_at_final_name_is_not_treated_as_done(isolated_model_dir, monkey
     choice.local_path.write_bytes(b"partial junk")
     completed = {"hub": False}
 
-    def _fake_hub(c, model_file, on_progress=None, cancel_event=None):
+    def _fake_hub(c, model_file, **kwargs):
         # Simulate the hub finishing the download at full size.
         Path(model_file).write_bytes(b"x" * 1024)
         monkeypatch.setattr(bootstrap, "_is_complete_download", lambda p, e: True)
         completed["hub"] = True
         return True
 
-    monkeypatch.setattr(bootstrap, "_try_hub_download", _fake_hub)
+    monkeypatch.setattr(bootstrap, "_download_parallel", _fake_hub)
     ok, path = bootstrap.download_model(choice)
     assert ok is True
     assert completed["hub"] is True, "partial file must NOT short-circuit the download"
