@@ -122,3 +122,5 @@ llama-cpp-turboquant/.github/
 
 # Eval results (per-run model outputs, logs, throwaway homes)
 /evals/runs/
+# benchmark data for the Inspect suite: never redistributed
+evals/data/
