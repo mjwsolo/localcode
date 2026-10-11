@@ -11,7 +11,7 @@ One directory per task, Harbor-style:
 <id>/solution/solve.sh   the oracle: applied to a fresh workspace it must make test.sh pass
 ```
 
-Runner contract. Before `tests/test.sh` runs, the runner writes into `$WORKSPACE/.eval/`:
+Grader contract. Before `tests/test.sh` runs, the solver (`localcode_evals/agent.py`) writes into `$WORKSPACE/.eval/`:
 `diff.txt` (changed paths vs the initial commit), `final.txt` (the agent's last message),
 `commands.log` (every bash command the agent ran, one per line), `metrics.json`
 (`steps`, `wall_s`, `reread_tokens` per turn, `prompt_tokens`), `ui_errors.txt`.

@@ -5,6 +5,15 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
+### Changed
+
+- The task evals run on Inspect AI itself. `pip install -e evals`, then
+  `inspect eval localcode_evals/regression --model localcode/<model>` and
+  `inspect view`. The hand-written runner, HTML dashboard, log exporter, tier
+  matrix and sweep scripts are gone; epochs, `eval-set`, task arguments
+  (`ram_gb`, `env`) and the Inspect viewer replace them. `gate.py` and
+  `nightly.sh` read Inspect logs. Not part of the `localcode` package.
+
 ## 0.5.17 — 2026-10-11
 
 ### Changed

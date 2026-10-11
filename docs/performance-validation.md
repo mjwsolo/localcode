@@ -49,12 +49,12 @@ The model's own guesses about its token count never trigger continuation.
    The probe reports first streamed content/reasoning/tool token latency,
    total time, server timings and usage. Repeated requests test prefix reuse.
    It fails on incomplete streams. Credentials and response text are not printed.
-3. Run `evals/run_tasks.py` on the same model and fixed coding tasks. The patched
+3. Run `inspect eval localcode_evals/regression --model localcode/<model>` (see `evals/README.md`) on the same model and fixed coding tasks. The patched
    JSON client emits one content-free `first_text_delta` timestamp. Results include
    `end_to_end_first_text_s` per turn, including harness startup, any preceding tool work and transport;
    this is distinct from server-only prefill timings. Older clients leave it
    unknown. Compare correctness as well as latency.
-4. Use `evals/sweep.py` for sequential context, batch, KV and drafting experiments.
+4. Pass `-T env='{"LOCALCODE_OVERRIDE_BATCH": "512"}'` and the like for sequential context, batch, KV and drafting experiments.
    Preserve a baseline and reverse order between repetitions. A RAM override
    exercises policy; it does not simulate a real lower-memory GPU.
 5. `evals/gate.py --require-performance` rejects missing decode measurements and
