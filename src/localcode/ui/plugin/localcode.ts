@@ -838,6 +838,12 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
         await nudge(sessionID, `${NUDGE_PREFIX} The runtime reported an output-token limit. Continue the unfinished answer exactly where it stopped, without repeating it. Finish the requested deliverable. Do not claim to have counted tokens.`);
         return;
       }
+      if (outputLimited && lengthContinuations >= 1) {
+        outputLimited = false;
+        try {
+          await client.tui?.showToast?.({ body: { title: "Output limit reached", message: "The response reached its output limit again after one continuation and may be incomplete. Send Continue to resume.", variant: "warning", duration: 15000 } });
+        } catch {} // A headless client may not have a TUI.
+      }
       if (!workspaceActive) return;
       // Flush a trailing round if a step-finish never arrived; then, if the
       // plateau breaker stopped this session, none of the gates may restart it.
