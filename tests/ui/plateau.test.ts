@@ -270,6 +270,24 @@ async function boot() {
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
 describe("plugin wiring", () => {
+  test("a turn made only of web searches is stopped when it repeats one query", async () => {
+    const { SAME_CALL_NUDGE_AFTER, SAME_CALL_STOP_AFTER } = LocalcodePluginDefault as any;
+    const h = await boot();
+    await h.userMessage("what is RKLB trading at");
+    const search = { tool: "websearch", args: { query: "RKLB", numResults: 8 }, output: "No search results found. Please try a different query." } as ToolEvent;
+    for (let i = 0; i < SAME_CALL_NUDGE_AFTER; i++) await h.toolRound(search);
+    await tick();
+    expect(h.prompts).toHaveLength(1);
+    expect(h.prompts[0]).toContain("websearch was called");
+    for (let i = SAME_CALL_NUDGE_AFTER; i < SAME_CALL_STOP_AFTER; i++) await h.toolRound(search);
+    await expect(h.before(search)).rejects.toThrow("stopped");
+    // a different search each time is research, not a loop
+    const g = await boot();
+    await g.userMessage("research the space sector");
+    for (let i = 0; i < 12; i++) await g.toolRound({ tool: "websearch", args: { query: `space stocks ${i}` }, output: `results ${i}` } as ToolEvent);
+    await expect(g.before(search)).resolves.toBeUndefined();
+    expect(g.prompts).toHaveLength(0);
+  });
   test("a new session does not inherit pending todos or late events from the previous one", async () => {
     const h = await boot();
     await h.userMessage("old task");
