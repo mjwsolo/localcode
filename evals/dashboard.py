@@ -111,18 +111,76 @@ def gate_receipt(dirs: list[Path]) -> dict:
     return best
 
 
+def _catalog():
+    try:
+        sys.path.insert(0, str(HERE.parent / "src"))
+        import localcode.models_catalog as cat  # type: ignore
+        return cat
+    except Exception:
+        return None
+
+
 def model_key(alias: str) -> str:
+    """Catalog group key for a run's model name (the GGUF stem). Resolved through
+    the shipping catalog so the coverage matrix lines up with its rows; the
+    string table below is the fallback when the catalog is not importable."""
+    cat = _catalog()
+    if cat is not None:
+        g = cat.group_for_filename(alias if alias.endswith(".gguf") else alias + ".gguf")
+        if g:
+            return g.key
     a = alias.lower()
-    if "diffusiongemma" in a: return "diffusiongemma"
+    if "diffusiongemma" in a: return "diffusiongemma-26b-a4b"
     if "gemma-4-12b" in a: return "gemma-4-12b"
     if "gemma-4-26b" in a: return "gemma-4-26b-a4b"
     if "qwen3.6-35b" in a: return "qwen-3.6-35b-a3b"
     if "qwen3.8-27b" in a: return "qwen-3.8-27b"
     if "muse" in a: return "muse-glimmer-30b"
-    if "north" in a: return "north-mini-code"
-    if "kolibri" in a: return "kolibri"
+    if "north" in a: return "north-mini-code-1.0"
+    if "kolibri" in a: return "kolibri-1"
+    if "saluki" in a: return "saluki-27b"
     if "openjev" in a: return "openjev"
     return a
+
+
+def quant_label(model: str) -> str:
+    """Q8_K_XL / IQ4_XS / IQ2-mix from a GGUF stem; the catalog's own labeller first."""
+    cat = _catalog()
+    if cat is not None:
+        try:
+            lab = cat._quant_label(model if model.endswith(".gguf") else model + ".gguf")
+            if lab:
+                return lab
+        except Exception:
+            pass
+    if "-UD-" in model:
+        return model.split("-UD-")[-1]
+    import re
+    m = re.search(r"((?:UD-)?I?Q\d[A-Za-z0-9_-]*)$", model)
+    return m.group(1) if m else model[-10:]
+
+
+def gate_by_group(receipt: dict) -> dict[str, dict]:
+    """Gate receipts are keyed by ModelChoice key (gemma, qwen38-q8, ...); the
+    coverage matrix is keyed by catalog group. Fold every non-turbo4 record of a
+    group into one entry whose checks are the union of what its quants passed."""
+    cat = _catalog()
+    out: dict[str, dict] = {}
+    for m in receipt.get("models", []):
+        if m.get("turbo4"):
+            continue
+        gkey = m["key"]
+        if cat is not None:
+            ch = cat.by_key(m["key"])
+            g = cat.group_for_filename(ch.filename) if ch else None
+            if g:
+                gkey = g.key
+        e = out.setdefault(gkey, {"key": gkey, "checks": [], "quants": []})
+        for c in m.get("checks", []):
+            if c not in e["checks"]:
+                e["checks"].append(c)
+        e["quants"].append(m["key"])
+    return out
 
 
 def esc(s) -> str:
@@ -242,7 +300,7 @@ def render(runs: list[dict], dirs: list[Path]) -> str:
     # what it says. One axis only; metrics live inside the cell, not as columns.
     cat = catalog_models() or [(model_key(m), m, False) for m in models]
     layers = ["No-model checks (CI)", "Gate (loads, acts once)", "Tasks on this machine", "Tasks as a 24 GB Mac", "Tasks as a 16 GB Mac", "Tasks on real 16/24 GB hardware"]
-    gate_rows = {m["key"]: m for m in receipt.get("models", []) if not m.get("turbo4")} if receipt else {}
+    gate_rows = gate_by_group(receipt) if receipt else {}
     gate_when = (receipt.get("verified_at") or receipt.get("commit", ""))[:10] if receipt else ""
     def cell(kind: str, text: str, tip: str = "") -> str:
         return f'<td class="cov {kind}" title="{esc(tip)}">{text}</td>'
@@ -257,14 +315,14 @@ def render(runs: list[dict], dirs: list[Path]) -> str:
         if sm["validity"] is not None: bits.append(f"{sm['validity']*100:.0f}% valid calls")
         if sm["decode"]: bits.append(f"{sm['decode']:.0f} tok/s")
         kind = "yes" if sm["pass_rate"] >= 0.9 else "part"
-        return cell(kind, f"{esc(r['model'].split('-UD-')[-1] if '-UD-' in r['model'] else r['model'][-10:])}<br>" + ", ".join(bits), f"{r['name']}: {sm['trials']} trials over {sm['tasks']} tasks")
+        return cell(kind, f"{esc(quant_label(r['model']))}<br>" + ", ".join(bits), f"{r['name']}: {sm['trials']} trials over {sm['tasks']} tasks")
     cov_rows = []
     for key, name, vision in cat:
         g = gate_rows.get(key)
         if g:
             checks = g.get("checks", [])
             gtxt = f"pass {esc(gate_when)}<br>" + ", ".join(esc(c) for c in checks)
-            gcell = cell("yes" if (not vision or "vision" in checks) else "part", gtxt, "from the newest gate receipt on disk")
+            gcell = cell("yes" if (not vision or "vision" in checks) else "part", gtxt, "newest gate receipt on disk; quants: " + ", ".join(g.get("quants", [])))
         else:
             gcell = cell("no", "no receipt on disk", "the gate ran on earlier checkouts that were deleted; receipts are now copied into runs/")
         cov_rows.append("<tr><th class=\"rowhead\">" + esc(name) + "</th>"
