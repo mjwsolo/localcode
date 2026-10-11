@@ -257,6 +257,13 @@ if ! grep -qE 'nextn_predict_layers|n_layer_nextn' "$SRC/src/llama-model.cpp"; t
   af "qwen35 MTP guard missing from src/llama-model.cpp - Qwen 3.8 27B will fail to load"
 fi
 
+# 0007: DFlash drafters crashed llama-server (HTTP 500) on every image request
+# because mtmd image chunks left a hole in the draft KV cache (upstream #27408).
+# Drop this assertion together with the patch once upstream merges a fix.
+if ! grep -q 'draft cache hole for seq' "$SRC/common/speculative.cpp"; then
+  af "dflash mtmd zero-fill missing from common/speculative.cpp - image requests with a DFlash drafter will return HTTP 500"
+fi
+
 if [ "$assert_fail" -ne 0 ]; then
   emit STATUS delta-missing
   die "the patch series applied but the fork delta is not in the tree - a patch is a no-op or applied to the wrong place" 40

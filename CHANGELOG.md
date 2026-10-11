@@ -5,6 +5,25 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
+## 0.5.14 — 2026-10-11
+
+### Fixed
+
+- **Images with a DFlash drafter no longer fail.** Qwen 3.6 35B-A3B answered
+  HTTP 500 to every image request since its drafter shipped in 0.5.8: the
+  bundled llama-server left a hole in the draft cache after an image
+  (upstream llama.cpp #27408). The bundled server now carries the upstream
+  zero-fill fix (PR #30220, patch 0007); output is unchanged and only draft
+  acceptance right after an image drops.
+
+### Added
+
+- The shipping model gate sends an image to every model that pairs a vision
+  projector and requires the answer to name its colour. This is the check that
+  found the failure above.
+- `LOCALCODE_RAM_GB` overrides the memory probe for the evals, so the picker
+  and runtime can be exercised as a 16 GB or 24 GB machine (`evals/matrix.py`).
+
 ## 0.5.13 — 2026-10-11
 
 ### Fixed

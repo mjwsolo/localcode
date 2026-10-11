@@ -442,6 +442,30 @@ the Q8_0 split files, CUDA.
 
 ---
 
+### `0007-dflash-mtmd-zero-fill.patch` — images with a DFlash drafter
+
+**Status: open upstream.** Minimal port of
+[ggml-org/llama.cpp#30220](https://github.com/ggml-org/llama.cpp/pull/30220)
+(issue [#27408](https://github.com/ggml-org/llama.cpp/issues/27408)). **When
+upstream merges a fix for #27408, delete this patch** and re-run the model gate's
+vision check on every DFlash model.
+
+mtmd image chunks are decoded into the target context by the mtmd helper and
+never pass through the DFlash `process()` hook, so the draft KV cache is left
+with a positional hole and the next injection fails the consecutive-position
+check: `llama_process(ctx_dft) failed rc=-1` and HTTP 500 on every image
+request when `--spec-type draft-dflash` is loaded. Upstream's earlier #28587
+(in the pinned tree) skips M-RoPE-pinned image batches but leaves the hole.
+The patch seeds the hole with zero target-layer features. Drafted tokens are
+still verified by the target, so output is unchanged; only draft acceptance
+right after an image drops.
+
+Found by the shipping gate's vision check (`scripts/verify_models.py`), which
+sends one image to every model that pairs a projector: Qwen 3.6 35B-A3B with
+its ggml-org DFlash drafter answered 500 on both quants, text requests and
+partial-prefix reuse were fine, and the same request without the drafter or
+with Gemma's MTP drafter passed.
+
 ## Retired at the 2026-08-22 bump
 
 Patches that no longer exist because upstream implemented the same thing,

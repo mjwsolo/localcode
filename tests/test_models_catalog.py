@@ -383,3 +383,14 @@ def test_saluki_mixed_quant_is_visible_and_keeps_integrity_pin():
     assert browsed.name.endswith("(IQ2-mix)")
     assert (browsed.revision, browsed.sha256, browsed.size_bytes) == (c.revision, c.sha256, c.size_bytes)
     assert _parse_label("model-draft-mtp.gguf") is None
+
+
+def test_ram_probe_honours_the_eval_knob(monkeypatch):
+    from localcode import models_catalog as mc
+
+    monkeypatch.setenv("LOCALCODE_RAM_GB", "16")
+    assert mc._system_ram_gb() == 16
+    monkeypatch.setenv("LOCALCODE_RAM_GB", "junk")
+    assert mc._system_ram_gb() >= 1 and mc._forced_ram_gb() is None   # ignored, real probe used
+    monkeypatch.delenv("LOCALCODE_RAM_GB")
+    assert mc._forced_ram_gb() is None
