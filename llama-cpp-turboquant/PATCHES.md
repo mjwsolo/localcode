@@ -12,8 +12,9 @@ The machine-readable form of this inventory lives at the repo root:
 | `patches/PINNED_UPSTREAM` | the upstream commit the series applies to |
 | `patches/000N-*.patch` | numbered patches, applied in order with `git apply` |
 
-**Pinned upstream:** `d81235049384534c167caea52b85a694f6103d14` (2026-10-05,
-tag `v0.6.0`, `llama.cpp : bump version to 0.6.0 (#29997)`).
+**Pinned upstream:** `62a6f74bab748b1755f4cd8dfc0871caf865c6c8` (2026-10-11,
+master, `server: add component tests (#30312)`, 124 commits after tag `v0.6.0`
+`d81235049`, the previous pin).
 
 **Previous pins:** `836d57176dc699a726c55418e4f96b8ca628e1bf` (2026-10-03),
 `3f545beccee69d9975f466ec7e45fd9aacd8ba90` (2026-08-22), and before it `c08d28d08871715fd68accffaeeb76ddcaede658` (2026-04-05). That
@@ -37,6 +38,12 @@ most of them one hunk each:
 ```sh
 git clone https://github.com/ggml-org/llama.cpp upstream && cd upstream
 git checkout -b fork-old "$(cat /path/to/patches/PINNED_UPSTREAM)"
+# If `upstream` was cloned from a local blobless clone, git drops the promisor
+# settings and the checkout fails with "unable to read sha1 file". Restore them
+# first: git config remote.origin.promisor true &&
+#        git config remote.origin.partialclonefilter blob:none
+# `git apply --3way` cannot be used with these patches (no preimage blobs);
+# the fork-old -> rebase route below is the one that works.
 for p in /path/to/patches/*.patch; do
   git apply --index "$p" && git commit -qm "$(basename "$p" .patch)"
 done
@@ -276,6 +283,12 @@ generalised it to `LLM_CHAT_TEMPLATE_HUNYUAN_VL` ("tencent/HunyuanOCR &
 tencent/HunyuanVL"). Only the mtmd vision model file remains fork-local.
 Re-check on the next bump whether upstream has taken this too.
 
+**2026-10-11:** `tools/mtmd/models/hunyuanocr.cpp` is referenced nowhere (not
+in `tools/mtmd/CMakeLists.txt`, no `clip_graph_hunyuanocr` anywhere); upstream
+compiles `hunyuanvl.cpp` (`PROJECTOR_TYPE_HUNYUANVL`) instead. The patch is a
+dead file and can be dropped at the next bump; kept this time to leave the
+series numbering alone.
+
 ### `0004-fork-local-bench-scripts.patch` — bench artifacts
 
 `scripts/turbo-quality-gate.sh`, `scripts/bench-smem-m5.sh` and two recorded
@@ -390,6 +403,19 @@ no_forced_thinking` additionally strips a thought opener the template appends
 after a tool response, so the model always decides itself. Verified: plain
 question, one-word reply, tool call, post-tool answer, streamed and not.
 
+**2026-10-11 bump:** upstream's `chat : refactor API` (#30210) replaced
+`common_chat_templates_apply()` in `oaicompat_chat_params_parse` with a
+`common_chat_session` whose prompt and generation prompt are private and
+already tokenised, so the `no_forced_thinking` opener strip can no longer live
+in `tools/server/server-common.cpp`. It is now a `bool no_forced_thinking` on
+`common_chat_session_params` (`common/chat.h`) applied to `applied.prompt` /
+`applied.generation_prompt` at the top of the `common_chat_session` constructor
+(`common/chat.cpp`), before the parser's generation prompt is tokenised, so
+prompt, parser prefix and the emitted generation prompt stay consistent;
+`server-common.cpp` only forwards the flag. Everything else in the patch
+rebased unchanged (upstream still has no DiffusionGemma, no denoiser, no
+thought-channel rules).
+
 ### `0006-kolibri1.patch` — Aleph Alpha Kolibri-1 (`kolibri1` architecture)
 
 **Status: not upstream.** Tracking issue
@@ -444,7 +470,9 @@ the Q8_0 split files, CUDA.
 
 ### `0007-dflash-mtmd-zero-fill.patch` — images with a DFlash drafter
 
-**Status: open upstream.** Minimal port of
+**Status: open upstream.** Still needed at the 2026-10-11 pin: upstream's #30257
+(`spec: properly handle mtmd input for mtp`) fixes only the MTP drafter, not
+DFlash. Minimal port of
 [ggml-org/llama.cpp#30220](https://github.com/ggml-org/llama.cpp/pull/30220)
 (issue [#27408](https://github.com/ggml-org/llama.cpp/issues/27408)). **When
 upstream merges a fix for #27408, delete this patch** and re-run the model gate's
