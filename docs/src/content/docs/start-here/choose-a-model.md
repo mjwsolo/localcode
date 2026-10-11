@@ -34,6 +34,10 @@ With no model loaded, the picker opens when you send your first message. Type `/
 
 Press Enter on a `Ready` row to load it. The model server reloads on the same port and the session continues. Press Enter on a `Download` row to start the download; the row shows a live percentage (`⇣ 42%`). Press Enter on a downloading row to cancel it.
 
+Downloads use parallel requests and save verified chunks. After cancelling, losing your connection, or restarting LocalCode, select the same quant again to resume. Resume needs range support and a stable server ETag; otherwise LocalCode starts a fresh transfer. Completed chunks are checked before reuse, and the finished file is verified against its catalog checksum when one is available.
+
+Partial downloads stay in the Models folder as `<filename>.part` and `<filename>.resume.json`. To reclaim that space, cancel the download, wait for it to stop, then delete those two files.
+
 Nothing downloads without you choosing it and seeing its size. Downloads come from Hugging Face and happen once per quant.
 
 A **Models folder** entry at the bottom of the picker shows where GGUFs are stored and lets you change it. The default is `~/.local/share/localcode/models`; `LOCALCODE_MODEL_DIR` overrides it. The older `LOCALCODE_MODELS_DIR` also works. See [Configuration](/localcode/reference/configuration).
