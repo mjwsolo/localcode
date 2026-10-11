@@ -15,8 +15,10 @@ for. This page lists every path.
   points inference elsewhere.
 - **Your files, prompts and edits.** The agent reads and writes your working
   tree directly.
-- **Sessions and logs.** Sessions live in `<project>/.localcode-agent/`. Server
-  and supervisor logs live in the run directory. Nothing is uploaded.
+- **Sessions and logs.** Sessions live in one SQLite file,
+  `~/.local/share/localcode-agent/opencode.db`. Server and supervisor logs
+  live in the run directory beside it. Nothing is uploaded. See
+  [where state lives](/localcode/reference/configuration#where-state-lives).
 
 There is no analytics endpoint, usage reporting, update check, or account.
 Every localcode process binds to `127.0.0.1`.

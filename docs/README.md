@@ -7,7 +7,7 @@ One folder for everything documentation:
 | `src/content/docs/` | The published docs site (Astro + Starlight), deployed by `.github/workflows/docs.yml` |
 | `assets/` | Brand marks, logos, the README demo GIF, the GitHub social preview |
 | `ERRORS.md` | Generated from `src/localcode/errors.py`; the site's error-codes page links to it |
-| `mcp-lsp.md`, `upstream-fork.md` | Contributor recipes linked from the site and `CONTRIBUTING.md` |
+| `upstream-fork.md` | Contributor recipe linked from the site and `CONTRIBUTING.md` |
 | `demo-tapes/`, `scripts/` | Recording and export tooling for the assets above |
 
 # localcode docs — preview site
@@ -217,7 +217,6 @@ These are pre-publication requirements, not optional polish.
 These pages carry an explicit "Preview stub" callout:
 
 - `concepts/architecture` — condensed; needs module-level detail.
-- `guides/mcp` — links to `docs/mcp-lsp.md` instead of a migrated recipe.
 - `reference/error-codes` — links to the generated `docs/ERRORS.md` instead of
   importing it.
 - `models-and-performance` — no throughput numbers until there is a
