@@ -255,7 +255,8 @@ function isTempPath(p: string, directory?: string): boolean {
 // component that does not exist (an invented root such as /home/user/project
 // is the same case: it leaves at the first component). A real location outside the project is left to
 // the normal permission flow. When the rest of the path names something in the
-// project it is used; otherwise the model is told the project root and retries.
+// project it is used; a read or edit that matches nothing gets the project root
+// back as an error the model can retry from.
 function isInside(root: string, target: string): boolean {
   const rel = relative(root, target);
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
@@ -275,6 +276,11 @@ function repairProjectPath(value: string, directory: string, mustExist: boolean)
     const candidate = join(root, ...rest.slice(k));
     if (existsSync(candidate) || (!mustExist && rest.length - k > 1 && isDir(join(root, rest[k])))) return { path: candidate };
   }
+  // Nothing in the project matches. Say so only when a refusal cannot cost anything:
+  // the tool needs the path to exist, and the model had started down a real
+  // directory toward the project. A new file somewhere else, or an invented
+  // root that matches nothing, is left to the normal flow.
+  if (!mustExist || dirname(ancestor) === ancestor) return {};
   return { error: `That path is not inside the project: the directory ${dirname(target)} does not exist. The project root is ${root}. Retry with a path relative to the project root${rest.length ? `, for example ${JSON.stringify(rest[rest.length - 1])}` : ""}.` };
 }
 
