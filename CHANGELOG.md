@@ -17,6 +17,9 @@ All notable changes to LocalCode will be documented here. The format follows
   `inspect eval localcode_evals/harnessbench`. Its data is read from
   `evals/data/` and never downloaded. Aider Polyglot, LiveCodeBench and
   SWE-bench are not included: they mostly rank the model, not the harness.
+- Removed dead files: the `tests/e2e` harness (it imported modules that no
+  longer exist), the unused `tests/protocol_fixtures`, and unreferenced demo
+  images.
 - Seven multi-check coding tasks from the older hand-written suite join the
   tracking set, each with a proven oracle: extend-without-breaking, todo-cli,
   expr-eval, bank-ledger, fix-failing-suite, csv-report, inventory-app.
