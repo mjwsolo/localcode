@@ -1,4 +1,4 @@
-"""Where the HarnessBench data must be, and how to get it. Nothing here downloads.
+"""Where the Harness-Bench 3.0 data must be, and how to get it. Nothing here downloads.
 
     python -m localcode_evals.data
 
@@ -10,11 +10,13 @@ from __future__ import annotations
 from .benchmarks import DATA
 
 PATH = DATA / "harness-bench"
-SIZE = "about 35 MB"
+SIZE = "about 90 MB"
 HOW = f"git clone --depth 1 https://github.com/Qihoo360/harness-bench {PATH}"
 
 if __name__ == "__main__":
     print(f"benchmark data directory: {DATA}\n")
-    print(f"harnessbench  {'present' if (PATH / 'tasks').is_dir() else 'MISSING'}  {PATH}")
-    if not (PATH / "tasks").is_dir():
+    current = (PATH / "src/harnessbench/grading/outcome_cases.py").is_file()
+    state = "present" if current else ("OLD (before 3.0)" if (PATH / "tasks").is_dir() else "MISSING")
+    print(f"harnessbench  {state}  {PATH}")
+    if not current:
         print(f"              {SIZE}\n              {HOW}")
