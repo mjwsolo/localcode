@@ -105,6 +105,7 @@ class Supervisor:
         self._budget_info: dict = {}
         self._budget_lock = threading.Lock()
         self._warm_stop = threading.Event()
+        self._warm_status = "idle"
         self._warm_replay = None  # warmup.Replay while the prefix is being pre-read
 
     # ---- llama-server lifecycle -------------------------------------------
@@ -256,7 +257,9 @@ class Supervisor:
     def _start_warmup(self, alias: str) -> None:
         from localcode.ui import warmup
         if not warmup.enabled():
+            self._warm_status = "disabled"
             return
+        self._warm_status = "checking"
         self._warm_stop = threading.Event()
         threading.Thread(target=self._warmup_worker, args=(alias, self._warm_stop), daemon=True).start()
 
@@ -264,14 +267,20 @@ class Supervisor:
         from localcode.ui import warmup
         port = self.port
         baseline: int | None = None
+        model_path = self.models_dir / f"{alias}.gguf"
         try:
-            toks = warmup.load(alias)
+            toks = warmup.load(alias, model_path)
+            if stop.is_set():
+                return
+            self._warm_status = "warming" if toks else "cold"
             if toks:
                 t0 = time.time()
                 rp = warmup.Replay(port)
                 self._warm_replay = rp
                 try:
                     tm = rp.run(toks)
+                    if not stop.is_set():
+                        self._warm_status = "warm"
                     log(f"warmup: replayed {len(toks)} tokens for {alias} in {time.time() - t0:.1f}s "
                         f"(server prompt_ms={tm.get('prompt_ms')}, cache_n={tm.get('cache_n')})")
                     try:
@@ -282,18 +291,26 @@ class Supervisor:
                         pass
                 except Exception as e:  # noqa: BLE001
                     if rp.cancelled or stop.is_set():
+                        if not stop.is_set():
+                            self._warm_status = "interrupted"
                         log(f"warmup: replay cancelled after {time.time() - t0:.1f}s (user turn started)")
                     else:
                         log(f"warmup: replay failed for {alias}, forgetting it: {e}")
+                        self._warm_status = "failed"
                         warmup.forget(alias)
                 finally:
-                    self._warm_replay = None
+                    if self._warm_replay is rp:
+                        self._warm_replay = None
+                if stop.is_set():
+                    return
                 for s in warmup.slots(port) or []:
                     try:
                         baseline = max(baseline or -1, int(s.get("id_task") if s.get("id_task") is not None else -1))
                     except (TypeError, ValueError):
                         pass
         except Exception as e:  # noqa: BLE001
+            if not stop.is_set():
+                self._warm_status = "failed"
             log(f"warmup: skipped: {e}")
         # Capture this session's first turn so the next load of this model is warm.
         tracker = warmup.CaptureTracker(baseline_task=baseline)
@@ -305,8 +322,8 @@ class Supervisor:
                 if slot_id is not None:
                     try:
                         new = warmup.capture(port, slot_id)
-                        merged = warmup.merge_tokens(warmup.load(alias), new)
-                        warmup.store(alias, merged)
+                        merged = warmup.merge_tokens(warmup.load(alias, model_path), new)
+                        warmup.store(alias, merged, model_path)
                         log(f"warmup: captured {len(new)} tokens for {alias}, stored {len(merged)}")
                     except Exception as e:  # noqa: BLE001
                         log(f"warmup: capture failed for {alias}: {e}")
@@ -405,7 +422,7 @@ class Supervisor:
         ready = running and state["state"] == "ready" and self.healthy()
         if state["state"] == "ready" and not ready:
             state.update(state="error", detail="Model server is unavailable")
-        return dict(state, server_running=running, server_ready=ready)
+        return dict(state, server_running=running, server_ready=ready, warmup=getattr(self, "_warm_status", "idle"))
 
     def server_action(self, action: str) -> dict:
         """Queue an explicit lifecycle action; retain session and selected model."""
