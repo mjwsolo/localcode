@@ -5,6 +5,21 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
+## 0.5.13 — 2026-10-11
+
+### Fixed
+
+- Restore `/server`, `/mode` and `/decide` in the slash menu using the current
+  runtime command-registration API.
+- Preserve prompt warm-up captures across UI updates when the model file has
+  not changed; invalidate them when the model changes.
+
+### Added
+
+- Prompt-cache status in `/server`: cold, warming or warm. First-use models
+  still need to process their context; this release does not promise instant
+  model switching or improved generation speed.
+
 ## 0.5.12 — 2026-10-11
 
 ### Added
