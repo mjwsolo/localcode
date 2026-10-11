@@ -86,6 +86,14 @@ Each directory under `tasks/` is one sample.
 
 `tasks/README.md` documents the `.eval/` files a grader may read.
 
+## Where a sample works
+
+Each sample gets a plain directory named for it, `/tmp/localcode-evals/<sample>-<n>`
+(`LOCALCODE_EVALS_WORKROOT` moves the root). The system temp directory is not used: on
+macOS its path holds thirty random characters, small models miscopy them, the miscopied
+path falls outside the workspace, the headless UI refuses it and the turn ends. That
+would score how well a model copies a random string, which no real project path asks.
+
 ## What runs
 
 `localcode_ui()` (in `localcode_evals/agent.py`) starts one isolated supervisor and
