@@ -1,0 +1,1 @@
+A demo site is running at http://127.0.0.1:18555/ . Use the browser tools to read its pricing page and tell me the monthly price of the Pro plan. Only report the price; do not change anything in the project.

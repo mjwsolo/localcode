@@ -10,3 +10,6 @@ budget_seconds = 1800
 allowed_paths = ['app/**']
 null_passes = false
 notes = ""
+setup = ""
+teardown = ""
+mcp = {}
