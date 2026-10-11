@@ -112,7 +112,10 @@ def write_config(path: Path, *, port: int, ctx: int, alias: str | None) -> None:
         # The supervisor's /status budget already includes the headroom one step
         # can add (ui/context_budget.step_reserve), and the provider sets it as
         # the model's input limit; a second reserve here would double-count.
-        "compaction": {"reserved": 0},
+        "compaction": {"reserved": 0, "prune": os.environ.get("LOCALCODE_PRUNE", "1") != "0"},
+        # The runtime saves the complete result to disk and exposes its path.
+        # Keep the preview affordable, including on small context windows.
+        "tool_output": {"max_bytes": max(4096, min(16384, ctx)), "max_lines": 400},
         "tools": {"task": False},
         "agent": {"plan": {"disable": True}},
         "lsp": True,

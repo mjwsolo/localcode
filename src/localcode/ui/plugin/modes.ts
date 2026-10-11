@@ -173,9 +173,9 @@ async function tui(api: TuiPluginApi) {
   async function server() {
     if (!control) return error("Start LocalCode to manage its model server");
     try {
-      const response = await fetch(control + "/server", { headers, signal: AbortSignal.timeout(3000) });
+      const response = await fetch(control + "/server", { headers, signal: AbortSignal.timeout(12000) });
       if (!response.ok) throw new Error(`Server status: HTTP ${response.status}`);
-      const info = await response.json() as { state: string; base_url: string; model?: string; port: number; preferred_port: number | string | null; server_ready: boolean; server_running?: boolean; warmup?: string; detail?: string };
+      const info = await response.json() as { state: string; base_url: string; model?: string; port: number; preferred_port: number | string | null; server_ready: boolean; server_running?: boolean; warmup?: string; detail?: string; budget?: number; ctx?: number; performance?: { decode_tps?: number; prefill_tps?: number; prompt_reuse_estimate_pct?: number }; machine?: { warnings?: string[]; swap_used_bytes?: number; on_battery?: boolean } };
       const copy = async (value: string, secret = false) => {
         const proc = Bun.spawn(["pbcopy"], { stdin: new Blob([value]), stdout: "ignore", stderr: "ignore" });
         if (await proc.exited !== 0) throw new Error("Could not copy to clipboard");
@@ -183,6 +183,13 @@ async function tui(api: TuiPluginApi) {
       };
       api.ui.dialog.replace(() => api.ui.DialogSelect({ title: "Model server · " + info.state, options: [
         { title: "Status", value: "status", description: info.detail || info.state },
+        { title: "Generation", value: "status", description: info.performance?.decode_tps != null ? `${info.performance.decode_tps} tokens/s · recent requests` : "Not enough generation measured yet" },
+        { title: "Prompt processing", value: "status", description: info.performance?.prefill_tps != null ? `${info.performance.prefill_tps} tokens/s · recent requests` : "Not enough prompt processing measured yet" },
+        { title: "Prompt reuse (estimate)", value: "status", description: info.performance?.prompt_reuse_estimate_pct != null ? `${info.performance.prompt_reuse_estimate_pct}% · recent requests` : "Unknown" },
+        { title: "Context budget", value: "status", description: `${info.budget ?? "automatic"} / ${info.ctx ?? "unknown"} tokens` },
+        { title: "System swap", value: "status", description: info.machine?.swap_used_bytes != null ? `${(info.machine.swap_used_bytes / 1024 ** 3).toFixed(2)} GiB · system-wide` : "Unknown" },
+        { title: "Power", value: "status", description: info.machine?.on_battery == null ? "Unknown" : info.machine.on_battery ? "Battery" : "External power" },
+        ...(info.machine?.warnings ?? []).map((message) => ({ title: "Performance warning", value: "status", description: message })),
         { title: "Prompt cache", value: "status", description: info.warmup === "warming" ? "Warming up in background · sending a message interrupts warm-up" : info.warmup === "warm" ? "Warm prefix available · changed context still needs processing" : info.warmup === "cold" ? "First use: no saved prefix yet" : info.warmup ?? "Unknown" },
         { title: "Base URL", value: "url", description: info.base_url },
         { title: "Model", value: "model", description: info.model ?? "No model loaded" },

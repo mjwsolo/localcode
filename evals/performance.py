@@ -112,7 +112,7 @@ class ResourceMeter:
         try:
             raw = subprocess.check_output(['pmset', '-g', 'therm'], text=True, stderr=subprocess.DEVNULL, timeout=2)
             m = re.search(r'CPU_Speed_Limit\s*=\s*(\d+)', raw)
-            limit = int(m[1]) if m else 100   # no limit line means no throttling recorded
+            limit = int(m[1]) if m else None  # no report is unknown, not proof of no throttling
         except (OSError, subprocess.SubprocessError):
             pass
         try:

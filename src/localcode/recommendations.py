@@ -18,6 +18,9 @@ from __future__ import annotations
 
 import json
 import os
+import platform
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -49,20 +52,41 @@ def _read(path: Path | None = None) -> dict[str, Any]:
         return {}
 
 
-def load_overrides(model_filename: str, path: Path | None = None) -> dict[str, str]:
-    """Return ``{LOCALCODE_OVERRIDE_*: value}`` for a model, or ``{}``.
+def hardware_identity() -> dict[str, str]:
+    """Recommendations apply only to the hardware on which they were measured."""
+    identity = {"machine": platform.machine(), "system": platform.system()}
+    for name in ("hw.memsize", "machdep.cpu.brand_string"):
+        try:
+            identity[name] = subprocess.check_output(
+                ["sysctl", "-n", name], text=True, stderr=subprocess.DEVNULL, timeout=2,
+            ).strip()
+        except (OSError, subprocess.SubprocessError):
+            return {}  # do not treat two unknown machines as a match
+    return identity
 
-    The shape runtime.apply_param_overrides consumes, so a stored
-    recommendation behaves exactly like the env-var sweep that produced it.
-    """
-    entry = _read(path).get(model_filename)
+
+def load_overrides(model_filename: str, path: Path | None = None) -> dict[str, str]:
+    """Use validated, same-machine recommendations; explicit env still wins."""
+    data = _read(path)
+    entry = data.get(model_filename) if isinstance(data, dict) else None
     if not isinstance(entry, dict):
         return {}
-    params = entry.get("params", {})
-    out: dict[str, str] = {}
+    identity = hardware_identity()
+    if not identity or entry.get("hardware") != identity:
+        return {}
+    params = entry.get("params")
+    if not isinstance(params, dict):
+        return {}
+    ranges = {"n_gpu_layers": (0, 999), "n_ctx": (2048, 1048576),
+              "n_threads": (1, 256), "n_batch": (1, 8192)}
+    out = {}
     for field, env_key in _FIELD_TO_ENV.items():
-        if params.get(field) is not None:
-            out[env_key] = str(params[field])
+        value = params.get(field)
+        if value is None:
+            continue
+        if type(value) is not int or not ranges[field][0] <= value <= ranges[field][1]:
+            return {}  # do not partially apply an invalid profile
+        out[env_key] = str(value)
     return out
 
 
@@ -76,12 +100,22 @@ def save_recommendation(
 
     ``params`` keys are the canonical fields (n_gpu_layers / n_ctx /
     n_threads / n_batch); only the ones present are stored. ``meta`` carries
-    provenance (machine, pass-rate, tok/s) for auditability.
+    provenance (machine, pass-rate, tok/s) for auditability. Hardware identity
+    is captured automatically; it cannot be overridden through metadata.
     """
     p = path or store_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     data = _read(p)
+    if not isinstance(data, dict):
+        data = {}
     clean = {k: v for k, v in params.items() if k in _FIELD_TO_ENV and v is not None}
-    data[model_filename] = {"params": clean, "meta": meta or {}}
-    p.write_text(json.dumps(data, indent=2, sort_keys=True))
+    data[model_filename] = {"params": clean, "meta": meta or {}, "hardware": hardware_identity()}
+    fd, tmp = tempfile.mkstemp(prefix=p.name + ".", dir=p.parent)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            json.dump(data, stream, indent=2, sort_keys=True)
+        os.replace(tmp, p)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
     return p
