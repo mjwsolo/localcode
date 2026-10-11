@@ -38,8 +38,9 @@ A second `localcode` opens another interface session attached to the running mod
 | `LOCALCODE_MODELS_DIR` | Older name for the models directory override; `LOCALCODE_MODEL_DIR` takes precedence |
 | `LOCALCODE_AGENT_RUN_DIR` | Supervisor logs and the voice runtime. Default `~/.local/share/localcode-agent/run` |
 | `LOCALCODE_MIC` | Microphone device for voice input |
-| `OPENCODE_ENABLE_EXA=1` + `EXA_API_KEY` | Use Exa for web search instead of the keyless default |
-| `OPENCODE_ENABLE_PARALLEL=1` + `PARALLEL_API_KEY` | Use Parallel for web search instead of the keyless default |
+| `LOCALCODE_VOICE_LIVE=0` | Transcribe once on release instead of as you speak |
+| `LOCALCODE_ENABLE_EXA=1` + `EXA_API_KEY` | Use Exa for web search instead of the keyless default |
+| `LOCALCODE_ENABLE_PARALLEL=1` + `PARALLEL_API_KEY` | Use Parallel for web search instead of the keyless default |
 | `LOCALCODE_WEBFETCH_MAX_CHARS` | Cap on fetched page text. Default `20000` |
 | `OPENCODE_DISABLE_LSP_DOWNLOAD` | Default `1`: language servers are never downloaded without `/lsp` |
 | `LOCALCODE_AUTO_CHECK=1` | Let the plugin run the project's own build or test command after a change, without asking. Off by default: that command is code from the opened repository |

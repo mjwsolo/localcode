@@ -5,6 +5,24 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
+## 0.5.19 — 2026-10-11
+
+### Added
+
+- Dictation is live. Hold Space and the words appear in the prompt as you
+  say them; release to finish. Before, nothing appeared until release, and
+  the speech model was loaded from disk on every use.
+- It gives way to the coding model: nothing is transcribed while the model is
+  reading or generating, only the phrase still being spoken is transcribed
+  again (about once a second), and silence is never transcribed.
+  `LOCALCODE_VOICE_LIVE=0` restores transcription on release.
+
+### Fixed
+
+- `LOCALCODE_ENABLE_EXA` and `LOCALCODE_ENABLE_PARALLEL`, the documented
+  switches for paid web search, did nothing: the interface only read the
+  upstream names. The launcher now passes them through.
+
 ## 0.5.18 — 2026-10-11
 
 ### Fixed

@@ -183,6 +183,11 @@ def runtime_env(config_path: Path, ctrl: int, *, trust_project: bool = False) ->
     # (.localcode-agent/skills, ~/.agents/skills, config `skills.paths`).
     # Set OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=0 to opt back in.
     env.setdefault("OPENCODE_DISABLE_CLAUDE_CODE_SKILLS", "1")
+    # Paid web search backends. The interface reads the upstream names; the
+    # documented ones are ours, and an explicit upstream value is left alone.
+    for name in ("ENABLE_EXA", "ENABLE_PARALLEL"):
+        if "LOCALCODE_" + name in env:
+            env.setdefault("OPENCODE_" + name, env["LOCALCODE_" + name])
     return env
 
 
