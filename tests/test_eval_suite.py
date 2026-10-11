@@ -54,37 +54,20 @@ def test_gate_reads_inspect_logs(tmp_path):
     assert run("bad.eval").returncode == 1
 
 
-def test_benchmarks_refuse_missing_data_and_never_fetch(tmp_path, monkeypatch):
+def test_harnessbench_refuses_missing_data_and_never_fetches(tmp_path, monkeypatch):
     from localcode_evals import benchmarks
 
     monkeypatch.setattr(benchmarks, "DATA", tmp_path)
-    for load in (lambda: benchmarks.polyglot_samples("python", None, None), lambda: benchmarks.livecodebench_samples("2000-01-01", None, None, None),
-                 lambda: benchmarks.swebench_samples("pallets/flask", None, None), lambda: benchmarks.harnessbench_samples(None, None, None)):
-        with pytest.raises(benchmarks.MissingData, match="Nothing is downloaded"):
-            load()
+    with pytest.raises(benchmarks.MissingData, match="Nothing is downloaded"):
+        benchmarks.harnessbench_samples(None, None, None)
 
 
-def test_benchmark_samples_from_local_data(tmp_path, monkeypatch):
+def test_harnessbench_samples_from_local_data(tmp_path, monkeypatch):
     import json
 
     from localcode_evals import benchmarks
 
     monkeypatch.setattr(benchmarks, "DATA", tmp_path)
-    ex = tmp_path / "polyglot-benchmark/python/exercises/practice/two-fer"
-    (ex / ".meta").mkdir(parents=True); (ex / ".docs").mkdir()
-    (ex / ".meta/config.json").write_text(json.dumps({"files": {"solution": ["two_fer.py"], "test": ["two_fer_test.py"], "example": [".meta/example.py"]}}))
-    (ex / ".meta/example.py").write_text("answer"); (ex / ".docs/instructions.md").write_text("Say it.")
-    (ex / "two_fer.py").write_text("stub"); (ex / "two_fer_test.py").write_text("test")
-    monkeypatch.setitem(benchmarks.POLYGLOT_TESTS["python"], "needs", [])
-    [s] = benchmarks.polyglot_samples("python", None, None)
-    assert s.id == "python/two-fer" and set(s.files) == {"two_fer.py", "two_fer_test.py"}      # the answer never reaches the workspace
-    assert s.metadata["reference"]["files"] == {"two_fer.py": str(ex / ".meta/example.py")}
-
-    (tmp_path / "livecodebench").mkdir()
-    (tmp_path / "livecodebench/index.jsonl").write_text("".join(json.dumps({"id": i, "platform": "x", "date": d, "content": "c", "cases": [{"input": "1", "output": "1"}]}) + "\n"
-                                                                 for i, d in (("old", "2023-01-01"), ("new", "2025-06-01"))))
-    assert [s.id for s in benchmarks.livecodebench_samples("2025-01-01", None, None, None)] == ["new"]
-
     task_dir = tmp_path / "harness-bench/tasks/001-a"; (task_dir / "fixtures/in").mkdir(parents=True)
     (task_dir / "task.yaml").write_text(json.dumps({"task_id": "001-a", "class": "Office", "timeout_sec": 60}))
     (task_dir / "prompt.txt").write_text("Read $WORKSPACE/in/a.txt"); (task_dir / "fixtures/in/a.txt").write_text("a")
@@ -92,4 +75,5 @@ def test_benchmark_samples_from_local_data(tmp_path, monkeypatch):
     (tunnel / "task.yaml").write_text(json.dumps({"task_id": "002-b"})); (tunnel / "prompt.txt").write_text("x"); (tunnel / "hooks.py").write_text("# trycloudflare")
     data, left_out = benchmarks.harnessbench_samples(None, None, None)
     assert [s.id for s in data] == ["001-a"] and data[0].files == {"in/a.txt": str(task_dir / "fixtures/in/a.txt")}
-    assert left_out["needs a public tunnel"] == 1
+    assert data[0].metadata["budget_seconds"] == 60 and left_out["needs a public tunnel"] == 1
+    assert benchmarks.harnessbench_samples(None, "SRE", None)[0] == []

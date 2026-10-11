@@ -175,9 +175,7 @@ is required before publication, not a nice-to-have.
   the earlier "make parse_duration accept …" wording classified as
   `general_task` and would have misrepresented the flow.
 - **The JSONL event table is taken from the producer** — the
-  `OutputManager._emit_event` call sites plus `headless_json.py`. It is
-  deliberately *not* derived from `tests/protocol_fixtures/*.jsonl`, which
-  exercise a consumer and describe a different, hypothetical vocabulary.
+  `OutputManager._emit_event` call sites plus `headless_json.py`.
 - **Illustrative.** The terminal transcript on the landing page
   (`src/components/TerminalDemo.astro`) is a **design preview**, labelled as
   such on the page. No repository artifact records that flow. The tool names
