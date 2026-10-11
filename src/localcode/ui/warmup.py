@@ -152,14 +152,36 @@ class CaptureTracker:
         return None
 
 
+# Saved token IDs are bound to the model file. UI updates do not change the
+# tokenizer; llama-server recomputes the common prefix for each actual request.
 # ---- store -------------------------------------------------------------------
 
-def load(alias: str) -> list[int] | None:
+def model_identity(path: Path) -> dict:
+    """Invalidate token IDs when the model file changes, not when the UI changes."""
+    st = path.stat()
+    return {"path": str(path.resolve()), "size": st.st_size, "mtime_ns": st.st_mtime_ns}
+
+
+def load(alias: str, model_path: Path | None = None) -> list[int] | None:
     try:
         data = json.loads(_warm_file(alias).read_text())
     except (OSError, ValueError):
         return None
-    if data.get("fork") != fork_commit():
+    if not isinstance(data, dict):
+        return None
+    if model_path is not None:
+        try:
+            identity = model_identity(model_path)
+            if "model" in data:
+                if data["model"] != identity:
+                    return None
+            # Legacy captures predate model fingerprints. Only reuse when the
+            # named model has not been modified since the capture was written.
+            elif not isinstance(data.get("saved"), (int, float)) or identity["mtime_ns"] > data["saved"] * 1e9:
+                return None
+        except OSError:
+            return None
+    elif data.get("fork") != fork_commit():
         return None
     toks = data.get("tokens")
     if not isinstance(toks, list) or not all(isinstance(t, int) for t in toks) or len(toks) < MIN_CAPTURE_TOKENS:
@@ -167,11 +189,16 @@ def load(alias: str) -> list[int] | None:
     return toks[:MAX_TOKENS]
 
 
-def store(alias: str, tokens: list[int]) -> None:
+def store(alias: str, tokens: list[int], model_path: Path | None = None) -> None:
     path = _warm_file(alias)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps({"fork": fork_commit(), "saved": int(time.time()), "tokens": tokens}))
+    data = {"fork": fork_commit(), "saved": time.time(), "tokens": tokens}
+    if model_path is not None:
+        data["model"] = model_identity(model_path)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump(data, f)
     os.replace(tmp, path)
 
 

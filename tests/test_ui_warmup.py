@@ -126,3 +126,29 @@ def test_replay_cancel_closes_the_socket_promptly():
     with pytest.raises(Exception):
         rp.run(list(range(600)))
     assert rp.cancelled and time.time() - t0 < 3
+
+
+def test_model_capture_survives_ui_update_but_not_model_replacement(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALCODE_AGENT_RUN_DIR", str(tmp_path))
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"model")
+    tokens = list(range(700))
+    warmup.store("model", tokens, model)
+    monkeypatch.setattr(warmup, "fork_commit", lambda: "new-ui")
+    assert warmup.load("model", model) == tokens
+    model.write_bytes(b"replacement model")
+    assert warmup.load("model", model) is None
+
+
+def test_legacy_capture_migrates_only_if_model_predates_capture(tmp_path, monkeypatch):
+    import os
+    monkeypatch.setenv("LOCALCODE_AGENT_RUN_DIR", str(tmp_path))
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"model")
+    os.utime(model, (100, 100))
+    tokens = list(range(700))
+    warmup.store("model", tokens)
+    monkeypatch.setattr(warmup, "fork_commit", lambda: "new-ui")
+    assert warmup.load("model", model) == tokens
+    os.utime(model, (9999999999, 9999999999))
+    assert warmup.load("model", model) is None

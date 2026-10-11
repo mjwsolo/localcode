@@ -55,6 +55,7 @@ function fakeTui() {
   let current: Current = { name: "session", params: { sessionID: "ses_first" } };
   let dialog: Select | Prompt | undefined;
   const commands = new Map<string, () => void>();
+  const slashes = new Map<string, string>();
   const routes = new Map<string, (input: { params?: Record<string, unknown> }) => unknown>();
   const disposals: (() => void)[] = [];
   const navigations: Current[] = [];
@@ -72,8 +73,11 @@ function fakeTui() {
       },
     },
     keymap: {
-      registerLayer(layer: { commands: { name: string; run: () => void }[] }) {
-        for (const command of layer.commands) commands.set(command.name, command.run);
+      registerLayer(layer: { commands: { name: string; slashName?: string; run: () => void }[] }) {
+        for (const command of layer.commands) {
+          commands.set(command.name, command.run);
+          if (command.slashName) slashes.set(command.slashName, command.name);
+        }
       },
     },
     ui: {
@@ -90,7 +94,7 @@ function fakeTui() {
     lifecycle: { onDispose(callback: () => void) { disposals.push(callback); } },
   };
   return {
-    api, navigations, toasts,
+    api, navigations, toasts, slashes,
     current: () => current,
     dispose: () => disposals.forEach((callback) => callback()),
     command: (name: string) => commands.get(name)!(),
@@ -264,4 +268,12 @@ test("/server stops and starts without leaving the session and reports rejected 
       expect(host.navigations).toEqual([]);
     }, "http://127.0.0.1:8323");
   } finally { fetcher.mockRestore(); }
+});
+
+test("native keymap discovers server, mode and decide slash commands", async () => {
+  const ui = fakeTui();
+  await modes.tui(ui.api as any);
+  try {
+    expect(Object.fromEntries(ui.slashes)).toEqual({server: "localcode.server", mode: "localcode.mode", decide: "localcode.decide"});
+  } finally { ui.dispose(); }
 });
