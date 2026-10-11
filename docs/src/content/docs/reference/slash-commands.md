@@ -45,7 +45,9 @@ Start a line with `!` to run a shell command yourself, for example `!git status`
 
 The leader key is `ctrl+x`. Press it, then a second key. For example `ctrl+x` then `v` starts voice input. `/help` lists every binding.
 
-Hold **Space** on an empty prompt to record voice. Release to transcribe into the prompt. The first use asks for consent and lists what it needs to download: a recorder runtime of about 60 MB and a speech model of about 514 MB. Set `LOCALCODE_MIC` to choose the microphone.
+Hold **Space** to dictate. The words appear in the prompt as you say them, after whatever was already there, and the last few can change as more is heard. Release to finish. The first use asks for consent and lists what it needs to download: a recorder runtime of about 60 MB and a speech model of about 514 MB. Set `LOCALCODE_MIC` to choose the microphone.
+
+Dictation runs on this Mac and shares the GPU with the coding model, so it gives way to it: while the model is reading or writing an answer nothing is transcribed, and the text arrives when the model finishes or when you release. Otherwise it re-transcribes only the phrase you are still speaking, about once a second. `LOCALCODE_VOICE_LIVE=0` goes back to transcribing once on release.
 
 ## Notes
 

@@ -294,3 +294,16 @@ def test_entrypoint_routes_mcp(monkeypatch):
     with pytest.raises(SystemExit) as e:
         entrypoint.main(["mcp", "list"])
     assert e.value.code == 0 and seen["argv"] == ["list"]
+
+
+def test_branded_web_search_switches_reach_the_interface(monkeypatch, tmp_path):
+    from localcode.ui.launch import runtime_env
+
+    monkeypatch.setenv("LOCALCODE_ENABLE_EXA", "1")
+    monkeypatch.delenv("OPENCODE_ENABLE_EXA", raising=False)
+    monkeypatch.delenv("LOCALCODE_ENABLE_PARALLEL", raising=False)
+    monkeypatch.delenv("OPENCODE_ENABLE_PARALLEL", raising=False)
+    env = runtime_env(tmp_path / "session.json", 8323)
+    assert env["OPENCODE_ENABLE_EXA"] == "1" and "OPENCODE_ENABLE_PARALLEL" not in env
+    monkeypatch.setenv("OPENCODE_ENABLE_EXA", "0")           # an explicit upstream value wins
+    assert runtime_env(tmp_path / "session.json", 8323)["OPENCODE_ENABLE_EXA"] == "0"
