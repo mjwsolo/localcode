@@ -605,6 +605,11 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
   const agentTouched = new Set<string>();
   let todos: Todo[] = [];
   let workspaceActive = false;
+  // Any tool call this turn, including ones that never touch the project (web
+  // search, web fetch, MCP). The loop guards watch these too: a turn made only
+  // of web searches repeated one query 162 times because they were switched on
+  // by the first file or shell call, which never came.
+  let toolsUsed = false;
   let continueCount = 0;
   let stuckCount = 0;
   let lastRemaining = Number.MAX_SAFE_INTEGER;
@@ -666,7 +671,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
   const openTodos = () => todos.filter((t) => t.status !== "completed" && t.status !== "cancelled");
 
   async function onRoundEnd(sessionID: string): Promise<PlateauDecision> {
-    if (!workspaceActive || interrupted.has(sessionID) || (activeSession && sessionID !== activeSession)) return "none";
+    if (!toolsUsed || interrupted.has(sessionID) || (activeSession && sessionID !== activeSession)) return "none";
     const decision = plateau.endRound();
     if (decision === "none" || planMode()) return "none";
     const open = openTodos();
@@ -768,6 +773,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
         const control = process.env.LOCALCODE_CONTROL_URL;
         if (control) fetch(`${control}/warmup/cancel`, { method: "POST", headers: controlHeaders(), body: "{}" }).catch(() => {});
         workspaceActive = false;
+        toolsUsed = false;
         if (activeSession !== input.sessionID || interrupted.has(input.sessionID)) todos = [];
         activeSession = input.sessionID;
         interrupted.delete(input.sessionID);
@@ -797,6 +803,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
 
     "tool.execute.after": async (input, output) => {
       if (activeSession && input.sessionID !== activeSession) return;
+      toolsUsed = true;
       if (["read", "glob", "grep", "bash", "write", "edit", "multiedit", "apply_patch"].includes(input.tool)) workspaceActive = true;
       plateau.observe({ tool: input.tool, args: input.args, output: output?.output, metadata: output?.metadata });
       for (const p of editedPaths({ tool: input.tool, args: input.args, output: output?.output, metadata: output?.metadata })) {
