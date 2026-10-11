@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""Compare a candidate results.jsonl against a baseline and apply the gate rule.
+"""Compare a candidate Inspect log against a baseline and apply the gate rule.
 
-  gate.py <baseline.jsonl> <candidate.jsonl> [--min-drop 5] [--se-mult 2] [--set regression]
+  gate.py <baseline.eval> <candidate.eval> [--min-drop 5] [--se-mult 2] [--set regression]
+
+Each argument is an Inspect AI log (or a directory of them) written by
+`inspect eval localcode_evals/...`. One row per sample and epoch.
 
 Per task: pass rate over trials (pass@1 estimate). Paired difference = candidate - baseline
 on identical, nonempty task/model/trial sets. Invalid or incomplete inputs fail closed. Standard error of the mean paired difference across tasks.
@@ -18,13 +21,33 @@ ap.add_argument('--max-speed-drop', type=float, default=0.30, help='block when m
 ap.add_argument('--require-performance', action='store_true', help='fail closed when any model lacks finite positive decode measurements')
 a = ap.parse_args()
 
+def rows_of(path):
+    """Rows from Inspect logs; a .jsonl of the same rows is accepted so the rule
+    itself can be tested without Inspect installed."""
+    from pathlib import Path
+    p = Path(path)
+    if p.is_file() and p.suffix not in (".eval", ".json"):
+        return [json.loads(line) for line in p.read_text().splitlines() if line.strip()]
+    from inspect_ai.log import read_eval_log
+    logs = sorted(p.glob("*.eval")) if p.is_dir() else [p]
+    if not logs: raise ValueError(f"no Inspect logs in {path}")
+    rows = []
+    for f in logs:
+        log = read_eval_log(str(f))
+        if log.status != "success": raise ValueError(f"{f.name}: run status is {log.status}")
+        for s in log.samples or []:
+            grade = (s.scores or {}).get("hidden_tests")
+            if s.error or grade is None: raise ValueError(f"{f.name}: sample {s.id} epoch {s.epoch} has no grade")
+            nums = ((s.scores or {}).get("measurements") or grade).value
+            nums = nums if isinstance(nums, dict) else {}
+            rows.append({"task": str(s.id), "model": log.eval.model, "trial": s.epoch, "purpose": (s.metadata or {}).get("purpose"),
+                         "pass": grade.value == "C", **{k: (v if isinstance(v, (int, float)) and math.isfinite(v) else None) for k, v in nums.items()}})
+    return rows
+
 def load(path):
     by = defaultdict(list)
     seen = set()
-    for line in open(path):
-        line = line.strip()
-        if not line: continue
-        r = json.loads(line)
+    for r in rows_of(path):
         if a.set != "all" and r.get("purpose") != a.set: continue
         key = (r["task"], r["model"], r["trial"])
         if key in seen:
@@ -41,7 +64,7 @@ try:
         return {(task, model, row["trial"]) for (task, model), rows in data.items() for row in rows}
     if not B or coverage(B) != coverage(C):
         raise ValueError("comparison requires identical, nonempty task/model/trial sets")
-except (OSError, ValueError, KeyError, TypeError) as error:
+except (OSError, ValueError, KeyError, TypeError, ImportError) as error:
     print(f"RESULT: BLOCKED (invalid evaluation input: {error})", file=sys.stderr)
     sys.exit(1)
 def rate(rows): return 100.0 * sum(r["pass"] for r in rows) / len(rows)

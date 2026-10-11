@@ -111,6 +111,11 @@ jobs:
         env:
           LOCALCODE_PY: python
         run: python -m pytest evals/checks -q -p no:cacheprovider --timeout=600
+      - name: Inspect AI suite loads and covers every task (no model)
+        run: |
+          python -m pip install -e evals
+          python -m pytest tests/test_eval_suite.py -q -p no:cacheprovider
+          inspect list tasks evals/localcode_evals
 
   # ── Packaging must always build ──
   packaging:
