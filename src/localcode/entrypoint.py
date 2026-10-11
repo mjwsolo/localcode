@@ -17,7 +17,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mode", choices=["chat", "decisions"], default="chat", help="Start in normal chat or typed decision mode")
     parser.add_argument("--trust-project", action="store_true", help="Allow this project's configuration, plugins and MCP startup commands to load")
     parser.add_argument("--model", help="Model alias to load (otherwise the picker asks)")
-    parser.add_argument("-s", "--session", "--resume", dest="resume", metavar="SESSION_ID",
+    parser.add_argument("--resume", dest="resume", metavar="SESSION_ID",
                         help="Resume a session by ID; uses its saved project directory when no project is given")
     parser.add_argument("project", nargs="?", default=None,
                         help="Project directory (defaults to the current directory)")
