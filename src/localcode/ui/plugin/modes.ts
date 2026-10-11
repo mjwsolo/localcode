@@ -175,7 +175,7 @@ async function tui(api: TuiPluginApi) {
     try {
       const response = await fetch(control + "/server", { headers, signal: AbortSignal.timeout(3000) });
       if (!response.ok) throw new Error(`Server status: HTTP ${response.status}`);
-      const info = await response.json() as { state: string; base_url: string; model?: string; port: number; preferred_port: number | string | null; server_ready: boolean; server_running?: boolean; detail?: string };
+      const info = await response.json() as { state: string; base_url: string; model?: string; port: number; preferred_port: number | string | null; server_ready: boolean; server_running?: boolean; warmup?: string; detail?: string };
       const copy = async (value: string, secret = false) => {
         const proc = Bun.spawn(["pbcopy"], { stdin: new Blob([value]), stdout: "ignore", stderr: "ignore" });
         if (await proc.exited !== 0) throw new Error("Could not copy to clipboard");
@@ -183,6 +183,7 @@ async function tui(api: TuiPluginApi) {
       };
       api.ui.dialog.replace(() => api.ui.DialogSelect({ title: "Model server · " + info.state, options: [
         { title: "Status", value: "status", description: info.detail || info.state },
+        { title: "Prompt cache", value: "status", description: info.warmup === "warming" ? "Warming up in background · sending a message interrupts warm-up" : info.warmup === "warm" ? "Warm prefix available · changed context still needs processing" : info.warmup === "cold" ? "First use: no saved prefix yet" : info.warmup ?? "Unknown" },
         { title: "Base URL", value: "url", description: info.base_url },
         { title: "Model", value: "model", description: info.model ?? "No model loaded" },
         { title: "Copy API key", value: "key", description: "Private · only for clients you trust" },
@@ -234,9 +235,9 @@ async function tui(api: TuiPluginApi) {
     } catch (e) { error(String(e)); }
   }
   api.keymap.registerLayer({ commands: [
-    { name: "localcode.server", title: "Model server connection and port", category: "LocalCode", slash: { name: "server" }, run: server },
-    { name: "localcode.mode", title: "Choose Chat or Decisions", category: "LocalCode", slash: { name: "mode" }, run: choose },
-    { name: "localcode.decide", title: "Open decision mode", category: "LocalCode", slash: { name: "decide" }, run: open },
+    { name: "localcode.server", title: "Model server connection and port", category: "LocalCode", slashName: "server", run: server },
+    { name: "localcode.mode", title: "Choose Chat or Decisions", category: "LocalCode", slashName: "mode", run: choose },
+    { name: "localcode.decide", title: "Open decision mode", category: "LocalCode", slashName: "decide", run: open },
   ] });
   api.keymap.registerLayer({ enabled: () => api.route.current.name === route && !api.ui.dialog.open, priority: 5, commands: [{ name: "localcode.mode.back", run: back }], bindings: [{ key: "escape", command: "localcode.mode.back" }] });
   const timer = setInterval(() => void poll(), 2000);
