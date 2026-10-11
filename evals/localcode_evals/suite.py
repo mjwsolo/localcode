@@ -98,7 +98,7 @@ def build(purpose: str | None, ids: str | None, ram_gb: int | None, env: dict | 
     data = samples(purpose, ids)
     tags = sorted({s.metadata["quality"] for s in data}) + ([f"ram{ram_gb}"] if ram_gb else [])
     return Task(dataset=data, solver=localcode_ui(ram_gb=ram_gb, env=env), scorer=[hidden_tests(), measurements()],
-                sandbox="local", name=name, tags=tags)
+                sandbox="workspace", name=name, tags=tags)
 
 
 @task

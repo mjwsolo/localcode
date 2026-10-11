@@ -92,3 +92,19 @@ def test_harnessbench_samples_from_local_data(tmp_path, monkeypatch):
     assert data[0].metadata["budget_seconds"] == benchmarks.LOCAL_BUDGET_SECONDS and data[0].metadata["official_timeout_sec"] == 7200
     assert benchmarks.harnessbench_samples(budget_seconds=7200)[0][0].metadata["budget_seconds"] == 7200
     assert benchmarks.harnessbench_samples(domains="Finance")[0] == [] and len(benchmarks.harnessbench_samples(domains="software")[0]) == 1
+
+
+def test_workspace_paths_are_readable_and_unique(tmp_path, monkeypatch):
+    import asyncio
+
+    from localcode_evals.workspace import WorkspaceSandbox
+
+    monkeypatch.setenv("LOCALCODE_EVALS_WORKROOT", str(tmp_path))
+    make = lambda: asyncio.run(WorkspaceSandbox.sample_init("regression", None, {"id": "fix-one-bug"}))["default"]
+    first, second = make(), make()
+    # a name a model can copy: the sample id and a counter, nothing random
+    assert Path(first.directory.name) == tmp_path.resolve() / "fix-one-bug-1"
+    assert Path(second.directory.name) == tmp_path.resolve() / "fix-one-bug-2"
+    assert asyncio.run(first.exec(["pwd", "-P"])).stdout.strip() == first.directory.name
+    first.directory.cleanup()
+    assert not Path(first.directory.name).exists() and Path(second.directory.name).is_dir()
