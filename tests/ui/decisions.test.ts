@@ -73,10 +73,13 @@ function fakeTui() {
       },
     },
     keymap: {
-      registerLayer(layer: { commands: { name: string; slashName?: string; run: () => void }[] }) {
+      registerLayer(layer: { commands: { name: string; namespace?: string; slashName?: string; run: () => void }[] }) {
         for (const command of layer.commands) {
           commands.set(command.name, command.run);
-          if (command.slashName) slashes.set(command.slashName, command.name);
+          // As the interface does it: the slash menu lists only palette commands
+          // (keymap.tsx, useCommandSlashes). Without the namespace /server, /mode
+          // and /decide register and still never appear.
+          if (command.slashName && command.namespace === "palette") slashes.set(command.slashName, command.name);
         }
       },
     },

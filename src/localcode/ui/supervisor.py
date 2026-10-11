@@ -742,10 +742,7 @@ class Supervisor:
 
     @staticmethod
     def _mic_device() -> str:
-        """ffmpeg avfoundation audio device index: LOCALCODE_MIC, else the built-in mic, else 0."""
-        env = os.environ.get("LOCALCODE_MIC")
-        if env:
-            return env
+        """ffmpeg avfoundation audio device index: the built-in mic, else 0."""
         try:
             out = subprocess.run(["ffmpeg", "-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", ""],
                                  capture_output=True, text=True, timeout=15, check=False).stderr
@@ -757,21 +754,6 @@ class Supervisor:
             pass
         return "0"
 
-    # Recorder that runs inside the voice venv: PortAudio ships in the sounddevice
-    # wheel, so no ffmpeg/Homebrew is needed. Records 16 kHz mono until stdin closes.
-    _RECORDER = """
-import sys, wave, sounddevice as sd
-path = sys.argv[1]
-frames = []
-def cb(indata, n, t, status):
-    frames.append(bytes(indata))
-with sd.RawInputStream(samplerate=16000, channels=1, dtype='int16', callback=cb):
-    sys.stdout.write('recording\\n'); sys.stdout.flush()
-    sys.stdin.read()
-with wave.open(path, 'wb') as w:
-    w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000); w.writeframes(b''.join(frames))
-"""
-
     def voice_start(self) -> dict:
         if self.voice_proc is not None and self.voice_proc.poll() is None:
             return {"error": "already recording"}
@@ -781,10 +763,7 @@ with wave.open(path, 'wb') as w:
         self.voice_wav.unlink(missing_ok=True)
         try:
             subprocess.run([str(py), "-c", "import sounddevice"], check=True, capture_output=True, timeout=30)
-            if os.environ.get("LOCALCODE_VOICE_LIVE", "1") != "0":
-                return self._voice_start_live(py)
-            cmd = [str(py), "-c", self._RECORDER, str(self.voice_wav)]
-            self.voice_recorder = "portaudio"
+            return self._voice_start_live(py)
         except Exception:  # noqa: BLE001
             if not shutil.which("ffmpeg"):
                 return {"error": "no recorder available: run /voice setup again (installs the PortAudio recorder) or brew install ffmpeg"}
