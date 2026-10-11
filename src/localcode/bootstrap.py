@@ -11,21 +11,9 @@ import threading
 import time
 from typing import Callable, TypeVar
 
-# huggingface_hub snapshots these env vars into `huggingface_hub.constants`
-# AT IMPORT TIME — setting them after the first `import huggingface_hub`
-# anywhere in the process silently does nothing. Set them here, before any
-# code path can import the hub:
-#   HF_HUB_DISABLE_XET — force the hub's plain-HTTP downloader instead of
-#     the hf_xet backend. Xet is faster on a clean run, but it CANNOT
-#     resume an interrupted download: it rewrites the `.incomplete` file
-#     from its chunk cache, and on a default install that cache holds
-#     ~nothing — so quitting LocalCode mid-download restarted a 33 GB
-#     model from byte 0 (observed 2026-06-11). The HTTP path resumes via
-#     `.incomplete` + Range. For 10-35 GB GGUFs on desktop machines,
-#     surviving an interrupt is worth more than peak throughput.
-#   HF_HUB_DISABLE_PROGRESS_BARS — keeps tqdm off stderr, which would
-#     corrupt the Textual screen; progress reaches the TUI through the
-#     `tqdm_class` hook in `_try_hub_download` instead.
+# Legacy hub helpers must not emit progress bars into the terminal UI.
+# Model downloads use our resumable range transport; hub versions differ in
+# their ability to reuse partial files after process restarts.
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 
@@ -430,157 +418,8 @@ def get_model_path(preferred_filename: str | None = None) -> Path | None:
 def _download_parallel(url: str, dest: Path, num_threads: int = 16,
                        on_progress: Callable[[str], None] | None = None,
                        cancel_event: "threading.Event | None" = None) -> None:
-    """Download a large file using parallel HTTP range requests.
-
-    Falls back to single-threaded if the server doesn't support ranges.
-
-    All bytes land in `<dest>.part`, atomically renamed to `dest` only on
-    success. NEVER write to the final name directly: the parallel path
-    pre-allocates the full file size up front, so a kill mid-download
-    used to leave a full-size mostly-zeros file at the final name that
-    passed the size-based completeness check and then failed inside
-    llama-server with a cryptic GGUF error.
-    """
-    import ssl
-    import threading
-    import urllib.request
-
-    # Create SSL context — try certifi, then system, then unverified.
-    # The probing HEAD doubles as the size/range capability check, so the
-    # common case (certifi works) costs exactly ONE round-trip before data
-    # flows instead of two.
-    ssl_ctx = None
-    total_size = 0
-    accepts_ranges = False
-    for _attempt in range(3):
-        try:
-            if _attempt == 0:
-                import certifi
-                ssl_ctx = ssl.create_default_context(cafile=certifi.where())
-            else:
-                # SECURITY: stay verified — no unverified-TLS fallback. If the
-                # system trust store can't verify, the download fails cleanly
-                # rather than trusting any cert.
-                ssl_ctx = ssl.create_default_context()
-            req = urllib.request.Request(url, method="HEAD")
-            with urllib.request.urlopen(req, context=ssl_ctx, timeout=10) as resp:
-                total_size = int(resp.headers.get("Content-Length", 0))
-                accepts_ranges = resp.headers.get("Accept-Ranges", "none") != "none"
-            break  # this context works
-        except ImportError:
-            continue
-        except Exception:
-            continue
-    if ssl_ctx is None:
-        # SECURITY: verified context only — never fall back to unverified TLS.
-        ssl_ctx = ssl.create_default_context()
-
-    part = dest.with_name(dest.name + ".part")
-
-    if cancel_event is not None and cancel_event.is_set():
-        part.unlink(missing_ok=True)
-        raise DownloadCancelled()
-
-    if not total_size or not accepts_ranges:
-        # Fallback: single-threaded. The reporthook doubles as the cancel
-        # poll — urlretrieve calls it every block, so raising there stops the
-        # transfer promptly (urlretrieve cleans up its own temp on the raise).
-        def _report(block_num, block_size, _total):
-            if cancel_event is not None and cancel_event.is_set():
-                raise DownloadCancelled()
-            if on_progress and total_size > 0:
-                done = min(block_num * block_size, total_size)
-                on_progress(f"Downloading: {done // (1024*1024)}/{total_size // (1024*1024)} MB ({done * 100 // total_size}%)")
-        try:
-            urllib.request.urlretrieve(url, str(part), reporthook=_report)  # no ssl_ctx for urlretrieve
-        except DownloadCancelled:
-            part.unlink(missing_ok=True)
-            raise
-        part.replace(dest)
-        return
-
-    # Split into chunks
-    chunk_size = total_size // num_threads
-    downloaded = [0] * num_threads  # bytes per thread for progress
-    errors: list[str] = []
-    lock = threading.Lock()
-
-    # Pre-allocate the working file
-    with open(part, "wb") as f:
-        f.seek(total_size - 1)
-        f.write(b"\0")
-
-    def _download_chunk(idx: int, start: int, end: int) -> None:
-        try:
-            req = urllib.request.Request(url)
-            req.add_header("Range", f"bytes={start}-{end}")
-            # timeout bounds CONNECT + each blocking read, not the whole
-            # transfer — a stalled thread aborts in 60s instead of hanging
-            # the download forever.
-            with urllib.request.urlopen(req, context=ssl_ctx, timeout=60) as resp:
-                buf_size = 8 * 1024 * 1024  # 8MB read buffer — cuts syscall overhead vs 1MB
-                with open(part, "r+b") as f:
-                    f.seek(start)
-                    while True:
-                        # Poll the cancel Event between reads so a cancelled
-                        # download stops writing within one 8MB buffer instead
-                        # of running the chunk to completion.
-                        if cancel_event is not None and cancel_event.is_set():
-                            return
-                        data = resp.read(buf_size)
-                        if not data:
-                            break
-                        f.write(data)
-                        with lock:
-                            downloaded[idx] += len(data)
-        except Exception as e:
-            with lock:
-                errors.append(f"Chunk {idx}: {e}")
-
-    # Progress reporter
-    progress_stop = threading.Event()
-
-    def _report_progress() -> None:
-        while not progress_stop.is_set():
-            total_done = sum(downloaded)
-            mb_done = total_done // (1024 * 1024)
-            mb_total = total_size // (1024 * 1024)
-            pct = min(100, total_done * 100 // total_size) if total_size else 0
-            speed_label = ""
-            if on_progress:
-                on_progress(f"Downloading: {mb_done}/{mb_total} MB ({pct}%){speed_label}")
-            progress_stop.wait(0.5)
-
-    progress_thread = threading.Thread(target=_report_progress, daemon=True)
-    progress_thread.start()
-
-    # Launch parallel downloads
-    threads: list[threading.Thread] = []
-    for i in range(num_threads):
-        start = i * chunk_size
-        end = total_size - 1 if i == num_threads - 1 else (i + 1) * chunk_size - 1
-        t = threading.Thread(target=_download_chunk, args=(i, start, end))
-        t.start()
-        threads.append(t)
-
-    for t in threads:
-        t.join()
-
-    progress_stop.set()
-    progress_thread.join(timeout=1)
-
-    # Cancelled mid-flight: the chunk threads have already returned, so just
-    # drop the pre-allocated partial and report the abort. Checked before the
-    # error list so a cancel never surfaces as a chunk RuntimeError.
-    if cancel_event is not None and cancel_event.is_set():
-        part.unlink(missing_ok=True)
-        raise DownloadCancelled()
-
-    if errors:
-        part.unlink(missing_ok=True)
-        raise RuntimeError("; ".join(errors))
-    # All chunks verified-written — promote atomically to the final name.
-    part.replace(dest)
+    from .transfer import download
+    download(url, dest, workers=num_threads, progress=on_progress, cancel=cancel_event)
 
 
 def download_model(
@@ -627,7 +466,11 @@ def download_model(
     # plus a 2 GB safety margin so we don't wedge the whole system.
     try:
         import shutil as _shutil
+        partial = model_file.with_name(model_file.name + ".part")
         already = model_file.stat().st_size if model_file.exists() else 0
+        if partial.is_file() and not partial.is_symlink():
+            # Sparse files have a full logical size before those bytes arrive.
+            already += partial.stat().st_blocks * 512
         need = max(0, int(choice.size_gb * 1000 ** 3) - already)
         free = _shutil.disk_usage(model_dir).free
         if free < need + 2 * 1024 ** 3:
@@ -648,11 +491,7 @@ def download_model(
     if on_progress:
         on_progress(f"Downloading {choice.filename} (~{choice.size_gb:.1f} GB)...")
 
-    # Retry with exponential backoff. The hub path resumes from its
-    # `.incomplete` sidecar (kept across attempts AND across app
-    # restarts); the urllib fallback restarts its own `.part` file but
-    # never touches the hub's partial, so a later hub attempt still
-    # resumes.
+    # Completed range chunks survive failures, cancellation and process restarts.
     last_err: Exception | None = None
     last_err_category = "unknown"
     backoffs = [0, 2, 5]  # seconds; 3 attempts total
@@ -665,30 +504,10 @@ def download_model(
                 on_progress(f"Retry {attempt}/{len(backoffs)} in {delay}s...")
             import time as _t
             _t.sleep(delay)
-        # Fast path: huggingface_hub (hf_xet Rust backend on Xet repos).
-        # Resumes via the hub's built-in partial-download handling.
-        try:
-            if _try_hub_download(choice, model_file, on_progress, cancel_event):
-                ok, reason = _verify_download_integrity(choice, model_file)
-                if not ok:
-                    return False, reason
-                return True, str(model_file)
-        except DownloadCancelled:
-            return False, "cancelled"
-        except Exception as e:
-            last_err = e
-            last_err_category = _classify_download_error(e)
-            if last_err_category in ("disk_full", "auth", "not_found"):
-                # Non-retryable — fail fast so the UI can show the right message.
-                return False, _format_download_error(last_err_category, e)
-            if on_progress:
-                on_progress(
-                    f"Hub download failed ({last_err_category}); trying urllib fallback"
-                )
-        # Slow path: tuned urllib parallel downloader.
+        # Resumable parallel HTTP is the default transport.
         try:
             _download_parallel(
-                url, model_file, num_threads=32,
+                url, model_file, num_threads=16,
                 on_progress=on_progress, cancel_event=cancel_event,
             )
             ok, reason = _verify_download_integrity(choice, model_file)
@@ -928,37 +747,18 @@ def start_background_download(choice) -> str:
     return key
 
 
-def _delete_partial_files(choice) -> None:
-    """Remove any on-disk bytes for `choice` after a cancel: the final file and
-    the `.part` working file the parallel downloader pre-allocates. A half-
-    written .gguf at the final name would pass the size check on a later run and
-    then fail cryptically inside llama-server, so we delete it outright rather
-    than trust `_is_complete_download` to catch it."""
-    try:
-        dest = Path(choice.local_path)
-    except Exception:
-        return
-    for p in (dest, dest.with_name(dest.name + ".part")):
-        try:
-            p.unlink(missing_ok=True)
-        except Exception:
-            # Best effort — a locked/absent file must never crash the cancel.
-            pass
-
-
 def cancel_download(key: str) -> bool:
-    """Cancel an in-flight (or queued) background download and delete its
-    partial file. Returns True iff there was something to cancel.
+    """Cancel an in-flight (or queued) background download, retaining its
+    checkpointed partial file. Returns True iff there was something to cancel.
 
     Sets the download's cancel Event (so the worker thread aborts promptly),
     drops the registry/queue entry so the row reverts to "not downloaded",
-    then removes the partial bytes from disk. Safe to call when nothing is
+    while preserving partial bytes for a later retry. Safe to call when nothing is
     downloading (returns False) and safe to call twice.
     """
     with _DOWNLOAD_LOCK:
         event = _DOWNLOAD_CANCEL.get(key)
         entry = _DOWNLOADS.get(key)
-        choice = _DOWNLOAD_CHOICES.get(key)
         # Only queued/downloading entries are cancellable; a done/failed entry
         # (or no entry at all) means there's nothing in flight to stop.
         active = entry is not None and entry["status"] in ("queued", "downloading")
@@ -971,10 +771,7 @@ def cancel_download(key: str) -> bool:
         _DOWNLOAD_CANCEL.pop(key, None)
     if not active:
         return False
-    # Disk I/O happens OUTSIDE the lock. Deleting only when the entry was
-    # actually in flight protects a just-completed file from being removed.
-    if choice is not None:
-        _delete_partial_files(choice)
+    # Keep checkpointed bytes so selecting the model again resumes.
     # A freed slot may let a queued download start now.
     with _DOWNLOAD_LOCK:
         _maybe_start_next()
@@ -1198,17 +995,10 @@ def _make_progress_tqdm(on_progress: Callable[[str], None], cancel_event=None):
 
 def _try_hub_download(choice, dest: Path, on_progress: Callable[[str], None] | None,
                       cancel_event=None) -> bool:
-    """Try to download via huggingface_hub's resumable HTTP downloader.
+    """Legacy Hub transport, retained for compatibility with existing callers.
 
-    The hf_xet backend is deliberately disabled (`HF_HUB_DISABLE_XET=1`
-    at module import, top of this file): Xet is faster on a clean run
-    but cannot resume an interrupted download, which on 10-35 GB GGUFs
-    meant quitting LocalCode mid-download lost everything. The HTTP path
-    streams into an `.incomplete` sidecar and resumes it via Range
-    requests — across retries and across app restarts.
-
-    Returns True on success, raises on hard failure. Returns False if the
-    library is not available (caller should fall back).
+    Not the default model-download path. Partial-file reuse is version-dependent;
+    current Hub releases can restart interrupted files from scratch.
     """
     try:
         from huggingface_hub import hf_hub_download

@@ -56,7 +56,7 @@ def _fake_choice(tmp_path: Path, name: str = "fake-model-cancel-Q4_K_M.gguf"):
     )
 
 
-def test_cancel_download_running_entry_cleans_up(tmp_path):
+def test_cancel_download_running_entry_preserves_resume_data(tmp_path):
     choice = _fake_choice(tmp_path)
     key = choice.filename
     # A partial file (final name) and its .part working file on disk.
@@ -73,9 +73,9 @@ def test_cancel_download_running_entry_cleans_up(tmp_path):
         with bootstrap._DOWNLOAD_LOCK:
             assert key not in bootstrap._DOWNLOAD_CANCEL
             assert key not in bootstrap._DOWNLOAD_CHOICES
-        # Both the partial and the .part working file are deleted.
-        assert not (tmp_path / key).exists()
-        assert not (tmp_path / (key + ".part")).exists()
+        # Cancel stops the worker; checkpointed bytes survive for resume.
+        assert (tmp_path / key).exists()
+        assert (tmp_path / (key + ".part")).exists()
     finally:
         _cleanup(key)
 
@@ -98,7 +98,7 @@ def test_cancel_download_queued_entry_is_removed_from_queue(tmp_path):
         with bootstrap._DOWNLOAD_LOCK:
             assert key not in bootstrap._DOWNLOAD_QUEUE
         assert bootstrap.download_status(key) is None
-        assert not (tmp_path / key).exists()
+        assert (tmp_path / key).exists()
     finally:
         _cleanup(key)
 

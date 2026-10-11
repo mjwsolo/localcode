@@ -595,10 +595,6 @@ class Supervisor:
 
                 ok, res = bootstrap.download_model(choice, on_progress=on_progress, cancel_event=self.cancel)
                 if self.cancel.is_set():
-                    for part in (self.models_dir / filename, choice.local_path):
-                        for cand in (part.with_suffix(part.suffix + ".part"), Path(str(part) + ".part")):
-                            try: cand.unlink()
-                            except FileNotFoundError: pass
                     self.state = {"state": "idle", "model": self.current, "detail": "download cancelled", "pct": None}
                     return
                 if not ok:

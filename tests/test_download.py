@@ -212,7 +212,8 @@ def test_bad_url():
 
 
 # ── Test 7: Partial failure — one chunk fails ──
-def test_partial_chunk_failure():
+def test_partial_chunk_failure(monkeypatch):
+    monkeypatch.setattr("localcode.transfer.CHUNK_BYTES", 65536)
     """Verify cleanup when one thread fails mid-download."""
     test_data = b"X" * (1024 * 1024)  # 1MB
     fail_count = [0]
@@ -238,6 +239,7 @@ def test_partial_chunk_failure():
                 chunk = test_data[start:end + 1]
                 self.send_response(206)
                 self.send_header("Content-Length", str(len(chunk)))
+                self.send_header("Content-Range", f"bytes {start}-{end}/{len(test_data)}")
                 self.end_headers()
                 self.wfile.write(chunk)
 
@@ -255,7 +257,7 @@ def test_partial_chunk_failure():
             _download_parallel(f"http://127.0.0.1:{port}/file.bin", dest, num_threads=8)
             print("  ✗ FAIL — should have raised on partial failure")
             assert False
-        except RuntimeError as e:
+        except OSError as e:
             print(f"  Error (expected): {str(e)[:80]}")
             assert not dest.exists(), "Partial file should be deleted"
             print("  ✓ PASS")
@@ -278,7 +280,8 @@ def test_download_model_skip_existing(tmp_path):
 
 
 # ── Test 9: Verify concurrent file writes don't corrupt ──
-def test_concurrent_writes_integrity():
+def test_concurrent_writes_integrity(monkeypatch):
+    monkeypatch.setattr("localcode.transfer.CHUNK_BYTES", 65536)
     """Each thread writes to its own file region — verify no overlap/corruption."""
     # Create deterministic data where each byte position has a known value
     size = 1024 * 1024  # 1MB
@@ -300,6 +303,7 @@ def test_concurrent_writes_integrity():
                 chunk = test_data[start:end + 1]
                 self.send_response(206)
                 self.send_header("Content-Length", str(len(chunk)))
+                self.send_header("Content-Range", f"bytes {start}-{end}/{len(test_data)}")
                 self.end_headers()
                 self.wfile.write(chunk)
 
