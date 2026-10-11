@@ -1,0 +1,15 @@
+id = "fix-failing-suite"
+quality = "capability"          # capability | reliability | safety_scope | efficiency | fidelity
+component = "harness"
+purpose = "tracking"          # regression | tracking
+turns = 1
+trials = 1
+require_all_trials = false
+budget_steps = 30
+budget_seconds = 900
+allowed_paths = ['shipping.py']
+null_passes = false
+notes = ""
+setup = ""
+teardown = ""
+mcp = {}

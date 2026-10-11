@@ -49,11 +49,10 @@ def test_nightly_propagates_failed_runner_without_reusing_old_results(tmp_path):
     harness.mkdir()
     shutil.copy(ROOT / "evals/nightly.sh", harness)
     (harness / "verify_oracles.py").write_text("")
-    (harness / "run_tasks.py").write_text("raise SystemExit(7)\n")
     (harness / "gate.py").write_text("from pathlib import Path\nPath('gate-was-run').touch()\n")
-    previous = harness / "runs/20260101-nightly-old-model"
+    previous = harness / "runs/nightly/model/20260101-000000-nightly-old"
     previous.mkdir(parents=True)
-    (previous / "results.jsonl").write_text(json.dumps(row()))
+    (previous / "old.eval").write_text("")
     (previous / ".complete").touch()
     repo = tmp_path / "repo"
     (repo / ".venv/bin").mkdir(parents=True)
@@ -69,6 +68,8 @@ def test_nightly_propagates_failed_runner_without_reusing_old_results(tmp_path):
     (tools / "lsof").write_text("#!/bin/sh\nexit 1\n")
     (tools / "lsof").chmod(0o755)
     (tools / "python3").symlink_to(sys.executable)
+    (tools / "inspect").write_text("#!/bin/sh\nexit 7\n")
+    (tools / "inspect").chmod(0o755)
     result = subprocess.run(["bash", str(harness / "nightly.sh"), str(repo), "model"], env={**os.environ, "HOME": str(home), "PATH": str(tools) + os.pathsep + os.environ["PATH"]}, capture_output=True, text=True)
     assert result.returncode == 1
     assert "TASK RUN FAILED" in result.stdout
@@ -77,7 +78,7 @@ def test_nightly_propagates_failed_runner_without_reusing_old_results(tmp_path):
 
 def test_task_stderr_survives_model_deleting_eval_directory(tmp_path):
     # Execute the runner's real post-invocation write without loading a model.
-    tree = ast.parse((ROOT / "evals/run_tasks.py").read_text())
+    tree = ast.parse((ROOT / "evals/localcode_evals/agent.py").read_text())
     write = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_write")
     trial = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "run_trial")
     statement = next(n for n in ast.walk(trial) if isinstance(n, ast.Expr) and "stderr-turn" in ast.unparse(n))
