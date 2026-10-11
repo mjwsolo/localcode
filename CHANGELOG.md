@@ -13,6 +13,13 @@ All notable changes to LocalCode will be documented here. The format follows
   matrix and sweep scripts are gone; epochs, `eval-set`, task arguments
   (`ram_gb`, `env`) and the Inspect viewer replace them. `gate.py` and
   `nightly.sh` read Inspect logs. Not part of the `localcode` package.
+- Four public benchmarks run through the same solver, locally and without
+  Docker: `localcode_evals/polyglot` (Aider Polyglot), `livecodebench`,
+  `swebench` (SWE-bench Verified, environments built with uv) and
+  `harnessbench`. Benchmark data is read from `evals/data/` and never
+  downloaded; `python -m localcode_evals.data` lists what is missing.
+  `--solver localcode_evals/reference_solution --model none/none` proves a
+  grader with the benchmark's own answer, with no model loaded.
 
 ## 0.5.17 — 2026-10-11
 

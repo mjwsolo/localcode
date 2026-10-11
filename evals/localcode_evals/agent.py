@@ -429,7 +429,8 @@ def localcode_ui(ram_gb: int | None = None, env: dict[str, str] | None = None) -
         # One model in memory, one trial at a time; time spent queued is not working time.
         async with concurrency("localcode", 1):
             rt = await anyio.to_thread.run_sync(runtime_for, state.model.name, ram_gb, overrides)
-            messages, metrics = await anyio.to_thread.run_sync(run_trial, rt, workspace, turns_of(state.input_text), state.metadata)
+            # The last user message, so a setup solver can fill in placeholders first.
+            messages, metrics = await anyio.to_thread.run_sync(run_trial, rt, workspace, turns_of(state.user_prompt.text), state.metadata)
             runtime = rt.describe()
         state.messages = messages
         usage = _record_usage(state, metrics.get("usage_tokens"))

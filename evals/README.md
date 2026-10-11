@@ -34,6 +34,49 @@ user. Models are never downloaded for you.
 The checkout under test is the one this directory sits in; `LOCALCODE_EVALS_REPO`
 points at another. The supervisor runs under `LOCALCODE_PY`, else `<checkout>/.venv/bin/python`.
 
+## Public benchmarks, run locally
+
+The same solver runs four public benchmarks on this machine. No Docker, no cloud. The
+data is not in this repository and is never fetched for you: `python -m localcode_evals.data`
+shows what is present, what is missing, the size, and the command for each.
+
+| Task | What it is | Graded by |
+| --- | --- | --- |
+| `localcode_evals/polyglot` | Aider Polyglot: Exercism exercises, `-T languages=python,rust,cpp` | the exercise's own tests, restored before they run |
+| `localcode_evals/livecodebench` | LiveCodeBench stdin problems, each with a release date (`-T since=`) | every public case, stdout compared |
+| `localcode_evals/swebench` | SWE-bench Verified, real GitHub issues (`-T repos=`) | the hidden test patch and its FAIL_TO_PASS tests |
+| `localcode_evals/harnessbench` | HarnessBench: office, data, SRE, knowledge and codebase tasks (`-T classes=`) | each task's programmatic oracle |
+
+All take `-T ids=`, `-T limit=`, `-T ram_gb=` and `-T env=`. Each reports `solved`
+(all or nothing, the number leaderboards use) and a partial-credit fraction.
+
+Prove a grader before trusting a score. Every benchmark that ships a reference answer
+can be run with it instead of a model, which needs no GPU:
+
+```
+inspect eval localcode_evals/polyglot --solver localcode_evals/reference_solution --model none/none
+inspect eval localcode_evals/swebench -T unproven=true --solver localcode_evals/reference_solution --model none/none
+python -m localcode_evals.data swebench-builds <that log>
+```
+
+The second command records which SWE-bench instances build and pass their gold patch on
+this machine. From then on `localcode_evals/swebench` scores only those, because an
+instance that cannot build says nothing about a model.
+
+What does not run here, and is refused or left out rather than scored as failure:
+
+- Polyglot languages whose toolchain is not installed (Go and Java need `go` and a JDK),
+  JavaScript until the shared jest install exists, and C++ exercises that need Boost.
+  Six Rust reference answers need crates and cannot be proven offline; the exercises
+  themselves ask for the standard library only.
+- SWE-bench repositories whose environment needs system libraries (Django, SymPy,
+  Matplotlib, scikit-learn). The default is the pure-Python repositories, whose pinned
+  environments `uv` builds. Each repository is cloned once into `evals/data/swebench/repos`.
+- HarnessBench tasks that need a public tunnel or per-round hooks. Its optional LLM
+  quality rubric is not used, so scores are deterministic.
+- LiveCodeBench problems newer than the release file on disk. A score is only
+  contamination-free for problems released after the model's training cutoff.
+
 ## What a sample is
 
 Each directory under `tasks/` is one sample.
