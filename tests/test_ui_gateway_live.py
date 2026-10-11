@@ -40,6 +40,7 @@ def test_live_port_handover_preserves_stream_and_authentication(tmp_path, monkey
     try:
         gateway = ModelGateway(backend.server_port, 0, 1)
         previous = gateway.port
+        old_listener = gateway.listener
         stream = http.client.HTTPConnection("127.0.0.1", previous, timeout=3)
         stream.request("GET", "/stream", headers={"Authorization": "Bearer test-private-key"})
         response = stream.getresponse()
@@ -48,8 +49,17 @@ def test_live_port_handover_preserves_stream_and_authentication(tmp_path, monkey
         assert response.readline() == b"\n"
         result = gateway.change(None)
         assert result["port"] != previous and result["restart_required"] is False
-        with pytest.raises(OSError):
-            socket.create_connection(("127.0.0.1", previous), timeout=1)
+        assert old_listener.socket.fileno() == -1
+        # Some hosted macOS stacks complete connect() before peer closure is
+        # observable. Check the API contract, not only the TCP handshake:
+        # a new authenticated HTTP request must not receive a response here.
+        retired = http.client.HTTPConnection("127.0.0.1", previous, timeout=1)
+        try:
+            with pytest.raises((OSError, http.client.HTTPException)):
+                retired.request("GET", "/v1/models", headers={"Authorization": "Bearer test-private-key"})
+                retired.getresponse()
+        finally:
+            retired.close()
         finish.set()
         assert response.read() == b"data: two\n\n"  # old TCP stream survives retirement
         for headers, expected in (({}, 401), ({"Authorization": "Bearer test-private-key"}, 200)):
