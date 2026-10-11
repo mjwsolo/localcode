@@ -934,6 +934,11 @@ class LocalCodeRuntimeGateway:
         # each miss shells `sysctl hw.memsize`, a needless per-request TTFT cost.
         if self._cached_ram_gb is not None:
             return self._cached_ram_gb
+        from .models_catalog import _forced_ram_gb
+        forced = _forced_ram_gb()   # LOCALCODE_RAM_GB: eval knob, see models_catalog
+        if forced is not None:
+            self._cached_ram_gb = forced
+            return forced
         try:
             import subprocess
             mem_bytes = int(subprocess.run(
