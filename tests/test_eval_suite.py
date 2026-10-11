@@ -54,26 +54,41 @@ def test_gate_reads_inspect_logs(tmp_path):
     assert run("bad.eval").returncode == 1
 
 
-def test_harnessbench_refuses_missing_data_and_never_fetches(tmp_path, monkeypatch):
+def _harnessbench_task(root, tid, **extra):
+    import yaml
+
+    d = root / "tasks" / tid
+    (d / "workspace/in").mkdir(parents=True); (d / "tests/reference").mkdir(parents=True)
+    (d / "task.yaml").write_text(yaml.safe_dump({"task_id": tid, "domain": "Software Engineering", "difficulty": "hard", "timeout_sec": 7200, **extra}))
+    (d / "instruction.md").write_text("Write out.txt"); (d / "workspace/in/a.txt").write_text("a")
+    (d / "tests/cases.yaml").write_text("x"); (d / "tests/test_outcome.py").write_text("x")
+    return d
+
+
+def test_harnessbench_refuses_missing_or_old_data_and_never_fetches(tmp_path, monkeypatch):
     from localcode_evals import benchmarks
 
     monkeypatch.setattr(benchmarks, "DATA", tmp_path)
     with pytest.raises(benchmarks.MissingData, match="Nothing is downloaded"):
-        benchmarks.harnessbench_samples(None, None, None)
+        benchmarks.harnessbench_samples()
+    (tmp_path / "harness-bench/tasks").mkdir(parents=True)          # a checkout from before 3.0
+    with pytest.raises(benchmarks.MissingData, match="3.0"):
+        benchmarks.harnessbench_samples()
 
 
 def test_harnessbench_samples_from_local_data(tmp_path, monkeypatch):
-    import json
-
     from localcode_evals import benchmarks
 
     monkeypatch.setattr(benchmarks, "DATA", tmp_path)
-    task_dir = tmp_path / "harness-bench/tasks/001-a"; (task_dir / "fixtures/in").mkdir(parents=True)
-    (task_dir / "task.yaml").write_text(json.dumps({"task_id": "001-a", "class": "Office", "timeout_sec": 60}))
-    (task_dir / "prompt.txt").write_text("Read $WORKSPACE/in/a.txt"); (task_dir / "fixtures/in/a.txt").write_text("a")
-    tunnel = tmp_path / "harness-bench/tasks/002-b"; tunnel.mkdir()
-    (tunnel / "task.yaml").write_text(json.dumps({"task_id": "002-b"})); (tunnel / "prompt.txt").write_text("x"); (tunnel / "hooks.py").write_text("# trycloudflare")
-    data, left_out = benchmarks.harnessbench_samples(None, None, None)
-    assert [s.id for s in data] == ["001-a"] and data[0].files == {"in/a.txt": str(task_dir / "fixtures/in/a.txt")}
-    assert data[0].metadata["budget_seconds"] == 60 and left_out["needs a public tunnel"] == 1
-    assert benchmarks.harnessbench_samples(None, "SRE", None)[0] == []
+    root = tmp_path / "harness-bench"
+    (root / "src/harnessbench/grading").mkdir(parents=True); (root / "src/harnessbench/grading/outcome_cases.py").write_text("")
+    plain = _harnessbench_task(root, "001-a")
+    image = _harnessbench_task(root, "002-b"); (image / "environment").mkdir(); (image / "environment/Dockerfile").write_text("FROM x")
+    hooked = _harnessbench_task(root, "003-c"); (hooked / "environment").mkdir(); (hooked / "environment/hooks.py").write_text("")
+    data, left_out = benchmarks.harnessbench_samples()
+    assert [s.id for s in data] == ["001-a"] and data[0].files == {"in/a.txt": str(plain / "workspace/in/a.txt")}
+    assert left_out == {"needs a container image": 1, "needs setup hooks or a service": 1}
+    # the local default budget is shorter than the benchmark's; the official one is recorded and can be asked for
+    assert data[0].metadata["budget_seconds"] == benchmarks.LOCAL_BUDGET_SECONDS and data[0].metadata["official_timeout_sec"] == 7200
+    assert benchmarks.harnessbench_samples(budget_seconds=7200)[0][0].metadata["budget_seconds"] == 7200
+    assert benchmarks.harnessbench_samples(domains="Finance")[0] == [] and len(benchmarks.harnessbench_samples(domains="software")[0]) == 1

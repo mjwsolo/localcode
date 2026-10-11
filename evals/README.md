@@ -34,23 +34,43 @@ user. Models are never downloaded for you.
 The checkout under test is the one this directory sits in; `LOCALCODE_EVALS_REPO`
 points at another. The supervisor runs under `LOCALCODE_PY`, else `<checkout>/.venv/bin/python`.
 
-## HarnessBench, run locally
+## Harness-Bench, run locally
 
 `inspect eval localcode_evals/harnessbench --model localcode/<model>` runs
-[HarnessBench](https://github.com/Qihoo360/harness-bench) through the same solver: office,
-data, SRE, knowledge and codebase jobs in a real workspace, each graded by the task's own
-programmatic oracle. It measures the agent harness, which is the product. Benchmarks that
-mostly rank the model (Aider Polyglot, LiveCodeBench, SWE-bench) are deliberately absent.
+[Harness-Bench 3.0](https://github.com/Qihoo360/harness-bench) through the same solver:
+realistic jobs across software engineering, IT operations, compliance, data and office
+work, each in its own workspace. It measures the agent harness, which is the product.
+Benchmarks that mostly rank the model (Aider Polyglot, LiveCodeBench, SWE-bench) are
+deliberately absent.
 
 No Docker, no cloud. The data is not in this repository and is never fetched for you:
-`python -m localcode_evals.data` shows whether it is present, its size and the command.
+`python -m localcode_evals.data` shows whether it is present and current, and the command.
 
-It takes `-T ids=`, `-T classes=` (a word in the task class, e.g. `classes=Software,SRE`),
-`-T limit=`, `-T ram_gb=` and `-T env=`, and reports `solved` (every check passes) and
-`outcome_score` (the oracle's weighted fraction).
+Grading is the benchmark's own. Each task's hidden `evaluate_cases` reports one
+observation per business case, and Harness-Bench's aggregator applies the weights, core
+cases and safety gates. `task_success` needs the pass threshold, every core case and
+every gate; `outcome_score` is the weighted fraction. The grader sees a copy of the
+workspace without this suite's own files.
 
-Left out rather than scored wrong: tasks that need a public tunnel or per-round hooks.
-The benchmark's optional LLM quality rubric is not used, so scores are deterministic.
+| Argument | Meaning |
+| --- | --- |
+| `-T domains=Software,Finance` | words to match in a task's domain |
+| `-T difficulty=medium` | `easy`, `medium` or `hard` |
+| `-T ids=`, `-T limit=` | named tasks, or the first N |
+| `-T budget_seconds=7200` | per-task time limit. The benchmark allows up to two hours; the default here is 30 minutes so a local run finishes, which makes scores a lower bound on the official protocol |
+| `-T ram_gb=`, `-T env=` | as for the other tasks |
+
+Prove the graders work on this machine, with no model loaded, by overlaying each task's
+own reference answer:
+
+```
+inspect eval localcode_evals/harnessbench --solver localcode_evals/harnessbench_reference --model none/none
+```
+
+Left out rather than scored wrong: tasks that need the benchmark's container image, a
+service, or its runner's setup hooks (29 of 274 in release 3.0). The optional LLM
+semantic judge, a bounded fallback on a few cases, is not used, so scores are
+deterministic and can only be lower than with it.
 
 ## What a sample is
 
