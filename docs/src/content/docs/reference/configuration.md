@@ -5,21 +5,6 @@ description: Environment variables, the run directory, localcode.json, and LOCAL
 
 There is nothing to configure before the first run. Most day-to-day settings live in the interface: `/models`, `/settings`, `/themes`, `/permissions`, `/mcps`. This page covers what lives outside it.
 
-## Environment variables
-
-| Variable | Effect |
-| --- | --- |
-| `LOCALCODE_MODEL_DIR` | Where GGUFs live. Default `~/.local/share/localcode/models`. The picker's **Models folder** entry changes the same setting |
-| `LOCALCODE_MODELS_DIR` | Older override name; `LOCALCODE_MODEL_DIR` takes precedence |
-| `LOCALCODE_AGENT_RUN_DIR` | Supervisor logs, the per-session runtime config, and the voice runtime. Default `~/.local/share/localcode-agent/run` |
-| `LOCALCODE_MIC` | Microphone device for voice input |
-| `LOCALCODE_ENABLE_EXA=1` + `EXA_API_KEY` | Web search through Exa instead of the keyless DuckDuckGo backend |
-| `LOCALCODE_ENABLE_PARALLEL=1` + `PARALLEL_API_KEY` | Web search through Parallel instead of the keyless DuckDuckGo backend |
-| `LOCALCODE_WEBFETCH_MAX_CHARS` | Cap on text returned by a page fetch. Default `20000` |
-| `OPENCODE_DISABLE_LSP_DOWNLOAD` | Default `1`. Language servers are installed only through `/lsp` after you confirm |
-| `LOCALCODE_UI_BIN` | Developer override: path to the interface binary |
-| `LOCALCODE_LLAMA_SERVER` | Developer override: path to a `llama-server` binary |
-
 ## Where state lives
 
 | Path | What is there |

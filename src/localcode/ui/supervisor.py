@@ -742,10 +742,7 @@ class Supervisor:
 
     @staticmethod
     def _mic_device() -> str:
-        """ffmpeg avfoundation audio device index: LOCALCODE_MIC, else the built-in mic, else 0."""
-        env = os.environ.get("LOCALCODE_MIC")
-        if env:
-            return env
+        """ffmpeg avfoundation audio device index: the built-in mic, else 0."""
         try:
             out = subprocess.run(["ffmpeg", "-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", ""],
                                  capture_output=True, text=True, timeout=15, check=False).stderr

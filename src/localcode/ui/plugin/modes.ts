@@ -242,9 +242,9 @@ async function tui(api: TuiPluginApi) {
     } catch (e) { error(String(e)); }
   }
   api.keymap.registerLayer({ commands: [
-    { name: "localcode.server", title: "Model server connection and port", category: "LocalCode", slashName: "server", run: server },
-    { name: "localcode.mode", title: "Choose Chat or Decisions", category: "LocalCode", slashName: "mode", run: choose },
-    { name: "localcode.decide", title: "Open decision mode", category: "LocalCode", slashName: "decide", run: open },
+    { name: "localcode.server", title: "Model server connection and port", namespace: "palette", category: "LocalCode", slashName: "server", run: server },
+    { name: "localcode.mode", title: "Choose Chat or Decisions", namespace: "palette", category: "LocalCode", slashName: "mode", run: choose },
+    { name: "localcode.decide", title: "Open decision mode", namespace: "palette", category: "LocalCode", slashName: "decide", run: open },
   ] });
   api.keymap.registerLayer({ enabled: () => api.route.current.name === route && !api.ui.dialog.open, priority: 5, commands: [{ name: "localcode.mode.back", run: back }], bindings: [{ key: "escape", command: "localcode.mode.back" }] });
   const timer = setInterval(() => void poll(), 2000);

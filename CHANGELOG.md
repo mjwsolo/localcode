@@ -5,10 +5,22 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
+## 0.5.20 — 2026-10-12
+
+### Fixed
+
+- `/server`, `/mode` and `/decide` were missing from the slash menu and did
+  nothing when typed. The interface lists only commands in its palette
+  namespace, and the plugin registered them without it.
+
 ### Removed
 
 - The `LOCALCODE_VOICE_LIVE` switch added in 0.5.19. Dictation is live; there is
   nothing to configure.
+- Environment-variable settings as a user feature. The docs no longer list
+  any: people use the interface. `LOCALCODE_MIC` and the `LOCALCODE_ENABLE_EXA`
+  and `LOCALCODE_ENABLE_PARALLEL` pass-through are removed; voice uses the
+  default microphone and web search is the keyless one.
 
 ## 0.5.19 — 2026-10-11
 
