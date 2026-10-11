@@ -102,7 +102,7 @@ def test_launch_config_leaves_the_reserve_to_the_supervisor(tmp_path):
     p = tmp_path / "c.json"
     write_config(p, port=8123, ctx=40000, alias="m")
     cfg = json.loads(p.read_text())
-    assert cfg["compaction"] == {"reserved": 0}
+    assert cfg["compaction"]["reserved"] == 0
     assert cfg["provider"]["localcode"]["models"]["m"]["limit"]["context"] == 40000
 
 

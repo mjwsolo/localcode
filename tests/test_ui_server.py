@@ -78,7 +78,7 @@ def control_request(path, *, method="GET", token="test-token", body=None, gatewa
     from localcode.ui.supervisor import make_handler
 
     sup = SimpleNamespace(gateway=gateway, control_token="test-token", control_port=8323, port=8123,
-                          current="test-model", server_status=lambda: {"state": "ready", "server_ready": True})
+                          current="test-model", _timing=None, context_info=lambda: {"ctx": 8192}, server_status=lambda: {"state": "ready", "server_ready": True})
     payload = json.dumps(body).encode() if body is not None else b""
     wire = (f"{method} {path} HTTP/1.0\r\nHost: 127.0.0.1:8323\r\n"
             f"X-Localcode-Token: {token}\r\nContent-Type: application/json\r\n"

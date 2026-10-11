@@ -171,6 +171,7 @@ def run_trial(task: Path, meta: dict, trial: int) -> dict:
     server_log = RUN_DIR / "server.log"
     log_offset = server_log.stat().st_size if server_log.exists() else 0
     all_events = []
+    first_text_times = []
     ui_log_dir = HOME / ".local/share/localcode-agent/log"
     ui_offsets = {p: p.stat().st_size for p in ui_log_dir.glob("*.log")}
     meter = ResourceMeter(sup.pid)
@@ -202,6 +203,8 @@ def run_trial(task: Path, meta: dict, trial: int) -> dict:
             try: e = json.loads(line)
             except Exception: continue
             all_events.append(e)
+            if e.get("type") == "first_text_delta" and isinstance(e.get("timestamp"), (int, float)):
+                first_text_times.append(max(0, e["timestamp"] / 1000 - t0))
             t = e.get("type"); p = e.get("part") or {}
             if t == "step_start": steps += 1
             elif t == "tool_use":
@@ -255,6 +258,7 @@ def run_trial(task: Path, meta: dict, trial: int) -> dict:
     with server_log.open("rb") as stream:
         stream.seek(log_offset)
         performance = summarize(all_events, stream.read().decode(errors="replace"))
+    performance["end_to_end_first_text_s"] = first_text_times or None
     # Tool-call validity: of the calls the model meant to make, how many executed.
     # Harness refusals (permission policy, plugin guards) are reported but excluded.
     counted = tool_calls + tool_narrated - tool_rejected - tool_guarded

@@ -5,6 +5,28 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
+## 0.5.16 — 2026-10-11
+
+### Added
+
+- `/server` shows recent prompt and generation speeds, estimated prompt reuse,
+  context budget, and warnings for competing llama-server processes.
+- Direct streaming latency probe and content-free first-text timing in the
+  headless task harness; speed comparisons separate each model.
+- One bounded continuation when the provider actually reports an output limit.
+
+### Changed
+
+- Old-tool-output pruning scales to local context budgets. Smaller tool previews
+  retain the full output on disk; summaries preserve constraints and pending work.
+- Unverified edits receive one targeted check prompt through normal tool permissions.
+- Stored model tuning applies only on matching chip/RAM hardware and ignores
+  invalid profiles. Existing RAM/context policies and inference defaults remain.
+
+These changes add controls and measurements; they do not establish a universal
+speedup or instant model switching. See `docs/performance-validation.md` for
+measurement instructions and rollback switches.
+
 ## 0.5.15 — 2026-10-11
 
 ### Changed
