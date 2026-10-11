@@ -15,8 +15,10 @@ for. This page lists every path.
   points inference elsewhere.
 - **Your files, prompts and edits.** The agent reads and writes your working
   tree directly.
-- **Sessions and logs.** Sessions live in `<project>/.localcode-agent/`. Server
-  and supervisor logs live in the run directory. Nothing is uploaded.
+- **Sessions and logs.** Sessions live in one SQLite file,
+  `~/.local/share/localcode-agent/opencode.db`. Server and supervisor logs
+  live in the run directory beside it. Nothing is uploaded. See
+  [where state lives](/localcode/reference/configuration#where-state-lives).
 
 There is no analytics endpoint, usage reporting, update check, or account.
 Every localcode process binds to `127.0.0.1`.
@@ -37,8 +39,8 @@ Loopback alone is not a boundary, since a web page can send requests to a local 
 | 9 | **Shell commands** | Wherever the command goes | Whenever a `bash` call runs; commands inside the project do not prompt |
 
 Web search works out of the box with a keyless DuckDuckGo backend. To use a
-paid search API instead, set `LOCALCODE_ENABLE_EXA=1` with `EXA_API_KEY`, or
-`LOCALCODE_ENABLE_PARALLEL=1` with `PARALLEL_API_KEY`. The key is sent only to
+paid search API instead, set `OPENCODE_ENABLE_EXA=1` with `EXA_API_KEY`, or
+`OPENCODE_ENABLE_PARALLEL=1` with `PARALLEL_API_KEY`. The key is sent only to
 that provider.
 
 The web tools, MCP tools and shell commands all run without a permission prompt;

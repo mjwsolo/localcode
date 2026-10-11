@@ -88,13 +88,16 @@ localcode recommends a model by your Mac's memory and marks it with a star. You 
 | Muse Glimmer 30B | 15.9 GB | UD-Q4_K_XL | 30B (dense, vision) | 32 GB |
 | Qwen 3.8 27B | 17.9 GB | UD-Q4_K_XL | 27B (dense) | 36 GB |
 | North-Mini-Code 30B-A3B | 17.9 GB | UD-Q4_K_M | 3B (MoE) | 36 GB |
+| OpenJev 27B (decision model) | 19.0 GB | Q4_K_M | 27B (dense) | 36 GB |
 | Gemma 4 12B (full) | 23.8 GB | BF16 | 12B (dense) | 48 GB |
 | Gemma 4 26B-A4B | 28.0 GB | UD-Q8_K_XL | 3.8B (MoE) | 64 GB |
+| Qwen 3.8 27B | 31.5 GB | UD-Q8_K_XL | 27B (dense) | 64 GB |
 | Qwen 3.6 35B-A3B | 38.5 GB | UD-Q8_K_XL | 3.0B (MoE) | 96 GB |
+| Kolibri 1 78B-A3B (experimental) | 47.5 GB | Q4_K_M | 3.5B (MoE) | 96 GB |
 
 [Underdog Saluki 27B 1.0](https://huggingface.co/ConwayResearch/Underdog-Saluki-27B-1.0) is also available as an opt-in IQ2-mix model: 7.9 GB of weights, plus memory for context and runtime, with an optional 0.93 GB vision projector. Coding quality and minimum RAM have not been benchmarked on LocalCode.
 
-Min RAM is the memory at which localcode will recommend the model. You can pick a heavier one by hand. DiffusionGemma is a research model that is never recommended automatically.
+Min RAM is the smallest Mac whose memory the weights fit in (about 55% of unified memory). You can pick a heavier one by hand. DiffusionGemma, Kolibri, OpenJev and Saluki are never recommended automatically: you choose them yourself.
 
 Measured on a top-memory Apple Silicon laptop with Qwen 3.6 35B-A3B UD-IQ2_M at a 131072-token context: about 89 tokens/s generation, about 1174 tokens/s prompt processing, and 12 to 15 seconds for a typical four-tool-call task.
 

@@ -13,8 +13,8 @@ There is nothing to configure before the first run. Most day-to-day settings liv
 | `LOCALCODE_MODELS_DIR` | Older override name; `LOCALCODE_MODEL_DIR` takes precedence |
 | `LOCALCODE_AGENT_RUN_DIR` | Supervisor logs, the per-session runtime config, and the voice runtime. Default `~/.local/share/localcode-agent/run` |
 | `LOCALCODE_MIC` | Microphone device for voice input |
-| `LOCALCODE_ENABLE_EXA=1` + `EXA_API_KEY` | Web search through Exa instead of the keyless DuckDuckGo backend |
-| `LOCALCODE_ENABLE_PARALLEL=1` + `PARALLEL_API_KEY` | Web search through Parallel instead of the keyless DuckDuckGo backend |
+| `OPENCODE_ENABLE_EXA=1` + `EXA_API_KEY` | Web search through Exa instead of the keyless DuckDuckGo backend |
+| `OPENCODE_ENABLE_PARALLEL=1` + `PARALLEL_API_KEY` | Web search through Parallel instead of the keyless DuckDuckGo backend |
 | `LOCALCODE_WEBFETCH_MAX_CHARS` | Cap on text returned by a page fetch. Default `20000` |
 | `OPENCODE_DISABLE_LSP_DOWNLOAD` | Default `1`. Language servers are installed only through `/lsp` after you confirm |
 | `LOCALCODE_UI_BIN` | Developer override: path to the interface binary |
@@ -25,10 +25,23 @@ There is nothing to configure before the first run. Most day-to-day settings liv
 | Path | What is there |
 | --- | --- |
 | `~/.local/share/localcode/models/` | Downloaded GGUFs and image projectors |
-| `~/.local/share/localcode-agent/run/` | `server.log` and supervisor logs, the session config, the voice runtime |
-| `<project>/.localcode-agent/` | Per-project runtime state: sessions and the plugin log |
+| `~/.local/share/localcode-agent/opencode.db` | Every session: messages, tool calls and the event history that `--resume` replays. A SQLite file, and the largest thing here after the models |
+| `~/.local/share/localcode-agent/log/` | The interface's own log |
+| `~/.local/share/localcode-agent/run/` | `server.log` (every model request, token counts and speeds), `supervisor.log` (model loading, context and slots), the session config, the voice runtime |
+| `~/.config/localcode-agent/` | Your `localcode.json` and user-level skills |
+| `~/.local/state/localcode-agent/` | Prompt history and the last model you chose |
+| `~/.cache/localcode-agent/` | The interface's cache; safe to delete |
+| `~/.localcode/` | `config.toml` for the launcher, and its own small cache |
+| `<project>/.localcode-agent/` | Per-project state: `localcode-plugin.log` (why the agent was nudged, stopped, or had a path corrected) and project skills |
 
-The launcher writes nothing into your project. The runtime keeps its per-project state in `.localcode-agent/`; add it to `.gitignore` if you do not want it tracked.
+Sessions are not stored in the project. The launcher writes nothing into your project; the runtime keeps a little per-project state in `.localcode-agent/`, which you can add to `.gitignore`.
+
+To watch a session as it runs:
+
+```
+tail -f ~/.local/share/localcode-agent/run/server.log
+tail -f .localcode-agent/localcode-plugin.log
+```
 
 ## `LOCALCODE.md`
 
