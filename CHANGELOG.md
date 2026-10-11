@@ -20,6 +20,9 @@ All notable changes to LocalCode will be documented here. The format follows
   downloaded; `python -m localcode_evals.data` lists what is missing.
   `--solver localcode_evals/reference_solution --model none/none` proves a
   grader with the benchmark's own answer, with no model loaded.
+- Seven multi-check coding tasks from the older hand-written suite join the
+  tracking set, each with a proven oracle: extend-without-breaking, todo-cli,
+  expr-eval, bank-ledger, fix-failing-suite, csv-report, inventory-app.
 
 ## 0.5.17 — 2026-10-11
 
