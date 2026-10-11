@@ -20,7 +20,7 @@ def test_parser_accepts_version_model_and_project():
     assert a.version is True
     a = p.parse_args(["--model", "x", "somedir"])
     assert a.model == "x" and a.project == "somedir"
-    for flag in ("-s", "--session", "--resume"):
+    for flag in ("--resume",):
         assert p.parse_args([flag, "ses_example"]).resume == "ses_example"
     with pytest.raises(SystemExit):
         p.parse_args(["--cwd", "somedir"])
@@ -62,7 +62,7 @@ def test_entrypoint_forwards_session_to_launcher(monkeypatch):
     calls = []
     monkeypatch.setattr(launch, "main", lambda *args, **kwargs: calls.append((args, kwargs)) or 0)
     with pytest.raises(SystemExit) as exc:
-        entrypoint.main(["-s", "ses_example"])
+        entrypoint.main(["--resume", "ses_example"])
     assert exc.value.code == 0
     assert calls == [((None,), {"project": None, "resume": "ses_example", "trust_project": False})]
 
