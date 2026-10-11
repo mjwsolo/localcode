@@ -5,6 +5,14 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
+## 0.5.17 — 2026-10-11
+
+### Changed
+
+- `localcode --resume SESSION_ID` is the only way to resume a session. The
+  `-s` and `--session` spellings are gone, and the hint printed when a
+  session ends, the help dialog and the home tips all say `--resume`.
+
 ## 0.5.16 — 2026-10-11
 
 ### Added
