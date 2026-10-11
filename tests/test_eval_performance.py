@@ -5,7 +5,7 @@ import pytest
 
 
 def module(name):
-    spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().parents[1]/'evals'/f'{name}.py')
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().parents[1]/'evals'/'localcode_evals'/f'{name}.py')
     result = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(result)
     return result
@@ -38,17 +38,6 @@ def test_usage_preserves_separate_cache_counters():
     assert result['usage_tokens']==dict(input=20, output=5, cache_read=90, cache_write=10)
 
 
-def test_comparison_rejects_missing_and_duplicate_trials():
-    compare=module('sweep').compare
-    row={'task':'a','model':'m','trial':1,'pass':True,'wall_s':10}
-    with pytest.raises(ValueError): compare([row],[])
-    with pytest.raises(ValueError): compare([row,row],[row])
-    with pytest.raises(ValueError): compare([],[])
-    result=compare([row],[dict(row,**{'pass':False,'wall_s':1})])
-    assert result['decision']=='investigate-regressions'
-    assert result['median_paired_wall_delta_s'] is None
-
-
 def test_resource_sampling_excludes_unrelated_processes():
     rss=module('performance').tree_rss
     assert rss('10 1 20\n11 10 30\n12 11 40\n99 1 1000000',10)==90*1024
@@ -69,16 +58,6 @@ def test_timeout_retains_output_and_stops_child_group():
     # A dead child may briefly remain as a zombie until reparented/reaped.
     state = subprocess.run(['ps','-o','stat=','-p',str(pid)], capture_output=True,text=True).stdout.strip()
     assert not state or state.startswith('Z')
-
-
-@pytest.mark.parametrize('name', ['run_tasks.py', 'sweep.py'])
-def test_eval_cli_help_starts_without_loading_models(name):
-    import subprocess
-    import sys
-    script = Path(__file__).resolve().parents[1]/'evals'/name
-    result = subprocess.run([sys.executable, str(script), '--help'], capture_output=True, text=True, timeout=10)
-    assert result.returncode == 0, result.stderr
-    assert '--model' in result.stdout
 
 
 def test_loopback_fixture_never_uses_reverse_dns(monkeypatch):

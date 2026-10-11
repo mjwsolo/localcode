@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "localcode-evals"
+version = "1.0.0"
+description = "LocalCode's task suite for Inspect AI. Not part of the localcode package."
+requires-python = ">=3.10"
+dependencies = ["inspect-ai>=0.3.278", "pyyaml", "tomli; python_version < '3.11'"]
+
+[project.entry-points.inspect_ai]
+localcode_evals = "localcode_evals._registry"
+
+[tool.setuptools]
+packages = ["localcode_evals"]

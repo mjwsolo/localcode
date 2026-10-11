@@ -699,4 +699,756 @@ pass_json true "ignored the instruction planted in the page"
 """,
      solve="true\n")
 
+
+# Ported from the older hand-authored suite (tracking) ---------------------------
+# Seven multi-check coding tasks. Each grader runs every check, passes only when
+# all of them pass, and otherwise reports "<passed>/<total> checks; first
+# failure: <name>". The turn text and the checks are carried over unchanged.
+import hashlib
+
+def _staged(text):
+    """The bytes w() writes for a workspace file, so a checksum can be staged beside it."""
+    return textwrap.dedent(text).lstrip("\n")
+
+def _sha_line(text):
+    return hashlib.sha1(_staged(text).encode()).hexdigest() + "\n"
+
+CK = r'''
+pass=0; total=0; first=""
+ck() { total=$((total + 1)); if [ "$1" -eq 0 ]; then pass=$((pass + 1)); elif [ -z "$first" ]; then first="$2"; fi; }
+pchk() { python3 -c "$1" >/dev/null 2>&1; }
+sha_of() { python3 -c "import hashlib,sys; print(hashlib.sha1(open(sys.argv[1],'rb').read()).hexdigest())" "$1" 2>/dev/null; }
+'''
+CK_END = r'''
+if [ "$pass" -eq "$total" ]; then pass_json true "$pass/$total checks"; else pass_json false "$pass/$total checks; first failure: $first"; fi
+'''
+
+# 26 extend-without-breaking -----------------------------------------------------------
+EXTEND_TODO = r'''
+class TodoList:
+    """A tiny in-memory todo list. Items are dicts: {"text": str, "done": bool}."""
+
+    def __init__(self):
+        self._items = []
+
+    def add(self, text):
+        self._items.append({"text": text, "done": False})
+
+    def complete(self, index):
+        self._items[index]["done"] = True
+
+    def all(self):
+        return list(self._items)
+'''
+
+EXTEND_TEST = r'''
+from todo import TodoList
+
+
+def test_add():
+    t = TodoList()
+    t.add("a")
+    assert len(t.all()) == 1
+    assert t.all()[0]["text"] == "a"
+    assert t.all()[0]["done"] is False
+
+
+def test_complete():
+    t = TodoList()
+    t.add("a")
+    t.complete(0)
+    assert t.all()[0]["done"] is True
+'''
+
+task("extend-without-breaking", quality="capability", purpose="tracking", component="harness", steps=30, seconds=900,
+     turns=["The `TodoList` class in `todo.py` has `add`, `complete`, and `all` methods, with passing tests in `test_todo.py`. Add two new methods: `remove(index)` which deletes the item at that index, and `pending()` which returns a list of the `text` values of all items that are not done, in order. Then add tests for the two new methods in a NEW file `test_todo_ext.py`. Do NOT modify `test_todo.py`, and all existing tests must still pass."],
+     workspace={"todo.py": EXTEND_TODO, "test_todo.py": EXTEND_TEST, ".test_todo.sha": _sha_line(EXTEND_TEST)},
+     allowed=["todo.py", "test_todo_ext.py"],
+     test=diff_ok(r"todo\.py|test_todo_ext\.py") + CK + r'''
+[ -f todo.py ]; ck $? "todo.py exists"
+[ -f test_todo_ext.py ]; ck $? "test_todo_ext.py exists"
+grep -q "def test_" test_todo_ext.py 2>/dev/null; ck $? "test_todo_ext.py has a test_ function"
+[ -n "$(sha_of test_todo.py)" ] && [ "$(sha_of test_todo.py)" = "$(cat .test_todo.sha 2>/dev/null)" ]; ck $? "test_todo.py unchanged"
+python3 - >/dev/null 2>&1 <<'PY'
+from todo import TodoList
+t = TodoList()
+for x in ("a", "b", "c"):
+    t.add(x)
+t.complete(1)
+assert t.pending() == ["a", "c"], t.pending()
+t.remove(0)
+assert [i["text"] for i in t.all()] == ["b", "c"], t.all()
+PY
+ck $? "remove/pending behaviour"
+''' + f'{PYTEST} >/dev/null 2>&1; ck $? "pytest passes (both test files)"\n' + CK_END,
+     solve=r'''
+cat > todo.py <<'PY'
+class TodoList:
+    """A tiny in-memory todo list. Items are dicts: {"text": str, "done": bool}."""
+
+    def __init__(self):
+        self._items = []
+
+    def add(self, text):
+        self._items.append({"text": text, "done": False})
+
+    def complete(self, index):
+        self._items[index]["done"] = True
+
+    def remove(self, index):
+        del self._items[index]
+
+    def pending(self):
+        return [item["text"] for item in self._items if not item["done"]]
+
+    def all(self):
+        return list(self._items)
+PY
+cat > test_todo_ext.py <<'PY'
+import pytest
+
+from todo import TodoList
+
+
+def make(*texts):
+    t = TodoList()
+    for text in texts:
+        t.add(text)
+    return t
+
+
+def test_remove_deletes_the_item_at_index():
+    t = make("a", "b", "c")
+    t.remove(1)
+    assert [i["text"] for i in t.all()] == ["a", "c"]
+
+
+def test_remove_out_of_range_raises():
+    with pytest.raises(IndexError):
+        make("a").remove(5)
+
+
+def test_pending_lists_undone_texts_in_order():
+    t = make("a", "b", "c")
+    t.complete(1)
+    assert t.pending() == ["a", "c"]
+
+
+def test_pending_empty_list():
+    assert TodoList().pending() == []
+PY
+''')
+
+# 28 todo-cli --------------------------------------------------------------------------
+task("todo-cli", quality="capability", purpose="tracking", component="harness", steps=30, seconds=900,
+     turns=["Create `todo.py`, a command-line todo app using `argparse` that persists tasks to a file `todos.json` in the current directory. Support four subcommands: `add <text>` appends a task; `list` prints every task on its own line as `<index>: [ ] <text>` (or `[x]` when done), zero-indexed in insertion order; `done <index>` marks a task done; `rm <index>` removes a task. State must persist across separate invocations (read/write `todos.json`). `list` with no tasks prints nothing and exits 0. An out-of-range index for `done` or `rm` must exit with a non-zero status."],
+     workspace={"README.md": "# scratch\n"},
+     test=CK + r'''
+[ -f todo.py ]; ck $? "todo.py exists"
+
+if [ -f todo.py ]; then
+  rm -f todos.json
+  python3 todo.py add "buy milk" >/dev/null 2>&1
+  python3 todo.py list 2>/dev/null | grep -q "0: \[ \] buy milk"; ck $? "add + list shows unchecked task"
+
+  rm -f todos.json
+  python3 todo.py add "one" >/dev/null 2>&1
+  python3 todo.py add "two" >/dev/null 2>&1
+  OUT=$(python3 todo.py list 2>/dev/null)
+  { echo "$OUT" | grep -q "0: \[ \] one" && echo "$OUT" | grep -q "1: \[ \] two"; }; ck $? "two adds list in order"
+
+  python3 todo.py done 0 >/dev/null 2>&1
+  python3 todo.py list 2>/dev/null | grep -q "0: \[x\] one"; ck $? "done marks [x]"
+
+  python3 todo.py rm 0 >/dev/null 2>&1
+  OUT=$(python3 todo.py list 2>/dev/null)
+  { echo "$OUT" | grep -q "two" && ! echo "$OUT" | grep -q "one"; }; ck $? "rm removes the task"
+
+  rm -f todos.json
+  python3 todo.py add "persisted" >/dev/null 2>&1
+  python3 todo.py list 2>/dev/null | grep -q "persisted"; ck $? "state persists across invocations"
+
+  rm -f todos.json
+  python3 todo.py add "only" >/dev/null 2>&1
+  python3 todo.py done 9 >/dev/null 2>&1; rc=$?
+  [ "$rc" -ne 0 ]; ck $? "out-of-range index exits non-zero"
+else
+  total=7
+fi
+''' + CK_END,
+     solve=r'''
+cat > todo.py <<'PY'
+"""A small persistent todo list. State lives in todos.json in the current directory."""
+import argparse
+import json
+import os
+import sys
+
+STATE = "todos.json"
+
+
+def load():
+    if not os.path.exists(STATE):
+        return []
+    with open(STATE) as fh:
+        return json.load(fh)
+
+
+def save(tasks):
+    with open(STATE, "w") as fh:
+        json.dump(tasks, fh, indent=2)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="todo")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("add").add_argument("text")
+    sub.add_parser("list")
+    sub.add_parser("done").add_argument("index", type=int)
+    sub.add_parser("rm").add_argument("index", type=int)
+    args = parser.parse_args(argv)
+
+    tasks = load()
+    if args.cmd == "add":
+        tasks.append({"text": args.text, "done": False})
+        save(tasks)
+        return 0
+    if args.cmd == "list":
+        for i, t in enumerate(tasks):
+            print(f"{i}: [{'x' if t['done'] else ' '}] {t['text']}")
+        return 0
+    if not 0 <= args.index < len(tasks):
+        print(f"error: no task with index {args.index}", file=sys.stderr)
+        return 1
+    if args.cmd == "done":
+        tasks[args.index]["done"] = True
+    else:
+        del tasks[args.index]
+    save(tasks)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+PY
+''')
+
+# 29 expr-eval -------------------------------------------------------------------------
+task("expr-eval", quality="capability", purpose="tracking", component="harness", steps=30, seconds=900,
+     turns=["Create `calc.py` with a function `evaluate(expr)` that parses and evaluates an arithmetic expression string. Support `+`, `-`, `*`, `/` with standard operator precedence (`*` and `/` bind tighter than `+` and `-`), parentheses for grouping, and unary minus. Subtraction and division are left-associative. Division is real (float) division. Whitespace in the input is ignored. On malformed input (e.g. `\"2+\"`, `\"(1\"`, empty), raise `ValueError`. Do NOT use Python's built-in `eval`/`exec`."],
+     workspace={"README.md": "# scratch\n"},
+     test=CK + r'''
+pchk "import calc; assert callable(calc.evaluate)"; ck $? "calc.evaluate exists"
+pchk "import calc; assert abs(calc.evaluate('2+3*4')-14)<1e-9"; ck $? "precedence 2+3*4==14"
+pchk "import calc; assert abs(calc.evaluate('(2+3)*4')-20)<1e-9"; ck $? "parens (2+3)*4==20"
+pchk "import calc; assert abs(calc.evaluate('10-3-2')-5)<1e-9"; ck $? "left-assoc 10-3-2==5"
+pchk "import calc; assert abs(calc.evaluate('-3+5')-2)<1e-9 and abs(calc.evaluate('2*-3')+6)<1e-9"; ck $? "unary minus"
+pchk "import calc; assert abs(calc.evaluate('7/2')-3.5)<1e-9"; ck $? "real division 7/2==3.5"
+pchk "import calc; assert abs(calc.evaluate('((1+2)*(3+4))')-21)<1e-9"; ck $? "nested parens==21"
+pchk "import calc
+try:
+    calc.evaluate('2+'); raise SystemExit(1)
+except ValueError:
+    pass"; ck $? "malformed raises ValueError"
+''' + CK_END,
+     solve=r'''
+cat > calc.py <<'PY'
+"""Arithmetic expression evaluator: a tokenizer and a recursive-descent parser."""
+
+DIGITS = "0123456789"
+
+
+def _tokenize(expr):
+    if not isinstance(expr, str):
+        raise ValueError("expression must be a string")
+    tokens, i, n = [], 0, len(expr)
+    while i < n:
+        ch = expr[i]
+        if ch.isspace():
+            i += 1
+        elif ch in "+-*/()":
+            tokens.append(ch)
+            i += 1
+        elif ch in DIGITS or ch == ".":
+            j = i
+            while j < n and (expr[j] in DIGITS or expr[j] == "."):
+                j += 1
+            text = expr[i:j]
+            if text.count(".") > 1 or text == ".":
+                raise ValueError(f"bad number {text!r}")
+            tokens.append(float(text) if "." in text else int(text))
+            i = j
+        else:
+            raise ValueError(f"unexpected character {ch!r}")
+    return tokens
+
+
+class _Parser:
+    def __init__(self, tokens):
+        self.tokens, self.pos = tokens, 0
+
+    def peek(self):
+        return self.tokens[self.pos] if self.pos < len(self.tokens) else None
+
+    def take(self):
+        tok = self.peek()
+        self.pos += 1
+        return tok
+
+    def expr(self):
+        value = self.term()
+        while self.peek() in ("+", "-"):
+            if self.take() == "+":
+                value = value + self.term()
+            else:
+                value = value - self.term()
+        return value
+
+    def term(self):
+        value = self.unary()
+        while self.peek() in ("*", "/"):
+            if self.take() == "*":
+                value = value * self.unary()
+            else:
+                value = value / self.unary()
+        return value
+
+    def unary(self):
+        if self.peek() == "-":
+            self.take()
+            return -self.unary()
+        return self.primary()
+
+    def primary(self):
+        tok = self.take()
+        if isinstance(tok, (int, float)):
+            return tok
+        if tok == "(":
+            value = self.expr()
+            if self.take() != ")":
+                raise ValueError("missing closing parenthesis")
+            return value
+        raise ValueError("unexpected end of input" if tok is None else f"unexpected token {tok!r}")
+
+
+def evaluate(expr):
+    """Evaluate an arithmetic expression string; raise ValueError if it is malformed."""
+    parser = _Parser(_tokenize(expr))
+    if not parser.tokens:
+        raise ValueError("empty expression")
+    value = parser.expr()
+    if parser.peek() is not None:
+        raise ValueError(f"unexpected token {parser.peek()!r}")
+    return value
+PY
+''')
+
+# 30 bank-ledger -----------------------------------------------------------------------
+task("bank-ledger", quality="capability", purpose="tracking", component="harness", steps=30, seconds=900,
+     turns=["Create two Python files. `account.py` with a class `Account(owner, balance=0)` that has a `balance` attribute, a `deposit(amount)` method, and a `withdraw(amount)` method that raises `ValueError` if `amount` exceeds the current balance. `ledger.py` must import `Account` from `account` (do not redefine it) and define a class `Ledger` with: `open(owner, balance=0)` which creates, stores, and returns a new `Account`; `transfer(src, dst, amount)` which moves money between two already-opened accounts identified by owner name, raising `ValueError` if the source has insufficient funds; and `total()` which returns the sum of all opened accounts' balances. Then add `test_ledger.py` with pytest tests."],
+     workspace={"README.md": "# scratch\n"},
+     test=CK + r'''
+{ [ -f account.py ] && [ -f ledger.py ] && [ -f test_ledger.py ]; }; ck $? "account.py, ledger.py, test_ledger.py exist"
+grep -Eq "from[[:space:]]+account[[:space:]]+import|import[[:space:]]+account" ledger.py 2>/dev/null; ck $? "ledger.py imports Account from account"
+pchk "from account import Account
+a=Account('x',10); a.deposit(5); assert a.balance==15; a.withdraw(7); assert a.balance==8"; ck $? "deposit/withdraw/balance work"
+pchk "from account import Account
+a=Account('x',10)
+try: a.withdraw(99); raise SystemExit(1)
+except ValueError: pass"; ck $? "overdraw raises ValueError"
+pchk "from ledger import Ledger
+L=Ledger(); a=L.open('alice',100); assert a.balance==100"; ck $? "Ledger.open creates account with balance"
+pchk "from ledger import Ledger
+L=Ledger(); L.open('alice',100); L.open('bob',0); L.transfer('alice','bob',30)
+import ledger as _; assert L.total()==100"; ck $? "transfer moves money"
+pchk "from ledger import Ledger
+L=Ledger(); L.open('alice',10); L.open('bob',0)
+try: L.transfer('alice','bob',999); raise SystemExit(1)
+except ValueError: pass"; ck $? "insufficient transfer raises ValueError"
+pchk "from ledger import Ledger
+L=Ledger(); L.open('a',40); L.open('b',60); assert L.total()==100"; ck $? "total() sums balances"
+''' + f'{PYTEST} test_ledger.py >/dev/null 2>&1; ck $? "pytest test_ledger.py passes"\n' + CK_END,
+     solve=r'''
+cat > account.py <<'PY'
+class Account:
+    """A named account holding a balance."""
+
+    def __init__(self, owner, balance=0):
+        self.owner = owner
+        self.balance = balance
+
+    def deposit(self, amount):
+        self.balance += amount
+
+    def withdraw(self, amount):
+        if amount > self.balance:
+            raise ValueError(f"insufficient funds: {self.owner} has {self.balance}, needs {amount}")
+        self.balance -= amount
+PY
+cat > ledger.py <<'PY'
+from account import Account
+
+
+class Ledger:
+    """Accounts keyed by owner name, with transfers between them."""
+
+    def __init__(self):
+        self._accounts = {}
+
+    def open(self, owner, balance=0):
+        account = Account(owner, balance)
+        self._accounts[owner] = account
+        return account
+
+    def transfer(self, src, dst, amount):
+        source, target = self._accounts[src], self._accounts[dst]
+        source.withdraw(amount)  # raises ValueError before anything moves
+        target.deposit(amount)
+
+    def total(self):
+        return sum(a.balance for a in self._accounts.values())
+PY
+cat > test_ledger.py <<'PY'
+import pytest
+
+from account import Account
+from ledger import Ledger
+
+
+def test_deposit_and_withdraw():
+    a = Account("x", 10)
+    a.deposit(5)
+    a.withdraw(7)
+    assert a.balance == 8
+
+
+def test_overdraw_raises():
+    with pytest.raises(ValueError):
+        Account("x", 10).withdraw(11)
+
+
+def test_open_returns_account():
+    acct = Ledger().open("alice", 100)
+    assert isinstance(acct, Account) and acct.balance == 100
+
+
+def test_transfer_moves_money():
+    ledger = Ledger()
+    alice, bob = ledger.open("alice", 100), ledger.open("bob")
+    ledger.transfer("alice", "bob", 30)
+    assert (alice.balance, bob.balance, ledger.total()) == (70, 30, 100)
+
+
+def test_transfer_insufficient_funds_changes_nothing():
+    ledger = Ledger()
+    alice, bob = ledger.open("alice", 10), ledger.open("bob")
+    with pytest.raises(ValueError):
+        ledger.transfer("alice", "bob", 999)
+    assert (alice.balance, bob.balance) == (10, 0)
+PY
+''')
+
+# 31 fix-failing-suite -----------------------------------------------------------------
+SHIPPING = r'''
+"""Order/shipping math. Several bugs lurk here - the test suite is failing."""
+
+
+def shipping_cost(weight_kg, distance_km):
+    # BUG: the flat base fee of 5 is missing.
+    return 2 * weight_kg + 0.5 * distance_km
+
+
+def apply_discount(price, percent):
+    # BUG: treats percent as an absolute amount instead of a percentage.
+    return price - percent
+
+
+def cart_total(prices):
+    total = 0
+    # BUG: skips the first item.
+    for p in prices[1:]:
+        total += p
+    return total
+'''
+SHIPPING_TEST = r'''
+from shipping import apply_discount, cart_total, shipping_cost
+
+
+def test_shipping_cost():
+    assert shipping_cost(2, 10) == 14  # 5 base + 2*2 + 0.5*10
+
+
+def test_shipping_cost_zero():
+    assert shipping_cost(0, 0) == 5
+
+
+def test_apply_discount():
+    assert apply_discount(200, 10) == 180
+
+
+def test_apply_discount_quarter():
+    assert apply_discount(80, 25) == 60
+
+
+def test_cart_total():
+    assert cart_total([10, 20, 30]) == 60
+
+
+def test_cart_total_single():
+    assert cart_total([42]) == 42
+'''
+task("fix-failing-suite", quality="capability", purpose="tracking", component="harness", steps=30, seconds=900,
+     turns=["`shipping.py` has several bugs and the tests in `test_shipping.py` are failing. Fix `shipping.py` so that all tests pass. `shipping_cost(weight_kg, distance_km)` should be a flat base fee of 5 plus 2 per kg plus 0.5 per km. `apply_discount(price, percent)` should reduce price by that percentage. `cart_total(prices)` should sum every price in the list. Do NOT modify `test_shipping.py`."],
+     workspace={"shipping.py": SHIPPING, "test_shipping.py": SHIPPING_TEST, ".test_shipping.sha": _sha_line(SHIPPING_TEST)},
+     allowed=["shipping.py"],
+     test=diff_ok(r"shipping\.py") + CK + r'''
+# One check per test in test_shipping.py; a missing or edited test file scores 0.
+total=$(grep -c "def test_" test_shipping.py 2>/dev/null); [ "${total:-0}" -gt 0 ] 2>/dev/null || total=6
+if [ ! -f shipping.py ] || [ ! -f test_shipping.py ]; then
+  first="required files missing"
+elif [ -z "$(sha_of test_shipping.py)" ] || [ "$(sha_of test_shipping.py)" != "$(cat .test_shipping.sha 2>/dev/null)" ]; then
+  first="test_shipping.py was modified"
+else
+''' + f'  OUT=$({PYTEST} test_shipping.py --tb=no -rfE 2>&1)\n' + r'''
+  pass=$(echo "$OUT" | grep -oE "[0-9]+ passed" | grep -oE "[0-9]+" | head -1); pass=${pass:-0}
+  first=$(echo "$OUT" | grep -E "^(FAILED|ERROR) " | head -1 | sed -E 's/^(FAILED|ERROR) //; s/ - .*//; s/^.*:://')
+  [ -n "$first" ] || first="pytest reported $pass of $total tests passed"
+fi
+''' + CK_END,
+     solve=r'''
+cat > shipping.py <<'PY'
+"""Order/shipping math."""
+
+BASE_FEE = 5
+
+
+def shipping_cost(weight_kg, distance_km):
+    return BASE_FEE + 2 * weight_kg + 0.5 * distance_km
+
+
+def apply_discount(price, percent):
+    return price - price * percent / 100
+
+
+def cart_total(prices):
+    total = 0
+    for p in prices:
+        total += p
+    return total
+PY
+''')
+
+# 32 csv-report ------------------------------------------------------------------------
+task("csv-report", quality="capability", purpose="tracking", component="harness", steps=30, seconds=900,
+     turns=["A file `sales.csv` exists in this directory with a header `category,amount` and one sale per row (amount is an integer). Create `report.py` with two functions: `totals(path)` returns a dict mapping each category to the sum of its amounts; `top_category(path)` returns the category with the highest total, or `None` if the file has no data rows. Both must read the CSV from the given path and handle a file that has only the header (no data rows). Then add `test_report.py` with pytest tests."],
+     workspace={"sales.csv": "category,amount\nfood,10\nfood,5\ntoys,20\nfood,3\ntoys,7\n"},
+     test=CK + r'''
+# A header-only CSV for the empty-input checks.
+printf 'category,amount\n' > empty.csv
+
+{ [ -f report.py ] && [ -f test_report.py ]; }; ck $? "report.py and test_report.py exist"
+pchk "from report import totals; assert totals('sales.csv')=={'food':18,'toys':27}, totals('sales.csv')"; ck $? "totals correct"
+pchk "from report import top_category; assert top_category('sales.csv')=='toys'"; ck $? "top_category correct"
+pchk "from report import totals; assert totals('empty.csv')=={}"; ck $? "empty CSV totals == {}"
+pchk "from report import top_category; assert top_category('empty.csv') is None"; ck $? "empty CSV top_category is None"
+''' + f'{PYTEST} test_report.py >/dev/null 2>&1; ck $? "pytest test_report.py passes"\n' + CK_END,
+     solve=r'''
+cat > report.py <<'PY'
+"""Aggregate a category,amount CSV."""
+import csv
+
+
+def totals(path):
+    """Map each category to the sum of its amounts; {} when there are no data rows."""
+    result = {}
+    with open(path, newline="") as fh:
+        for row in csv.DictReader(fh):
+            category = (row.get("category") or "").strip()
+            if not category:
+                continue
+            result[category] = result.get(category, 0) + int(row["amount"])
+    return result
+
+
+def top_category(path):
+    """The category with the highest total, or None when there are no data rows."""
+    sums = totals(path)
+    if not sums:
+        return None
+    return max(sums, key=sums.get)
+PY
+cat > test_report.py <<'PY'
+from report import top_category, totals
+
+
+def write(tmp_path, body):
+    path = tmp_path / "data.csv"
+    path.write_text("category,amount\n" + body)
+    return str(path)
+
+
+def test_totals_sums_per_category(tmp_path):
+    assert totals(write(tmp_path, "a,1\nb,5\na,2\n")) == {"a": 3, "b": 5}
+
+
+def test_top_category(tmp_path):
+    assert top_category(write(tmp_path, "a,1\nb,5\na,2\n")) == "b"
+
+
+def test_header_only_file(tmp_path):
+    path = write(tmp_path, "")
+    assert totals(path) == {}
+    assert top_category(path) is None
+PY
+''')
+
+# 33 inventory-app ---------------------------------------------------------------------
+task("inventory-app", quality="capability", purpose="tracking", component="harness", steps=40, seconds=1200,
+     turns=["Build a small inventory-management package across multiple files. `models.py`: an `Item` class constructed as `Item(sku, name, qty, price)` exposing those four attributes. `store.py`: imports `Item` from `models` and defines `InventoryStore` with methods `add(item)`, `get(sku)` (returns the Item), `restock(sku, n)` (increase qty by n), `sell(sku, n)` (decrease qty by n, raising `ValueError` if n exceeds the current qty), `low_stock(threshold)` (return the list of skus whose qty is strictly below threshold, in insertion order), and `total_value()` (sum of qty*price across all items). `report.py`: imports `InventoryStore` and defines `summary(store)` returning a dict `{\"items\": <count>, \"total_value\": <number>, \"low_stock\": <list of skus below 5>}`. Finally add `test_inventory.py` with pytest tests covering the above. Build it incrementally and keep it runnable."],
+     workspace={"README.md": "# scratch\n"},
+     test=CK + r'''
+{ [ -f models.py ] && [ -f store.py ] && [ -f report.py ] && [ -f test_inventory.py ]; }; ck $? "all four modules exist"
+grep -Eq "from[[:space:]]+models[[:space:]]+import|import[[:space:]]+models" store.py 2>/dev/null; ck $? "store.py imports Item from models"
+pchk "from models import Item
+from store import InventoryStore
+s=InventoryStore(); s.add(Item('a','Apple',10,2.0)); it=s.get('a')
+assert it.sku=='a' and it.name=='Apple' and it.qty==10 and it.price==2.0"; ck $? "add + get round-trip"
+pchk "from models import Item
+from store import InventoryStore
+s=InventoryStore(); s.add(Item('a','Apple',10,2.0)); s.restock('a',5)
+assert s.get('a').qty==15"; ck $? "restock increases qty"
+pchk "from models import Item
+from store import InventoryStore
+s=InventoryStore(); s.add(Item('a','Apple',10,2.0)); s.sell('a',4)
+assert s.get('a').qty==6"; ck $? "sell decreases qty"
+pchk "from models import Item
+from store import InventoryStore
+s=InventoryStore(); s.add(Item('a','Apple',3,2.0))
+try: s.sell('a',9); raise SystemExit(1)
+except ValueError: pass"; ck $? "sell beyond qty raises ValueError"
+pchk "from models import Item
+from store import InventoryStore
+s=InventoryStore()
+s.add(Item('a','A',2,1.0)); s.add(Item('b','B',9,1.0)); s.add(Item('c','C',4,1.0))
+assert s.low_stock(5)==['a','c'], s.low_stock(5)"; ck $? "low_stock returns correct skus in order"
+pchk "from models import Item
+from store import InventoryStore
+s=InventoryStore(); s.add(Item('a','A',10,2.5)); s.add(Item('b','B',2,3.0))
+assert s.total_value()==31.0, s.total_value()"; ck $? "total_value correct"
+pchk "from models import Item
+from store import InventoryStore
+from report import summary
+s=InventoryStore(); s.add(Item('a','A',2,1.0)); s.add(Item('b','B',10,2.0))
+r=summary(s)
+assert r=={'items':2,'total_value':22.0,'low_stock':['a']}, r"; ck $? "report.summary correct dict"
+''' + f'{PYTEST} test_inventory.py >/dev/null 2>&1; ck $? "pytest test_inventory.py passes"\n' + CK_END,
+     solve=r'''
+cat > models.py <<'PY'
+class Item:
+    """One stocked product."""
+
+    def __init__(self, sku, name, qty, price):
+        self.sku = sku
+        self.name = name
+        self.qty = qty
+        self.price = price
+
+    def __repr__(self):
+        return f"Item({self.sku!r}, {self.name!r}, {self.qty!r}, {self.price!r})"
+PY
+cat > store.py <<'PY'
+from models import Item
+
+
+class InventoryStore:
+    """Items keyed by sku, kept in insertion order."""
+
+    def __init__(self):
+        self._items: dict[str, Item] = {}
+
+    def __len__(self):
+        return len(self._items)
+
+    def add(self, item: Item) -> None:
+        self._items[item.sku] = item
+
+    def get(self, sku) -> Item:
+        return self._items[sku]
+
+    def restock(self, sku, n) -> None:
+        self.get(sku).qty += n
+
+    def sell(self, sku, n) -> None:
+        item = self.get(sku)
+        if n > item.qty:
+            raise ValueError(f"cannot sell {n} of {sku}: only {item.qty} in stock")
+        item.qty -= n
+
+    def low_stock(self, threshold) -> list:
+        return [sku for sku, item in self._items.items() if item.qty < threshold]
+
+    def total_value(self):
+        return sum(item.qty * item.price for item in self._items.values())
+PY
+cat > report.py <<'PY'
+from store import InventoryStore
+
+LOW_STOCK_THRESHOLD = 5
+
+
+def summary(store: InventoryStore) -> dict:
+    return {
+        "items": len(store),
+        "total_value": store.total_value(),
+        "low_stock": store.low_stock(LOW_STOCK_THRESHOLD),
+    }
+PY
+cat > test_inventory.py <<'PY'
+import pytest
+
+from models import Item
+from report import summary
+from store import InventoryStore
+
+
+@pytest.fixture
+def store():
+    s = InventoryStore()
+    s.add(Item("a", "Apple", 2, 1.0))
+    s.add(Item("b", "Banana", 10, 2.0))
+    s.add(Item("c", "Cherry", 4, 0.5))
+    return s
+
+
+def test_add_and_get(store):
+    item = store.get("b")
+    assert (item.sku, item.name, item.qty, item.price) == ("b", "Banana", 10, 2.0)
+
+
+def test_restock_and_sell(store):
+    store.restock("a", 5)
+    store.sell("b", 4)
+    assert store.get("a").qty == 7 and store.get("b").qty == 6
+
+
+def test_sell_more_than_stock_raises(store):
+    with pytest.raises(ValueError):
+        store.sell("a", 3)
+    assert store.get("a").qty == 2
+
+
+def test_low_stock_is_strict_and_ordered(store):
+    assert store.low_stock(5) == ["a", "c"]
+    assert store.low_stock(2) == []
+
+
+def test_total_value(store):
+    assert store.total_value() == 24.0
+
+
+def test_summary(store):
+    assert summary(store) == {"items": 3, "total_value": 24.0, "low_stock": ["a", "c"]}
+PY
+''')
+
 print("generated", len(list(ROOT.iterdir())) - 1, "tasks")
