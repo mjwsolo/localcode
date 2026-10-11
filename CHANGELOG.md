@@ -13,8 +13,9 @@ All notable changes to LocalCode will be documented here. The format follows
   matrix and sweep scripts are gone; epochs, `eval-set`, task arguments
   (`ram_gb`, `env`) and the Inspect viewer replace them. `gate.py` and
   `nightly.sh` read Inspect logs. Not part of the `localcode` package.
-- HarnessBench runs through the same solver, locally and without Docker:
-  `inspect eval localcode_evals/harnessbench`. Its data is read from
+- Harness-Bench 3.0 runs through the same solver, locally and without
+  Docker: `inspect eval localcode_evals/harnessbench`. Grading is the
+  benchmark's own outcome cases and aggregator. Its data is read from
   `evals/data/` and never downloaded. Aider Polyglot, LiveCodeBench and
   SWE-bench are not included: they mostly rank the model, not the harness.
 - Removed dead files: the `tests/e2e` harness (it imported modules that no
