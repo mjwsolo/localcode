@@ -1,0 +1,1 @@
+A demo site is running at http://127.0.0.1:18555/ . Use the browser tools to find the monthly price of the Pro plan on its pricing page, then submit the contact form with the name Eval Bot and any message, and read the reference code on the confirmation page. Write two lines to answer.txt in the project: the Pro price, then the reference code.

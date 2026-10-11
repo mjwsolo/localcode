@@ -10,3 +10,6 @@ budget_seconds = 1500
 allowed_paths = ['**']
 null_passes = false
 notes = ""
+setup = ""
+teardown = ""
+mcp = {}
