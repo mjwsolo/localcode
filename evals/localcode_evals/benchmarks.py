@@ -1,9 +1,9 @@
-"""HarnessBench, run locally through the same LocalCode UI solver. No Docker.
+"""Harness-Bench 3.0, run locally through the same LocalCode UI solver. No Docker.
 
     inspect eval localcode_evals/harnessbench --model localcode/<model>
 
-It measures the agent harness doing real workspace jobs (files, terminal, data,
-office documents, codebases), which is the product. Benchmarks that mostly rank
+It measures the agent harness doing realistic jobs in a workspace (software
+engineering, IT operations, compliance, data, office work), which is the product. Benchmarks that mostly rank
 the model (Aider Polyglot, LiveCodeBench, SWE-bench) are deliberately not here.
 
 The benchmark data is not in this repository and is never downloaded for you.
@@ -14,9 +14,10 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
-from types import SimpleNamespace
 
 from inspect_ai import Task, task
 from inspect_ai.dataset import Sample
@@ -45,14 +46,6 @@ async def workspace_dir() -> Path:
     return Path((await sandbox().exec(["pwd", "-P"])).stdout.strip())
 
 
-def build(name: str, data: list[Sample], grader: Scorer, ram_gb, env, setup: Solver | None = None, cleanup=None) -> Task:
-    if not data:
-        raise ValueError(f"{name}: the selection is empty")
-    # One sample whose environment will not build must not end a run of hundreds.
-    return Task(dataset=data, setup=setup, solver=localcode_ui(ram_gb=ram_gb, env=env), cleanup=cleanup, fail_on_error=False,
-                scorer=[grader, measurements()], sandbox="local", name=name, tags=[name] + ([f"ram{ram_gb}"] if ram_gb else []))
-
-
 def names(value) -> list[str]:
     """A task argument that is a list: Inspect passes `a,b` as a list and `a` as a string."""
     items = value.split(",") if isinstance(value, str) else list(value or [])
@@ -63,115 +56,128 @@ def pick(ids) -> set[str]:
     return set(names(ids))
 
 
-# ── HarnessBench (workspace tasks with programmatic oracles) ──────────────────
+# ── Harness-Bench 3.0 ─────────────────────────────────────────────────────────
+# https://github.com/Qihoo360/harness-bench : each task is a directory with
+# task.yaml, instruction.md, workspace/, and a hidden tests/ package whose
+# test_outcome.evaluate_cases(workspace) reports one observation per business
+# case; tests/cases.yaml gives each case its weight, and marks core cases and
+# safety gates. The benchmark's own aggregator turns that into the score.
 
-def _harness_spec(task_dir: Path) -> SimpleNamespace:
-    raw = (task_dir / "task.yaml").read_text(encoding="utf-8")
-    try:
-        d = json.loads(raw)
-    except json.JSONDecodeError:
-        import yaml
-        d = yaml.safe_load(raw) or {}
-    return SimpleNamespace(task_id=str(d["task_id"]), title=str(d.get("title", d["task_id"])), prompt_file=str(d.get("prompt_file", "prompt.txt")),
-                           prompt_files=[str(x) for x in (d.get("prompt_files") or [])], fixtures_dir=str(d.get("fixtures_dir", "fixtures")),
-                           oracle_module=str(d.get("oracle_module", "oracle_grade.py")), hooks_module=str(d.get("hooks_module", "hooks.py")),
-                           timeout_sec=int(d.get("timeout_sec", 600)), tags=list(d.get("tags") or []), task_dir=task_dir.resolve(),
-                           task_class=str(d.get("class", "")), difficulty=str(d.get("difficulty", "")))
+LOCAL_BUDGET_SECONDS = 1800
+
+GRADER = r"""
+import importlib.util, json, sys
+from pathlib import Path
+import yaml
+task, workspace, src, outcome, cases = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5]
+sys.path[:0] = [src, str((task / outcome).parent)]
+from harnessbench.grading.outcome_cases import score_workspace_from_cases
+spec = importlib.util.spec_from_file_location("test_outcome", task / outcome)
+module = importlib.util.module_from_spec(spec); sys.modules["test_outcome"] = module; spec.loader.exec_module(module)
+result = score_workspace_from_cases(workspace, manifest=yaml.safe_load((task / cases).read_text(encoding="utf-8")),
+                                    evaluate_cases=module.evaluate_cases, task_id=task.name)
+print("HARNESSBENCH_RESULT " + json.dumps(result, default=str))
+"""
+
+# What the solver leaves in a workspace. The grader sees a copy without it, so a
+# task that checks "nothing else was created" judges the agent, not this suite.
+OURS = shutil.ignore_patterns(".git", ".eval", ".localcode-agent", "__pycache__", ".pytest_cache")
 
 
-def _load(path: Path, name: str):
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(name, path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
+def harnessbench_root() -> Path:
+    root = need(DATA / "harness-bench", "the Harness-Bench checkout")
+    if not (root / "src/harnessbench/grading/outcome_cases.py").is_file():
+        raise MissingData(f"{root} is not Harness-Bench 3.0 or newer (no outcome-case grader). Nothing is downloaded for you: "
+                          "run `python -m localcode_evals.data` to see how to update it.")
+    return root
 
 
-def harnessbench_samples(ids, classes: str | None, limit: int | None) -> tuple[list[Sample], dict[str, int]]:
-    root = need(DATA / "harness-bench/tasks", "the HarnessBench checkout")
-    wanted, keep, out, skipped = pick(ids), pick(classes), [], {"needs a public tunnel": 0, "needs per-round hooks": 0}
-    for d in sorted(p for p in root.iterdir() if (p / "task.yaml").is_file()):
-        t = _harness_spec(d)
-        if (wanted and t.task_id not in wanted) or (keep and not any(k.lower() in t.task_class.lower() for k in keep)):
+def harnessbench_samples(ids=None, domains=None, difficulty=None, limit: int | None = None,
+                         budget_seconds: int | None = None) -> tuple[list[Sample], dict[str, int]]:
+    import yaml
+    root = harnessbench_root()
+    wanted, keep, levels, out = pick(ids), [d.lower() for d in names(domains)], pick(difficulty), []
+    left_out = {"needs a container image": 0, "needs setup hooks or a service": 0}
+    for d in sorted(p for p in (root / "tasks").iterdir() if (p / "task.yaml").is_file()):
+        t = yaml.safe_load((d / "task.yaml").read_text(encoding="utf-8")) or {}
+        tid = str(t.get("task_id") or d.name)
+        if (wanted and tid not in wanted) or (keep and not any(k in str(t.get("domain", "")).lower() for k in keep)) or (levels and t.get("difficulty") not in levels):
             continue
-        hooks = (d / t.hooks_module).read_text(encoding="utf-8") if (d / t.hooks_module).is_file() else ""
-        # Two kinds of task cannot run faithfully here yet, and are left out rather than scored wrong.
-        if "trycloudflare" in hooks or "PUBLIC_URL" in hooks:
-            skipped["needs a public tunnel"] += 1; continue
-        if "def after_round" in hooks:
-            skipped["needs per-round hooks"] += 1; continue
-        prompts = t.prompt_files or [t.prompt_file]
-        texts = [(d / p).read_text(encoding="utf-8").strip() for p in prompts]
-        prompt = texts[0] if len(texts) == 1 else "\n\n".join(f"## Turn {n}\n\n{x}" for n, x in enumerate(texts, 1))
-        fixtures = d / t.fixtures_dir
-        files = {str(f.relative_to(fixtures)): str(f) for f in sorted(fixtures.rglob("*")) if f.is_file()} if fixtures.is_dir() else {}
-        out.append(Sample(id=t.task_id, input=prompt, target="oracle outcome_score of 1.0", files=files, metadata={
-            "benchmark": "harnessbench", "title": t.title, "class": t.task_class, "difficulty": t.difficulty, "task_dir": str(d),
-            "has_hooks": bool(hooks), "budget_seconds": t.timeout_sec}))
+        env = t.get("environment") or {}
+        # Tasks that are only faithful inside the benchmark's own image, or that need
+        # its runner to build the workspace or start a service, are left out, not scored wrong.
+        if (d / "environment/Dockerfile").is_file():
+            left_out["needs a container image"] += 1; continue
+        workspace = d / str(t.get("workspace_dir") or "workspace")
+        if (d / "environment/hooks.py").is_file() or env.get("services") or env.get("prepare") or not workspace.is_dir():
+            left_out["needs setup hooks or a service"] += 1; continue
+        official = int(t.get("timeout_sec") or 7200)
+        out.append(Sample(
+            id=tid, input=(d / str(t.get("prompt_file") or "instruction.md")).read_text(encoding="utf-8").strip(), target="task_success",
+            files={str(f.relative_to(workspace)): str(f) for f in sorted(workspace.rglob("*")) if f.is_file()},
+            metadata={"benchmark": "harnessbench", "title": t.get("title"), "domain": t.get("domain"), "difficulty": t.get("difficulty"),
+                      "category": t.get("task_category"), "subcategory": t.get("task_subcategory"), "task_dir": str(d),
+                      "outcome_test": str(t.get("outcome_test") or "tests/test_outcome.py"), "cases_file": str(t.get("cases_file") or "tests/cases.yaml"),
+                      "official_timeout_sec": official, "budget_seconds": min(official, budget_seconds or LOCAL_BUDGET_SECONDS)}))
         if limit and len(out) >= limit:
             break
-    return out, skipped
+    return out, left_out
 
 
-_harness_state: dict[str, tuple] = {}
+@scorer(metrics={"task_success": [mean(), stderr()], "outcome_score": [mean()]})
+def harnessbench_outcome() -> Scorer:
+    """The task's own outcome cases, aggregated by Harness-Bench's own code:
+    `task_success` needs the pass threshold, every core case and every safety gate.
+    The optional LLM semantic judge is not used, so scores are deterministic."""
+    async def score(state: TaskState, target: Target) -> Score:
+        ws, m = await workspace_dir(), state.metadata
+        with tempfile.TemporaryDirectory(prefix="harnessbench-grade-") as tmp:
+            clean = Path(tmp) / "workspace"
+            shutil.copytree(ws, clean, symlinks=True, ignore=OURS)
+            (Path(tmp) / "grade.py").write_text(GRADER)
+            try:
+                r = await sandbox().exec([sys.executable, str(Path(tmp) / "grade.py"), m["task_dir"], str(clean),
+                                          str(harnessbench_root() / "src"), m["outcome_test"], m["cases_file"]], timeout=900)
+                line = next((l for l in reversed(r.stdout.splitlines()) if l.startswith("HARNESSBENCH_RESULT ")), None)
+            except TimeoutError:
+                r, line = None, None
+        if line is None:
+            # A grader that cannot run is not evidence about the agent: an error, not a zero.
+            raise RuntimeError(f"Harness-Bench grader failed for {state.sample_id}: {(r.stderr[-600:] if r else 'timed out after 900s')}")
+        result = json.loads(line[len("HARNESSBENCH_RESULT "):])
+        failed = [f"{c['label']}{' [core]' if c.get('core') else ''}{' [gate]' if c.get('gate') else ''}: {c.get('detail')}"
+                  for c in result.get("checks") or [] if not c.get("pass")]
+        return Score(value={"task_success": 1.0 if result.get("task_success") else 0.0, "outcome_score": float(result.get("outcome_score") or 0.0)},
+                     answer=(state.output.completion or "")[:2000] if state.output else "",
+                     explanation=("every case passes" if not failed else "failed cases:\n" + "\n".join(failed))[:3000],
+                     metadata={k: result.get(k) for k in ("weighted_score", "pass_threshold", "failed_core_cases", "failed_gates")})
+    return score
 
 
 @solver
-def harnessbench_prepare() -> Solver:
-    """The task's own prepare_runtime hook (mock servers and the like), and the
-    prompt's $WORKSPACE and runtime placeholders."""
+def harnessbench_reference() -> Solver:
+    """Overlay the task's own reference answer instead of running a model. A grader
+    that does not pass this is not working here, whatever a model scores on it:
+        inspect eval localcode_evals/harnessbench --solver localcode_evals/harnessbench_reference --model none/none"""
     async def solve(state: TaskState, generate: Generate) -> TaskState:
-        ws = await workspace_dir()
-        (ws / "in").mkdir(exist_ok=True); (ws / "out").mkdir(exist_ok=True)
-        t = _harness_spec(Path(state.metadata["task_dir"]))
-        runtime_env: dict[str, str] = {}
-        if state.metadata.get("has_hooks"):
-            hooks = _load(t.task_dir / t.hooks_module, f"harnessbench_hooks_{t.task_id.replace('-', '_')}")
-            ctx = {"task": t, "sandbox": ws.parent, "workspace": ws}
-            started = hooks.prepare_runtime(ctx) if callable(getattr(hooks, "prepare_runtime", None)) else None
-            started = started if isinstance(started, dict) else {}
-            runtime_env = {k: v for k, v in started.items() if isinstance(v, str)}
-            _harness_state[str(state.uuid)] = (hooks, ctx, started)
-        text = state.user_prompt.text.replace("$WORKSPACE", str(ws))
-        for k, v in runtime_env.items():
-            text = text.replace(f"${k}", v)
-        state.user_prompt.text = text
+        reference = Path(state.metadata["task_dir"]) / "tests/reference"
+        shutil.copytree(reference, await workspace_dir(), symlinks=True, dirs_exist_ok=True)
         return state
     return solve
 
 
-async def harnessbench_cleanup(state: TaskState) -> None:
-    hooks, ctx, started = _harness_state.pop(str(state.uuid), (None, None, None))
-    if hooks is not None and callable(getattr(hooks, "cleanup_runtime", None)):
-        hooks.cleanup_runtime(ctx, started)
-
-
-@scorer(metrics={"solved": [mean(), stderr()], "outcome_score": [mean()]})
-def harnessbench_oracle() -> Scorer:
-    """The task's own oracle_grade.score_workspace: weighted programmatic checks.
-    The benchmark's optional LLM quality rubric is not used, so scores are deterministic."""
-    async def score(state: TaskState, target: Target) -> Score:
-        ws = await workspace_dir()
-        t = _harness_spec(Path(state.metadata["task_dir"]))
-        try:
-            result = dict(_load(t.task_dir / t.oracle_module, f"harnessbench_oracle_{t.task_id.replace('-', '_')}").score_workspace(ws))
-        except Exception as e:  # noqa: BLE001 - a crashing oracle is a failed sample, not a failed run
-            return Score(value={"solved": 0.0, "outcome_score": 0.0}, explanation=f"oracle raised {type(e).__name__}: {e}"[:600])
-        outcome = float(result.get("outcome_score") or 0.0)
-        failed = [f"{c.get('label') or c.get('id')}: {c.get('detail')}" for c in result.get("checks") or [] if not c.get("pass")]
-        return Score(value={"solved": 1.0 if outcome >= 0.999 else 0.0, "outcome_score": outcome},
-                     answer=(state.output.completion or "")[:2000] if state.output else "",
-                     explanation=("all checks pass" if not failed else "failed checks:\n" + "\n".join(failed))[:3000],
-                     metadata={"grade": result.get("grade"), "checks": len(result.get("checks") or [])})
-    return score
-
-
 @task
-def harnessbench(ids: str | None = None, classes: str | None = None, limit: int | None = None, ram_gb: int | None = None, env: dict | None = None) -> Task:
-    """HarnessBench: office, data, SRE, knowledge and codebase tasks in a real workspace, graded by each
-    task's programmatic oracle. `classes` filters by a word in the task class, e.g. classes=Software,SRE."""
-    data, skipped = harnessbench_samples(ids, classes, limit)
-    t = build("harnessbench", data, harnessbench_oracle(), ram_gb, env, setup=harnessbench_prepare(), cleanup=harnessbench_cleanup)
-    t.metadata = {"left_out": skipped}
-    return t
+def harnessbench(ids: str | None = None, domains: str | None = None, difficulty: str | None = None, limit: int | None = None,
+                 budget_seconds: int | None = None, ram_gb: int | None = None, env: dict | None = None) -> Task:
+    """Harness-Bench 3.0: realistic jobs across software engineering, IT operations, compliance, data
+    and office work, each in its own workspace and graded by the benchmark's hidden outcome cases.
+
+    domains: words to match in a task's domain, e.g. domains=Software,Finance.
+    budget_seconds: per-task time limit. The benchmark allows up to two hours a task; the default
+    here is 30 minutes so a local run finishes. Pass 7200 for the official budget."""
+    data, left_out = harnessbench_samples(ids, domains, difficulty, limit, budget_seconds)
+    if not data:
+        raise ValueError("harnessbench: the selection is empty")
+    # One task whose grader cannot run must not end a run of hundreds.
+    return Task(dataset=data, solver=localcode_ui(ram_gb=ram_gb, env=env), scorer=[harnessbench_outcome(), measurements()], sandbox="local",
+                fail_on_error=False, name="harnessbench", tags=["harnessbench"] + ([f"ram{ram_gb}"] if ram_gb else []), metadata={"left_out": left_out})
