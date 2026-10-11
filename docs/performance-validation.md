@@ -32,7 +32,7 @@ this extra prompt. The older explicitly opted-in automatic-check mode is
 unchanged.
 
 An actual provider `length` finish triggers at most one continuation per user
-turn. Interruption, Plan mode and a stopped task prevent it. This does not
+turn. Interruption, Plan mode and a stopped task prevent it. A second limit is surfaced as a warning. This does not
 increase the per-request output ceiling, nor guarantee arbitrary output length.
 The model's own guesses about its token count never trigger continuation.
 
