@@ -5,7 +5,7 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
-## 0.5.15 — 2026-10-11
+## 0.5.16 — 2026-10-11
 
 ### Added
 
@@ -26,6 +26,18 @@ All notable changes to LocalCode will be documented here. The format follows
 These changes add controls and measurements; they do not establish a universal
 speedup or instant model switching. See `docs/performance-validation.md` for
 measurement instructions and rollback switches.
+
+## 0.5.15 — 2026-10-11
+
+### Changed
+
+- **Bundled llama.cpp moved to upstream master of 2026-10-11** (124 commits
+  past v0.6.0). The fork's seven patches replay unchanged except for the
+  DiffusionGemma thought-channel strip, which upstream's chat API refactor
+  moved into the chat session constructor; behaviour is identical, streamed
+  and not. Every model in the catalog passed the shipping gate on the new
+  server, images included, and drafter decode speed is unchanged or slightly
+  faster.
 
 ## 0.5.14 — 2026-10-11
 
