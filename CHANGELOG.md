@@ -18,6 +18,9 @@ All notable changes to LocalCode will be documented here. The format follows
   benchmark's own outcome cases and aggregator. Its data is read from
   `evals/data/` and never downloaded. Aider Polyglot, LiveCodeBench and
   SWE-bench are not included: they mostly rank the model, not the harness.
+- Eval workspaces have readable paths (`/tmp/localcode-evals/<sample>-<n>`)
+  instead of the system temp directory, whose random name small models
+  miscopied into file paths, ending the turn on a refused read.
 - Removed dead files: the `tests/e2e` harness (it imported modules that no
   longer exist), the unused `tests/protocol_fixtures`, and unreferenced demo
   images.
