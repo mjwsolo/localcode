@@ -16,8 +16,9 @@ through bootstrap.download_model — the same code the Textual picker uses.
     GET  /models_dir         {"path", "free_gb"}
     GET  /progress           prompt-fill progress of the running request (from llama-server /slots)
     GET  /voice/status       {"ready", "recording", "detail"}   (whisper env + STT model)
-    POST /voice/start        start recording the default mic (PortAudio, 16 kHz mono wav)
-    POST /voice/stop         stop, transcribe locally (whisper.cpp), {"text"}
+    POST /voice/start        open the default mic (PortAudio, 16 kHz mono) and start live dictation
+    GET  /voice/partial      {"text", "recording"}: what has been heard so far, while recording
+    POST /voice/stop         stop, {"text"}: the final transcript (whisper.cpp, local)
     POST /voice/speak {"text"}   read text aloud with macOS `say`
     POST /models_dir {"path"}   change where GGUFs download to (persisted in localcode's config)
 
@@ -670,6 +671,10 @@ class Supervisor:
     voice_wav = HERE / "voice.wav"
     voice_detail = ""
     voice_setup_lock = threading.Lock()
+    voice_live = False          # the running recorder is the live-dictation worker
+    voice_partial_text = ""     # what it has heard so far
+    voice_final: dict | None = None
+    voice_final_ready = threading.Event()
 
     @staticmethod
     def _voice_venv() -> Path:
@@ -776,6 +781,8 @@ with wave.open(path, 'wb') as w:
         self.voice_wav.unlink(missing_ok=True)
         try:
             subprocess.run([str(py), "-c", "import sounddevice"], check=True, capture_output=True, timeout=30)
+            if os.environ.get("LOCALCODE_VOICE_LIVE", "1") != "0":
+                return self._voice_start_live(py)
             cmd = [str(py), "-c", self._RECORDER, str(self.voice_wav)]
             self.voice_recorder = "portaudio"
         except Exception:  # noqa: BLE001
@@ -792,8 +799,69 @@ with wave.open(path, 'wb') as w:
             return {"error": f"could not open the microphone: {err or 'unknown error'} (grant microphone access to your terminal in System Settings → Privacy)"}
         return {"ok": True}
 
+    def _voice_start_live(self, py: Path) -> dict:
+        """Live dictation (localcode/voice_live.py): one worker records and
+        transcribes as you speak, and yields the GPU to the coding model."""
+        from localcode.voice import DEFAULT_STT_MODEL_DIR, DEFAULT_STT_MODEL_NAME, VoiceState
+        model = VoiceState().stt_model_path or (DEFAULT_STT_MODEL_DIR / DEFAULT_STT_MODEL_NAME)
+        worker = Path(localcode.__file__).resolve().parent / "voice_live.py"
+        env = {**os.environ, "LOCALCODE_CONTROL_URL": f"http://127.0.0.1:{self.control_port}", "LOCALCODE_CONTROL_TOKEN": self.control_token}
+        self.voice_recorder, self.voice_live, self.voice_partial_text, self.voice_final = "portaudio", True, "", None
+        self.voice_final_ready = threading.Event()
+        opened, done = threading.Event(), self.voice_final_ready
+        proc = subprocess.Popen([str(py), str(worker), str(model)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env, text=True)
+        self.voice_proc = proc
+
+        def read() -> None:
+            final: dict = {"error": "the voice worker stopped without a transcript"}
+            for line in proc.stdout:  # type: ignore[union-attr]
+                try:
+                    msg = json.loads(line)
+                except ValueError:
+                    continue
+                kind = msg.get("type")
+                if kind == "recording":
+                    opened.set()
+                elif kind == "partial" and self.voice_proc is proc:
+                    self.voice_partial_text = str(msg.get("text", ""))
+                elif kind == "final":
+                    final = {"ok": True, "text": str(msg.get("text", ""))}
+                elif kind == "error":
+                    final = {"error": str(msg.get("message", "voice worker failed"))}
+            if self.voice_proc is proc or self.voice_final is None:
+                self.voice_final = final
+            opened.set(); done.set()
+
+        threading.Thread(target=read, daemon=True).start()
+        opened.wait(timeout=8)
+        if proc.poll() is not None:
+            self.voice_proc, self.voice_live = None, False
+            err = (self.voice_final or {}).get("error") or "unknown error"
+            return {"error": f"could not open the microphone: {err} (grant microphone access to your terminal in System Settings → Privacy)"}
+        return {"ok": True, "live": True}
+
+    def voice_partial(self) -> dict:
+        recording = self.voice_proc is not None and self.voice_proc.poll() is None
+        return {"recording": recording, "live": self.voice_live, "text": self.voice_partial_text if self.voice_live else ""}
+
+    def _voice_stop_live(self, p: subprocess.Popen) -> dict:
+        done = self.voice_final_ready
+        try:
+            p.stdin.close()  # type: ignore[union-attr]
+        except Exception:  # noqa: BLE001
+            p.terminate()
+        if not done.wait(timeout=120):
+            p.kill()
+        self.voice_proc, self.voice_live = None, False
+        out = self.voice_final or {"error": "transcription timed out"}
+        if "error" in out:
+            return {"error": f"transcription failed: {out['error']}"}
+        return {"ok": True, "text": out.get("text", "").strip()}
+
     def voice_stop(self) -> dict:
         p = self.voice_proc
+        if p is not None and self.voice_live:
+            return self._voice_stop_live(p)      # also when the worker already ended: its transcript is kept
         if p is None or p.poll() is not None:
             return {"error": "not recording"}
         try:
@@ -958,6 +1026,8 @@ def make_handler(sup: Supervisor):
                 return self._json(sup.models_dir_info())
             if u.path == "/voice/status":
                 return self._json(sup.voice_status())
+            if u.path == "/voice/partial":
+                return self._json(sup.voice_partial())
             if u.path == "/progress":
                 return self._json(sup.progress())
             self._json({"error": "not found"}, 404)
