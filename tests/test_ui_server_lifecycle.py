@@ -127,3 +127,30 @@ def test_lifecycle_routes_require_auth_and_object_payload(monkeypatch):
         assert control_request('/server/'+action, method='POST', body=[])[0] == 400
         assert control_request('/server/'+action, method='POST', body={})[0] == 200
     assert calls == ['start', 'stop']
+
+
+@pytest.mark.parametrize('code,name', [(-11, 'SIGSEGV'), (-6, 'SIGABRT'), (1, 'exit code 1'), (0, 'exit code 0')])
+def test_unexpected_exit_reports_actual_cause_without_probing_dead_port(sup, monkeypatch, code, name):
+    import urllib.request
+    sup.proc = SimpleNamespace(poll=lambda: code, pid=2345)
+    sup.progress = Supervisor.progress.__get__(sup)
+    monkeypatch.setattr(urllib.request, 'urlopen', lambda *args, **kwargs: pytest.fail('dead port must not be probed'))
+    status = sup.server_status()
+    assert status['state'] == 'error' and not status['server_running']
+    assert status['exit_code'] == code
+    assert name in status['detail'] and '/server' in status['detail']
+    progress = sup.progress()
+    assert progress['phase'] == 'error' and progress['process_id'] == 2345
+    assert progress['exit_code'] == code
+
+
+def test_intentional_stop_and_new_live_process_do_not_report_previous_crash(sup):
+    sup.proc = SimpleNamespace(poll=lambda: -11, pid=2345)
+    assert sup.server_status()['exit_code'] == -11
+    sup.state['state'] = 'stopped'
+    assert sup._server_failure() == {}
+    assert sup.server_status()['state'] == 'stopped'
+    sup.state['state'] = 'ready'
+    sup.proc = SimpleNamespace(poll=lambda: None, pid=2346)
+    assert sup.server_status()['server_ready']
+    assert 'exit_code' not in sup.server_status()

@@ -625,6 +625,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
   let stopReason = "";
   const interrupted = new Set<string>();
   let activeSession: string | undefined;
+  let lastServerCrash: string | undefined;
   // The agent the user is talking to. Nudges must keep it (a prompt without an
   // agent defaults to build, which silently escalated Plan sessions to Build),
   // and in Plan mode the model is conversing with the user, so no gate fires at all.
@@ -861,11 +862,29 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
     },
 
     event: async ({ event }) => {
-      if (event.type === "session.error") {
+      if (event.type === "session.error" || (event.type === "session.status" && (event.properties as any).status?.type === "retry")) {
         const props = event.properties as any;
         if (props.sessionID && props.error?.name === "MessageAbortedError") {
           interrupted.add(props.sessionID);
           log("task interrupted — automatic continuation is paused until the next user message");
+        } else if (!activeSession || props.sessionID === activeSession) {
+          const control = process.env.LOCALCODE_CONTROL_URL;
+          if (control) {
+            try {
+              const response = await fetch(`${control}/status`, { headers: controlHeaders(), signal: AbortSignal.timeout(1500) });
+              if (response.ok) {
+                const state = await response.json() as { state?: string; exit_code?: number; process_id?: number; detail?: string };
+                if (state.state === "error" && Number.isInteger(state.exit_code) && typeof state.detail === "string") {
+                  const identity = `${state.process_id}:${state.exit_code}`;
+                  if (lastServerCrash !== identity) {
+                    lastServerCrash = identity;
+                    await client.tui?.showToast?.({ body: { title: "Model server stopped", message: state.detail.slice(0, 400), variant: "error", duration: 20000 } });
+                    if (props.sessionID) await client.session?.abort?.({ path: { id: props.sessionID } });
+                  }
+                }
+              }
+            } catch { /* Keep the original error when supervisor diagnosis is unavailable. */ }
+          }
         }
         return;
       }

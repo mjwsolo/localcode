@@ -1062,8 +1062,10 @@ class LocalCodeRuntimeGateway:
         # or future, gets a `--ctx-size` whose KV cache can't fit (the OOM
         # never-again guard). No-op when KV size isn't confidently computable
         # (turbo-compressed KV) — the validated ceilings govern there.
+        ram_gb = self._system_ram_gb()
         return min(
-            raw, self._kv_aware_ctx_ceiling(model_path, self._system_ram_gb())
+            raw, self._ram_ctx_ceiling(ram_gb),
+            self._kv_aware_ctx_ceiling(model_path, ram_gb),
         )
 
     def _target_num_ctx_uncapped(

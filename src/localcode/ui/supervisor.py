@@ -121,9 +121,32 @@ class Supervisor:
         for name in removed:
             log(f"supervisor: removed retired drafter {name} (replaced by a newer catalog drafter)")
 
+    def _server_failure(self) -> dict:
+        """Describe an unexpected exit without treating an intentional stop as a crash."""
+        process = getattr(self, "proc", None)
+        if process is None or getattr(self, "state", {}).get("state") != "ready":
+            return {}
+        code = process.poll()
+        if code is None:
+            return {}
+        name = None
+        if code < 0:
+            try:
+                name = signal.Signals(-code).name
+            except ValueError:
+                name = f"signal {-code}"
+        reason = name or f"exit code {code}"
+        verb = "crashed" if code < 0 else "exited unexpectedly"
+        return {"exit_code": code, "exit_signal": name,
+                "process_id": getattr(process, "pid", None),
+                "detail": f"Model server {verb} ({reason}). Open /server to restart or choose another model. See server.log for diagnostics."}
+
     def progress(self) -> dict:
         """What the server is doing right now: reading the prompt (with a fraction) or
         generating. Lets the TUI show 'reading context 40%' instead of a bare spinner."""
+        failure = self._server_failure()
+        if failure:
+            return {"phase": "error", **failure}
         try:
             req = urllib.request.Request(f"http://127.0.0.1:{self.port}/slots", headers=server_headers())
             with urllib.request.urlopen(req, timeout=1) as r:
@@ -423,7 +446,10 @@ class Supervisor:
         process = self.proc
         running = process is not None and process.poll() is None
         ready = running and state["state"] == "ready" and self.healthy()
-        if state["state"] == "ready" and not ready:
+        failure = self._server_failure()
+        if failure:
+            state.update(state="error", **failure)
+        elif state["state"] == "ready" and not ready:
             state.update(state="error", detail="Model server is unavailable")
         return dict(state, server_running=running, server_ready=ready, warmup=getattr(self, "_warm_status", "idle"))
 
