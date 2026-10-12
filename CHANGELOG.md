@@ -5,6 +5,8 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
+## 0.5.23 — 2026-10-12
+
 ### Fixed
 
 - Local sessions derive their initial title from the first user message instead
