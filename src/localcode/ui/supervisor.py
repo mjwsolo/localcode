@@ -107,6 +107,7 @@ class Supervisor:
         self._budget_lock = threading.Lock()
         self._warm_stop = threading.Event()
         self._warm_status = "idle"
+        self._context_ready = False
         self._warm_replay = None  # warmup.Replay while the prefix is being pre-read
 
     # ---- llama-server lifecycle -------------------------------------------
@@ -157,7 +158,8 @@ class Supervisor:
         if slot is None:
             return {"phase": "idle"}
         request = {"request_id": f"{slot.get('id')}:{slot.get('id_task')}",
-                   "warmup": getattr(self, "_warm_replay", None) is not None}
+                   "warmup": getattr(self, "_warm_replay", None) is not None,
+                   "context_ready": getattr(self, "_context_ready", False)}
         total = int(slot.get("n_prompt_tokens") or 0)
         cache = int(slot.get("n_prompt_tokens_cache") or 0)
         done = int(slot.get("n_prompt_tokens_processed") or 0)
@@ -165,6 +167,9 @@ class Supervisor:
         decoded = int((nt[0] if isinstance(nt, list) and nt else nt or {}).get("n_decoded") or 0)
         todo = max(total - cache, 0)
         if decoded > 0 or (todo and done >= todo):
+            if slot.get("id") == 0 and not request["warmup"]:
+                self._context_ready = True
+                request["context_ready"] = True
             return {"phase": "generating", "decoded": decoded, "prompt_tokens": total, **request}
         if todo:
             return {"phase": "reading", "done": done, "todo": todo, "cached": cache, "pct": int(100 * done / todo), **request}
@@ -281,6 +286,7 @@ class Supervisor:
 
     # ---- prompt warm-up (see ui/warmup.py) ----------------------------------
     def _start_warmup(self, alias: str) -> None:
+        self._context_ready = False
         from localcode.ui import warmup
         if not warmup.enabled():
             self._warm_status = "disabled"
@@ -307,6 +313,7 @@ class Supervisor:
                     tm = rp.run(toks)
                     if not stop.is_set():
                         self._warm_status = "warm"
+                        self._context_ready = True
                     log(f"warmup: replayed {len(toks)} tokens for {alias} in {time.time() - t0:.1f}s "
                         f"(server prompt_ms={tm.get('prompt_ms')}, cache_n={tm.get('cache_n')})")
                     try:

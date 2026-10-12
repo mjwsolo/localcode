@@ -66,7 +66,7 @@ for patch in "$ROOT"/patches/ui/*.patch; do
 done
 ( cd "$WORK/opencode" && bun install --frozen-lockfile --ignore-scripts >/dev/null )
 # Validate the native render-buffer contracts before bundling the UI.
-( cd "$WORK/opencode/packages/tui" && bun test test/ui/solid-quote.test.ts test/ui/message-panel.test.ts )
+( cd "$WORK/opencode/packages/tui" && bun test test/ui/solid-quote.test.ts test/ui/message-panel.test.ts test/ui/first-response-note.test.ts )
 # The runtime shows this in its footer; keep it equal to the wheel version (semver form).
 PYVER="$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/pyproject.toml" | head -1)"
 export OPENCODE_VERSION="$(echo "$PYVER" | sed -E 's/([0-9])(a|b|rc)([0-9]+)$/\1-\2\3/')"
