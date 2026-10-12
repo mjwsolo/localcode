@@ -71,7 +71,15 @@ suitably small quant; it may correctly reject all locally downloaded catalog
 choices. Do not label an untested hardware tier as verified. Simulating less
 RAM on a large Mac is not equivalent to owning that smaller Mac.
 
-The stricter model promotion gate remains:
+The model promotion gate tests each catalog configuration, plus q8/TurboQuant
+2/3/4 Qwen cache configurations with tensor acceleration enabled and disabled.
+The cache matrix starts with a fresh harness greeting (including its system and
+tool context), then processes longer synthetic prompts before decoding so short
+startup turns cannot hide kernel-selection failures. Disabling tensor acceleration
+exercises the legacy dispatch path on the available Mac; it does not emulate
+another physical chip or macOS driver.
+
+Run the stricter model promotion gate:
 
 ```sh
 python scripts/verify_models.py --strict --publish-status

@@ -5,6 +5,26 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
+## 0.5.26 — 2026-10-13
+
+### Fixed
+
+- Metal flash-attention kernel selection now accounts for both cache types.
+  Mixed q8/TurboQuant caches use their available baseline vector kernels;
+  the key-only tuner could request an uncompiled variant after a long prompt
+  and then crash with SIGSEGV. Pipeline queries also check for a missing
+  pipeline before accessing it.
+- The upstream build script resolves its scratch directory to a physical path,
+  avoiding a CMake archive failure caused by macOS's /tmp symlink.
+
+### Tests
+
+- The live model gate includes q8 and TurboQuant 2/3/4 with tensor acceleration
+  enabled and disabled, checking a first harness greeting plus long prefill
+  followed by decoding.
+- Compiled selector tests cover 14,400 supported cache/shape/GPU-family cases
+  and verify that selected baseline kernels exist in the shader sources.
+
 ## 0.5.25 — 2026-10-12
 
 ### Fixed
