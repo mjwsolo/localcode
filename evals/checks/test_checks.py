@@ -112,11 +112,19 @@ def test_prompt_budgets(four):
     assert len(json.dumps(agent[0]["tools"])) <= TOOL_SCHEMA_BYTES, len(json.dumps(agent[0]["tools"]))
 
 
-def test_side_requests_pinned_to_last_slot(four, one):
-    side4 = [r for r in four["reqs"] if not r["tools"]]
-    assert side4 and all(r["id_slot"] == 3 for r in side4), [(r["name"], r["id_slot"]) for r in side4]
+def test_local_titles_do_not_issue_inference(four, one):
+    assert all(r["tools"] for r in four["reqs"]), "a title helper displaced the cached agent prefix"
+    assert all(r["tools"] for r in one["reqs"]), "a title helper occupied the single model slot"
     assert all(r["id_slot"] is None for r in _agent_requests(four))
     assert all(r["id_slot"] is None for r in one["reqs"]), [(r["name"], r["id_slot"]) for r in one["reqs"]]
+
+
+def test_compaction_request_is_pinned_to_last_slot():
+    run = _run(4, force_compaction=True)
+    side = [r for r in run["reqs"] if "Preserve in the summary:" in json.dumps(r["body"])]
+    assert side, "the runtime never issued a real compaction request"
+    assert all(r["id_slot"] == 3 for r in side), [(r["name"], r["id_slot"]) for r in side]
+    assert all(r["id_slot"] is None for r in _agent_requests(run))
 
 
 # ── Fidelity: the model is told the truth about itself ───────────────

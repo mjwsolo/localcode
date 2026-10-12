@@ -5,6 +5,16 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
+## 0.5.23 — 2026-10-12
+
+### Fixed
+
+- Local sessions derive their initial title from the first user message instead
+  of sending a separate inference request through the model server. This avoids
+  the extra title prefill during startup. Existing session titles are preserved.
+- Prompt progress distinguishes model warm-up from the current request. Token
+  counts are labeled per request, and stale polls cannot overwrite newer state.
+
 ## 0.5.22 — 2026-10-12
 
 ### Fixed

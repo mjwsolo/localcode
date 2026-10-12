@@ -1,0 +1,103 @@
+diff --git a/packages/opencode/src/session/prompt.ts b/packages/opencode/src/session/prompt.ts
+index 82d24416f5..a652804083 100644
+--- a/packages/opencode/src/session/prompt.ts
++++ b/packages/opencode/src/session/prompt.ts
+@@ -210,6 +210,21 @@ const layer = Layer.effect(
+       if (!firstUser || firstUser.info.role !== "user") return
+       const firstInfo = firstUser.info
+ 
++      // A separate title request adds prefill and can displace the warmed local prefix.
++      // Use the user's text without an extra inference request for LocalCode.
++      if (input.providerID === "localcode") {
++        const text = firstUser.parts
++          .flatMap((part) => part.type === "text" && !part.synthetic ? [part.text] : [])
++          .join(" ")
++          .replace(/[\s\x00-\x1f\x7f]+/g, " ")
++          .trim()
++        if (text) {
++          yield* sessions.setTitle({ sessionID: input.session.id, title: text.length > 100 ? text.substring(0, 97) + "..." : text })
++            .pipe(Effect.catchCause((cause) => Effect.logError("failed to set title", { error: Cause.squash(cause) })))
++        }
++        return
++      }
++
+       const subtasks = firstUser.parts.filter((p): p is SessionV1.SubtaskPart => p.type === "subtask")
+       const onlySubtasks = subtasks.length > 0 && firstUser.parts.every((p) => p.type === "subtask")
+ 
+diff --git a/packages/opencode/test/session/prompt.test.ts b/packages/opencode/test/session/prompt.test.ts
+index cb531b96b9..5789be4e97 100644
+--- a/packages/opencode/test/session/prompt.test.ts
++++ b/packages/opencode/test/session/prompt.test.ts
+@@ -783,6 +783,32 @@ it.instance("static loop returns assistant text through local provider", () =>
+   }),
+ )
+ 
++it.instance("localcode titles a first turn without evicting the agent prefix", () =>
++  Effect.gen(function* () {
++    const { llm } = yield* useServerConfig((url) => ({
++      provider: { localcode: { ...cfg.provider.test, id: "localcode", name: "LocalCode", options: { ...cfg.provider.test.options, baseURL: url } } },
++    }))
++    const prompt = yield* SessionPrompt.Service
++    const sessions = yield* Session.Service
++    const session = yield* sessions.create({ permission: [{ permission: "*", pattern: "*", action: "allow" }] })
++    yield* prompt.prompt({
++      sessionID: session.id,
++      agent: "build",
++      model: { providerID: ProviderV2.ID.make("localcode"), modelID: ModelV2.ID.make("test-model") },
++      noReply: true,
++      parts: [{ type: "text", text: "  hello\nworld  " }, { type: "text", text: "workspace metadata", synthetic: true }],
++    })
++    yield* llm.text("Hello!")
++    const result = yield* prompt.loop({ sessionID: session.id })
++    expect(result.parts.some((part) => part.type === "text" && part.text === "Hello!")).toBe(true)
++    yield* pollWithTimeout(Effect.gen(function* () {
++      const info = yield* sessions.get(session.id)
++      return info.title === "hello world" ? true : undefined
++    }), "local title was never set")
++    expect(yield* llm.hits).toHaveLength(1)
++  }),
++)
++
+ it.instance("static loop consumes queued replies across turns", () =>
+   Effect.gen(function* () {
+     const { llm } = yield* useServerConfig(providerCfg)
+diff --git a/packages/tui/src/component/prompt/index.tsx b/packages/tui/src/component/prompt/index.tsx
+index 64002bca69..f76fc21bfc 100644
+--- a/packages/tui/src/component/prompt/index.tsx
++++ b/packages/tui/src/component/prompt/index.tsx
+@@ -225,23 +225,29 @@ export function Prompt(props: PromptProps) {
+       setFill("")
+       return
+     }
++    let polling = false
++    let active = true
+     const timer = setInterval(async () => {
++      if (polling) return
++      polling = true
+       try {
+         const r = await controlFetch("/progress", { signal: AbortSignal.timeout(900) })
+-        const p = (await r.json()) as { phase?: string; pct?: number; done?: number; todo?: number; cached?: number; decoded?: number }
++        const p = (await r.json()) as { phase?: string; warmup?: boolean; request_id?: string; pct?: number; done?: number; todo?: number; cached?: number; decoded?: number }
++        if (!active) return
+         if (p.phase === "reading" && (p.todo ?? 0) > 0) {
+-          // llama-server grows the prompt total while it tokenises in batches, so a
+-          // percentage drifts; tokens read so far is honest and only goes up.
++          // Counts are per request, not the session's total context. Warm-up is separate.
+           const k = (p.done ?? 0) / 1000
+-          setFill(`reading context · ${k >= 1 ? `${k.toFixed(k >= 10 ? 0 : 1)}k` : `${p.done ?? 0}`} tokens read`)
++          setFill(`${p.warmup ? "warming model" : "reading context"} · ${k >= 1 ? `${k.toFixed(k >= 10 ? 0 : 1)}k` : `${p.done ?? 0}`} tokens this request`)
+         } else if (p.phase === "generating" && (p.decoded ?? 0) > 0) {
+           setFill(`writing · ${p.decoded} tokens`)
+         } else setFill("")
+       } catch {
+-        setFill("")
++        if (active) setFill("")
++      } finally {
++        polling = false
+       }
+     }, 500)
+-    onCleanup(() => clearInterval(timer))
++    onCleanup(() => { active = false; clearInterval(timer) })
+   })
+ 
+   // Hold-space voice state (see onKeyDown). 450 ms without a repeat = released.
