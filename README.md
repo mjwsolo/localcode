@@ -17,7 +17,7 @@
   <img src="https://raw.githubusercontent.com/mjwsolo/localcode/main/docs/assets/demo/first-change.gif" alt="A localcode turn: it reads the stub and test, edits the file, then pytest reports 1 passed" width="900">
 </p>
 
-localcode runs an open-weight model on your Mac and uses it to read, edit and test your code. Your prompts and your files stay on your machine. The only thing it downloads is the model weights, once per model.
+localcode runs an open-weight model on your Mac and uses it to read, edit and test your code. Model inference runs locally.
 
 ## Install
 
@@ -34,24 +34,9 @@ cd your-project
 localcode
 ```
 
-On first launch the model picker opens: models first, then every quant the
-repository ships, with the size and whether it fits your Mac's memory. The
-recommended one for your machine is starred. Pick one, watch the download, and
-start typing. `/models` switches later.
-
-Project plugins and configuration load only with `localcode --trust-project`.
-Use it after reviewing the project's startup code and settings.
-
-OpenJev also supports typed decisions: use `/mode` to choose **Chat** or
-**Decisions**, or run `localcode --mode decisions`. The decision screen returns
-choices, yes/no probabilities and scores without running coding tools.
-See [Chat and Decisions](https://mjwsolo.github.io/localcode/guides/decisions).
-
 ```
 > Implement the retry decorator in retry.py so every test in test_retry.py passes. Then run: pytest -q
 ```
-
-Docs: [mjwsolo.github.io/localcode](https://mjwsolo.github.io/localcode/)
 
 To use the running model from another local app, open `/server` or run `localcode api` for its
 OpenAI compatible endpoint. See the [Local API guide](https://mjwsolo.github.io/localcode/guides/local-api/).
@@ -69,37 +54,26 @@ OpenAI compatible endpoint. See the [Local API guide](https://mjwsolo.github.io/
 - Mac with Apple Silicon, macOS 13 or newer
 - 16 GB unified memory or more
 - Python 3.10 or newer
-- About 12 GB of free disk for the smallest model
+- Disk space for LocalCode and your chosen model (download sizes below)
 
 ## Models
 
-Model downloads run in parallel and keep verified chunks after cancellation or
-interruption. Select the same model again to resume. Resume requires HTTP range
-support and a stable server ETag; otherwise the download restarts safely.
+Choose from **10 models and 100+ quant options** for coding, image input and typed decisions. Models download from Hugging Face. Downloads run in parallel and can resume if interrupted. Switch with `/models`.
 
-localcode recommends a model by your Mac's memory and marks it with a star. You choose; nothing is selected for you. Every quant the model's repository ships is listed, with a fit badge for your machine. Every model runs on binaries shipped in the package.
+| Model | Smallest download | Largest download | 16 GB: tokens/s | 16 GB: context | 128 GB: tokens/s | 128 GB: context |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| [Gemma 4 12B](https://huggingface.co/unsloth/gemma-4-12b-it-GGUF) | 4.2 GB | 23.8 GB | — | — | — | — |
+| [Qwen 3.8 27B](https://huggingface.co/unsloth/Qwen3.8-27B-GGUF) | 6.2 GB | 31.5 GB | — | — | — | — |
+| [Underdog Saluki 27B 1.0](https://huggingface.co/ConwayResearch/Underdog-Saluki-27B-1.0) | 7.9 GB | 7.9 GB | — | — | — | — |
+| [North-Mini-Code 30B-A3B](https://huggingface.co/unsloth/North-Mini-Code-1.0-GGUF) | 9.4 GB | 33.2 GB | — | — | — | — |
+| [Gemma 4 26B-A4B](https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF) | 9.9 GB | 27.6 GB | — | — | — | — |
+| [Qwen 3.6 35B-A3B](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF) | 10.0 GB | 38.5 GB | — | — | — | — |
+| [Muse Glimmer 30B](https://huggingface.co/unsloth/Muse-Glimmer-30B-GGUF) | 10.7 GB | 32.3 GB | — | — | — | — |
+| [DiffusionGemma 26B-A4B](https://huggingface.co/unsloth/diffusiongemma-26B-A4B-it-GGUF) | 16.8 GB | 50.5 GB | — | — | — | — |
+| [OpenJev 27B (decisions)](https://huggingface.co/ggml-org/OpenJev-GGUF) | 19.4 GB | 53.8 GB | — | — | — | — |
+| [Kolibri 1 78B-A3B (experimental)](https://huggingface.co/Hob-forge/Kolibri-1-GGUF) | 28.6 GB | 47.5 GB | — | — | — | — |
 
-| Model | Weights | Quant | Active params | Min RAM |
-| --- | ---: | --- | --- | ---: |
-| Gemma 4 12B | 7.4 GB | UD-Q4_K_XL | 12B (dense) | 16 GB |
-| Qwen 3.6 35B-A3B | 10.7 GB | UD-IQ2_M | 3.0B (MoE) | 24 GB |
-| Gemma 4 26B-A4B | 11.2 GB | UD-IQ3_S | 3.8B (MoE) | 24 GB |
-| DiffusionGemma 26B-A4B | 15.7 GB | Q4_K_M | 4B (diffusion MoE) | 32 GB |
-| Muse Glimmer 30B | 15.9 GB | UD-Q4_K_XL | 30B (dense, vision) | 32 GB |
-| Qwen 3.8 27B | 17.9 GB | UD-Q4_K_XL | 27B (dense) | 36 GB |
-| North-Mini-Code 30B-A3B | 17.9 GB | UD-Q4_K_M | 3B (MoE) | 36 GB |
-| OpenJev 27B (decision model) | 19.0 GB | Q4_K_M | 27B (dense) | 36 GB |
-| Gemma 4 12B (full) | 23.8 GB | BF16 | 12B (dense) | 48 GB |
-| Gemma 4 26B-A4B | 28.0 GB | UD-Q8_K_XL | 3.8B (MoE) | 64 GB |
-| Qwen 3.8 27B | 31.5 GB | UD-Q8_K_XL | 27B (dense) | 64 GB |
-| Qwen 3.6 35B-A3B | 38.5 GB | UD-Q8_K_XL | 3.0B (MoE) | 96 GB |
-| Kolibri 1 78B-A3B (experimental) | 47.5 GB | Q4_K_M | 3.5B (MoE) | 96 GB |
-
-[Underdog Saluki 27B 1.0](https://huggingface.co/ConwayResearch/Underdog-Saluki-27B-1.0) is also available as an opt-in IQ2-mix model: 7.9 GB of weights, plus memory for context and runtime, with an optional 0.93 GB vision projector. Coding quality and minimum RAM have not been benchmarked on LocalCode.
-
-Min RAM is the smallest Mac whose memory the weights fit in (about 55% of unified memory). You can pick a heavier one by hand. DiffusionGemma, Kolibri, OpenJev and Saluki are never recommended automatically: you choose them yourself.
-
-Measured on a top-memory Apple Silicon laptop with Qwen 3.6 35B-A3B UD-IQ2_M at a 131072-token context: about 89 tokens/s generation, about 1174 tokens/s prompt processing, and 12 to 15 seconds for a typical four-tool-call task.
+Download sizes checked on Hugging Face on 12 October 2026; optional vision and draft files are extra. **— = not measured** on that RAM tier. Speed and usable context also depend on the Mac's chip and selected quant; RAM alone does not determine them.
 
 ## Network
 

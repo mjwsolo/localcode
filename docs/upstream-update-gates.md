@@ -72,7 +72,8 @@ issue with a link to the log. No candidate auto-merges on build success.
 
 ## Release
 
-After local verification and hosted CI pass, merge the candidate. Update both
-package versions and the changelog, rebuild the UI if the embedded version
-changes, test, and tag the merged main commit. The publish workflow creates the
-PyPI package and GitHub release. Never tag an unmerged feature branch.
+Before merging, update both package versions and the changelog, rebuild the UI
+if the embedded version changes, and run local verification and hosted CI.
+Merging a version change into main starts publication automatically. The workflow
+creates the matching tag, PyPI package and GitHub release at that commit. Ordinary
+main commits do not publish a package. Never tag an unmerged feature branch.

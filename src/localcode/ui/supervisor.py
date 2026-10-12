@@ -107,6 +107,7 @@ class Supervisor:
         self._budget_lock = threading.Lock()
         self._warm_stop = threading.Event()
         self._warm_status = "idle"
+        self._context_ready = False
         self._warm_replay = None  # warmup.Replay while the prefix is being pre-read
 
     # ---- llama-server lifecycle -------------------------------------------
@@ -121,9 +122,32 @@ class Supervisor:
         for name in removed:
             log(f"supervisor: removed retired drafter {name} (replaced by a newer catalog drafter)")
 
+    def _server_failure(self) -> dict:
+        """Describe an unexpected exit without treating an intentional stop as a crash."""
+        process = getattr(self, "proc", None)
+        if process is None or getattr(self, "state", {}).get("state") != "ready":
+            return {}
+        code = process.poll()
+        if code is None:
+            return {}
+        name = None
+        if code < 0:
+            try:
+                name = signal.Signals(-code).name
+            except ValueError:
+                name = f"signal {-code}"
+        reason = name or f"exit code {code}"
+        verb = "crashed" if code < 0 else "exited unexpectedly"
+        return {"exit_code": code, "exit_signal": name,
+                "process_id": getattr(process, "pid", None),
+                "detail": f"Model server {verb} ({reason}). Open /server to restart or choose another model. See server.log for diagnostics."}
+
     def progress(self) -> dict:
         """What the server is doing right now: reading the prompt (with a fraction) or
         generating. Lets the TUI show 'reading context 40%' instead of a bare spinner."""
+        failure = self._server_failure()
+        if failure:
+            return {"phase": "error", **failure}
         try:
             req = urllib.request.Request(f"http://127.0.0.1:{self.port}/slots", headers=server_headers())
             with urllib.request.urlopen(req, timeout=1) as r:
@@ -134,7 +158,8 @@ class Supervisor:
         if slot is None:
             return {"phase": "idle"}
         request = {"request_id": f"{slot.get('id')}:{slot.get('id_task')}",
-                   "warmup": getattr(self, "_warm_replay", None) is not None}
+                   "warmup": getattr(self, "_warm_replay", None) is not None,
+                   "context_ready": getattr(self, "_context_ready", False)}
         total = int(slot.get("n_prompt_tokens") or 0)
         cache = int(slot.get("n_prompt_tokens_cache") or 0)
         done = int(slot.get("n_prompt_tokens_processed") or 0)
@@ -142,6 +167,9 @@ class Supervisor:
         decoded = int((nt[0] if isinstance(nt, list) and nt else nt or {}).get("n_decoded") or 0)
         todo = max(total - cache, 0)
         if decoded > 0 or (todo and done >= todo):
+            if slot.get("id") == 0 and not request["warmup"]:
+                self._context_ready = True
+                request["context_ready"] = True
             return {"phase": "generating", "decoded": decoded, "prompt_tokens": total, **request}
         if todo:
             return {"phase": "reading", "done": done, "todo": todo, "cached": cache, "pct": int(100 * done / todo), **request}
@@ -258,6 +286,7 @@ class Supervisor:
 
     # ---- prompt warm-up (see ui/warmup.py) ----------------------------------
     def _start_warmup(self, alias: str) -> None:
+        self._context_ready = False
         from localcode.ui import warmup
         if not warmup.enabled():
             self._warm_status = "disabled"
@@ -284,6 +313,7 @@ class Supervisor:
                     tm = rp.run(toks)
                     if not stop.is_set():
                         self._warm_status = "warm"
+                        self._context_ready = True
                     log(f"warmup: replayed {len(toks)} tokens for {alias} in {time.time() - t0:.1f}s "
                         f"(server prompt_ms={tm.get('prompt_ms')}, cache_n={tm.get('cache_n')})")
                     try:
@@ -423,7 +453,10 @@ class Supervisor:
         process = self.proc
         running = process is not None and process.poll() is None
         ready = running and state["state"] == "ready" and self.healthy()
-        if state["state"] == "ready" and not ready:
+        failure = self._server_failure()
+        if failure:
+            state.update(state="error", **failure)
+        elif state["state"] == "ready" and not ready:
             state.update(state="error", detail="Model server is unavailable")
         return dict(state, server_running=running, server_ready=ready, warmup=getattr(self, "_warm_status", "idle"))
 

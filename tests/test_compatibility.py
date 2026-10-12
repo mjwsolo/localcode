@@ -112,3 +112,15 @@ def test_rejected_load_keeps_existing_server(monkeypatch, tmp_path):
     with pytest.raises(ValueError, match='Insufficient RAM'):
         sup.start('too-large')
     assert not stopped
+
+
+def test_reported_qwen_q5_24gib_load_is_refused_before_inference(tmp_path, monkeypatch):
+    from localcode.ui import server_cmd
+    # Exact Hugging Face size of the reported Q5_K_S file. Sparse fixture only.
+    model = tmp_path / "Qwen3.6-35B-A3B-UD-Q5_K_S.gguf"
+    with model.open("wb") as stream:
+        stream.truncate(24_942_050_272)
+    monkeypatch.setattr(server_cmd, "mmproj_for", lambda _: None)
+    monkeypatch.setattr(server_cmd, "catalog_choice", lambda _: None)
+    with pytest.raises(ValueError, match="Insufficient RAM"):
+        server_cmd.validate_model_memory(str(model), 24)

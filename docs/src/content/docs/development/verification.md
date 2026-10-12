@@ -18,11 +18,16 @@ flag assertion was corrected against the current shipped server flag.
   upgrades from 0.4.9 and 0.5.2. Tests run outside the checkout, verify the resolved
   executable and package version, and execute both installed binaries.
 - After publishing: pip and uv install the exact PyPI version, upgrading 0.4.9.
-- Every publish path (tag, manual run or published-release event) creates or
+- A version change merged into main starts package publication automatically;
+  ordinary main commits skip publication. Every publish path creates or
   updates the matching GitHub release and checks its package files are attached.
   Missing tags are created at the published commit; existing tags are never moved.
   A failed post-publication check marks the workflow failed; it cannot undo a
   PyPI upload. Fix forward or explicitly decide whether to yank the release.
+- Context defaults are capped by the physical-RAM tier and, when computable,
+  the remaining memory for the selected model’s KV cache. Final launcher
+  validation also caps saved tuning and environment overrides at that
+  limit. Over-capacity model weights are refused before starting the server.
 - Simulated model/RAM tests cover 8–192 GiB, including the shipping server command.
   They verify configuration and definite over-capacity rejection, not physical fit.
 

@@ -20,6 +20,20 @@ def server_command(gguf: str, port: int, alias: str | None = None) -> list[str]:
     g = LocalCodeRuntimeGateway(cfg.runtime)
     validate_model_memory(gguf, g._system_ram_gb())
     cmd = g.llama_server_command(gguf, port)
+    # Validate AFTER stored tuning and environment overrides have rewritten flags.
+    ram_gb = g._system_ram_gb()
+    ceiling = min(g._ram_ctx_ceiling(ram_gb), g._kv_aware_ctx_ceiling(gguf, ram_gb), g._model_max_ctx(gguf))
+    if g._is_cohere_gguf(gguf):
+        ceiling = min(ceiling, g._cohere_ctx_ceiling(ram_gb))
+    try:
+        requested_ctx = int(cmd[cmd.index("--ctx-size") + 1])
+    except (ValueError, IndexError) as exc:
+        raise ValueError("Invalid model context setting; choose a smaller context or clear the tuning override.") from exc
+    if requested_ctx <= 0:
+        raise ValueError("Model context must be a positive token count.")
+    # Old presets/tuning should recover automatically on the current machine.
+    # Weight-fit validation still refuses models that cannot leave OS headroom.
+    cmd[cmd.index("--ctx-size") + 1] = str(min(requested_ctx, ceiling))
     cmd[1:1] = ["--host", "127.0.0.1"]
     # Any web page can reach a localhost port; the key makes the model and its
     # /slots (which can hold prompt text) unusable without the session secret.

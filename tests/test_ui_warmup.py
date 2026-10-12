@@ -169,6 +169,7 @@ def test_progress_identifies_warmup_and_request_changes(monkeypatch):
     monkeypatch.setattr(sv, "server_headers", lambda: {})
     monkeypatch.setattr(sv.urllib.request, "urlopen", lambda *a, **kw: Response())
     warm = sup.progress()
+    assert warm["context_ready"] is False
     assert warm["warmup"] and warm["request_id"] == "0:1" and warm["done"] == 5000
     sup._warm_replay = None
     slot.update(id_task=2, n_prompt_tokens=600, n_prompt_tokens_processed=500)
@@ -177,4 +178,17 @@ def test_progress_identifies_warmup_and_request_changes(monkeypatch):
     assert current["done"] == 500  # A new request's count can legitimately be smaller.
     slot.update(next_token=[{"n_decoded": 10}])
     generated = sup.progress()
+    assert generated["context_ready"] is True
+    slot.update(next_token=[], n_prompt_tokens=6500, n_prompt_tokens_processed=0)
+    assert sup.progress()["context_ready"] is True  # Later reads do not repeat the note.
     assert generated["phase"] == "generating" and generated["request_id"] == current["request_id"]
+
+
+def test_start_warmup_resets_readiness_even_when_prefetch_disabled(monkeypatch):
+    from localcode.ui import supervisor as sv
+    sup = sv.Supervisor.__new__(sv.Supervisor)
+    sup._context_ready = True
+    monkeypatch.setattr(warmup, "enabled", lambda: False)
+    sup._start_warmup("new-model")
+    assert sup._context_ready is False
+    assert sup._warm_status == "disabled"

@@ -5,11 +5,29 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
+## 0.5.25 — 2026-10-12
+
 ### Fixed
 
-- Manual package publishes now create or update the matching GitHub release,
+- Version bumps merged into main automatically publish the package and its
+  GitHub release. Manual publishes also create or update the matching release,
   including its tag, changelog notes and package files. Release validation
   rejects version mismatches and tags that point to another commit.
+
+- Computed context sizes always respect the machine’s RAM-tier ceiling,
+  including stale balanced presets. Final launcher validation reduces saved
+  tuning or environment overrides that exceed the machine or model limit.
+- Unexpected model-server exits report the exit code or signal instead of
+  retaining a ready state. The interface explains the crash and stops retries
+  against the dead process; intentional stops remain distinct.
+
+### Changed
+
+- Cold context preparation shows a brief explanation above the input. Cached
+  turns and later reads skip it; the note disappears when generation starts.
+- Simplified model information to one row per model, with Hugging Face download
+  size ranges. Hardware speed and context measurements are marked as unmeasured
+  rather than inferred from RAM alone.
 
 ## 0.5.24 — 2026-10-12
 

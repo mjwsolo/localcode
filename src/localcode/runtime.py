@@ -654,7 +654,7 @@ class LocalCodeRuntimeGateway:
         The tier ladder lives in `model_config.RAM_CTX_CEILING_TIERS` (the
         central per-Mac config); this delegates so the numbers are edited in
         one place. The normal high-RAM default is the checkpointed 128K path;
-        256K remains available as an explicit experimental override. Small-RAM
+        Launcher overrides are checked against the same ceiling. Small-RAM
         tiers stay conservative (16 GB→64K, 64 GB→128K hardware-measured).
         """
         from .model_config import ram_ctx_ceiling
@@ -1062,8 +1062,10 @@ class LocalCodeRuntimeGateway:
         # or future, gets a `--ctx-size` whose KV cache can't fit (the OOM
         # never-again guard). No-op when KV size isn't confidently computable
         # (turbo-compressed KV) — the validated ceilings govern there.
+        ram_gb = self._system_ram_gb()
         return min(
-            raw, self._kv_aware_ctx_ceiling(model_path, self._system_ram_gb())
+            raw, self._ram_ctx_ceiling(ram_gb),
+            self._kv_aware_ctx_ceiling(model_path, ram_gb),
         )
 
     def _target_num_ctx_uncapped(
