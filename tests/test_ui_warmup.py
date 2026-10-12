@@ -152,3 +152,29 @@ def test_legacy_capture_migrates_only_if_model_predates_capture(tmp_path, monkey
     assert warmup.load("model", model) == tokens
     os.utime(model, (9999999999, 9999999999))
     assert warmup.load("model", model) is None
+
+
+def test_progress_identifies_warmup_and_request_changes(monkeypatch):
+    from localcode.ui import supervisor as sv
+    from types import SimpleNamespace
+    sup = sv.Supervisor.__new__(sv.Supervisor)
+    sup.port = 8123
+    sup._warm_replay = SimpleNamespace(cancelled=False)
+    slot = {"id": 0, "id_task": 1, "is_processing": True, "n_prompt_tokens": 5500,
+            "n_prompt_tokens_cache": 0, "n_prompt_tokens_processed": 5000}
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def read(self): return json.dumps([slot]).encode()
+    monkeypatch.setattr(sv, "server_headers", lambda: {})
+    monkeypatch.setattr(sv.urllib.request, "urlopen", lambda *a, **kw: Response())
+    warm = sup.progress()
+    assert warm["warmup"] and warm["request_id"] == "0:1" and warm["done"] == 5000
+    sup._warm_replay = None
+    slot.update(id_task=2, n_prompt_tokens=600, n_prompt_tokens_processed=500)
+    current = sup.progress()
+    assert not current["warmup"] and current["request_id"] != warm["request_id"]
+    assert current["done"] == 500  # A new request's count can legitimately be smaller.
+    slot.update(next_token=[{"n_decoded": 10}])
+    generated = sup.progress()
+    assert generated["phase"] == "generating" and generated["request_id"] == current["request_id"]

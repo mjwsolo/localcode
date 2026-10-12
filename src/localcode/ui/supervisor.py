@@ -133,6 +133,8 @@ class Supervisor:
         slot = next((x for x in slots if x.get("is_processing")), None)
         if slot is None:
             return {"phase": "idle"}
+        request = {"request_id": f"{slot.get('id')}:{slot.get('id_task')}",
+                   "warmup": getattr(self, "_warm_replay", None) is not None}
         total = int(slot.get("n_prompt_tokens") or 0)
         cache = int(slot.get("n_prompt_tokens_cache") or 0)
         done = int(slot.get("n_prompt_tokens_processed") or 0)
@@ -140,10 +142,10 @@ class Supervisor:
         decoded = int((nt[0] if isinstance(nt, list) and nt else nt or {}).get("n_decoded") or 0)
         todo = max(total - cache, 0)
         if decoded > 0 or (todo and done >= todo):
-            return {"phase": "generating", "decoded": decoded, "prompt_tokens": total}
+            return {"phase": "generating", "decoded": decoded, "prompt_tokens": total, **request}
         if todo:
-            return {"phase": "reading", "done": done, "todo": todo, "cached": cache, "pct": int(100 * done / todo)}
-        return {"phase": "reading", "done": 0, "todo": 0, "cached": cache, "pct": 0}
+            return {"phase": "reading", "done": done, "todo": todo, "cached": cache, "pct": int(100 * done / todo), **request}
+        return {"phase": "reading", "done": 0, "todo": 0, "cached": cache, "pct": 0, **request}
 
     def vision_info(self) -> dict:
         """What the loaded model could see with, and whether it is on disk. Nothing
