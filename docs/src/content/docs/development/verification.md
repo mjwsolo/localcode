@@ -23,6 +23,10 @@ flag assertion was corrected against the current shipped server flag.
   Missing tags are created at the published commit; existing tags are never moved.
   A failed post-publication check marks the workflow failed; it cannot undo a
   PyPI upload. Fix forward or explicitly decide whether to yank the release.
+- Context defaults are capped by the physical-RAM tier and, when computable,
+  the remaining memory for the selected model’s KV cache. Final launcher
+  validation also checks saved tuning and environment overrides against that
+  limit. Over-capacity model weights are refused before starting the server.
 - Simulated model/RAM tests cover 8–192 GiB, including the shipping server command.
   They verify configuration and definite over-capacity rejection, not physical fit.
 

@@ -35,17 +35,17 @@ from __future__ import annotations
 # pending real-hardware OOM measurement. 96 GB+ stays at 128K: at 256K the
 # Qwen checkpoint path is disabled due a measured Metal SIGKILL, forcing a
 # full prompt prefill every round. 128K keeps four checkpoints and is faster
-# for long agentic tasks; 256K remains an explicit override.
+# for long agentic tasks; launcher overrides stay within these ceilings.
 # Dedicated tier for every Apple Silicon RAM variant (MBA/MBP/Studio/Mini).
 # The VALIDATED anchors are 16→64K, 48→96K, 64→128K; every other tier is
 # INTERPOLATED strictly between its validated neighbours (or below the 16 GB
 # floor), so no tier ever exceeds a value that's already been validated on real
 # hardware — a 32 GB machine at 80K uses less KV than the 48 GB-validated 96K
 # and more than the 16 GB-validated 64K. Sizes are multiples of 8192 (clean
-# batch alignment). 256K stays an explicit override, never an auto default
+# batch alignment). Overrides cannot exceed the machine ceiling
 # (its checkpoint path SIGKILLs on Metal — see runtime.py).
 RAM_CTX_CEILING_TIERS: tuple[tuple[int, int], ...] = (
-    (192, 131072),  # 192-512 GB (Studio/Pro) — 128K default; 256K via override
+    (192, 131072),  # 192-512 GB (Studio/Pro) — 128K ceiling
     (128, 131072),  # 128 GB — 128K
     (96,  131072),  # 96 GB  — 128K
     (64,  131072),  # 64 GB  — 128K (validated)

@@ -54,7 +54,7 @@ OpenAI compatible endpoint. See the [Local API guide](https://mjwsolo.github.io/
 - Mac with Apple Silicon, macOS 13 or newer
 - 16 GB unified memory or more
 - Python 3.10 or newer
-- About 12 GB of free disk for the smallest model
+- Disk space for LocalCode and your chosen model (download sizes below)
 
 ## Models
 

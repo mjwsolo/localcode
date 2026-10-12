@@ -654,7 +654,7 @@ class LocalCodeRuntimeGateway:
         The tier ladder lives in `model_config.RAM_CTX_CEILING_TIERS` (the
         central per-Mac config); this delegates so the numbers are edited in
         one place. The normal high-RAM default is the checkpointed 128K path;
-        256K remains available as an explicit experimental override. Small-RAM
+        Launcher overrides are checked against the same ceiling. Small-RAM
         tiers stay conservative (16 GB→64K, 64 GB→128K hardware-measured).
         """
         from .model_config import ram_ctx_ceiling
