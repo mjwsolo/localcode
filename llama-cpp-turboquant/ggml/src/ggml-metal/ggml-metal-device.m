@@ -97,6 +97,7 @@ void ggml_metal_pipeline_free(ggml_metal_pipeline_t pipeline) {
 }
 
 int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_with_params pipeline) {
+    GGML_ASSERT(pipeline.pipeline != NULL && "Metal pipeline unavailable: check kernel compilation diagnostics");
     return pipeline.pipeline->obj.maxTotalThreadsPerThreadgroup;
 }
 

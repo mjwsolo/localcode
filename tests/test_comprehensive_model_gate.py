@@ -65,7 +65,9 @@ def test_shutdown_kills_then_waits_after_timeout(tmp_path):
 @pytest.mark.parametrize("mutation", ["commit", "binaries", "coverage", "runtime", "decisions", "vision", "turbo"])
 def test_invalid_receipts_cannot_publish_a_promotion(mutation):
     rows = [{"key": key, "turbo4": False, "checks": ["auth", "template", "chat", "tool-loop", "systemone", "decision-control", "runtime", "vision"]} for key in gate.REQUIRED_KEYS]
-    rows.append({"key": "qwen", "turbo4": True, "checks": ["tool-loop"]})
+    rows.extend({"key": "qwen", "turbo4": cache == "turbo4", "cache_v": cache, "legacy_metal": legacy,
+                 "matrix": True, "checks": ["tool-loop", "long-context", "runtime-greeting"]}
+                for cache in ("q8_0", "turbo2", "turbo3", "turbo4") for legacy in (False, True))
     receipt = {"commit": "candidate", "dirty": False, "strict": True, "success": True, "binaries": {"server": "hash"}, "models": rows}
     gate.validate_receipt(receipt, "candidate", {"server": "hash"}, gate.REQUIRED_KEYS)
     if mutation == "commit": receipt["commit"] = "old"

@@ -72,4 +72,7 @@ fa_vec_cfg_t fa_vec_baseline_cfg(int dk, int dv);
 // Keyed by Apple GPU family; an untuned family matches no row and gets the baseline.
 fa_vec_cfg_t fa_vec_pick(int gpu_family, int dtype, int dk, int dv, int64_t ne11, int64_t ne01);
 
+// TurboQuant kernels only instantiate the baseline Q/NE variant.
+fa_vec_cfg_t fa_vec_pick_kv(int gpu_family, int dtype_k, int dtype_v, int dk, int dv, int64_t ne11, int64_t ne01);
+
 }  // namespace ggml_metal_tuning

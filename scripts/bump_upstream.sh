@@ -77,6 +77,8 @@ if [ -z "$WORKDIR" ]; then
   WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/localcode-bump.XXXXXX")"
 fi
 mkdir -p "$WORKDIR"
+# CMake archive paths must use one physical path on macOS (/tmp is a symlink).
+WORKDIR="$(cd "$WORKDIR" && pwd -P)"
 SRC="$WORKDIR/llama.cpp"
 RESULT_ENV="$WORKDIR/bump-result.env"
 : > "$RESULT_ENV"
@@ -381,6 +383,6 @@ bump is merged, run locally and paste the output into the PR:
     pytest -m real_models -q tests/test_real_models.py
 
 Check the output for skipped models: the pytest tier skips a GGUF that is not
-downloaded. The local 11-config gate also covers the turbo KV variants.
+downloaded. The strict local gate also covers long prompts and native/legacy Metal KV variants.
 EOF
 exit 0
