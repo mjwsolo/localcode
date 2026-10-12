@@ -14,6 +14,9 @@ command -v bun >/dev/null || { echo "bun is required (https://bun.sh)"; exit 1; 
 mkdir -p "$WORK"
 if [ ! -d "$WORK/opencode/.git" ]; then git clone -q "$REPO" "$WORK/opencode"; fi
 git -C "$WORK/opencode" fetch -q origin
+# A previous build leaves the product patches applied; start from a clean tree
+# or the checkout of a different commit refuses.
+git -C "$WORK/opencode" reset -q --hard
 git -C "$WORK/opencode" checkout -q "$COMMIT"
 # Product UI changes kept alongside the pinned source until upstreamed.
 for patch in "$ROOT"/patches/ui/*.patch; do
