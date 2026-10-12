@@ -5,6 +5,17 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
+## 0.5.24 — 2026-10-12
+
+### Fixed
+
+- Markdown quotes use a continuous colored background strip for their left
+  border, filling font-height gaps and empty rows. Text spacing stays the same
+  while streaming and resizing.
+- Removed the colored side accents from the input box and sent messages.
+- Sent messages use a lighter gray background in dark mode, matching the
+  supplied Codex reference. The input background and text alignment are preserved.
+
 ## 0.5.23 — 2026-10-12
 
 ### Fixed
