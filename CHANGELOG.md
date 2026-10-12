@@ -5,6 +5,19 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
+## 0.5.22 — 2026-10-12
+
+### Fixed
+
+- Dictated text no longer comes back after it was sent. Releasing Space
+  starts a short wait for the last words; a message sent in that wait cleared
+  the prompt, and the transcript was then written back into it, ready to be
+  sent a second time. Dictation now writes only while the prompt still holds
+  what it last wrote.
+- Pressing Enter while dictating, or in that wait, sends the message once,
+  when the complete transcript has arrived, instead of whatever part was on
+  screen.
+
 ## 0.5.21 — 2026-10-12
 
 ### Fixed
