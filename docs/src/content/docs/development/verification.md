@@ -18,6 +18,9 @@ flag assertion was corrected against the current shipped server flag.
   upgrades from 0.4.9 and 0.5.2. Tests run outside the checkout, verify the resolved
   executable and package version, and execute both installed binaries.
 - After publishing: pip and uv install the exact PyPI version, upgrading 0.4.9.
+- Every publish path (tag, manual run or published-release event) creates or
+  updates the matching GitHub release and checks its package files are attached.
+  Missing tags are created at the published commit; existing tags are never moved.
   A failed post-publication check marks the workflow failed; it cannot undo a
   PyPI upload. Fix forward or explicitly decide whether to yank the release.
 - Simulated model/RAM tests cover 8–192 GiB, including the shipping server command.

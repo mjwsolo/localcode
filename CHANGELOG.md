@@ -5,6 +5,12 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
+### Fixed
+
+- Manual package publishes now create or update the matching GitHub release,
+  including its tag, changelog notes and package files. Release validation
+  rejects version mismatches and tags that point to another commit.
+
 ## 0.5.24 — 2026-10-12
 
 ### Fixed

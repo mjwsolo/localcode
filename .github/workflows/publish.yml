@@ -7,10 +7,21 @@ on:
     types: [published]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+# Serialize tag, manual and release-event runs; never cancel a publish halfway.
+concurrency:
+  group: localcode-publish
+  cancel-in-progress: false
+
 jobs:
   test:
     name: Release gate
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+      tag: ${{ steps.identity.outputs.tag }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -27,21 +38,20 @@ jobs:
             echo "::error::Release commit $GITHUB_SHA ($GITHUB_REF_NAME) is not on main. Merge to main before tagging/releasing."
             exit 1
           fi
-      - name: Tag must equal the package version
-        if: startsWith(github.ref, 'refs/tags/')
-        run: |
-          v="$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml | head -1)"
-          f="$(sed -n 's/^    __version__ = "\(.*\)"/\1/p' src/localcode/__init__.py | head -1)"
-          echo "pyproject=$v fallback=$f tag=$GITHUB_REF_NAME"
-          [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "::error::tag $GITHUB_REF_NAME != pyproject version $v"; exit 1; }
-          [ "$v" = "$f" ] || { echo "::error::__init__ fallback version $f != pyproject $v"; exit 1; }
+      - name: Resolve and validate release identity
+        id: identity
+        run: python3 scripts/release_identity.py --ref "$GITHUB_REF" --sha "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+      - name: Require changelog notes before publishing
+        env:
+          VERSION: ${{ steps.identity.outputs.version }}
+        run: python3 scripts/release_notes.py "$VERSION" --check > /dev/null
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e . pytest pytest-timeout ruff
       - run: ruff check --select E9,F63,F7,F82 src tests
-      - run: pytest tests/test_comprehensive_*.py tests/test_ui_auth.py tests/test_ui_api.py tests/test_ui_launch.py -q --timeout=120
+      - run: pytest tests/test_release_identity.py tests/test_comprehensive_*.py tests/test_ui_auth.py tests/test_ui_api.py tests/test_ui_launch.py -q --timeout=120
 
   # LocalCode has no compiled Python extensions; the two shipped binaries
   # (llama-server and the localcode-ui runtime) are checked in under
@@ -94,43 +104,72 @@ jobs:
         with:
           skip-existing: true
 
-  # The GitHub release is created from the same tag, with the notes taken from
-  # the CHANGELOG section for that version (scripts/release_notes.py), and the
-  # wheel and sdist attached. Only on a tag push: creating the release fires a
-  # `release: published` event that re-runs this workflow, and that run must not
-  # try to create it again.
+  # Every successful publishing path gets the same tag, notes and artifacts.
+  # A manual publish creates its missing tag; an existing tag is never moved.
   github-release:
     name: GitHub release
-    needs: [publish]
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    needs: [test, publish]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: dist
           path: dist/
-      - name: Release notes from CHANGELOG.md
+      - name: Ensure matching tag exists
+        env:
+          RELEASE_TAG: ${{ needs.test.outputs.tag }}
         run: |
-          python3 scripts/release_notes.py "${GITHUB_REF_NAME#v}" --check > notes.md
+          if git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"; then
+            actual=$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")
+            expected=$(git rev-parse "$GITHUB_SHA^{commit}")
+            [ "$actual" = "$expected" ] || { echo "::error::Release tag points to another commit"; exit 1; }
+          else
+            git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              tag --annotate "$RELEASE_TAG" "$GITHUB_SHA" --message "$RELEASE_TAG"
+            git push origin "refs/tags/$RELEASE_TAG"
+          fi
+      - name: Release notes from CHANGELOG.md
+        env:
+          VERSION: ${{ needs.test.outputs.version }}
+        run: |
+          python3 scripts/release_notes.py "$VERSION" --check > notes.md
           cat notes.md
       - name: Create or update the release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.test.outputs.tag }}
         run: |
-          tag="$GITHUB_REF_NAME"
+          tag="$RELEASE_TAG"
           pre=""
           if [[ "${tag#v}" =~ [a-zA-Z] ]]; then pre="--prerelease"; fi
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --title "$tag" --notes-file notes.md $pre
+            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --title "$tag" --notes-file notes.md --draft=false $pre
             gh release upload "$tag" dist/* --repo "$GITHUB_REPOSITORY" --clobber
           else
             gh release create "$tag" dist/* --repo "$GITHUB_REPOSITORY" --title "$tag" --notes-file notes.md $pre --verify-tag
           fi
+
+      - name: Verify published GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.test.outputs.tag }}
+        run: |
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,assets > release.json
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          release = json.loads(Path("release.json").read_text())
+          assert release["tagName"] == os.environ["RELEASE_TAG"]
+          assert release["isDraft"] is False
+          expected = {p.name for p in Path("dist").iterdir() if p.is_file()}
+          actual = {p["name"] for p in release["assets"]}
+          assert expected and expected <= actual, "Release artifacts are missing"
+          PY
 
   verify-published:
     name: Verify published PyPI install
