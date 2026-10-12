@@ -28,5 +28,5 @@ def test_tuned_launcher_context_cannot_bypass_machine_ceiling(source, monkeypatc
     monkeypatch.delenv('LOCALCODE_OVERRIDE_NCTX', raising=False)
     monkeypatch.setattr(recommendations, 'load_overrides', lambda _: {'LOCALCODE_OVERRIDE_NCTX':'98304'} if source=='recommendation' else {})
     if source == 'environment': monkeypatch.setenv('LOCALCODE_OVERRIDE_NCTX', '98304')
-    with pytest.raises(ValueError, match='context.*73728'):
-        server_cmd.server_command(str(tmp_path / 'Qwen3.6-35B-A3B-UD-IQ2_M.gguf'), 8123)
+    command = server_cmd.server_command(str(tmp_path / 'Qwen3.6-35B-A3B-UD-IQ2_M.gguf'), 8123)
+    assert command[command.index('--ctx-size') + 1] == '73728'

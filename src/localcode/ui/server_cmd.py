@@ -29,11 +29,11 @@ def server_command(gguf: str, port: int, alias: str | None = None) -> list[str]:
         requested_ctx = int(cmd[cmd.index("--ctx-size") + 1])
     except (ValueError, IndexError) as exc:
         raise ValueError("Invalid model context setting; choose a smaller context or clear the tuning override.") from exc
-    if requested_ctx <= 0 or requested_ctx > ceiling:
-        raise ValueError(
-            f"Requested context {requested_ctx} exceeds this {ram_gb} GiB Mac's current context limit {ceiling}. "
-            "Clear the context tuning override or select a smaller context."
-        )
+    if requested_ctx <= 0:
+        raise ValueError("Model context must be a positive token count.")
+    # Old presets/tuning should recover automatically on the current machine.
+    # Weight-fit validation still refuses models that cannot leave OS headroom.
+    cmd[cmd.index("--ctx-size") + 1] = str(min(requested_ctx, ceiling))
     cmd[1:1] = ["--host", "127.0.0.1"]
     # Any web page can reach a localhost port; the key makes the model and its
     # /slots (which can hold prompt text) unusable without the session secret.

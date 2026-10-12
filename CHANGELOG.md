@@ -9,12 +9,13 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ### Fixed
 
-- Manual package publishes now create or update the matching GitHub release,
+- Version bumps merged into main automatically publish the package and its
+  GitHub release. Manual publishes also create or update the matching release,
   including its tag, changelog notes and package files. Release validation
   rejects version mismatches and tags that point to another commit.
 
 - Computed context sizes always respect the machine’s RAM-tier ceiling,
-  including stale balanced presets. Final launcher validation rejects saved
+  including stale balanced presets. Final launcher validation reduces saved
   tuning or environment overrides that exceed the machine or model limit.
 - Unexpected model-server exits report the exit code or signal instead of
   retaining a ready state. The interface explains the crash and stops retries
