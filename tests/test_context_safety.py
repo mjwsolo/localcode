@@ -52,4 +52,5 @@ def test_final_memory_budget_includes_explicit_drafter(weights_gib, expect_rejec
     else:
         cmd = server_cmd.server_command(str(model), 8123)
         ctx = int(cmd[cmd.index('--ctx-size')+1])
-        assert ctx * 48 * 8 * 128 * 2.125 + (weights_gib + 1 + 3) * 1024**3 <= 16 * 1024**3
+        # Target uses q8/q8; an ordinary drafter independently uses f16/f16.
+        assert ctx * 48 * 8 * 128 * (2.125 + 4) + (weights_gib + 1 + 3) * 1024**3 <= 16 * 1024**3

@@ -92,6 +92,23 @@ def server_command(gguf: str, port: int, alias: str | None = None) -> list[str]:
             loaded_paths.add(Path(cmd[cmd.index(flag) + 1]))
     loaded_weights = sum(p.stat().st_size for p in loaded_paths if p.is_file())
     bpt = g._kv_bytes_per_token(gguf)
+    draft = cmd[cmd.index("--model-draft") + 1] if "--model-draft" in cmd else None
+    spec = cmd[cmd.index("--spec-type") + 1] if "--spec-type" in cmd else ""
+    if draft or spec == "draft-mtp":
+        draft_path = draft or gguf
+        draft_meta = g._gguf_kv_meta(draft_path)
+        if not draft_meta:
+            raise ValueError("Cannot estimate draft-model memory from its GGUF header; disable drafting or select a supported drafter.")
+        # Gemma assistant borrows target KV; ordinary/DFlash contexts own KV.
+        if draft_meta.get("architecture") != "gemma4-assistant":
+            draft_bpt = g._kv_bytes_per_token(draft_path, dtypes=("f16", "f16"))
+            if spec == "draft-mtp":
+                nextn = draft_meta.get("n_mtp_layers", 0)
+                if nextn:
+                    draft_bpt *= nextn / draft_meta["n_layers"]
+                elif not draft:
+                    draft_bpt = 0
+            bpt = (bpt or 0) + (draft_bpt or 0)
     if bpt:
         total = ram_gb * 1024**3
         reserve = max(3 * 1024**3, int(total * 0.15))

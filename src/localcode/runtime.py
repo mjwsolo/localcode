@@ -780,6 +780,7 @@ class LocalCodeRuntimeGateway:
             return cache[path]
         meta: dict | None = None
         found: dict[str, int] = {}
+        architecture = ""
         try:
             if _Path(path).is_file():
                 with open(path, "rb") as f:
@@ -812,6 +813,8 @@ class LocalCodeRuntimeGateway:
                             k = _rs()
                             t, = struct.unpack("<I", f.read(4))
                             v = _rv(t)
+                            if k == "general.architecture" and isinstance(v, str):
+                                architecture = v
                             for suf in wanted:
                                 if k.endswith(suf) and isinstance(v, int):
                                     found[suf] = v
@@ -827,6 +830,7 @@ class LocalCodeRuntimeGateway:
                                 "n_kv_heads": n_kv_heads,
                                 "head_dim": head_dim,
                                 "value_head_dim": found.get(".attention.value_length", head_dim),
+                                "architecture": architecture,
                                 # Multi-token-prediction heads shipped inside
                                 # the GGUF (Qwen 3.6+/3.8 `nextn_predict_layers`).
                                 "n_mtp_layers": found.get(".nextn_predict_layers", 0),
@@ -876,14 +880,14 @@ class LocalCodeRuntimeGateway:
         except (TypeError, ValueError):
             return 0
 
-    def _kv_bytes_per_token(self, model_path: str | None = None) -> float | None:
+    def _kv_bytes_per_token(self, model_path: str | None = None, *, dtypes: tuple[str, str] | None = None) -> float | None:
         """KV-cache bytes per token = n_layers × n_kv_heads × head_dim ×
         (bytes_K + bytes_V). Returns None when the metadata or the launched
         KV dtype is unknown (→ caller does not clamp)."""
         meta = self._gguf_kv_meta(model_path)
         if not meta:
             return None
-        kt, vt = self._effective_kv_dtypes(model_path)
+        kt, vt = dtypes or self._effective_kv_dtypes(model_path)
         kb = self._KV_DTYPE_BYTES.get(kt)
         vb = self._KV_DTYPE_BYTES.get(vt)
         if kb is None or vb is None:
