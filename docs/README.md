@@ -188,9 +188,8 @@ is required before publication, not a nice-to-have.
   memory bandwidth) do appear; what is absent is any figure presented as a
   measurement of performance. The model picker's tok/s
   figures are documented as a calculated estimate (bytes-per-token over assumed
-  realised bandwidth, plus a compute floor), not a measurement. The one other
-  quantitative figure — TurboQuant's ~3.8× KV-cache compression versus `f16` —
-  is attributed in-page as the fork's own figure for the quantisation scheme.
+  realised bandwidth, plus a compute floor), not a measurement. Cache compression figures specify the key/value configuration and describe
+  block storage before padding or adaptive layers; they are not speed measurements.
 - **Claims are scoped to the default configuration.** `runtime.base_url` /
   `LOCALCODE_BASE_URL` accepts any URL with no validation, so a custom
   inference endpoint is documented as an outbound path that carries prompts and
