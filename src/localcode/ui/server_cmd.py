@@ -84,6 +84,22 @@ def server_command(gguf: str, port: int, alias: str | None = None) -> list[str]:
     mm = mmproj_for(gguf)
     if mm is not None and "--mmproj" not in cmd:
         cmd += ["--mmproj", str(mm)]
+    # Budget every weight file actually passed to the server, including an
+    # explicit user drafter. A 2048-token floor must not override lack of RAM.
+    loaded_paths = {Path(gguf)}
+    for flag in ("--mmproj", "--model-draft"):
+        if flag in cmd:
+            loaded_paths.add(Path(cmd[cmd.index(flag) + 1]))
+    loaded_weights = sum(p.stat().st_size for p in loaded_paths if p.is_file())
+    bpt = g._kv_bytes_per_token(gguf)
+    if bpt:
+        total = ram_gb * 1024**3
+        reserve = max(3 * 1024**3, int(total * 0.15))
+        fit = int((total - loaded_weights - reserve) / bpt) // 2048 * 2048
+        if fit < 2048:
+            raise ValueError("Insufficient RAM for model weights and minimum context; choose a smaller quantization in /models.")
+        ctx_index = cmd.index("--ctx-size") + 1
+        cmd[ctx_index] = str(min(int(cmd[ctx_index]), fit))
     # Prompt warm-up (ui/warmup.py) reads the first turn's token ids back out
     # of a slot save; the flag only enables the endpoint, nothing is written
     # until the supervisor asks.

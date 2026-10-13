@@ -7,7 +7,7 @@ never launch a context whose KV cache won't fit in RAM, for ANY model.
 
 These tests assert the invariant (KV + weights + reserve fits) across every
 RAM tier, AND that the cap defers (no-op) when KV size isn't confidently
-computable — so the validated turbo-compressed ceilings are never regressed.
+computable. Known TurboQuant formats include padding and adaptive layers.
 """
 from __future__ import annotations
 
@@ -40,15 +40,33 @@ def test_kv_bytes_per_token_f16_matches_formula(monkeypatch):
     assert bpt == 48 * 8 * 128 * (2.0 + 2.0)
 
 
-def test_cap_defers_on_unknown_compressed_dtype(monkeypatch):
-    # Turbo-compressed KV (unknown exact bytes) -> bytes/token None -> the cap
-    # is a no-op (large sentinel) so the validated ceilings govern. This is the
-    # no-regression guarantee for the TurboQuant path.
+def test_cap_defers_on_unknown_dtype(monkeypatch):
+    # Unsupported storage formats defer to the independent RAM ceiling.
     gw = _gw()
     monkeypatch.setattr(gw, "_gguf_kv_meta", lambda mp=None: dict(HEAVY_SHAPE))
-    monkeypatch.setattr(gw, "_effective_kv_dtypes", lambda mp: ("q8_0", "turbo4"))
+    monkeypatch.setattr(gw, "_effective_kv_dtypes", lambda mp: ("q8_0", "unknown"))
     assert gw._kv_bytes_per_token() is None
     assert gw._kv_aware_ctx_ceiling(None, 128) >= 1_000_000
+
+
+@pytest.mark.parametrize("cache,block_bytes", [("turbo2",34),("turbo3",50),("turbo4",68)])
+def test_turbo_cache_uses_real_storage_and_distinct_value_width(monkeypatch, cache, block_bytes):
+    monkeypatch.setenv("TURBO_LAYER_ADAPTIVE", "0")
+    gw = _gw()
+    monkeypatch.setattr(gw, "_gguf_kv_meta", lambda mp=None: {**HEAVY_SHAPE, "value_head_dim": 256})
+    monkeypatch.setattr(gw, "_effective_kv_dtypes", lambda mp: ("q8_0", cache))
+    assert gw._kv_bytes_per_token() == 48 * 8 * (128 * 34 / 32 + 256 * block_bytes / 128)
+    monkeypatch.setattr(gw, "_model_file_bytes", lambda mp=None: 12 * 1024**3)
+    cap = gw._kv_aware_ctx_ceiling(None, 16)
+    assert cap * gw._kv_bytes_per_token() + 15 * 1024**3 <= 16 * 1024**3
+
+
+def test_turbo_padding_and_default_boundary_layers_are_budgeted(monkeypatch):
+    monkeypatch.delenv("TURBO_LAYER_ADAPTIVE", raising=False)
+    gw = _gw()
+    monkeypatch.setattr(gw, "_gguf_kv_meta", lambda mp=None: {**HEAVY_SHAPE, "value_head_dim": 192})
+    monkeypatch.setattr(gw, "_effective_kv_dtypes", lambda mp: ("q8_0", "turbo2"))
+    assert gw._kv_bytes_per_token() == 8 * (48 * 128 * 34 / 32 + 44 * 256 * 34 / 128 + 4 * 256 * 34 / 32)
 
 
 def test_kv_cap_invariant_holds_across_all_ram_tiers(monkeypatch):
@@ -104,3 +122,28 @@ def test_explicit_override_bypasses_cap(monkeypatch):
     monkeypatch.setattr(gw, "_kv_aware_ctx_ceiling", lambda mp, ram: 4096)
     # An explicit override is a deliberate value and must not be KV-clamped.
     assert gw._target_num_ctx(num_ctx_override=99999) == 99999
+
+
+def test_cache_storage_table_matches_compiled_backend_blocks(tmp_path):
+    from pathlib import Path
+    import shutil
+    import subprocess
+    from localcode.model_config import KV_DTYPE_BYTES
+    compiler = shutil.which('c++')
+    if not compiler:
+        pytest.skip('C++ compiler unavailable')
+    source = tmp_path / 'storage.cpp'
+    source.write_text(r"""
+#define GGML_COMMON_DECL_CPP
+#include "ggml-common.h"
+#include <cstdio>
+int main() {
+    std::printf("%zu %zu %zu %zu %d %d %d %d", sizeof(block_q8_0),sizeof(block_turbo2_0),sizeof(block_turbo3_0),sizeof(block_turbo4_0),QK8_0,QK_TURBO2,QK_TURBO3,QK_TURBO4);
+}
+""")
+    binary = tmp_path / 'storage'
+    root = Path(__file__).resolve().parents[1]
+    subprocess.run([compiler,'-std=c++17','-I'+str(root/'llama-cpp-turboquant/ggml/src'),str(source),'-o',str(binary)], check=True,capture_output=True,timeout=60)
+    values = [int(x) for x in subprocess.check_output([str(binary)],text=True,timeout=10).split()]
+    for index, dtype in enumerate(('q8_0','turbo2','turbo3','turbo4')):
+        assert KV_DTYPE_BYTES[dtype] == values[index] / values[index+4]

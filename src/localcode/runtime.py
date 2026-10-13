@@ -744,20 +744,9 @@ class LocalCodeRuntimeGateway:
     # the GGUF's own attention metadata × the dtype actually launched, then
     # cap ctx so weights + KV-at-full-ctx + headroom fit in unified memory.
     #
-    # CRITICAL design choice — fail OPEN, only tighten when CONFIDENT:
-    # the cap is applied only when the launched KV dtype has a known byte
-    # size (f16/f32/q8_0/…). The TurboQuant path uses compressed KV types
-    # (turbo4-V etc.) whose exact byte size we don't model; for those the
-    # cap is a NO-OP and the existing hardware-validated ceilings
-    # (`_ram_ctx_ceiling`) govern — so this never regresses the tuned
-    # 64K/128K/256K turbo tiers, it only catches the uncompressed-f16
-    # stock-path class that actually OOM'd (cohere/North-Mini).
-
-    # Bytes per KV element by quant type. None-on-miss is deliberate:
-    # an unknown (e.g. "turbo4") type means "don't clamp — defer to the
-    # validated ceilings", never "guess and risk a wrong cap". The table is
-    # the central `model_config.KV_DTYPE_BYTES`; aliased here so the existing
-    # `self._KV_DTYPE_BYTES.get(...)` call sites are unchanged.
+    # Known standard and TurboQuant block sizes are modeled. Unknown formats
+    # or missing attention metadata still defer to the separate RAM ceiling.
+    # Hybrid models are conservatively charged for every reported layer.
     from .model_config import KV_DTYPE_BYTES as _KV_DTYPE_BYTES
 
     def _effective_kv_dtypes(self, model_path: str | None) -> tuple[str, str]:
@@ -769,6 +758,8 @@ class LocalCodeRuntimeGateway:
             return ("f16", "f16")
         k = (getattr(self.config, "kv_cache_type_k", "") or "f16").lower()
         v = (getattr(self.config, "kv_cache_type_v", "") or "f16").lower()
+        if k == "turbo2":
+            k = "q8_0"  # Matches the launcher's value-only TurboQuant2 policy.
         return (k, v)
 
     def _gguf_kv_meta(self, model_path: str | None = None) -> dict | None:
@@ -814,7 +805,7 @@ class LocalCodeRuntimeGateway:
 
                         wanted = (
                             ".block_count", ".attention.head_count_kv",
-                            ".attention.head_count", ".attention.key_length",
+                            ".attention.head_count", ".attention.key_length", ".attention.value_length",
                             ".embedding_length", ".nextn_predict_layers",
                         )
                         for _ in range(n_kv):
@@ -835,6 +826,7 @@ class LocalCodeRuntimeGateway:
                                 "n_layers": n_layers,
                                 "n_kv_heads": n_kv_heads,
                                 "head_dim": head_dim,
+                                "value_head_dim": found.get(".attention.value_length", head_dim),
                                 # Multi-token-prediction heads shipped inside
                                 # the GGUF (Qwen 3.6+/3.8 `nextn_predict_layers`).
                                 "n_mtp_layers": found.get(".nextn_predict_layers", 0),
@@ -895,8 +887,27 @@ class LocalCodeRuntimeGateway:
         kb = self._KV_DTYPE_BYTES.get(kt)
         vb = self._KV_DTYPE_BYTES.get(vt)
         if kb is None or vb is None:
-            return None  # compressed/unknown (e.g. turbo) → defer to ceilings
-        return meta["n_layers"] * meta["n_kv_heads"] * meta["head_dim"] * (kb + vb)
+            return None  # unknown storage format → defer to ceilings
+        layers = meta["n_layers"]
+        kd = meta["head_dim"]
+        vd = meta.get("value_head_dim", kd)
+        # TurboQuant stores a complete 128-element rotation group per head.
+        if kt.startswith("turbo"):
+            kd = (kd + 127) // 128 * 128
+        if vt.startswith("turbo"):
+            vd = (vd + 127) // 128 * 128
+        k_bytes = layers * kd * kb
+        v_bytes = layers * vd * vb
+        adaptive = os.environ.get("TURBO_LAYER_ADAPTIVE")
+        if adaptive is None and vt == "turbo2" and layers >= 8:
+            # Backend default: first two and last two value layers use q8.
+            v_bytes += 4 * vd * (self._KV_DTYPE_BYTES["q8_0"] - vb)
+        elif adaptive not in (None, "0"):
+            # User-selected layer policies can widen either cache; bound them
+            # by q8 rather than underestimating an adaptive allocation.
+            k_bytes = max(k_bytes, layers * kd * self._KV_DTYPE_BYTES["q8_0"])
+            v_bytes = max(v_bytes, layers * vd * self._KV_DTYPE_BYTES["q8_0"])
+        return meta["n_kv_heads"] * (k_bytes + v_bytes)
 
     def _model_file_bytes(self, model_path: str | None = None) -> int:
         from pathlib import Path as _Path
@@ -909,7 +920,7 @@ class LocalCodeRuntimeGateway:
         """Largest context whose KV cache fits in RAM beside the weights, with
         headroom for the OS, the app, and compute activations. Returns a large
         sentinel (no clamp) when KV size isn't confidently computable, so the
-        existing validated ceilings govern the turbo-compressed path."""
+        separate RAM ceilings govern the unknown-format path."""
         from .model_config import (
             CTX_NO_CLAMP_SENTINEL, KV_FIT_CTX_MULTIPLE, KV_FIT_MIN_CTX,
             KV_FIT_RESERVE_FRACTION, KV_FIT_RESERVE_GB,
@@ -1061,7 +1072,7 @@ class LocalCodeRuntimeGateway:
         # Universal RAM-aware KV cap on EVERY computed path: no model, present
         # or future, gets a `--ctx-size` whose KV cache can't fit (the OOM
         # never-again guard). No-op when KV size isn't confidently computable
-        # (turbo-compressed KV) — the validated ceilings govern there.
+        # unknown formats — the independent RAM ceiling still applies.
         ram_gb = self._system_ram_gb()
         return min(
             raw, self._ram_ctx_ceiling(ram_gb),

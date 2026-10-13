@@ -39,8 +39,8 @@ def test_kv_dtype_bytes_is_the_central_table():
     from localcode.runtime import LocalCodeRuntimeGateway as GW
     # The class attribute IS the central dict (aliased, not copied).
     assert GW._KV_DTYPE_BYTES is mc.KV_DTYPE_BYTES
-    # A known compressed type is absent → caller defers (no clamp).
-    assert "turbo4" not in mc.KV_DTYPE_BYTES
+    # TurboQuant sizes include all norm fields in the native block layout.
+    assert mc.KV_DTYPE_BYTES["turbo4"] == 68 / 128
     assert mc.KV_DTYPE_BYTES["f16"] == 2.0
 
 
