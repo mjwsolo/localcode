@@ -90,7 +90,10 @@ class Server:
         self.command[0] = str(ROOT / "src/localcode/bin/llama-server")
         self.log = (self.work / "server.log").open("wb")
         try:
-            self.proc = subprocess.Popen(self.command, stdout=self.log, stderr=subprocess.STDOUT, env={k: v for k, v in {**os.environ, **env}.items() if k not in {"GH_TOKEN", "GITHUB_TOKEN"}})
+            child_env = {k: v for k, v in {**os.environ, **env}.items() if k not in {"GH_TOKEN", "GITHUB_TOKEN"}}
+            if not self.legacy_metal:
+                child_env.pop("GGML_METAL_TENSOR_DISABLE", None)
+            self.proc = subprocess.Popen(self.command, stdout=self.log, stderr=subprocess.STDOUT, env=child_env)
             deadline = time.monotonic() + 420
             while time.monotonic() < deadline:
                 if self.proc.poll() is not None:

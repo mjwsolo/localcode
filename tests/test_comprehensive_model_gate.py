@@ -62,6 +62,25 @@ def test_shutdown_kills_then_waits_after_timeout(tmp_path):
     assert server.proc.wait.call_count == 2
 
 
+@pytest.mark.parametrize("legacy", [False, True])
+def test_dispatch_matrix_ignores_ambient_tensor_disable(monkeypatch, tmp_path, legacy):
+    monkeypatch.setenv("GGML_METAL_TENSOR_DISABLE", "0")
+    proc = Mock()
+    proc.poll.return_value = None
+    captured = {}
+    def launch(*args, **kwargs):
+        captured.update(kwargs["env"])
+        return proc
+    monkeypatch.setattr(gate, "server_command", lambda *a: ["llama-server"])
+    monkeypatch.setattr(gate.subprocess, "Popen", launch)
+    monkeypatch.setattr(gate.Server, "request", lambda *a, **kw: {})
+    with gate.Server(Mock(key="qwen", local_path=tmp_path / "model.gguf"), tmp_path, legacy_metal=legacy):
+        pass
+    assert ("GGML_METAL_TENSOR_DISABLE" in captured) is legacy
+    if legacy:
+        assert captured["GGML_METAL_TENSOR_DISABLE"] == "1"
+
+
 @pytest.mark.parametrize("mutation", ["commit", "binaries", "coverage", "runtime", "decisions", "vision", "turbo"])
 def test_invalid_receipts_cannot_publish_a_promotion(mutation):
     rows = [{"key": key, "turbo4": False, "checks": ["auth", "template", "chat", "tool-loop", "systemone", "decision-control", "runtime", "vision"]} for key in gate.REQUIRED_KEYS]
