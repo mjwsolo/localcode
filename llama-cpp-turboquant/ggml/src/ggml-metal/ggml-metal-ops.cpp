@@ -3913,9 +3913,10 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
         // sparse: the index lists are per query row, so a threadgroup can share KV with Q == 1 only
         auto cfg = use_sparse
                 ? ggml_metal_tuning::fa_vec_baseline_cfg((int) ne00, (int) ne20)
-                : ggml_metal_tuning::fa_vec_pick(
+                : ggml_metal_tuning::fa_vec_pick_kv(
                           props_dev->gpu_family,
                           (int) op->src[1]->type,
+                          (int) op->src[2]->type,
                           (int) ne00, (int) ne20,   // dk, dv (ne00 == dk for FA)
                           ne11, ne01);
 

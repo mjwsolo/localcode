@@ -66,8 +66,10 @@ def environment(values):
 
 
 class Server:
-    def __init__(self, choice, work: Path, *, turbo=False):
+    def __init__(self, choice, work: Path, *, turbo=False, cache_v=None, legacy_metal=False):
         self.choice, self.work, self.turbo = choice, work, turbo
+        self.cache_v = cache_v or ("turbo4" if turbo else None)
+        self.legacy_metal = legacy_metal
         self.key = secrets.token_urlsafe(32)
         self.proc = None
         self.log = None
@@ -78,15 +80,20 @@ class Server:
             self.port = sock.getsockname()[1]
         self.base = f"http://127.0.0.1:{self.port}"
         env = {auth.KEY_ENV: self.key, "LOCALCODE_AGENT_RUN_DIR": str(self.work / "run"), "LOCALCODE_INTERNAL_THINKING_MODE": "off"}
-        if self.turbo:
-            env.update(LOCALCODE_KV_CACHE_TYPE_K="q8_0", LOCALCODE_KV_CACHE_TYPE_V="turbo4")
+        if self.cache_v:
+            env.update(LOCALCODE_KV_CACHE_TYPE_K="q8_0", LOCALCODE_KV_CACHE_TYPE_V=self.cache_v)
+        if self.legacy_metal:
+            env["GGML_METAL_TENSOR_DISABLE"] = "1"
         with environment(env):
             self.command = server_command(str(self.choice.local_path), self.port, self.choice.key)
         # A user's custom binary must not redirect a test of the shipped binary.
         self.command[0] = str(ROOT / "src/localcode/bin/llama-server")
         self.log = (self.work / "server.log").open("wb")
         try:
-            self.proc = subprocess.Popen(self.command, stdout=self.log, stderr=subprocess.STDOUT, env={k: v for k, v in os.environ.items() if k not in {"GH_TOKEN", "GITHUB_TOKEN"}})
+            child_env = {k: v for k, v in {**os.environ, **env}.items() if k not in {"GH_TOKEN", "GITHUB_TOKEN"}}
+            if not self.legacy_metal:
+                child_env.pop("GGML_METAL_TENSOR_DISABLE", None)
+            self.proc = subprocess.Popen(self.command, stdout=self.log, stderr=subprocess.STDOUT, env=child_env)
             deadline = time.monotonic() + 420
             while time.monotonic() < deadline:
                 if self.proc.poll() is not None:
@@ -143,7 +150,7 @@ def validate_decisions(data):
     assert 0 <= answers["urgency"]["score"] <= 2
 
 
-def runtime_turn(server):
+def runtime_turn(server, prompt="Reply with exactly OK."):
     """Drive the actual bundled OpenCode client and plugin in a disposable project."""
     from localcode.ui.launch import write_config, runtime_env
     config = server.work / "runtime.json"
@@ -151,7 +158,7 @@ def runtime_turn(server):
         ctx = int(server.command[server.command.index("--ctx-size") + 1])
         write_config(config, port=server.port, ctx=ctx, alias=server.choice.key)
     env = {**{k: v for k, v in runtime_env(config, 1).items() if k not in {"GH_TOKEN", "GITHUB_TOKEN"}}, "OPENCODE_CONFIG": str(config), "XDG_DATA_HOME": str(server.work / "data"), "XDG_CONFIG_HOME": str(server.work / "config"), "XDG_CACHE_HOME": str(server.work / "cache"), "LOCALCODE_CONTROL_PORT": "1", "LOCALCODE_AUTO_CHECK": "0"}
-    result = subprocess.run([str(ROOT / "src/localcode/bin/localcode-ui"), "run", "--format", "json", "Reply with exactly OK."], cwd=server.work, env=env, capture_output=True, text=True, timeout=240)
+    result = subprocess.run([str(ROOT / "src/localcode/bin/localcode-ui"), "run", "--format", "json", prompt], cwd=server.work, env=env, capture_output=True, text=True, timeout=240)
     events = [json.loads(line) for line in result.stdout.splitlines() if line.startswith("{")]
     assert result.returncode == 0, "bundled runtime failed"
     assert not any(e.get("type") == "error" for e in events), "bundled runtime returned an error"
@@ -251,6 +258,19 @@ def verify(server, *, runtime=False):
     return checks
 
 
+def verify_long_context(server):
+    """Cross vector-tuning buckets, then decode after a long prefill."""
+    for repeats in (160, 520, 1000):
+        body = {"model": server.choice.key, "messages": [{"role": "user", "content":
+                "Synthetic context for a local inference test. " * repeats + "\nReply with just OK."}],
+                "temperature": 0, "max_tokens": 32, "cache_prompt": True}
+        result = server.request("/v1/chat/completions", body)
+        assert server.proc.poll() is None, "model server exited after long prefill/decode"
+        message = result["choices"][0]["message"]
+        assert (message.get("content") or "").strip().upper().rstrip(".!") == "OK", "incorrect long-context response"
+        assert result.get("usage", {}).get("prompt_tokens", 0) >= repeats * 4, "long-context test did not process enough tokens"
+
+
 def status(commit, state, description):
     # gh uses local credentials; GitHub tokens are not passed to inference subprocesses.
     subprocess.run(["gh", "api", "repos/mjwsolo/localcode/statuses/" + commit, "-f", "state=" + state, "-f", "context=local model gate", "-f", "description=" + description], check=True, stdout=subprocess.DEVNULL)
@@ -260,7 +280,7 @@ def validate_receipt(receipt, commit, hashes, keys):
     assert receipt.get("success") is True and receipt.get("strict") is True
     assert receipt.get("dirty") is False and receipt.get("commit") == commit
     assert receipt.get("binaries") == hashes, "candidate binaries changed since verification"
-    normal = {r["key"]: set(r["checks"]) for r in receipt["models"] if not r["turbo4"]}
+    normal = {r["key"]: set(r["checks"]) for r in receipt["models"] if not r.get("matrix", False) and not r["turbo4"]}
     assert set(normal) == keys and REQUIRED_KEYS <= keys, "model coverage changed"
     for key, checks in normal.items():
         expected = {"auth", "template", "chat", "systemone" if key == "openjev" else "tool-loop"}
@@ -271,7 +291,10 @@ def validate_receipt(receipt, commit, hashes, keys):
         if key in VISION_KEYS:
             expected.add("vision")
         assert expected <= checks, "missing checks for " + key
-    assert any(r["key"] == "qwen" and r["turbo4"] and "tool-loop" in r["checks"] for r in receipt["models"]), "turbo4 not verified"
+    expected_matrix = {(cache, legacy) for cache in ("q8_0", "turbo2", "turbo3", "turbo4") for legacy in (False, True)}
+    actual_matrix = {(r.get("cache_v"), r.get("legacy_metal")) for r in receipt["models"]
+                     if r["key"] == "qwen" and r.get("matrix") and {"tool-loop", "long-context", "runtime-greeting"} <= set(r["checks"])}
+    assert expected_matrix <= actual_matrix, "mixed-KV/legacy Metal long-context coverage missing"
 
 
 def main(argv=None):
@@ -302,17 +325,24 @@ def main(argv=None):
         status(commit, "pending", "Local shipping launcher, inference and runtime verification running")
     receipt = {"commit": commit, "dirty": dirty, "strict": args.strict, "binaries": {name: sha256(ROOT / "src/localcode/bin" / name) for name in ["llama-server", "localcode-ui"]}, "models": [], "success": False}
     try:
-        runs = [(c, False) for c in choices]
-        turbo_choice = next((c for c in choices if c.key == "qwen"), None)
-        if turbo_choice:
-            runs.append((turbo_choice, True))
-        for choice, turbo in runs:
-            label = choice.key + ("/turbo4" if turbo else "")
+        runs = [(c, None, False) for c in choices]
+        qwen_choice = next((c for c in choices if c.key == "qwen"), None)
+        if qwen_choice:
+            runs.extend((qwen_choice, cache, legacy) for cache in ("q8_0", "turbo2", "turbo3", "turbo4") for legacy in (False, True))
+        for choice, cache, legacy in runs:
+            label = choice.key + (f"/{cache}/{'legacy-metal' if legacy else 'native-metal'}" if cache else "")
             print("VERIFY " + label, flush=True)
             with tempfile.TemporaryDirectory(prefix="localcode-gate-") as tmp:
-                with Server(choice, Path(tmp), turbo=turbo) as server:
-                    checks = verify(server, runtime=choice.key in {"qwen38", "openjev", "diffusiongemma", "saluki"} and not turbo)
-            receipt["models"].append({"key": choice.key, "turbo4": turbo, "checks": checks})
+                with Server(choice, Path(tmp), cache_v=cache, legacy_metal=legacy) as server:
+                    if cache:
+                        runtime_turn(server, "Hi")
+                        assert server.proc.poll() is None, "model server exited on the first harness greeting"
+                    checks = verify(server, runtime=choice.key in {"qwen38", "openjev", "diffusiongemma", "saluki"} and cache is None)
+                    if cache:
+                        verify_long_context(server)
+                        checks.extend(["runtime-greeting", "long-context"])
+            receipt["models"].append({"key": choice.key, "turbo4": cache == "turbo4", "cache_v": cache,
+                                      "legacy_metal": legacy, "matrix": cache is not None, "checks": checks})
             print("PASS " + label + " " + ", ".join(checks), flush=True)
         receipt["success"] = True
     except Exception as exc:

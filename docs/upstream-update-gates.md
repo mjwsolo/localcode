@@ -26,16 +26,20 @@ Required keys: `gemma-12b`, `qwen`, `qwen38`, `diffusiongemma`, `north-mini-code
 `muse-glimmer`, `kolibri`, `openjev`. Additional downloaded catalog quants run too.
 Checks cover rejected unauthenticated inference, template rendering, chat,
 well-formed tool calls with correct arguments, consumption of tool results,
-System One choice/boolean/score response contracts, and an additional turbo4 run.
+System One choice/boolean/score response contracts, and eight Qwen cache/dispatch
+configurations: q8 and TurboQuant 2/3/4 values with q8 keys, each on native and
+legacy Metal dispatch. Each configuration checks the first harness greeting
+and long-context prefill followed by decoding. Legacy dispatch on the test Mac
+does not replace testing on physical older chips.
 OpenJev also verifies all three answer types through the authenticated supervisor
 bridge; its receipt must include `decision-control`.
-Qwen 3.8, OpenJev and DiffusionGemma also run through the shipping OpenCode binary and plugin.
+Qwen 3.8, OpenJev, DiffusionGemma and Saluki also run through the shipping OpenCode binary and plugin.
 Decision probabilities are checked for validity, not used as safety approvals.
 This is a compatibility gate, not a coding-quality benchmark or exhaustive eval.
 
 To test before pushing, run `--strict` without publishing, push the tested
 commit, then run `--publish-receipt`. That verifies the clean commit, binary
-hashes, model coverage, runtime checks and turbo4 result before publishing;
+hashes, model coverage, runtime checks and the full cache/dispatch matrix before publishing;
 a stale or incomplete receipt is refused.
 
 For a focused development run use `--models openjev`; that cannot publish a

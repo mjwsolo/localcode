@@ -1,0 +1,53 @@
+diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+--- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+@@ -3913,9 +3913,10 @@
+         // sparse: the index lists are per query row, so a threadgroup can share KV with Q == 1 only
+         auto cfg = use_sparse
+                 ? ggml_metal_tuning::fa_vec_baseline_cfg((int) ne00, (int) ne20)
+-                : ggml_metal_tuning::fa_vec_pick(
++                : ggml_metal_tuning::fa_vec_pick_kv(
+                           props_dev->gpu_family,
+                           (int) op->src[1]->type,
++                          (int) op->src[2]->type,
+                           (int) ne00, (int) ne20,   // dk, dv (ne00 == dk for FA)
+                           ne11, ne01);
+ 
+diff --git a/ggml/src/ggml-metal/ggml-metal-tuning.h b/ggml/src/ggml-metal/ggml-metal-tuning.h
+--- a/ggml/src/ggml-metal/ggml-metal-tuning.h
++++ b/ggml/src/ggml-metal/ggml-metal-tuning.h
+@@ -72,4 +72,7 @@
+ // Keyed by Apple GPU family; an untuned family matches no row and gets the baseline.
+ fa_vec_cfg_t fa_vec_pick(int gpu_family, int dtype, int dk, int dv, int64_t ne11, int64_t ne01);
+ 
++// TurboQuant kernels only instantiate the baseline Q/NE variant.
++fa_vec_cfg_t fa_vec_pick_kv(int gpu_family, int dtype_k, int dtype_v, int dk, int dv, int64_t ne11, int64_t ne01);
++
+ }  // namespace ggml_metal_tuning
+diff --git a/ggml/src/ggml-metal/ggml-metal-tuning.cpp b/ggml/src/ggml-metal/ggml-metal-tuning.cpp
+--- a/ggml/src/ggml-metal/ggml-metal-tuning.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-tuning.cpp
+@@ -1172,4 +1172,12 @@
+     return baseline;
+ }
+ 
++fa_vec_cfg_t fa_vec_pick_kv(int gpu_family, int dtype_k, int dtype_v, int dk, int dv, int64_t ne11, int64_t ne01) {
++    const bool turbo = dtype_k == GGML_TYPE_TURBO2_0 || dtype_k == GGML_TYPE_TURBO3_0 || dtype_k == GGML_TYPE_TURBO4_0;
++    if (dtype_k != dtype_v || turbo) {
++        return fa_vec_baseline_cfg(dk, dv);
++    }
++    return fa_vec_pick(gpu_family, dtype_k, dk, dv, ne11, ne01);
++}
++
+ }  // namespace ggml_metal_tuning
+diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
+--- a/ggml/src/ggml-metal/ggml-metal-device.m
++++ b/ggml/src/ggml-metal/ggml-metal-device.m
+@@ -97,6 +97,7 @@
+ }
+ 
+ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_with_params pipeline) {
++    GGML_ASSERT(pipeline.pipeline != NULL && "Metal pipeline unavailable: check kernel compilation diagnostics");
+     return pipeline.pipeline->obj.maxTotalThreadsPerThreadgroup;
+ }
+ 

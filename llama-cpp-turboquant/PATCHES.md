@@ -549,3 +549,13 @@ rather than against whatever upstream happens to be today.
 - **CUDA `GET_ROWS` claims TQ4_1S/TQ3_1S support** in `supports_op`, but
   `ggml-cuda/getrows.cu` has no TQ case and would `GGML_ABORT`. Pre-existing,
   not introduced by the bump, but it should be decided one way or the other.
+
+## Mixed-KV Metal vector selection
+
+Mixed q8/TurboQuant and symmetric TurboQuant caches have baseline vector
+kernels only. Select by both K and V types, keeping these caches on baseline
+Q/NE variants. Standard symmetric caches retain their upstream tuning. A
+missing pipeline is checked before querying its thread limit. The regression
+case is an 8K-token Qwen prompt followed by decode with q8 keys/TurboQuant
+values and the tensor API disabled; it previously SIGSEGVed at the pipeline
+thread-limit query.

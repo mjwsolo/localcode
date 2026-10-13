@@ -1172,4 +1172,12 @@ fa_vec_cfg_t fa_vec_pick(int gpu_family, int dtype, int dk, int dv, int64_t ne11
     return baseline;
 }
 
+fa_vec_cfg_t fa_vec_pick_kv(int gpu_family, int dtype_k, int dtype_v, int dk, int dv, int64_t ne11, int64_t ne01) {
+    const bool turbo = dtype_k == GGML_TYPE_TURBO2_0 || dtype_k == GGML_TYPE_TURBO3_0 || dtype_k == GGML_TYPE_TURBO4_0;
+    if (dtype_k != dtype_v || turbo) {
+        return fa_vec_baseline_cfg(dk, dv);
+    }
+    return fa_vec_pick(gpu_family, dtype_k, dk, dv, ne11, ne01);
+}
+
 }  // namespace ggml_metal_tuning
