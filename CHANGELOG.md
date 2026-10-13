@@ -5,6 +5,22 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
+## 0.5.27 — 2026-10-13
+
+### Fixed
+
+- RAM-aware context sizing includes TurboQuant block storage, padded heads,
+  adaptive q8 boundary layers, and separate key/value head widths.
+- Launch validation budgets all loaded weight files and independent draft KV
+  caches. Gemma assistant KV sharing and built-in MTP head caches are handled
+  separately. A model is refused when even the minimum context cannot fit.
+
+### Tests
+
+- Compile the backend's cache structs to verify Python storage estimates.
+- Cover padded TurboQuant heads, boundary layers and explicit draft context
+  allocations in the memory guards.
+
 ## 0.5.26 — 2026-10-13
 
 ### Fixed
