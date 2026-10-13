@@ -25,7 +25,11 @@ flag assertion was corrected against the current shipped server flag.
   A failed post-publication check marks the workflow failed; it cannot undo a
   PyPI upload. Fix forward or explicitly decide whether to yank the release.
 - Context defaults are capped by the physical-RAM tier and, when computable,
-  the remaining memory for the selected model’s KV cache. Final launcher
+  the remaining memory for the selected model’s KV cache. Known TurboQuant
+  layouts include head padding and adaptive boundary layers. Separate value
+  head widths and independent draft KV are included; Gemma assistant sharing
+  and built-in MTP heads are accounted for separately. These are conservative
+  estimates, not measured peak-memory guarantees. Final launcher
   validation also caps saved tuning and environment overrides at that
   limit. Over-capacity model weights are refused before starting the server.
 - Simulated model/RAM tests cover 8–192 GiB, including the shipping server command.

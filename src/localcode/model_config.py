@@ -128,13 +128,15 @@ BALANCED_RAM_LIFT_MIN_GB = 32
 # ─────────────────────────────────────────────────────────────────────
 #
 # Bytes per KV element by quant type. A MISSING key is deliberate: an unknown
-# type (e.g. "turbo4") means "don't clamp — defer to the validated ceilings",
+# type means "don't clamp — defer to the validated ceilings",
 # never "guess and risk a wrong cap".
 KV_DTYPE_BYTES: dict[str, float] = {
     "f32": 4.0, "f16": 2.0, "bf16": 2.0,
     "q8_0": 1.0625, "q8_1": 1.125,
     "q5_1": 0.875, "q5_0": 0.8125,
     "q4_1": 0.625, "q4_0": 0.5625,
+    # Actual block storage from ggml-common.h, including scale/norm fields.
+    "turbo2": 34 / 128, "turbo3": 50 / 128, "turbo4": 68 / 128,
 }
 
 # RAM-aware KV-fit ceiling reserve + rounding (runtime._kv_aware_ctx_ceiling).

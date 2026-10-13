@@ -46,7 +46,7 @@ Small local models finish a task when the loop makes them. The plugin adds local
 
 localcode is designed to enable agentic coding with local models on consumer hardware. The prompts, the loop, and the model server are tuned for small quantised models rather than a frontier model:
 
-- **Long context on 16 GB** - the llama.cpp fork compresses the KV cache with TurboQuant (about 3.8x smaller than f16), so long contexts fit on small machines. See [Unified Memory](/localcode/concepts/unified-memory).
+- **RAM-aware context** - the launcher budgets the selected weights and KV caches against the machine’s RAM. Optional TurboQuant cache formats reduce storage; context still depends on the model and quant. See [Unified Memory](/localcode/concepts/unified-memory).
 - **Fast multi-turn** - the server keeps the prompt prefix between turns, so the next turn does not re-read it.
 - **Compact tool definitions** - the runtime shortens built-in tool descriptions and large MCP schemas before sending them to the model. This leaves more room for the task and project context, especially on a 16 GB Mac.
 - **Hidden reasoning is off by default** - the server starts with `--reasoning off`. Small models finish faster and follow tool calls better without it.
