@@ -12,11 +12,12 @@ The machine-readable form of this inventory lives at the repo root:
 | `patches/PINNED_UPSTREAM` | the upstream commit the series applies to |
 | `patches/000N-*.patch` | numbered patches, applied in order with `git apply` |
 
-**Pinned upstream:** `62a6f74bab748b1755f4cd8dfc0871caf865c6c8` (2026-10-11,
-master, `server: add component tests (#30312)`, 124 commits after tag `v0.6.0`
-`d81235049`, the previous pin).
+**Pinned upstream:** `62df1815bc053066761f4eac58e288f23778e164` (2026-10-14,
+master, `cuda, hip: GDN chunked kernel (#29353)`, 75 commits after
+`5c8854fd8`, the previous pin).
 
-**Previous pins:** `836d57176dc699a726c55418e4f96b8ca628e1bf` (2026-10-03),
+**Previous pins:** `5c8854fd88319125125dc4b836c98b1b215b0f23` (2026-10-11),
+`62a6f74bab748b1755f4cd8dfc0871caf865c6c8` (2026-10-11), `836d57176dc699a726c55418e4f96b8ca628e1bf` (2026-10-03),
 `3f545beccee69d9975f466ec7e45fd9aacd8ba90` (2026-08-22), and before it `c08d28d08871715fd68accffaeeb76ddcaede658` (2026-04-05). That
 commit was never recorded anywhere; it was recovered for this bump by
 blob-matching the vendored tree against upstream history. Do not let that
@@ -257,6 +258,17 @@ small sample; treat the ranking as solid and the exact numbers as rough.
   fork rotates inside the KV kernels, so upstream's rotation would be a second,
   redundant rotation. `LLAMA_ATTN_ROT_DISABLE` now defaults to `true`;
   set it to `0` to opt back in. Worth re-evaluating for non-turbo KV types.
+  At the 2026-10-14 bump upstream added a per-model switch
+  (`llama_model_set_attn_rot`, `model.attn_rot`); the two compose as
+  `!model.attn_rot || (env ? atoi(env) != 0 : true)`, so the fork default
+  (off) and the env opt-in are unchanged and the model switch can only turn
+  it further off.
+- **`mul_mm_id_map0` threadgroup memory cap (32 KB).** At the 2026-10-14 bump
+  upstream rewrote `kernel_mul_mm_id_map0` (#30373, duplicate expert ids): its
+  smem is now `2*ne02*4 + ne02*ne20*2` (per-expert count + base, then id
+  staging). The fork keeps upstream's formula and its own clamp to 32768
+  after `GGML_PAD`, and the fork's larger `map0` instantiations (32..256)
+  still apply to the new kernel.
 - **CUDA RDNA `DKQ=640` flash-attention tuning** now reuses upstream's
   `576,512` RDNA numbers rather than the fork's own tuned values.
 - **Vulkan `rte` shader variants** for TURBO3_0 are gone; upstream removed the
@@ -415,6 +427,16 @@ prompt, parser prefix and the emitted generation prompt stay consistent;
 `server-common.cpp` only forwards the flag. Everything else in the patch
 rebased unchanged (upstream still has no DiffusionGemma, no denoiser, no
 thought-channel rules).
+
+**2026-10-14 bump:** upstream's `chat: replace output string with parts`
+(#30389) turned `common_chat_params::prompt` into a `common_chat_prompt`
+(template parts and user-input parts). The `no_forced_thinking` strip now
+trims the opener from the last prompt part, and only when that part is
+template text (the opener is never user input). `tools/diffusion/diffusion-cli.cpp`
+and `tools/diffusion-gemma-server/diffusion-gemma-visual-server.cpp` take
+`.prompt.str()`. Upstream's no-cache attention now pads K/V to the mask's KV
+dimension (#30416); the DiffusionGemma masks are built at the exact K/V
+length, so no padding is added for them.
 
 ### `0006-kolibri1.patch` — Aleph Alpha Kolibri-1 (`kolibri1` architecture)
 
