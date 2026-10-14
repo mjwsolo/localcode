@@ -3,16 +3,13 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## 0.5.28 — 2026-10-14
-
-- Reap the owned model when the supervisor is forcibly killed. Stop the model before draining API connections, and prevent a background load from spawning a replacement during shutdown.
-
-- Avoid a startup npm SDK install in numeric release builds. Report sandbox integration tests separately; required CI refuses capability skips. Live speech model tests are opt-in, with a CPU option for environments without GPU inference.
+## 0.5.29 — 2026-10-14
 
 ### Fixed
 
+- Reap the owned model when the supervisor is forcibly killed. Stop the model before draining API connections, and prevent a background load from spawning a replacement during shutdown.
+- Avoid a startup npm SDK install in numeric release builds. Report sandbox integration tests separately; required CI refuses capability skips. Live speech model tests are opt-in, with a CPU option for environments without GPU inference.
 - Server Stop offers an explicit confirmation when a request is active or activity cannot be checked. Notifications stay above dialogs on every screen.
-
 - Minimal startup context excludes automatic project listings, project instructions
   and skill catalogs. Removed overlapping workflow instructions and schema noise.
   `--context full` restores complete context explicitly.
@@ -33,6 +30,15 @@ All notable changes to LocalCode will be documented here. The format follows
 - Minimal mode does not replay old conversation warmup captures. Captures are
   bound to their context profile. `doctor` reports model processes and service state
   without exposing API keys or conversation contents.
+
+## 0.5.28 — 2026-10-13
+
+### Fixed
+
+- Unsupported asymmetric Metal cache settings are rejected before launch with
+  instructions for supported formats, rather than reaching a backend assertion.
+  Matching standard caches and the supported q8/TurboQuant combinations remain
+  available.
 
 ## 0.5.27 — 2026-10-13
 

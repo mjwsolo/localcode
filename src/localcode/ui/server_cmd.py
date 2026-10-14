@@ -20,6 +20,7 @@ def server_command(gguf: str, port: int, alias: str | None = None) -> list[str]:
     g = LocalCodeRuntimeGateway(cfg.runtime)
     validate_model_memory(gguf, g._system_ram_gb())
     cmd = g.llama_server_command(gguf, port)
+    validate_kv_cache_settings(cmd)
     # Validate AFTER stored tuning and environment overrides have rewritten flags.
     ram_gb = g._system_ram_gb()
     ceiling = min(g._ram_ctx_ceiling(ram_gb), g._kv_aware_ctx_ceiling(gguf, ram_gb), g._model_max_ctx(gguf))
@@ -160,6 +161,21 @@ def mmproj_for(gguf: str) -> Path | None:
 def context_size(gguf: str) -> int:
     cmd = server_command(gguf, 0)
     return int(cmd[cmd.index("--ctx-size") + 1])
+
+
+def validate_kv_cache_settings(cmd: list[str]) -> None:
+    """Reject unsupported Metal mixed caches before a backend assertion."""
+    if "--flash-attn" not in cmd or cmd[cmd.index("--flash-attn") + 1] != "on":
+        return
+    def value(flag: str) -> str:
+        return cmd[cmd.index(flag) + 1].lower() if flag in cmd else "f16"
+    key, val = value("--cache-type-k"), value("--cache-type-v")
+    mixed = {"q8_0", "turbo2", "turbo3", "turbo4"}
+    if key != val and not (key in mixed and val in mixed):
+        raise ValueError(
+            f"Unsupported mixed KV caches: {key} keys / {val} values. "
+            "Use matching cache types, or q8_0 keys with q8_0/TurboQuant values."
+        )
 
 
 def validate_model_memory(gguf: str, ram_gb: float) -> None:
