@@ -5,6 +5,34 @@ description: Environment variables, the run directory, localcode.json, and LOCAL
 
 There is nothing to configure before the first run. Most day-to-day settings live in the interface: `/models`, `/settings`, `/themes`, `/permissions`, `/mcps`. This page covers what lives outside it.
 
+## Context
+
+Sessions start with minimal context: assistant instructions, the working directory,
+tool definitions and the current conversation. They do not automatically attach
+workspace listings, project instruction files or skill catalogs. Files can still
+be read when needed for the work you request. Older tool arguments and results
+are abbreviated in requests; the complete conversation stays saved on disk.
+
+Use `localcode --context full` to include project instructions, skill and MCP
+instructions, automatic workspace listings and unabridged tool history in requests.
+Normal context-window limits and compaction still apply. Combine
+it with `--trust-project` when using repository configuration. `LOCALCODE_CONTEXT=full`
+sets the same default. `LOCALCODE_WORKSPACE_CONTEXT=1` enables just the automatic
+workspace listing and change reports. Saved warmup captures are not replayed
+in minimal mode unless you explicitly set `LOCALCODE_PROMPT_WARMUP=1`.
+
+MCP servers without an explicit `enabled: true` setting stay disconnected at
+minimal startup. Enable the server you need with `/mcps`, or set `enabled: true`
+in its configuration. Full context mode retains the previous connection defaults.
+
+Switching models in an active chat offers **Start a new chat** first. The previous
+conversation remains saved, and unsent text moves to the new chat. Choose **Continue this chat** to have the new model
+process that conversation. Selecting an already running model keeps it loaded.
+
+After an upgrade, exit running LocalCode windows before launching the updated
+version. The launcher refuses to attach a new interface to an outdated model
+supervisor, so an old process cannot silently keep the previous behavior active.
+
 ## Where state lives
 
 | Path | What is there |
@@ -30,7 +58,9 @@ tail -f .localcode-agent/localcode-plugin.log
 
 ## `LOCALCODE.md`
 
-The runtime reads project instructions from `LOCALCODE.md` in the project root: the checks to run, conventions, files to leave alone. It is included in every session in that project. `/project-context` opens it for editing.
+`LOCALCODE.md` stores project instructions: checks to run, conventions and files
+to leave alone. `/project-context` opens it for editing. Full context mode
+includes it automatically; in minimal mode, ask the agent to read it when relevant.
 
 ## `localcode.json`
 
@@ -62,3 +92,28 @@ See [MCP](/localcode/guides/mcp) for the server shapes. The model provider secti
 ## Skills
 
 Skill folders are read from `<project>/.localcode-agent/skills/` and `~/.config/localcode-agent/skills/`. See [Skills](/localcode/guides/skills-and-hooks).
+
+Their catalog is included in full context mode. Minimal mode does not list skills
+automatically; a named skill can still be loaded when explicitly requested.
+
+## Local service diagnostics
+
+`localcode doctor` reports the selected context mode, detected GGUF files,
+model process IDs and memory usage, and the running service state. It omits
+API keys, prompt contents and full process arguments. Use it when a local API
+cannot connect or a model switch appears to leave a previous server running.
+
+The picker detects existing GGUFs in its configured folder and subfolders,
+the previous default folder, `~/models`, Hugging Face Hub caches, and the standard
+LM Studio folders. Selecting one links to the existing file rather than copying
+or downloading its weights. Models stored elsewhere can be loaded by full path
+with `localcode --model /path/to/model.gguf`.
+
+Selecting existing weights does not download a missing optional drafter. The
+model runs without it. Set `LOCALCODE_DOWNLOAD_DRAFTER=1` to request that download;
+new model downloads still include their advertised drafter.
+
+Available quant listings refresh in the background. Local and cached models
+remain selectable while the remote listing is slow or unavailable. A failed
+model load releases its new process; validation failures preserve a healthy
+previous process. Model switches also refuse to interrupt requests from other clients.

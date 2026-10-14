@@ -6,8 +6,10 @@ test("catalog groups installed model files without counting projectors or broken
   const result = Bun.spawnSync([python, "-c", `
 import pathlib, tempfile
 from localcode.ui.supervisor import Supervisor, MODEL_GROUPS
+from localcode import model_files
 with tempfile.TemporaryDirectory() as directory:
     root = pathlib.Path(directory)
+    model_files.search_roots = lambda _: [root]
     group = MODEL_GROUPS[0]
     stem = group.hf_repo.rsplit('/', 1)[-1].removesuffix('-GGUF')
     first = root / (stem + '-Q4_K_M.gguf')

@@ -35,6 +35,7 @@ import socket
 import struct
 import time
 import urllib.request
+from localcode.ui.http import local_urlopen
 from pathlib import Path
 
 from localcode.ui import fork_commit, run_dir
@@ -47,7 +48,10 @@ SLOT_FILE = "warm.bin"
 
 
 def enabled() -> bool:
-    return os.environ.get("LOCALCODE_PROMPT_WARMUP", "1").strip().lower() not in {"0", "false", "no", "off"}
+    # Slot captures can contain previous user turns. Do not pre-read them in
+    # minimal mode; ordinary live-session prefix caching still works normally.
+    default = "1" if os.environ.get("LOCALCODE_CONTEXT") == "full" else "0"
+    return os.environ.get("LOCALCODE_PROMPT_WARMUP", default).strip().lower() not in {"0", "false", "no", "off"}
 
 
 def slot_save_dir() -> Path:
@@ -169,6 +173,8 @@ def load(alias: str, model_path: Path | None = None) -> list[int] | None:
         return None
     if not isinstance(data, dict):
         return None
+    if data.get("prefix_revision") != "lean-v1" or data.get("context") != os.environ.get("LOCALCODE_CONTEXT", "minimal"):
+        return None
     if model_path is not None:
         try:
             identity = model_identity(model_path)
@@ -193,7 +199,8 @@ def store(alias: str, tokens: list[int], model_path: Path | None = None) -> None
     path = _warm_file(alias)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".json.tmp")
-    data = {"fork": fork_commit(), "saved": time.time(), "tokens": tokens}
+    data = {"fork": fork_commit(), "saved": time.time(), "tokens": tokens,
+            "prefix_revision": "lean-v1", "context": os.environ.get("LOCALCODE_CONTEXT", "minimal")}
     if model_path is not None:
         data["model"] = model_identity(model_path)
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
@@ -215,7 +222,7 @@ def _post(port: int, path: str, body: dict, timeout: float) -> dict:
     from localcode.ui.auth import server_headers
     req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json", **server_headers()})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with local_urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode())
 
 
@@ -223,7 +230,7 @@ def slots(port: int) -> list[dict] | None:
     try:
         from localcode.ui.auth import server_headers
         req = urllib.request.Request(f"http://127.0.0.1:{port}/slots", headers=server_headers())
-        with urllib.request.urlopen(req, timeout=2) as r:
+        with local_urlopen(req, timeout=2) as r:
             data = json.loads(r.read().decode())
         return data if isinstance(data, list) else None
     except Exception:  # noqa: BLE001

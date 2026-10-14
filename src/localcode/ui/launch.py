@@ -17,6 +17,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+from localcode.ui.http import bypass_local_proxies, local_urlopen
 from pathlib import Path
 from urllib.parse import quote
 
@@ -25,6 +26,39 @@ from localcode.ui.auth import KEY_ENV, TOKEN_ENV, control_headers, new_secret, r
 from localcode.ui.ports import choose_ports, find_running
 
 WAIT_S = 240
+
+
+def _shutdown_supervisor(process) -> None:
+    """Allow the guarded model shutdown and kill/reap before forcing exit."""
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=35)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=5)
+
+
+def _model_alias(model: str | None, directory: Path) -> str | None:
+    if not model:
+        return None
+    from localcode.models_catalog import by_key
+    from localcode.model_files import find_model
+    raw = model.strip()
+    choice = by_key(raw)
+    filename = choice.filename if choice else Path(raw).name
+    if not filename.endswith('.gguf'):
+        filename += '.gguf'
+    explicit = Path(raw).expanduser()
+    existing = explicit if explicit.is_file() else find_model(filename, directory)
+    if existing is None:
+        return None
+    target = directory / existing.name
+    directory.mkdir(parents=True, exist_ok=True)
+    if not target.is_file():
+        target.symlink_to(existing.resolve())
+    return existing.stem
 
 
 def _models_dir() -> Path:
@@ -49,7 +83,7 @@ def _get_json(url: str, timeout: float = 1.0) -> dict | None:
     """GET a control-API route with the session token."""
     try:
         req = urllib.request.Request(url, headers=control_headers())
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with local_urlopen(req, timeout=timeout) as r:
             return json.load(r)
     except Exception:  # noqa: BLE001
         return None
@@ -58,7 +92,7 @@ def _get_json(url: str, timeout: float = 1.0) -> dict | None:
 def _ok(url: str) -> bool:
     try:
         req = urllib.request.Request(url, headers=control_headers())
-        with urllib.request.urlopen(req, timeout=1.0):
+        with local_urlopen(req, timeout=1.0):
             return True
     except Exception:  # noqa: BLE001
         return False
@@ -167,6 +201,8 @@ def _session_directory(session_id: str) -> Path | None:
 def runtime_env(config_path: Path, ctrl: int, *, trust_project: bool = False) -> dict[str, str]:
     """Project configuration can execute code before tool permissions apply."""
     env = dict(os.environ)
+    env.setdefault("LOCALCODE_CONTEXT", "minimal")
+    bypass_local_proxies(env)
     env["LOCALCODE_CONTROL_URL"] = f"http://127.0.0.1:{ctrl}"
     env["LOCALCODE_CONFIG"] = str(config_path)
     env["OPENCODE_TUI_CONFIG"] = str(config_path.with_suffix(".tui.json"))
@@ -309,11 +345,14 @@ def main(model: str | None = None, project: str | None = None,
               file=sys.stderr)
         return 1
     models_dir = _models_dir()
-    alias = (model or "").strip() or None
-    if alias and not (models_dir / f"{alias}.gguf").is_file():
-        print(f"localcode: no downloaded model named {alias!r} in {models_dir}; opening the picker instead.",
+    try:
+        alias = _model_alias(model, models_dir)
+    except OSError as error:
+        print(f"localcode: could not use the existing model: {error}", file=sys.stderr)
+        return 1
+    if model and alias is None:
+        print(f"localcode: no downloaded model named {model!r} in the model folders; opening the picker instead.",
               file=sys.stderr)
-        alias = None
     project_dir = Path(project).expanduser().resolve() if project else (
         _session_directory(resume) if resume and resume != "last" else None
     ) or Path.cwd()
@@ -322,6 +361,12 @@ def main(model: str | None = None, project: str | None = None,
     # instead of refusing. One llama-server per machine, any number of windows.
     running = find_running()
     if running is not None:
+        from localcode import __version__
+        if running[1].get("version") != __version__:
+            print(f"localcode: a service from an earlier installation is still running. "
+                  f"Exit LocalCode in its open terminals, then launch again to use {__version__}.",
+                  file=sys.stderr)
+            return 1
         return attach(running[0], running[1], ui_bin, project_dir, alias, resume,
                       trust_project=trust_project)
 
@@ -351,17 +396,9 @@ def main(model: str | None = None, project: str | None = None,
     frontend: subprocess.Popen | None = None
 
     def cleanup() -> None:
-        for proc in (frontend, sup):
-            if proc is not None and proc.poll() is None:
-                try:
-                    proc.terminate()
-                except OSError:
-                    pass
-        if sup.poll() is None:
-            try:
-                sup.wait(timeout=8)
-            except subprocess.TimeoutExpired:
-                sup.kill()
+        if frontend is not None and frontend.poll() is None:
+            frontend.terminate()
+        _shutdown_supervisor(sup)
 
     def on_signal(signum, _frame):
         cleanup()

@@ -50,7 +50,39 @@ def report() -> dict:
         'network_configuration_present': {name: bool(os.environ.get(name)) for name in (
             'HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy', 'SSL_CERT_FILE',
             'REQUESTS_CA_BUNDLE', 'PIP_INDEX_URL', 'UV_INDEX_URL', 'UV_DEFAULT_INDEX')},
+        'local_services': service_report(),
     }
+
+
+def service_report() -> dict:
+    """Read-only local diagnosis: no API keys, prompts or full process arguments."""
+    from .model_files import model_files
+    from .models_catalog import model_dir
+    from .ui.ports import find_running
+    result = {'context': os.environ.get('LOCALCODE_CONTEXT', 'minimal'),
+              'models_dir': str(model_dir()), 'installed_models': len(model_files(model_dir()))}
+    try:
+        processes = subprocess.check_output(['ps', '-axo', 'pid,ppid,rss,comm'], text=True, timeout=3)
+        servers = []
+        for line in processes.splitlines():
+            fields = line.strip().split(None, 3)
+            if len(fields) == 4 and os.path.basename(fields[3]) == 'llama-server':
+                servers.append({'pid': int(fields[0]), 'parent_pid': int(fields[1]), 'rss_kb': int(fields[2])})
+        result['model_processes'] = servers
+    except (OSError, ValueError, subprocess.SubprocessError):
+        result['model_processes'] = None
+    try:
+        running = find_running()
+        result['supervisor_found'] = running is not None
+        if running:
+            result['control_port'] = running[0]
+            result['server'] = {key: running[1][key] for key in (
+                'version', 'state', 'current', 'port', 'inference_port', 'server_running',
+                'server_ready', 'process_id', 'exit_code', 'ctx', 'warmup',
+            ) if key in running[1]}
+    except (OSError, ValueError):
+        result['supervisor_found'] = False
+    return result
 
 
 def main() -> int:

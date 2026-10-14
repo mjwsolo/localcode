@@ -344,6 +344,11 @@ def resolve_model_arg(candidate: str | None) -> Path | None:
 
     name = Path(candidate).name
     if name.endswith(".gguf"):
+        explicit = Path(candidate).expanduser()
+        if explicit.is_file():
+            from .models_catalog import by_filename
+            if _is_complete_download(explicit, by_filename(name)):
+                return explicit.resolve()
         return get_model_path(name)
     choice = by_key(candidate)
     if choice is None:
@@ -393,8 +398,9 @@ def get_model_path(preferred_filename: str | None = None) -> Path | None:
     # 3. Canonical download directory (same size check — a half-written file
     # in the canonical dir is a partial, not a usable model).
     if preferred_filename is not None:
-        candidate = _model_dir() / preferred_filename
-        if candidate.is_file() and _is_complete_download(candidate, catalog_entry):
+        from .model_files import find_model
+        candidate = find_model(preferred_filename, _model_dir())
+        if candidate is not None and _is_complete_download(candidate, catalog_entry):
             return candidate
     else:
         # No preference — pick any catalog model that's already downloaded,

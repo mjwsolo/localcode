@@ -170,6 +170,33 @@ async function tui(api: TuiPluginApi) {
   } }));
   let changingPort = false;
   let changingServer = false;
+  async function changeServer(action: "start" | "stop", force = false) {
+    if (changingServer) return;
+    changingServer = true;
+    try {
+      const response = await fetch(control + "/server/" + action, {
+        method: "POST", headers, body: JSON.stringify(force ? { force: true } : {}), signal: AbortSignal.timeout(5000),
+      });
+      const result = await response.json() as { error?: string; state?: string; force_required?: boolean };
+      if (!response.ok) {
+        if (action === "stop" && result.force_required === true) {
+          api.ui.dialog.replace(() => api.ui.DialogConfirm({
+            title: "Stop shared model server?",
+            message: `${result.error || "The server may be busy"} Stop anyway? This interrupts requests in every LocalCode window and connected app, then frees model memory. Saved chat history stays available.`,
+            onConfirm: () => { void changeServer("stop", true); },
+          }));
+          return;
+        }
+        throw new Error(result.error || `HTTP ${response.status}`);
+      }
+      api.ui.toast({ variant: "info", message: action === "stop" ? "Stopping shared model server. Chat history stays available." : "Loading model. Refresh /server to check progress.", duration: 8000 });
+      await server();
+    } catch (cause) {
+      error(`Could not confirm server operation: ${cause instanceof Error ? cause.message : String(cause)}. Refresh /server before retrying.`);
+    } finally {
+      changingServer = false;
+    }
+  }
   async function server() {
     if (!control) return error("Start LocalCode to manage its model server");
     try {
@@ -205,16 +232,7 @@ async function tui(api: TuiPluginApi) {
       ], onSelect(item) {
         if (item.value === "refresh" || item.value === "status") return void server();
         if (item.value === "start" || item.value === "stop") {
-          if (changingServer) return;
-          changingServer = true;
-          void fetch(control + "/server/" + item.value, { method: "POST", headers, body: "{}", signal: AbortSignal.timeout(5000) })
-            .then(async (r) => {
-              const result = await r.json() as { error?: string; state?: string };
-              if (!r.ok) throw new Error(result.error || `HTTP ${r.status}`);
-              api.ui.toast({ variant: "info", message: item.value === "stop" ? "Stopping shared model server. Chat history stays available." : "Loading model. Refresh /server to check progress.", duration: 8000 });
-              await server();
-            }).catch((e) => error(`Could not confirm server operation: ${String(e)}. Refresh /server before retrying.`))
-            .finally(() => { changingServer = false; });
+          void changeServer(item.value);
           return;
         }
         if (item.value === "port") return api.ui.dialog.replace(() => api.ui.DialogPrompt({

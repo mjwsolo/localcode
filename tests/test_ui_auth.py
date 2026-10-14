@@ -24,7 +24,7 @@ TOKEN = "t" * 43
 
 
 @pytest.fixture()
-def control():
+def control(loopback_listener):
     """A live control server backed by a stub supervisor."""
     calls: list[str] = []
     sup = types.SimpleNamespace(

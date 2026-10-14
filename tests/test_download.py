@@ -162,6 +162,7 @@ def test_parallel_chunked_model_fragment():
 
 
 # ── Test 5: Fallback when server doesn't support ranges ──
+@pytest.mark.usefixtures("loopback_listener")
 def test_fallback_no_ranges():
     """Verify single-threaded fallback when Accept-Ranges is not supported."""
     test_data = b"Hello world! " * 1000  # ~13KB
@@ -212,6 +213,7 @@ def test_bad_url():
 
 
 # ── Test 7: Partial failure — one chunk fails ──
+@pytest.mark.usefixtures("loopback_listener")
 def test_partial_chunk_failure(monkeypatch):
     monkeypatch.setattr("localcode.transfer.CHUNK_BYTES", 65536)
     """Verify cleanup when one thread fails mid-download."""
@@ -280,6 +282,7 @@ def test_download_model_skip_existing(tmp_path):
 
 
 # ── Test 9: Verify concurrent file writes don't corrupt ──
+@pytest.mark.usefixtures("loopback_listener")
 def test_concurrent_writes_integrity(monkeypatch):
     monkeypatch.setattr("localcode.transfer.CHUNK_BYTES", 65536)
     """Each thread writes to its own file region — verify no overlap/corruption."""

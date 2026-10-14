@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import os
 import subprocess
+import socket
+import errno
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -87,3 +89,35 @@ def mock_runtime(mock_config: AppConfig) -> LocalCodeRuntimeGateway:
     gw = LocalCodeRuntimeGateway(mock_config.runtime)
     gw._client = MagicMock()
     return gw
+
+
+@pytest.fixture
+def loopback_listener():
+    """Require real loopback I/O; never swallow application/test failures."""
+    try:
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            probe.listen(1)
+    except OSError as error:
+        if error.errno not in (errno.EPERM, errno.EACCES):
+            raise
+        if os.environ.get("LOCALCODE_REQUIRE_INTEGRATION") == "1":
+            pytest.fail("this runner denies loopback listeners; integration coverage is required")
+        pytest.skip("runner denies loopback listeners (EPERM/EACCES); requires unrestricted integration run")
+
+
+@pytest.fixture
+def process_inspection():
+    """Check the process-inspection capability before starting child processes."""
+    try:
+        probe = subprocess.run(["ps", "-o", "pid=", "-p", str(os.getpid())],
+                               capture_output=True, text=True, check=False)
+    except PermissionError:
+        probe = None
+    if probe is not None and probe.returncode == 0:
+        return
+    if probe is not None and not any(reason in probe.stderr.lower() for reason in ("operation not permitted", "permission denied")):
+        pytest.fail(f"process inspection probe failed: {probe.stderr}")
+    if os.environ.get("LOCALCODE_REQUIRE_INTEGRATION") == "1":
+        pytest.fail("process inspection is unavailable; integration coverage is required")
+    pytest.skip("runner denies process inspection; requires unrestricted integration run")

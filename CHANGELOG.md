@@ -3,7 +3,36 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## Unreleased
+## 0.5.28 — 2026-10-14
+
+- Reap the owned model when the supervisor is forcibly killed. Stop the model before draining API connections, and prevent a background load from spawning a replacement during shutdown.
+
+- Avoid a startup npm SDK install in numeric release builds. Report sandbox integration tests separately; required CI refuses capability skips. Live speech model tests are opt-in, with a CPU option for environments without GPU inference.
+
+### Fixed
+
+- Server Stop offers an explicit confirmation when a request is active or activity cannot be checked. Notifications stay above dialogs on every screen.
+
+- Minimal startup context excludes automatic project listings, project instructions
+  and skill catalogs. Removed overlapping workflow instructions and schema noise.
+  `--context full` restores complete context explicitly.
+- Older tool results, arguments and reasoning are shortened in requests while
+  the complete saved conversation remains intact. Current-turn tool data stays complete.
+- Model switches offer a fresh chat or explicit continuation. Reselecting a live
+  model reports "Model already loaded" without a restart or download.
+- Existing GGUFs in nested model folders, Hugging Face caches and LM Studio are
+  recognized and selectable offline. Full model paths and catalog aliases work at launch.
+- Loopback API requests bypass network proxies. Shutdown waits for model cleanup
+  before force-killing the supervisor. Failed model selections release their lock.
+- The picker returns local/cached quant choices immediately instead of timing out
+  behind Hugging Face listings. Failed new loads release their process, and model
+  switches check for active requests from other clients before stopping a server.
+- Upgraded interfaces refuse to attach to outdated supervisors. Fresh-chat model
+  switches preserve unsent text, and stopped models are labeled as selected rather
+  than loaded.
+- Minimal mode does not replay old conversation warmup captures. Captures are
+  bound to their context profile. `doctor` reports model processes and service state
+  without exposing API keys or conversation contents.
 
 ## 0.5.27 — 2026-10-13
 

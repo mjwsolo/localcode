@@ -15,6 +15,10 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Required CI cannot silently skip tests when runner capabilities are missing.
+  LOCALCODE_REQUIRE_INTEGRATION: "1"
+
 jobs:
   # ── Required gate: the comprehensive suite must pass on every push ──
   # Full non-model Python suite, including RAM/KV and failure recovery.

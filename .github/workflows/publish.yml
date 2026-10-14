@@ -16,6 +16,9 @@ concurrency:
   group: localcode-publish
   cancel-in-progress: false
 
+env:
+  LOCALCODE_REQUIRE_INTEGRATION: "1"
+
 jobs:
   intent:
     name: Detect release

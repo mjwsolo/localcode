@@ -40,6 +40,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realp
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Plugin } from "@opencode-ai/plugin";
+import { leanHistory } from "./context";
 
 type Todo = { content: string; status: string };
 
@@ -59,18 +60,13 @@ const controlHeaders = (): Record<string, string> => ({
 const autoCheck = () => process.env.LOCALCODE_AUTO_CHECK === "1";
 
 const PLANNING_RULE = `WORKSPACE TASK COMPLETION:
-- These execution rules apply ONLY when the user asks for work on project files. Answer general questions, advice, greetings, and unrelated web research directly, without todowrite, repository exploration, build checks, or creating files. Do not invent deliverables, compliance requirements, or project work the user did not request.
-- LOCALCODE.md is the only project instruction file and is supplied automatically. Never read, create, or update legacy agent instruction files. Do not seek out configuration or skills for unrelated questions.
-- Do not guess your token count, remaining output budget, or inference speed. Only quote limits or timings supplied by the runtime. For long deliverables, complete the requested work without asking the user to repeat the request.
-- Keep going until the user's request is COMPLETELY done. Do not end your turn while any part of the work remains. A dev server that starts, a scaffold that installs, a single file written — none of these is "done" unless that was the entire request.
-- ORIENT FROM THE SNAPSHOT, NOT FROM TOOL CALLS. The first user turn carries a snapshot of the workspace (top two levels) and later turns report files changed outside this session. Do not list directories or glob just to see what exists; if a file you need is not in the snapshot or a change report, glob for that specific file. Open only the files you will change or must quote. Every tool call is a full model round trip; a typical small change is read -> edit -> check, three calls.
-- PLAN, THEN EXECUTE THE PLAN. For requested workspace changes of THREE or more steps, call todowrite FIRST to lay out every concrete step (one per requirement, and every deliverable the user named — a README is a plan item like any feature, not a closing flourish). Skip the plan for one/two-step tasks. Keep exactly ONE item in_progress. Mark a step completed as soon as its last edit lands (one todowrite call, which may also set the next item in_progress); never call todowrite twice in a row without an edit or check in between, and never before AND after the same edit.
-- ONE EDIT PER FILE PER STEP: when a step changes several places in one file, make them in a single edit or multi-edit call.
-- Validate incrementally: get the minimal scaffold building before implementing the full app. After each coherent feature, run the relevant check and repair failures before adding more features. Do not defer all integration checks until the end.
-- RUN THE CHECK ONCE, AFTER THE EDIT. Do not run tests or builds before you have changed anything unless the user asked for a diagnosis; do not re-run a passing check without a new edit. The last plan item is final verification: the project's own build/typecheck and one smoke check of the main flow. Do not install browsers and test rigs unless requested.
-- Write complete, runnable code — no TODOs, stubs, placeholders, "demo only" or "you could add…". If a piece is too big for one call, split it across calls; never drop it.
-- Only stop for one of two reasons: (a) every todo is completed and verified, or (b) you have ONE specific blocking question you cannot answer yourself. The harness sends you back to the next open item if you stop early.
-- Never run a foreground server (npm run dev, vite, http.server) through bash: start it in the background with nohup ... & and a log file, then curl it.`;
+- Answer greetings, general questions and advice directly. Do not inspect project files, load skills, create todos or run checks unless the user requests project work.
+- For requested project work, use the supplied working directory. Inspect only the relevant files and follow LOCALCODE.md when supplied. Do not seek out legacy agent instructions or unrelated configuration.
+- Complete every requested deliverable and verify it. For three or more steps, make a concise todo list and update it as steps finish. Do not stop at a scaffold or a plan.
+- Match existing project conventions and dependencies. Combine edits to the same file. Run the relevant project check after changes; do not repeat passing checks without new changes. Report failures accurately.
+- Preserve the user's changes. Do not run destructive git commands or commit without permission. Never expose secrets. Background persistent servers and verify their endpoint.
+- Old tool results may be abbreviated in history. Reread a specific file only when needed; never scan the whole project to answer an unrelated question.
+- Use measured limits and timings; do not invent token counts or inference speed. If blocked, state the specific blocker.`;
 
 // A dev server is a PROGRAM being run, so only match in program position (start of
 // command or after ; && || | ( or npx/bunx). Round 5 of the Anki bench died in 2 min
@@ -592,7 +588,9 @@ function workspaceLayout(directory: string): string {
 }
 
 const LocalcodePlugin: Plugin = async ({ client, directory }) => {
-  const layoutBlock = workspaceLayout(directory);
+  // Opt in once at launch; ordinary chat must not scan or attach the project.
+  const workspaceContext = process.env.LOCALCODE_CONTEXT === "full" || process.env.LOCALCODE_WORKSPACE_CONTEXT === "1";
+  const layoutBlock = workspaceContext ? workspaceLayout(directory) : "";
   // Per-session workspace state lives on disk, not in memory: a headless `run`
   // is one process per turn, and a user may close and reopen the UI mid-session.
   // Without this the snapshot was re-sent on every turn and no change was ever reported.
@@ -726,6 +724,12 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
   }
 
   return {
+    "experimental.chat.messages.transform": async (_input, output) => {
+      if (process.env.LOCALCODE_CONTEXT !== "minimal") return;
+      const messages = leanHistory(output.messages, workspaceContext);
+      output.messages.splice(0, output.messages.length, ...messages);
+    },
+
     // Add explicit retention requirements without changing the stable system prefix.
     "experimental.session.compacting": async (_input, output) => {
       if (process.env.LOCALCODE_COMPACTION_CHECKLIST === "0") return;
@@ -784,7 +788,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
         turnStartedAt = Date.now() - 1000;
         plateau = new PlateauTracker(directory); plateauStopped = false; stopDenials = 0; stopReason = ""; seenSteps.clear();
       }
-      if (!text.startsWith(NUDGE_PREFIX)) {
+      if (workspaceContext && !text.startsWith(NUDGE_PREFIX)) {
         const st = loadWs(input.sessionID);
         const now = scanTree(directory);
         if (!st || !st.sent) {
@@ -810,7 +814,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
       for (const p of editedPaths({ tool: input.tool, args: input.args, output: output?.output, metadata: output?.metadata })) {
         const rel = relative(resolve(directory), resolve(directory, p)).replace(/\\/g, "/");
         agentTouched.add(rel);
-        if (input.sessionID) touchWs(input.sessionID, rel);
+        if (workspaceContext && input.sessionID) touchWs(input.sessionID, rel);
       }
       if (process.env.LOCALCODE_PLUGIN_DEBUG) emit(`[localcode debug] progress: ${plateau.mem.changedPaths.size} delivered files, ${plateau.mem.completedTodos} completed todos`);
     },

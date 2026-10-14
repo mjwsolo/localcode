@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test"
 import path from "node:path"
-import { python, pythonEnv } from "./support/python"
+import { python, pythonEnv, loopbackAvailable } from "./support/python"
 
-test("an existing picker prevents a second launch, while unrelated listeners reserve ports", () => {
+test.skipIf(!loopbackAvailable)("an existing picker prevents a second launch, while unrelated listeners reserve ports", () => {
   const result = Bun.spawnSync([python, "-c", `
 import json, socket, threading
 from unittest.mock import patch

@@ -36,12 +36,14 @@ import sys
 import threading
 import time
 import urllib.request
+from localcode.ui.http import local_urlopen
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import localcode
 from localcode import bootstrap
+from localcode.model_files import model_files, find_model
 from localcode.hf_quants import fetch_quants, fit_badge
 from localcode.models_catalog import (
     MODEL_GROUPS,
@@ -86,6 +88,8 @@ class Supervisor:
         self.proc: subprocess.Popen | None = None
         self.current: str | None = None           # alias of the loaded model
         self.lock = threading.Lock()
+        self._process_lock = threading.RLock()
+        self._closing = threading.Event()
         self.speech_lock = threading.Lock()
         self.speech_proc: subprocess.Popen | None = None
         self.state = {"state": "idle", "model": None, "detail": "", "pct": None}
@@ -150,7 +154,7 @@ class Supervisor:
             return {"phase": "error", **failure}
         try:
             req = urllib.request.Request(f"http://127.0.0.1:{self.port}/slots", headers=server_headers())
-            with urllib.request.urlopen(req, timeout=1) as r:
+            with local_urlopen(req, timeout=1) as r:
                 slots = json.loads(r.read().decode())
         except Exception:  # noqa: BLE001
             return {"phase": "unknown"}
@@ -252,29 +256,35 @@ class Supervisor:
         return {**result, "model": model}
 
     def start(self, alias: str, wait_s: int = 240) -> bool:
+        if self._closing.is_set():
+            return False
         gguf = self.models_dir / f"{alias}.gguf"
         # localcode's own per-machine server command (RAM-tier context, KV
         # compression, flash-attn, checkpoints) — nothing hardcoded here.
         from localcode.ui.server_cmd import server_command
         cmd = server_command(str(gguf), self.port, alias)
-        self.stop()
-        cmd[0] = self.server_bin
-        self.ctx = self.ctx_total = int(cmd[cmd.index("--ctx-size") + 1])
-        self.slots = int(cmd[cmd.index("--parallel") + 1]) if "--parallel" in cmd else 1
-        from localcode.ui.auth import redact_command
-        self.log.write(f"\n=== {time.ctime()} {' '.join(redact_command(cmd))}\n".encode())
-        with self._budget_lock:
-            from localcode.ui.context_budget import TimingTable
-            self._timing = TimingTable()
-            self._log_offset = self.log.tell()
-            self.pp_prior = None
-            self._budget = None
-            self._budget_info = {}
-        self.proc = subprocess.Popen(cmd, stdout=self.log, stderr=subprocess.STDOUT,
-                                     start_new_session=True, pass_fds=(self.lease_fd,) if getattr(self, "lease_fd", None) is not None else ())
-        log(f"supervisor: started llama-server pid {self.proc.pid} for {alias}")
+        with self._process_lock:
+            if self._closing.is_set():
+                return False
+            self.stop()
+            cmd[0] = self.server_bin
+            self.ctx = self.ctx_total = int(cmd[cmd.index("--ctx-size") + 1])
+            self.slots = int(cmd[cmd.index("--parallel") + 1]) if "--parallel" in cmd else 1
+            from localcode.ui.auth import redact_command
+            self.log.write(f"\n=== {time.ctime()} {' '.join(redact_command(cmd))}\n".encode())
+            with self._budget_lock:
+                from localcode.ui.context_budget import TimingTable
+                self._timing = TimingTable()
+                self._log_offset = self.log.tell()
+                self.pp_prior = None
+                self._budget = None
+                self._budget_info = {}
+            from localcode.ui.process_guard import spawn_owned
+            self.proc = spawn_owned(cmd, stdout=self.log, lease_fd=getattr(self, "lease_fd", None))
+            process = self.proc
+            log(f"supervisor: started model process guard pid {self.proc.pid} for {alias}")
         for _ in range(wait_s):
-            if self.proc.poll() is not None:
+            if self._closing.is_set() or process.poll() is not None:
                 return False
             if self.healthy():
                 self.current = alias
@@ -371,25 +381,35 @@ class Supervisor:
             return {"ok": True, "cancelled": True}
         return {"ok": True, "cancelled": False}
 
+    def shutdown(self) -> None:
+        """Permanently forbid new model workers before stopping the current one."""
+        self._closing.set()
+        self.cancel.set()
+        self.stop()
+
     def stop(self) -> None:
-        self._warm_stop.set()
-        self.cancel_warmup()
-        if self.proc and self.proc.poll() is None:
-            log(f"supervisor: stopping llama-server pid {self.proc.pid}")
-            self.proc.terminate()
-            try:
-                self.proc.wait(timeout=15)
-            except subprocess.TimeoutExpired:
-                self.proc.kill()
-                self.proc.wait(timeout=5)
-        self.proc = None
+        with self._process_lock:
+            self._warm_stop.set()
+            self.cancel_warmup()
+            if self.proc and self.proc.poll() is None:
+                log(f"supervisor: stopping model service pid {self.proc.pid}")
+                self.proc.terminate()
+                try:
+                    self.proc.wait(timeout=20)
+                except subprocess.TimeoutExpired:
+                    self.proc.kill()
+                    self.proc.wait(timeout=5)
+            owner_pipe = getattr(self.proc, "stdin", None)
+            if owner_pipe is not None:
+                owner_pipe.close()
+            self.proc = None
 
     def _probe_props(self) -> None:
         """The context the server really gives each request. With --parallel N the
         flag's --ctx-size is split N ways; /props reports the per-slot figure."""
         try:
             req = urllib.request.Request(f"http://127.0.0.1:{self.port}/props", headers=server_headers())
-            with urllib.request.urlopen(req, timeout=3) as r:
+            with local_urlopen(req, timeout=3) as r:
                 props = json.loads(r.read().decode())
             n_ctx = int((props.get("default_generation_settings") or {}).get("n_ctx") or 0)
             slots = int(props.get("total_slots") or 0)
@@ -442,7 +462,7 @@ class Supervisor:
 
     def healthy(self) -> bool:
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/health", timeout=1) as r:
+            with local_urlopen(f"http://127.0.0.1:{self.port}/health", timeout=1) as r:
                 return r.status == 200
         except Exception:  # noqa: BLE001
             return False
@@ -458,9 +478,11 @@ class Supervisor:
             state.update(state="error", **failure)
         elif state["state"] == "ready" and not ready:
             state.update(state="error", detail="Model server is unavailable")
-        return dict(state, server_running=running, server_ready=ready, warmup=getattr(self, "_warm_status", "idle"))
+        return dict(state, server_running=running, server_ready=ready,
+                    version=localcode.__version__, process_id=getattr(process, "pid", None),
+                    warmup=getattr(self, "_warm_status", "idle"))
 
-    def server_action(self, action: str) -> dict:
+    def server_action(self, action: str, *, force: bool = False) -> dict:
         """Queue an explicit lifecycle action; retain session and selected model."""
         if action not in ("start", "stop"):
             return {"error": "Unknown server action"}
@@ -473,11 +495,12 @@ class Supervisor:
                 return {"error": "A model operation is in progress; wait and refresh /server"}
             running = self.proc is not None and self.proc.poll() is None
             if action == "stop":
-                if running:
+                if running and not force:
                     phase = self.progress().get("phase")
                     if phase != "idle":
-                        return {"error": "A request is active or server activity cannot be verified. Cancel requests in all clients, then retry."}
-                else:
+                        return {"error": "A request is active." if phase in ("reading", "generating", "prefill") else "Server activity could not be checked.",
+                                "force_required": True, "phase": phase}
+                if not running:
                     self.state = {"state": "stopped", "model": self.current, "detail": "Model server stopped. Use /server to start it.", "pct": None}
                     return {"ok": True, "state": "stopped"}
                 self.state = {"state": "stopping", "model": self.current, "detail": "Stopping model server…", "pct": None}
@@ -489,7 +512,7 @@ class Supervisor:
                 if not _safe_filename(self.current + ".gguf") or not (self.models_dir / (self.current + ".gguf")).is_file():
                     return {"error": "The previous model file is missing. Select an installed model using /model."}
                 self.state = {"state": "loading", "model": self.current, "detail": "Reloading model…", "pct": None}
-            threading.Thread(target=self._server_action_worker, args=(action,), daemon=True).start()
+            threading.Thread(target=self._server_action_worker, args=(action, force), daemon=True).start()
             queued = True
             return {"ok": True, "state": self.state["state"]}
         except Exception:
@@ -500,11 +523,11 @@ class Supervisor:
             if not queued:
                 self.lock.release()
 
-    def _server_action_worker(self, action: str) -> None:
+    def _server_action_worker(self, action: str, force: bool = False) -> None:
         try:
             if action == "stop":
                 # Recheck immediately before stopping, including other API clients.
-                if self.proc is not None and self.proc.poll() is None and self.progress().get("phase") != "idle":
+                if not force and self.proc is not None and self.proc.poll() is None and self.progress().get("phase") != "idle":
                     self.state = {"state": "ready", "model": self.current, "detail": "Stop cancelled: a request started. Cancel it and retry.", "pct": None}
                     return
                 self.stop()
@@ -538,22 +561,36 @@ class Supervisor:
         g = group_for_filename(self.current + ".gguf")
         return g.hf_repo if g else None
 
+    def _installed_models(self) -> dict[str, Path]:
+        # The picker polls frequently. Avoid recursively rescanning external
+        # caches on every poll while noticing removals immediately.
+        cached = getattr(self, "_model_file_cache", None)
+        now = time.monotonic()
+        if cached and cached[0] == self.models_dir and now - cached[1] < 3:
+            return {name: path for name, path in cached[2].items() if path.is_file()}
+        files = model_files(self.models_dir)
+        self._model_file_cache = (self.models_dir, now, files)
+        return files
+
     def catalog(self) -> dict:
         from localcode.models_catalog import group_for_filename
         installed = {}
-        for file in self.models_dir.glob("*.gguf"):
+        for file in self._installed_models().values():
             if not file.is_file() or file.name.lower().startswith("mmproj"):
                 continue
             group = group_for_filename(file.name)
             if group:
                 installed[group.key] = installed.get(group.key, 0) + 1
         rec, cur = self._rec_repo(), self._current_repo()
+        process = getattr(self, "proc", None)
+        loaded = process is not None and process.poll() is None and self.state["state"] == "ready"
         groups = []
         for g in MODEL_GROUPS:
             groups.append({
                 "key": g.key, "display_name": g.display_name, "maker": g.maker,
                 "license": g.license, "hf_repo": g.hf_repo,
                 "recommended": g.hf_repo == rec, "current": g.hf_repo == cur,
+                "loaded": loaded and g.hf_repo == cur,
                 "installed_count": installed.get(g.key, 0),
                 "downloading": self.state["state"] == "downloading" and self.active.get("group") == g.key,
                 "pct": self.state["pct"] if self.active.get("group") == g.key else None,
@@ -561,13 +598,64 @@ class Supervisor:
         return {"ram_gb": self.ram_gb, "current": self.current, "groups": groups,
                 "models_dir": str(self.models_dir)}
 
+    def _quant_rows(self, g, refresh: bool = False):
+        from localcode.hf_quants import Quant, _parse_label, _read_cache
+        from localcode.models_catalog import CHOICES
+        cached = _read_cache(g.hf_repo)
+        memory = self.__dict__.setdefault("_quant_memory", {})
+        rows, fetched = memory.get(g.hf_repo, cached or ([], 0))
+        if cached and cached[1] > fetched:
+            rows, fetched = cached
+        if refresh and time.time() - fetched >= 86400:
+            lock = self.__dict__.setdefault("_quant_lock", threading.Lock())
+            with lock:
+                pending = self.__dict__.setdefault("_quant_pending", set())
+                attempts = self.__dict__.setdefault("_quant_attempts", {})
+                if g.hf_repo not in pending and time.monotonic() - attempts.get(g.hf_repo, -60) >= 60:
+                    pending.add(g.hf_repo)
+                    attempts[g.hf_repo] = time.monotonic()
+                    def fetch():
+                        try:
+                            memory[g.hf_repo] = (fetch_quants(g.hf_repo), time.time())
+                        except Exception as exc:
+                            log(f"Quant refresh failed: {type(exc).__name__}")
+                        finally:
+                            with lock:
+                                pending.discard(g.hf_repo)
+                    try:
+                        threading.Thread(target=fetch, daemon=True).start()
+                    except RuntimeError:
+                        pending.discard(g.hf_repo)
+        # Trusted curated choices keep a first-time/offline picker usable too.
+        known = {q.filename: q for q in rows if not q.is_mmproj}
+        for choice in CHOICES:
+            label = _parse_label(choice.filename)
+            if choice.hf_repo == g.hf_repo and label:
+                known.setdefault(choice.filename, Quant(choice.filename, choice.size_gb, label, False))
+        return list(known.values())
+
     def quants(self, key: str) -> dict:
         g = next((g for g in MODEL_GROUPS if g.key == key), None)
         if g is None:
             return {"error": f"unknown group {key}"}
-        rows = [q for q in fetch_quants(g.hf_repo) if not q.is_mmproj]
+        rows = self._quant_rows(g, refresh=True)
+        # Local weights remain selectable even when HF is offline, or its
+        # current listing no longer contains a previously downloaded quant.
+        from localcode.hf_quants import Quant, _parse_label
+        from localcode.models_catalog import group_for_filename
+        installed = self._installed_models()
+        listed = {q.filename for q in rows}
+        for filename, path in installed.items():
+            label = _parse_label(filename)
+            if label and filename not in listed and group_for_filename(filename) == g:
+                try:
+                    rows.append(Quant(filename, path.stat().st_size / 1e9, label, False))
+                except OSError:
+                    continue
         rows.sort(key=lambda q: q.size_gb)
         rec_idx = self._recommended_quant_idx(rows, g.display_name)
+        process = getattr(self, "proc", None)
+        loaded = process is not None and process.poll() is None and self.state["state"] == "ready"
         out = []
         # A vendor-trained drafter ships with the model (downloaded with it,
         # loaded with it), so the size the user sees and the RAM fit include it.
@@ -579,13 +667,15 @@ class Supervisor:
                 "filename": q.filename, "alias": _alias(q.filename), "label": q.label,
                 "size_gb": round(total_gb, 1), "fit": fit_badge(total_gb, self.ram_gb),
                 "tok_s": spd, "recommended": i == rec_idx,
-                "downloaded": (self.models_dir / q.filename).exists(),
+                "downloaded": q.filename in installed,
                 "current": _alias(q.filename) == self.current,
+                "loaded": loaded and _alias(q.filename) == self.current,
                 "downloading": self.state["state"] == "downloading" and self.active.get("filename") == q.filename,
                 "pct": self.state["pct"] if self.active.get("filename") == q.filename else None,
             })
         return {"group": g.key, "display_name": g.display_name, "maker": g.maker,
                 "license": g.license, "ram_gb": self.ram_gb, "quants": out,
+                "listing": g.hf_repo in getattr(self, "_quant_pending", set()),
                 "drafter_size_gb": round(draft_gb, 2),
                 "vision_size_gb": round(float(getattr(g, "mmproj_size_gb", 0.0) or 0.0), 2) if getattr(g, "mmproj_filename", None) else 0.0}
 
@@ -609,32 +699,59 @@ class Supervisor:
         g = next((g for g in MODEL_GROUPS if g.key == key), None)
         if g is None:
             return {"error": f"unknown group {key}"}
-        # The filename names a file under models_dir and a path in the download
-        # URL, so it must be exactly one the group's listing offers: no
-        # separators, no dot segments, nothing the catalogue did not list.
         if not _safe_filename(filename):
             return {"error": "invalid filename"}
-        if not (self.models_dir / filename).is_file():   # installed files work offline
-            try:
-                listed = {q.filename for q in fetch_quants(g.hf_repo)}
-            except Exception as e:  # noqa: BLE001
-                return {"error": f"could not list {g.hf_repo}: {e}"}
-            if filename not in listed:
-                return {"error": f"{filename} is not a file of {g.hf_repo}"}
         if not self.lock.acquire(blocking=False):
             return {"error": "a model switch is already in progress"}
         alias = _alias(filename)
-        self.cancel.clear()
-        self.active = {"group": key, "filename": filename}
-        self.state = {"state": "downloading" if not (self.models_dir / filename).exists() else "loading",
-                      "model": alias, "detail": "", "pct": None}
-        threading.Thread(target=self._select_worker, args=(g, filename, alias), daemon=True).start()
-        return {"ok": True, "model": alias, "state": self.state["state"]}
+        queued = False
+        previous = None
+        try:
+            # Check liveness before disk/network access: the loaded file may
+            # have moved, and reselecting it must never trigger a download.
+            process = getattr(self, "proc", None)
+            if alias == getattr(self, "current", None) and process is not None and process.poll() is None and self.healthy():
+                if self.state["state"] != "ready":
+                    self.state = {"state": "ready", "model": alias, "detail": "", "pct": None}
+                return {"ok": True, "model": alias, "state": "ready", "already_loaded": True,
+                        "detail": "Model already loaded"}
+            if process is not None and process.poll() is None and self.progress().get("phase") != "idle":
+                return {"error": "A request is active or server activity cannot be verified. Cancel it or wait before switching models."}
+            existing = find_model(filename, self.models_dir)
+            target = self.models_dir / filename
+            if existing is not None and not target.is_file():
+                self.models_dir.mkdir(parents=True, exist_ok=True)
+                target.symlink_to(existing.resolve())
+            if not target.is_file():
+                listed = {q.filename for q in self._quant_rows(g)}
+                if filename not in listed:
+                    return {"error": f"{filename} is not a file of {g.hf_repo}"}
+            previous = (dict(self.state), dict(self.active), self.cancel.is_set())
+            self.cancel.clear()
+            self.active = {"group": key, "filename": filename}
+            self.state = {"state": "loading" if target.is_file() else "downloading",
+                          "model": alias, "detail": "", "pct": None}
+            threading.Thread(target=self._select_worker, args=(g, filename, alias), daemon=True).start()
+            queued = True
+            return {"ok": True, "model": alias, "state": self.state["state"]}
+        except Exception as exc:
+            log(f"Could not begin model switch: {type(exc).__name__}")
+            return {"error": "Could not begin the model switch. Check the model folder and retry."}
+        finally:
+            if not queued:
+                if previous is not None:
+                    self.state, self.active, was_cancelled = previous
+                    if was_cancelled:
+                        self.cancel.set()
+                self.lock.release()
 
     def _select_worker(self, g, filename: str, alias: str) -> None:
+        previous_process = getattr(self, "proc", None)
+        load_started = False
         try:
-            if not (self.models_dir / filename).exists():
-                size = next((q.size_gb for q in fetch_quants(g.hf_repo) if q.filename == filename), 0.0)
+            download_requested = not (self.models_dir / filename).exists()
+            if download_requested:
+                size = next((q.size_gb for q in self._quant_rows(g) if q.filename == filename), 0.0)
                 choice = choice_for_quant(g, filename, size)
 
                 def on_progress(msg: str) -> None:
@@ -661,7 +778,9 @@ class Supervisor:
             # figure the user picked). Missing it is not fatal: the model runs
             # without speculation and the next select retries.
             drafter = getattr(g, "drafter", None)
-            if drafter is not None and not drafter.local_path.is_file():
+            if drafter is not None and not drafter.local_path.is_file() and (
+                download_requested or os.environ.get("LOCALCODE_DOWNLOAD_DRAFTER") == "1"
+            ):
                 def on_draft_progress(msg: str) -> None:
                     pct = None
                     if "(" in msg and "%)" in msg:
@@ -678,14 +797,26 @@ class Supervisor:
                     log(f"supervisor: drafter download failed for {alias}: {res}")
                 else:
                     self._drop_retired_sidecars()
+            # Downloads may take minutes; another client can start a request
+            # before the switch gets here. Never terminate that active reply.
+            process = getattr(self, "proc", None)
+            if process is not None and process.poll() is None and self.progress().get("phase") != "idle":
+                self.state = {"state": "error", "model": alias,
+                              "detail": "Model files are ready, but another request is active. Retry the selection when it finishes.", "pct": None}
+                return
             self.state = {"state": "loading", "model": alias, "detail": "loading model…", "pct": None}
+            load_started = True
             if self.start(alias):
                 self.state = {"state": "ready", "model": alias, "detail": "", "pct": None}
             else:
+                if getattr(self, "proc", None) is not previous_process:
+                    self.stop()
                 self.state = {"state": "error", "model": alias,
                               "detail": "llama-server failed to load the model (see server.log in the localcode-agent run dir)",
                               "pct": None}
         except Exception as e:  # noqa: BLE001
+            if load_started and getattr(self, "proc", None) is not previous_process:
+                self.stop()
             import traceback
             log(traceback.format_exc())
             self.state = {"state": "error", "model": alias, "detail": str(e), "pct": None}
@@ -1064,7 +1195,10 @@ def make_handler(sup: Supervisor):
             if u.path in ("/server/start", "/server/stop"):
                 if not isinstance(body, dict):
                     return self._json({"error": "Expected a JSON object"}, 400)
-                res = sup.server_action(u.path.rsplit("/", 1)[1])
+                force = body.get("force", False)
+                if type(force) is not bool:
+                    return self._json({"error": "force must be a boolean"}, 400)
+                res = sup.server_action(u.path.rsplit("/", 1)[1], force=force)
                 return self._json(res, 409 if "error" in res else 200)
             if u.path == "/server/port":
                 from localcode.ui.gateway import PortChangeError
@@ -1178,12 +1312,19 @@ def main() -> int:
         log(f"could not start local API services: {exc}")
         return 1
 
+    exiting = False
+
     def bye(signum, frame):
+        nonlocal exiting
+        if exiting:
+            return
+        exiting = True
         import traceback
         log(f"supervisor: got signal {signum}, exiting")
         log("".join(traceback.format_stack(frame)))
+        # Stop model ownership before waiting for any network connection drain.
+        sup.shutdown()
         sup.gateway.close()
-        sup.stop()
         with sup.speech_lock:
             if sup.speech_proc and sup.speech_proc.poll() is None:
                 sup.speech_proc.terminate()
@@ -1194,8 +1335,8 @@ def main() -> int:
     signal.signal(signal.SIGINT, bye)
     signal.signal(signal.SIGHUP, bye)
     import atexit
-    atexit.register(sup.stop)
     atexit.register(sup.gateway.close)
+    atexit.register(sup.shutdown)
     if a.parent_pid:
         def watch_launcher() -> None:
             while os.getppid() == a.parent_pid:

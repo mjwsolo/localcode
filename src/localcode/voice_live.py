@@ -166,7 +166,8 @@ def main() -> int:
 
     from pywhispercpp.model import Model
     with _silence_native_stderr():
-        model = Model(model_path, n_threads=4, print_realtime=False, print_progress=False, print_timestamps=False)
+        model = Model(model_path, n_threads=4, print_realtime=False, print_progress=False, print_timestamps=False,
+                      **({"context_params": {"use_gpu": False}} if os.environ.get("LOCALCODE_VOICE_GPU") == "0" else {}))
 
     def transcribe(samples) -> str:
         with _silence_native_stderr():
