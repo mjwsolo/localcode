@@ -5,6 +5,19 @@ from localcode.config import RuntimeConfig
 from localcode.runtime import LocalCodeRuntimeGateway
 
 
+@pytest.mark.parametrize("key,value", [("f16","q8_0"),("q4_0","turbo4"),("turbo3","f16")])
+def test_unsupported_metal_cache_pairs_fail_before_inference(key, value):
+    from localcode.ui.server_cmd import validate_kv_cache_settings
+    with pytest.raises(ValueError, match="Unsupported mixed KV"):
+        validate_kv_cache_settings(["server","--flash-attn","on","--cache-type-k",key,"--cache-type-v",value])
+
+
+@pytest.mark.parametrize("key,value", [("f16","f16"),("q4_0","q4_0"),("q8_0","turbo4"),("turbo3","turbo4")])
+def test_supported_metal_cache_pairs_are_preserved(key, value):
+    from localcode.ui.server_cmd import validate_kv_cache_settings
+    validate_kv_cache_settings(["server","--flash-attn","on","--cache-type-k",key,"--cache-type-v",value])
+
+
 @pytest.mark.parametrize('kv', ['q8_0', 'turbo4'])
 def test_stale_balanced_context_cannot_exceed_24gib_tier(kv, monkeypatch):
     runtime = LocalCodeRuntimeGateway(RuntimeConfig(quant_preset='balanced', max_context_chars=393216, kv_cache_type_v=kv))

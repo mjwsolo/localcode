@@ -5,6 +5,15 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
+## 0.5.28 — 2026-10-13
+
+### Fixed
+
+- Unsupported asymmetric Metal cache settings are rejected before launch with
+  instructions for supported formats, rather than reaching a backend assertion.
+  Matching standard caches and the supported q8/TurboQuant combinations remain
+  available.
+
 ## 0.5.27 — 2026-10-13
 
 ### Fixed
