@@ -17,15 +17,11 @@
   <img src="https://raw.githubusercontent.com/mjwsolo/localcode/main/docs/assets/demo/first-change.gif" alt="A localcode turn: it reads the stub and test, edits the file, then pytest reports 1 passed" width="900">
 </p>
 
-localcode runs an open-weight model on your Mac and uses it to read, edit and test your code. Model inference runs locally.
-
 ## Install
 
 ```bash
 pip install -U localcode      # or: uv pip install -U localcode
 ```
-
-The inference server ships inside the package. Nothing is compiled or cloned on your machine.
 
 ## Run
 
