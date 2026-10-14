@@ -73,8 +73,6 @@ Choose from **10 models and 100+ quant options** for coding, image input and typ
 | [OpenJev 27B (decisions)](https://huggingface.co/ggml-org/OpenJev-GGUF) | 19.4 GB | 53.8 GB |
 | [Kolibri 1 78B-A3B (experimental)](https://huggingface.co/Hob-forge/Kolibri-1-GGUF) | 28.6 GB | 47.5 GB |
 
-Download sizes checked on Hugging Face on 12 October 2026; optional vision and draft files are extra.
-
 ## Network
 
 Inference is local. Three features use the network: model downloads, the `web_search` and `web_fetch` tools, and any MCP servers you add. See [Network Boundary](https://mjwsolo.github.io/localcode/concepts/network-boundary/) for the full list.
