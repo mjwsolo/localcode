@@ -11,6 +11,8 @@ from localcode.ui.supervisor import Supervisor
 def sup(tmp_path):
     s = Supervisor.__new__(Supervisor)
     s.lock = threading.Lock()
+    s.active = {}
+    s.cancel = threading.Event()
     s.current = 'test-model'
     s.models_dir = tmp_path
     (tmp_path / 'test-model.gguf').touch()
@@ -119,7 +121,7 @@ def test_lifecycle_routes_require_auth_and_object_payload(monkeypatch):
     original = module.make_handler
     calls = []
     def handler(s):
-        s.server_action = lambda action: calls.append(action) or {'ok': True, 'state': 'loading'}
+        s.server_action = lambda action, **kwargs: calls.append(action) or {'ok': True, 'state': 'loading'}
         return original(s)
     monkeypatch.setattr(module, 'make_handler', handler)
     for action in ('start', 'stop'):
@@ -131,10 +133,10 @@ def test_lifecycle_routes_require_auth_and_object_payload(monkeypatch):
 
 @pytest.mark.parametrize('code,name', [(-11, 'SIGSEGV'), (-6, 'SIGABRT'), (1, 'exit code 1'), (0, 'exit code 0')])
 def test_unexpected_exit_reports_actual_cause_without_probing_dead_port(sup, monkeypatch, code, name):
-    import urllib.request
+    import localcode.ui.supervisor as module
     sup.proc = SimpleNamespace(poll=lambda: code, pid=2345)
     sup.progress = Supervisor.progress.__get__(sup)
-    monkeypatch.setattr(urllib.request, 'urlopen', lambda *args, **kwargs: pytest.fail('dead port must not be probed'))
+    monkeypatch.setattr(module, 'local_urlopen', lambda *args, **kwargs: pytest.fail('dead port must not be probed'))
     status = sup.server_status()
     assert status['state'] == 'error' and not status['server_running']
     assert status['exit_code'] == code
@@ -154,3 +156,126 @@ def test_intentional_stop_and_new_live_process_do_not_report_previous_crash(sup)
     sup.proc = SimpleNamespace(poll=lambda: None, pid=2346)
     assert sup.server_status()['server_ready']
     assert 'exit_code' not in sup.server_status()
+
+
+def test_select_loaded_model_leaves_server_and_warmup_untouched(sup, monkeypatch):
+    from localcode.ui.supervisor import MODEL_GROUPS
+
+    sup.cancel = threading.Event()
+    sup.cancel.set()
+    sup.active = {}
+    sup._warm_status = 'warm'
+    before = dict(sup.state)
+    process = sup.proc
+    monkeypatch.setattr(threading.Thread, 'start', lambda _: pytest.fail('must not reload'))
+    result = sup.select(MODEL_GROUPS[0].key, 'test-model.gguf')
+    assert result['already_loaded'] is True and result['detail'] == 'Model already loaded'
+    assert result['state'] == 'ready' and result['ok'] is True
+    assert sup.state == before and sup.proc is process
+    assert sup._warm_status == 'warm' and sup.cancel.is_set()
+    assert sup.active == {} and not sup.lock.locked()
+
+
+@pytest.mark.parametrize('failure', ['stopped', 'exited', 'unhealthy', 'error-state'])
+def test_select_previous_model_can_reload_when_server_is_unavailable(sup, monkeypatch, failure):
+    from localcode.ui.supervisor import MODEL_GROUPS
+
+    sup.cancel = threading.Event()
+    if failure == 'stopped':
+        sup.proc = None
+        sup.state['state'] = 'stopped'
+    elif failure == 'exited':
+        sup.proc = SimpleNamespace(poll=lambda: 1)
+    elif failure == 'unhealthy':
+        sup.healthy = lambda: False
+    else:
+        sup.state['state'] = 'error'
+        sup.healthy = lambda: False
+    calls = []
+    def worker(group, filename, alias):
+        calls.append((group.key, filename, alias))
+        sup.lock.release()
+    sup._select_worker = worker
+    assert sup.select(MODEL_GROUPS[0].key, 'test-model.gguf')['ok']
+    done(sup)
+    assert calls == [(MODEL_GROUPS[0].key, 'test-model.gguf', 'test-model')]
+
+
+def test_select_loaded_model_during_another_operation_keeps_busy_guard(sup):
+    from localcode.ui.supervisor import MODEL_GROUPS
+
+    sup.lock.acquire()
+    try:
+        assert sup.select(MODEL_GROUPS[0].key, 'test-model.gguf') == {
+            'error': 'a model switch is already in progress',
+        }
+        assert sup.lock.locked()
+    finally:
+        sup.lock.release()
+
+
+def test_select_thread_failure_restores_state_and_allows_retry(sup, monkeypatch):
+    from localcode.ui.supervisor import MODEL_GROUPS
+    sup.current = None
+    sup.cancel = threading.Event(); sup.cancel.set()
+    sup.active = {}
+    before = dict(sup.state)
+    monkeypatch.setattr(threading.Thread, 'start', lambda _: (_ for _ in ()).throw(RuntimeError('no threads')))
+    assert 'error' in sup.select(MODEL_GROUPS[0].key, 'test-model.gguf')
+    assert sup.state == before and sup.active == {} and sup.cancel.is_set()
+    assert not sup.lock.locked()
+
+
+def test_reselect_loaded_model_does_not_touch_network_if_file_was_moved(sup, monkeypatch):
+    import localcode.ui.supervisor as module
+    (sup.models_dir / 'test-model.gguf').unlink()
+    monkeypatch.setattr(module, 'fetch_quants', lambda _: pytest.fail('must not access HF'))
+    monkeypatch.setattr(module, 'find_model', lambda *args: pytest.fail('must not scan model folders'))
+    assert sup.select(module.MODEL_GROUPS[0].key, 'test-model.gguf')['already_loaded'] is True
+    assert not sup.lock.locked()
+
+
+def test_healthy_loaded_model_recovers_a_stale_error_without_restart(sup, monkeypatch):
+    import localcode.ui.supervisor as module
+    sup.state = {'state': 'error', 'model': 'failed-other-model'}
+    monkeypatch.setattr(threading.Thread, 'start', lambda _: pytest.fail('healthy model must not restart'))
+    assert sup.select(module.MODEL_GROUPS[0].key, 'test-model.gguf')['already_loaded']
+    assert sup.state['state'] == 'ready' and sup.state['model'] == 'test-model'
+
+
+@pytest.mark.parametrize('phase', ['generating', 'reading', 'unknown'])
+def test_model_switch_refuses_active_or_unverifiable_requests_from_other_clients(sup, phase):
+    from localcode.ui.supervisor import MODEL_GROUPS
+    sup.progress = lambda: {'phase': phase}
+    before = dict(sup.state)
+    result = sup.select(MODEL_GROUPS[0].key, 'another-model.gguf')
+    assert 'error' in result and 'active' in result['error']
+    assert sup.state == before and sup.proc is not None and not sup.lock.locked()
+
+
+@pytest.mark.parametrize('phase', ['generating', 'reading', 'unknown', None])
+def test_explicit_stop_confirmation_stops_busy_or_unreachable_model(sup, phase):
+    sup.progress = lambda: {'phase': phase}
+    rejected = sup.server_action('stop')
+    assert rejected['force_required'] is True
+    assert sup.proc is not None
+    assert sup.server_action('stop', force=True)['ok']
+    done(sup)
+    assert sup.proc is None
+    assert sup.state['state'] == 'stopped'
+
+
+def test_confirmed_stop_cannot_bypass_a_model_operation_lock(sup):
+    sup.lock.acquire()
+    try:
+        assert 'error' in sup.server_action('stop', force=True)
+        assert sup.proc is not None
+    finally:
+        sup.lock.release()
+
+
+@pytest.mark.parametrize('force', ['true', 1, None, {}])
+def test_stop_rejects_non_boolean_confirmation(force):
+    from tests.test_ui_server import control_request
+    response, _ = control_request('/server/stop', method='POST', body={'force': force})
+    assert response == 400

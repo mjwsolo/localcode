@@ -33,6 +33,8 @@ def isolated_model_dir(tmp_path, monkeypatch):
     d = tmp_path / "models"
     d.mkdir()
     monkeypatch.setattr(catalog, "model_dir", lambda: d)
+    from localcode import model_files
+    monkeypatch.setattr(model_files, "search_roots", lambda _: [d])
     return d
 
 

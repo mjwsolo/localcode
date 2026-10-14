@@ -44,6 +44,7 @@ def test_resource_sampling_excludes_unrelated_processes():
     assert rss('99 1 1000000',10) is None
 
 
+@pytest.mark.usefixtures("process_inspection")
 def test_timeout_retains_output_and_stops_child_group():
     import os
     import signal
@@ -60,6 +61,7 @@ def test_timeout_retains_output_and_stops_child_group():
     assert not state or state.startswith('Z')
 
 
+@pytest.mark.usefixtures("loopback_listener")
 def test_loopback_fixture_never_uses_reverse_dns(monkeypatch):
     from http.server import BaseHTTPRequestHandler
     spec = importlib.util.spec_from_file_location('http_fixture', Path(__file__).resolve().parents[1]/'evals/checks/http_fixture.py')

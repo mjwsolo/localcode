@@ -6,6 +6,7 @@ import os
 import socket
 import tempfile
 import urllib.request
+from localcode.ui.http import local_urlopen
 
 from localcode.ui import run_dir
 from localcode.ui.auth import control_headers, read_auth_file
@@ -45,7 +46,7 @@ def _status(port: int) -> dict:
     auth = read_auth_file(run_dir())
     req = urllib.request.Request(f"http://127.0.0.1:{port}/status",
                                  headers=control_headers(auth[0] if auth else ""))
-    with urllib.request.urlopen(req, timeout=1.5) as response:
+    with local_urlopen(req, timeout=1.5) as response:
         return json.load(response)
 
 

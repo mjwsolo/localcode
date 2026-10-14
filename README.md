@@ -17,25 +17,17 @@
   <img src="https://raw.githubusercontent.com/mjwsolo/localcode/main/docs/assets/demo/first-change.gif" alt="A localcode turn: it reads the stub and test, edits the file, then pytest reports 1 passed" width="900">
 </p>
 
-localcode runs an open-weight model on your Mac and uses it to read, edit and test your code. Model inference runs locally.
-
 ## Install
 
 ```bash
 pip install -U localcode      # or: uv pip install -U localcode
 ```
 
-The inference server ships inside the package. Nothing is compiled or cloned on your machine.
-
 ## Run
 
 ```bash
 cd your-project
 localcode
-```
-
-```
-> Implement the retry decorator in retry.py so every test in test_retry.py passes. Then run: pytest -q
 ```
 
 To use the running model from another local app, open `/server` or run `localcode api` for its
@@ -60,20 +52,18 @@ OpenAI compatible endpoint. See the [Local API guide](https://mjwsolo.github.io/
 
 Choose from **10 models and 100+ quant options** for coding, image input and typed decisions. Models download from Hugging Face. Downloads run in parallel and can resume if interrupted. Switch with `/models`.
 
-| Model | Smallest download | Largest download | 16 GB: tokens/s | 16 GB: context | 128 GB: tokens/s | 128 GB: context |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| [Gemma 4 12B](https://huggingface.co/unsloth/gemma-4-12b-it-GGUF) | 4.2 GB | 23.8 GB | — | — | — | — |
-| [Qwen 3.8 27B](https://huggingface.co/unsloth/Qwen3.8-27B-GGUF) | 6.2 GB | 31.5 GB | — | — | — | — |
-| [Underdog Saluki 27B 1.0](https://huggingface.co/ConwayResearch/Underdog-Saluki-27B-1.0) | 7.9 GB | 7.9 GB | — | — | — | — |
-| [North-Mini-Code 30B-A3B](https://huggingface.co/unsloth/North-Mini-Code-1.0-GGUF) | 9.4 GB | 33.2 GB | — | — | — | — |
-| [Gemma 4 26B-A4B](https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF) | 9.9 GB | 27.6 GB | — | — | — | — |
-| [Qwen 3.6 35B-A3B](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF) | 10.0 GB | 38.5 GB | — | — | — | — |
-| [Muse Glimmer 30B](https://huggingface.co/unsloth/Muse-Glimmer-30B-GGUF) | 10.7 GB | 32.3 GB | — | — | — | — |
-| [DiffusionGemma 26B-A4B](https://huggingface.co/unsloth/diffusiongemma-26B-A4B-it-GGUF) | 16.8 GB | 50.5 GB | — | — | — | — |
-| [OpenJev 27B (decisions)](https://huggingface.co/ggml-org/OpenJev-GGUF) | 19.4 GB | 53.8 GB | — | — | — | — |
-| [Kolibri 1 78B-A3B (experimental)](https://huggingface.co/Hob-forge/Kolibri-1-GGUF) | 28.6 GB | 47.5 GB | — | — | — | — |
-
-Download sizes checked on Hugging Face on 12 October 2026; optional vision and draft files are extra. **— = not measured** on that RAM tier. Speed and usable context also depend on the Mac's chip and selected quant; RAM alone does not determine them.
+| Model | Smallest download | Largest download |
+| --- | ---: | ---: |
+| [Gemma 4 12B](https://huggingface.co/unsloth/gemma-4-12b-it-GGUF) | 4.2 GB | 23.8 GB |
+| [Qwen 3.8 27B](https://huggingface.co/unsloth/Qwen3.8-27B-GGUF) | 6.2 GB | 31.5 GB |
+| [Underdog Saluki 27B 1.0](https://huggingface.co/ConwayResearch/Underdog-Saluki-27B-1.0) | 7.9 GB | 7.9 GB |
+| [North-Mini-Code 30B-A3B](https://huggingface.co/unsloth/North-Mini-Code-1.0-GGUF) | 9.4 GB | 33.2 GB |
+| [Gemma 4 26B-A4B](https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF) | 9.9 GB | 27.6 GB |
+| [Qwen 3.6 35B-A3B](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF) | 10.0 GB | 38.5 GB |
+| [Muse Glimmer 30B](https://huggingface.co/unsloth/Muse-Glimmer-30B-GGUF) | 10.7 GB | 32.3 GB |
+| [DiffusionGemma 26B-A4B](https://huggingface.co/unsloth/diffusiongemma-26B-A4B-it-GGUF) | 16.8 GB | 50.5 GB |
+| [OpenJev 27B (decisions)](https://huggingface.co/ggml-org/OpenJev-GGUF) | 19.4 GB | 53.8 GB |
+| [Kolibri 1 78B-A3B (experimental)](https://huggingface.co/Hob-forge/Kolibri-1-GGUF) | 28.6 GB | 47.5 GB |
 
 ## Network
 

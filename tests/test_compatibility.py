@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 """Platform/enterprise errors and the default shipping server command."""
 from pathlib import Path
 
@@ -102,6 +103,7 @@ def test_memory_guard_counts_sidecars(monkeypatch, tmp_path):
 def test_rejected_load_keeps_existing_server(monkeypatch, tmp_path):
     from localcode.ui.supervisor import Supervisor
     sup = object.__new__(Supervisor)
+    sup._closing = SimpleNamespace(is_set=lambda: False)
     sup.models_dir = tmp_path
     sup.port = 8000
     stopped = []

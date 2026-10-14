@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -146,7 +147,10 @@ def test_prefix_check_detects_a_changing_prompt():
     anchor = '"experimental.chat.system.transform": async (input, output) => {'
     assert anchor in src
     mutated = src.replace(anchor, anchor + '\n      output.system.push("stamp " + String(Date.now()));', 1)
-    tmp = Path(tempfile.mkdtemp(prefix="lc-mutant-")) / "localcode.ts"
+    # Copy the whole plugin directory: the plugin imports its sibling modules.
+    plugin_dir = Path(tempfile.mkdtemp(prefix="lc-mutant-")) / "plugin"
+    shutil.copytree(REPO / "src/localcode/ui/plugin", plugin_dir)
+    tmp = plugin_dir / "localcode.ts"
     tmp.write_text(mutated)
     run = _run(4, plugin=str(tmp))
     shas = [r["sys_sha"] for r in _agent_requests(run)]

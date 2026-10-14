@@ -5,6 +5,7 @@ import argparse
 import json
 import sys
 import urllib.request
+from localcode.ui.http import local_urlopen
 import urllib.error
 
 from . import run_dir
@@ -39,7 +40,7 @@ def main(argv: list[str] | None = None) -> int:
                 data=json.dumps({"port": port}).encode(),
                 headers={**control_headers(auth[0]), "Content-Type": "application/json"},
             )
-            with urllib.request.urlopen(request, timeout=5) as response:
+            with local_urlopen(request, timeout=5) as response:
                 result = json.load(response)
             print(f"API moved to {result['base_url']}. Update external clients to this address; LocalCode stays connected.")
             return 0

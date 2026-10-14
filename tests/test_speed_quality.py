@@ -1,4 +1,5 @@
 import json
+import pytest
 from localcode.ui.context_budget import Sample
 from localcode.ui.diagnostics import timing_summary
 from localcode.ui.launch import write_config
@@ -43,6 +44,7 @@ def test_recommendations_are_machine_bound_and_fail_closed(tmp_path, monkeypatch
     assert recommendations.load_overrides('a.gguf', path) == {}
 
 
+@pytest.mark.usefixtures("loopback_listener")
 def test_probe_counts_first_delta_and_requires_complete_stream():
     import importlib.util
     import threading

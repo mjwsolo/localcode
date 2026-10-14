@@ -122,7 +122,7 @@ def test_supervisor_status_reports_per_slot_context_and_budget(tmp_path, monkeyp
         def read(self): return json.dumps(self.body).encode()
         def __enter__(self): return self
         def __exit__(self, *a): return False
-    monkeypatch.setattr(sv.urllib.request, "urlopen", lambda url, timeout=0: R({"default_generation_settings": {"n_ctx": 65536}, "total_slots": 2}))
+    monkeypatch.setattr(sv, "local_urlopen", lambda url, timeout=0: R({"default_generation_settings": {"n_ctx": 65536}, "total_slots": 2}))
     sup._probe_props()
     assert sup.ctx == 65536 and sup.slots == 2 and sup.ctx_total == 131072
     info = sup.context_info()

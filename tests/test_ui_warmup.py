@@ -97,11 +97,30 @@ def test_disabled_by_env(monkeypatch):
     monkeypatch.setenv("LOCALCODE_PROMPT_WARMUP", "0")
     assert not warmup.enabled()
     monkeypatch.delenv("LOCALCODE_PROMPT_WARMUP")
+    monkeypatch.delenv("LOCALCODE_CONTEXT", raising=False)
+    assert not warmup.enabled()
+    monkeypatch.setenv("LOCALCODE_CONTEXT", "full")
     assert warmup.enabled()
+
+
+def test_capture_does_not_cross_context_profiles_or_replay_legacy_history(tmp_path, monkeypatch):
+    monkeypatch.setenv('LOCALCODE_AGENT_RUN_DIR', str(tmp_path))
+    monkeypatch.setenv('LOCALCODE_CONTEXT', 'full')
+    tokens = list(range(700))
+    warmup.store('model', tokens)
+    assert warmup.load('model') == tokens
+    monkeypatch.setenv('LOCALCODE_CONTEXT', 'minimal')
+    assert warmup.load('model') is None
+    monkeypatch.setenv('LOCALCODE_CONTEXT', 'full')
+    file = tmp_path / 'warm/model.json'
+    data = json.loads(file.read_text()); data.pop('prefix_revision')
+    file.write_text(json.dumps(data))
+    assert warmup.load('model') is None
 
 
 def test_server_command_carries_slot_save_path(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALCODE_AGENT_RUN_DIR", str(tmp_path))
+    monkeypatch.setenv("LOCALCODE_PROMPT_WARMUP", "1")
     from localcode.ui.server_cmd import server_command
     cmd = server_command(str(tmp_path / "x.gguf"), 8123, "x")
     assert cmd[cmd.index("--slot-save-path") + 1] == str(tmp_path / "slots")
@@ -109,6 +128,7 @@ def test_server_command_carries_slot_save_path(tmp_path, monkeypatch):
     assert "--slot-save-path" not in server_command(str(tmp_path / "x.gguf"), 8123, "x")
 
 
+@pytest.mark.usefixtures("loopback_listener")
 def test_replay_cancel_closes_the_socket_promptly():
     """Closing the client socket is the cancel: llama-server drops a task whose client left."""
     import socket
@@ -167,7 +187,7 @@ def test_progress_identifies_warmup_and_request_changes(monkeypatch):
         def __exit__(self, *args): pass
         def read(self): return json.dumps([slot]).encode()
     monkeypatch.setattr(sv, "server_headers", lambda: {})
-    monkeypatch.setattr(sv.urllib.request, "urlopen", lambda *a, **kw: Response())
+    monkeypatch.setattr(sv, "local_urlopen", lambda *a, **kw: Response())
     warm = sup.progress()
     assert warm["context_ready"] is False
     assert warm["warmup"] and warm["request_id"] == "0:1" and warm["done"] == 5000

@@ -52,8 +52,9 @@ function fakeTui() {
   type Option = { value: string };
   type Select = { options: Option[]; onSelect: (option: Option) => void };
   type Prompt = { onConfirm: (value: string) => void };
+  type Confirm = { title: string; message: string; onConfirm?: () => void };
   let current: Current = { name: "session", params: { sessionID: "ses_first" } };
-  let dialog: Select | Prompt | undefined;
+  let dialog: Select | Prompt | Confirm | undefined;
   const commands = new Map<string, () => void>();
   const slashes = new Map<string, string>();
   const routes = new Map<string, (input: { params?: Record<string, unknown> }) => unknown>();
@@ -87,11 +88,12 @@ function fakeTui() {
       Dialog(props: unknown) { return props; },
       DialogSelect(props: Select) { return props; },
       DialogPrompt(props: Prompt) { return props; },
+      DialogConfirm(props: Confirm) { return props; },
       toast(value: { message: string; variant: string }) { toasts.push(value); },
       dialog: {
         get open() { return dialog !== undefined; },
         clear() { dialog = undefined; },
-        replace(render: () => Select | Prompt) { dialog = render(); },
+        replace(render: () => Select | Prompt | Confirm) { dialog = render(); },
       },
     },
     lifecycle: { onDispose(callback: () => void) { disposals.push(callback); } },
@@ -106,6 +108,9 @@ function fakeTui() {
       select.onSelect(select.options.find((option) => option.value === value)!);
     },
     confirm: (value: string) => (dialog as Prompt).onConfirm(value),
+    confirmation: () => dialog as Confirm,
+    confirmDialog() { const callback = (dialog as Confirm).onConfirm; dialog = undefined; callback?.(); },
+    cancelDialog() { dialog = undefined; },
     selectRow(value: string) {
       const page = routes.get(current.name)!({ params: current.params }) as { children: Select };
       page.children.onSelect(page.children.options.find((option) => option.value === value)!);
@@ -279,4 +284,32 @@ test("native keymap discovers server, mode and decide slash commands", async () 
   try {
     expect(Object.fromEntries(ui.slashes)).toEqual({server: "localcode.server", mode: "localcode.mode", decide: "localcode.decide"});
   } finally { ui.dispose(); }
+});
+
+
+test("busy or unverified server stop offers explicit confirmation and retries only after acceptance", async () => {
+  const posted: unknown[] = [];
+  const network = spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    if (new URL(String(input)).pathname === "/server/stop") {
+      const body = JSON.parse(String(init?.body)); posted.push(body);
+      if (body.force !== true) return Response.json({error: "Server activity could not be checked.", force_required: true}, {status: 409});
+      return Response.json({ok: true, state: "stopping"});
+    }
+    return Response.json({state:"ready",server_running:true,port:8123,base_url:"http://127.0.0.1:8123/v1"});
+  });
+  try {
+    await withTui(async host => {
+      await host.command("localcode.server"); host.choose("stop");
+      await Bun.sleep(20);
+      expect(host.confirmation().title).toBe("Stop shared model server?");
+      expect(host.confirmation().message).toContain("every LocalCode window and connected app");
+      expect(posted).toEqual([{}]);
+      host.cancelDialog(); await Bun.sleep(20);
+      expect(posted).toEqual([{}]);
+      await host.command("localcode.server"); host.choose("stop"); await Bun.sleep(20);
+      host.confirmDialog(); await Bun.sleep(20);
+      expect(posted).toEqual([{}, {}, {force:true}]);
+      expect(host.navigations).toEqual([]);
+    }, "http://127.0.0.1:8323");
+  } finally { network.mockRestore(); }
 });

@@ -10,3 +10,24 @@ const root = path.resolve(import.meta.dir, "../../..")
 const venv = path.join(root, ".venv/bin/python")
 export const python = process.env.LOCALCODE_PY ?? (existsSync(venv) ? venv : "python3")
 export const pythonEnv = { ...process.env, PYTHONPATH: [path.join(root, "src"), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter) }
+
+
+/** Only skip a real integration test after an explicit capability denial. */
+const listener = Bun.spawnSync([python, "-c", `
+import errno, socket
+try:
+    with socket.socket() as sock:
+        sock.bind(('127.0.0.1', 0))
+        sock.listen(1)
+except OSError as error:
+    if error.errno in (errno.EPERM, errno.EACCES):
+        raise SystemExit(77)
+    raise
+`], { env: pythonEnv })
+if (listener.exitCode !== 0 && listener.exitCode !== 77) {
+  throw new Error(`Loopback capability probe failed: ${listener.stderr.toString()}`)
+}
+if (listener.exitCode === 77 && process.env.LOCALCODE_REQUIRE_INTEGRATION === "1") {
+  throw new Error("Runner denies loopback listeners; integration coverage is required")
+}
+export const loopbackAvailable = listener.exitCode === 0

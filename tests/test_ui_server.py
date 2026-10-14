@@ -277,7 +277,7 @@ def test_cli_changes_live_port_through_authenticated_control(monkeypatch, capsys
     def request(req, timeout):
         requests.append(req)
         return io.BytesIO(b'{"ok":true,"base_url":"http://127.0.0.1:9234/v1"}')
-    monkeypatch.setattr(api.urllib.request, "urlopen", request)
+    monkeypatch.setattr(api, "local_urlopen", request)
     assert api.main(["--port", "9234"]) == 0
     assert requests[0].full_url == "http://127.0.0.1:8323/server/port"
     assert requests[0].get_header("X-localcode-token") == "control-key"
@@ -294,7 +294,7 @@ def test_cli_reports_live_rejection_without_saving_offline(monkeypatch, capsys):
     monkeypatch.setattr(api, "read_auth_file", lambda _: ("control-key", "inference-key"))
     def fail(req, timeout):
         raise HTTPError(req.full_url, 409, "Conflict", {}, io.BytesIO(b'{"error":"port occupied; unchanged"}'))
-    monkeypatch.setattr(api.urllib.request, "urlopen", fail)
+    monkeypatch.setattr(api, "local_urlopen", fail)
     assert api.main(["--port", "9234"]) == 1
     assert "port occupied" in capsys.readouterr().err
     assert ports.preferred_port() is None

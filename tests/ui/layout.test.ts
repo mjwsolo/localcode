@@ -1,8 +1,33 @@
-import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Plugin from "../../src/localcode/ui/plugin/localcode";
+
+let originalContext: string | undefined;
+beforeEach(() => {
+  originalContext = process.env.LOCALCODE_WORKSPACE_CONTEXT;
+  process.env.LOCALCODE_WORKSPACE_CONTEXT = "1";
+});
+afterEach(() => {
+  if (originalContext === undefined) delete process.env.LOCALCODE_WORKSPACE_CONTEXT;
+  else process.env.LOCALCODE_WORKSPACE_CONTEXT = originalContext;
+});
+
+test("default chat does not attach workspace files or track the project tree", async () => {
+  delete process.env.LOCALCODE_WORKSPACE_CONTEXT;
+  const directory = mkdtempSync(join(tmpdir(), "lean-context-"));
+  try {
+    writeFileSync(join(directory, "unrelated.txt"), "unrelated project data");
+    const hooks = await (Plugin as any)({ directory, client: {} });
+    for (const [messageID, text] of [["m1", "hello"], ["m2", "explain recursion"]]) {
+      const output = { parts: [{ type: "text", text }] as any[] };
+      await hooks["chat.message"]({ sessionID: "lean", agent: "build", messageID }, output);
+      expect(output.parts).toEqual([{ type: "text", text }]);
+    }
+    expect(existsSync(join(directory, ".localcode-agent"))).toBe(false);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
 
 // The snapshot rides on the session's FIRST user turn (history, cached, labelled as a
 // snapshot); later turns get a change report; the system prompt carries neither.

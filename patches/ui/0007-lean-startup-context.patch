@@ -1,0 +1,360 @@
+--- a/packages/opencode/src/session/prompt.ts
++++ b/packages/opencode/src/session/prompt.ts
+@@ -14,6 +14,7 @@
+ import type { JSONSchema7 } from "@ai-sdk/provider"
+ import { SessionCompaction } from "./compaction"
+ import { SystemPrompt } from "./system"
++import { LocalContext } from "./local-context"
+ import { Instruction } from "./instruction"
+ import { Plugin } from "../plugin"
+ import { MAX_STEPS_PROMPT } from "@opencode-ai/core/session/runner/max-steps"
+@@ -1285,7 +1286,7 @@
+             // ~6k new tokens on top (12k tokens, ~20 s on a 27B Q8 model).
+             // Local models now get the same constant prompt every provider
+             // gets; the warm-up replays it while the model loads.
+-            const workspace = true
++            const workspace = LocalContext.fullContext(model.providerID)
+             const [skills, env, instructions, mcpInstructions, modelMsgs] = yield* Effect.all([
+               workspace ? sys.skills(agent) : Effect.succeed(undefined),
+               // The environment block (working directory, git, platform) is
+@@ -1293,6 +1294,7 @@
+               // idea where it is and invents a path outside the workspace.
+               sys.environment(model),
+               workspace ? instruction.system().pipe(Effect.orDie) : Effect.succeed([]),
++              // In minimal mode, only explicitly enabled MCPs are connected.
+               sys.mcp(agent, session.permission),
+               MessageV2.toModelMessagesEffect(msgs, model),
+             ])
+--- a/packages/opencode/src/session/prompt/localcode.txt
++++ b/packages/opencode/src/session/prompt/localcode.txt
+@@ -5,7 +5,7 @@
+
+ # Tools
+ Your available tools are supplied with each request. Use websearch for online research and webfetch to read a specific URL when these tools are available. Report an actual tool failure accurately; do not claim you lack internet access without trying the available web tool when research is requested.
+-For requested project work, first inspect the relevant files before making changes. File tools use the current directory by default. Project workflow and LOCALCODE.md instructions are supplied when workspace work begins. Use only LOCALCODE.md for project instructions.
++For requested project work, inspect the relevant files before making changes. File tools use the current directory by default. Project instructions and skills are opt-in; use them when supplied or requested. Use only LOCALCODE.md for project instructions.
+
+ # Answers
+ Be clear and concise. Answer directly without a preamble about the conversation or workspace. Match the user's requested level of detail. Distinguish verified facts from assumptions. Use Markdown suitable for a terminal.
+--- a/packages/opencode/src/session/tools.ts
++++ b/packages/opencode/src/session/tools.ts
+@@ -6,6 +6,7 @@
+ import { McpCatalog } from "@/mcp/catalog"
+ import { Permission } from "@/permission"
+ import { Tool } from "@/tool/tool"
++import { LocalContext } from "./local-context"
+ import { ToolJsonSchema } from "@/tool/json-schema"
+ import { ToolRegistry } from "@/tool/registry"
+ import { Truncate } from "@/tool/truncate"
+@@ -95,7 +96,8 @@
+     agent: input.agent,
+     permission: input.session.permission,
+   })) {
+-    const schema = ProviderTransform.schema(input.model, ToolJsonSchema.fromTool(item))
++    const rawSchema = ProviderTransform.schema(input.model, ToolJsonSchema.fromTool(item))
++    const schema = LocalContext.fullContext(input.model.providerID) ? rawSchema : LocalContext.compactToolSchema(rawSchema)
+     tools[item.id] = tool({
+       description: item.description,
+       inputSchema: jsonSchema(schema),
+@@ -394,7 +396,7 @@
+
+     const schema = yield* Effect.promise(() => Promise.resolve(asSchema(item.inputSchema).jsonSchema))
+     const transformed = ProviderTransform.schema(input.model, { ...schema, properties: schema.properties ?? {} })
+-    item.inputSchema = jsonSchema(transformed)
++    item.inputSchema = jsonSchema(LocalContext.fullContext(input.model.providerID) ? transformed : LocalContext.compactToolSchema(transformed))
+     item.execute = (args, opts) =>
+       run.promise(
+         Effect.gen(function* () {
+--- /dev/null
++++ b/packages/opencode/src/session/local-context.ts
+@@ -0,0 +1,34 @@
++/** Keep local startup small; full project context is an explicit launch choice. */
++export function fullContext(providerID: string) {
++  return providerID !== "localcode" || process.env.LOCALCODE_CONTEXT === "full"
++}
++
++export function mcpStartupEnabled(enabled?: boolean, mode = process.env.LOCALCODE_CONTEXT) {
++  return enabled !== false && (mode !== "minimal" || enabled === true)
++}
++
++/** Remove schema documentation noise without changing fields or constraints. */
++export function compactToolSchema<T>(value: T): T {
++  return compact(value) as T
++}
++
++function compact(value: unknown): unknown {
++  if (typeof value !== "object" || value === null) return value
++  if (Array.isArray(value)) return value.map(compact)
++  const result: Record<string, unknown> = {}
++  for (const [key, item] of Object.entries(value)) {
++    if (["$schema", "title", "examples", "default"].includes(key)) continue
++    if (["properties", "$defs", "definitions", "patternProperties", "dependentSchemas"].includes(key)) {
++      result[key] = typeof item === "object" && item !== null ? Object.fromEntries(Object.entries(item).map(([name, schema]) => [name, compact(schema)])) : item
++    } else if (["items", "additionalProperties", "anyOf", "oneOf", "allOf", "not", "if", "then", "else", "prefixItems", "contains"].includes(key)) {
++      result[key] = compact(item)
++    } else if (key === "description" && typeof item === "string" && item.length > 160) {
++      result[key] = item.slice(0, 157) + "…"
++    } else {
++      result[key] = item
++    }
++  }
++  return result
++}
++
++export * as LocalContext from "./local-context"
+--- a/packages/opencode/src/mcp/index.ts
++++ b/packages/opencode/src/mcp/index.ts
+@@ -1,4 +1,5 @@
+ import path from "node:path"
++import { LocalContext } from "../session/local-context"
+ import { pathToFileURL } from "node:url"
+ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+ import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
+@@ -511,7 +512,7 @@
+                 return
+               }
+
+-              if (mcp.enabled === false) {
++              if (!LocalContext.mcpStartupEnabled(mcp.enabled)) {
+                 s.status[key] = { status: "disabled" }
+                 return
+               }
+--- /dev/null
++++ b/packages/opencode/test/session/local-context.test.ts
+@@ -0,0 +1,46 @@
++import { expect, test } from "bun:test"
++import { LocalContext } from "../../src/session/local-context"
++
++test("local project context is opt-in without changing other providers", () => {
++  const original = process.env.LOCALCODE_CONTEXT
++  try {
++    delete process.env.LOCALCODE_CONTEXT
++    expect(LocalContext.fullContext("localcode")).toBe(false)
++    expect(LocalContext.fullContext("other")).toBe(true)
++    process.env.LOCALCODE_CONTEXT = "full"
++    expect(LocalContext.fullContext("localcode")).toBe(true)
++  } finally {
++    if (original === undefined) delete process.env.LOCALCODE_CONTEXT
++    else process.env.LOCALCODE_CONTEXT = original
++  }
++})
++
++test("compact schemas preserve property names, validation and descriptions", () => {
++  const schema = {
++    type: "object", title: "Verbose generated title", required: ["title"],
++    properties: {
++      title: { type: "string", minLength: 1, description: "Page title" },
++      description: { type: "string", description: "d".repeat(800), examples: ["big example"] },
++      default: { type: "number", minimum: 0 },
++    },
++    additionalProperties: false,
++  }
++  const original = JSON.stringify(schema)
++  const compact = LocalContext.compactToolSchema(schema)
++  expect(compact.title).toBeUndefined()
++  expect(compact.required).toEqual(["title"])
++  expect(compact.properties.title).toEqual(schema.properties.title)
++  expect(compact.properties.default.minimum).toBe(0)
++  expect(compact.properties.description.description.length).toBeLessThanOrEqual(160)
++  expect(compact.additionalProperties).toBe(false)
++  expect(JSON.stringify(schema)).toBe(original)
++})
++
++test("minimal startup connects only explicitly enabled MCPs, while toggles and other hosts work", () => {
++  expect(LocalContext.mcpStartupEnabled(undefined, "minimal")).toBe(false)
++  expect(LocalContext.mcpStartupEnabled(false, "minimal")).toBe(false)
++  expect(LocalContext.mcpStartupEnabled(true, "minimal")).toBe(true)
++  expect(LocalContext.mcpStartupEnabled(undefined, "full")).toBe(true)
++  expect(LocalContext.mcpStartupEnabled(false, "full")).toBe(false)
++  expect(LocalContext.mcpStartupEnabled(undefined, "other-host")).toBe(true)
++})
+--- a/packages/tui/src/component/dialog-localcode-model.tsx
++++ b/packages/tui/src/component/dialog-localcode-model.tsx
+@@ -15,6 +15,9 @@
+ import { useDialog } from "../ui/dialog"
+ import { useLocal } from "../context/local"
+ import { useSync } from "../context/sync"
++import { useRoute } from "../context/route"
++import { usePromptRef } from "../context/prompt"
++import { unwrap } from "solid-js/store"
+ import { ModelChangeQueue } from "../util/model-change-queue"
+ import { useToast } from "../ui/toast"
+ import { selectedForeground, useTheme } from "../context/theme"
+@@ -39,6 +42,7 @@
+   hf_repo: string
+   recommended: boolean
+   current: boolean
++  loaded?: boolean
+   installed_count?: number
+   downloading?: boolean
+   pct?: number | null
+@@ -53,6 +57,7 @@
+   recommended: boolean
+   downloaded: boolean
+   current: boolean
++  loaded?: boolean
+   downloading?: boolean
+   pct?: number | null
+ }
+@@ -118,13 +123,13 @@
+ const pctLabel = (pct: number | null | undefined) => (pct != null ? `${Math.round(pct)}%` : "…")
+
+ /** Re-fetch a resource every second while a download runs, so rows show live progress. */
+-function pollWhileDownloading(refetch: () => void) {
++function pollWhileDownloading(refetch: () => void, listing = () => false) {
+   onMount(() => {
+     let active = false
+     const timer = setInterval(async () => {
+       try {
+         const st = await getJSON<Status>("/status")
+-        const next = st.state === "downloading" || st.state === "loading"
++        const next = st.state === "downloading" || st.state === "loading" || listing()
+         if (next || active) refetch()
+         active = next
+       } catch {}
+@@ -175,7 +180,7 @@
+         <span>
+           {`${g.display_name}${g.recommended ? " ★" : ""}`.padEnd(dimensions().width >= 80 ? 38 : 32)}
+           {dimensions().width >= 80 ? g.maker.padEnd(12) : ""}
+-          {g.downloading ? `⇣ ${pctLabel(g.pct)}` : g.current ? "Loaded" : g.installed_count ? `${g.installed_count} on disk` : "Download"}
++          {g.downloading ? `⇣ ${pctLabel(g.pct)}` : (g.loaded ?? g.current) ? "Loaded" : g.current ? "Selected" : g.installed_count ? `${g.installed_count} on disk` : "Download"}
+         </span>
+       ),
+       category: "Models",
+@@ -227,16 +232,18 @@
+   onMount(() => dialog.setSize("large"))
+   const toast = useToast()
+   const local = useLocal()
++  const route = useRoute()
++  const prompt = usePromptRef()
+   const { theme } = useTheme()
+   const dimensions = useTerminalDimensions()
+   const [selected, setSelected] = createSignal<string>()
+   const nameWidth = () => dimensions().width >= 80 ? 24 : 18
+   const [data, { refetch }] = createResource(() =>
+-    getJSON<{ group: string; display_name: string; maker: string; ram_gb: number; quants: Quant[]; vision_size_gb?: number; error?: string }>(
++    getJSON<{ group: string; display_name: string; maker: string; ram_gb: number; quants: Quant[]; listing?: boolean; vision_size_gb?: number; error?: string }>(
+       `/quants?group=${encodeURIComponent(props.group.key)}`,
+     ),
+   )
+-  pollWhileDownloading(() => void refetch())
++  pollWhileDownloading(() => void refetch(), () => !!data()?.listing)
+
+   async function cancel(q: Quant) {
+     try {
+@@ -258,7 +265,7 @@
+         {`${q.size_gb.toFixed(1)} GB`.padEnd(10)}
+         {`${FIT_GLYPH[q.fit] ?? "✗"} ${fitLabel(q.fit)}`.padEnd(12)}
+         <span style={{ fg: active() === q.alias ? selectedForeground(theme) : q.current ? theme.primary : q.downloaded ? theme.success : theme.textMuted }}>
+-          {q.downloading ? `⇣ ${pctLabel(q.pct)}` : q.current ? "Loaded" : q.downloaded ? "Ready" : "Download"}
++          {q.downloading ? `⇣ ${pctLabel(q.pct)}` : (q.loaded ?? q.current) ? "Loaded" : q.downloaded ? "Ready" : q.current ? "Selected" : "Download"}
+         </span>
+       </span>
+     ),
+@@ -275,6 +282,31 @@
+
+   function select(q: Quant) {
+     escapeStepsBack = false
++    // A no-op selection can be acknowledged during an active reply. The
++    // supervisor verifies liveness before returning already_loaded.
++    if (q.current && lastStatus()?.state === "ready" && lastStatus()?.current === q.alias) {
++      dialog.clear()
++      modelChangeQueue.cancel()
++      setQueuedModel(undefined)
++      void load(q, true)
++      return
++    }
++    if (route.data.type === "session" && !q.current) {
++      const sessionID = route.data.sessionID
++      dialog.replace(() => <DialogSelect
++        title="Switch model"
++        current="fresh"
++        options={[
++          { value: "fresh", title: "Start a new chat", description: "Keep this conversation saved; the new model starts without its history.", onSelect: () => queue(q, false, sessionID) },
++          { value: "continue", title: "Continue this chat", description: "The new model will process this conversation before replying.", onSelect: () => queue(q, true, sessionID) },
++        ]}
++      />)
++      return
++    }
++    queue(q, true)
++  }
++
++  function queue(q: Quant, keepHistory: boolean, sessionID?: string) {
+     dialog.clear()
+     const label = `${props.group.display_name} · ${q.label}`
+     setQueuedModel(undefined)
+@@ -282,7 +314,7 @@
+       () => Object.values(sync.data.session_status).some((status) => status.type !== "idle"),
+       () => {
+         setQueuedModel(undefined)
+-        void load(q)
++        void load(q, keepHistory, sessionID)
+       },
+     )
+     if (queued) {
+@@ -291,15 +323,22 @@
+     }
+   }
+
+-  async function load(q: Quant) {
++  async function load(q: Quant, keepHistory: boolean, sessionID?: string) {
+     try {
+       const r = await controlFetch("/select", {
+         method: "POST",
+         headers: { "content-type": "application/json" },
+         body: JSON.stringify({ group: props.group.key, filename: q.filename }),
+       })
+-      const res = (await r.json()) as { ok?: boolean; error?: string; model?: string }
++      const res = (await r.json()) as { ok?: boolean; error?: string; model?: string; already_loaded?: boolean }
+       if (!r.ok || res.error) throw new Error(res.error ?? `HTTP ${r.status}`)
++      if (res.already_loaded) {
++        // Another window may have changed the shared model. Synchronize this
++        // client's selection without restarting the server or dropping history.
++        local.model.set({ providerID: LOCALCODE_PROVIDER_ID, modelID: q.alias }, { recent: true })
++        toast.show({ variant: "info", title: "Model already loaded", message: `${props.group.display_name} · ${q.label}` })
++        return
++      }
+       setLastStatus({ ...lastStatus(), state: q.downloaded ? "loading" : "downloading", model: q.alias })
+     } catch (e) {
+       toast.show({ variant: "error", title: "Model switch failed", message: String(e) })
+@@ -328,6 +367,10 @@
+         clearInterval(timer)
+         if (st.model !== q.alias) return
+         local.model.set({ providerID: LOCALCODE_PROVIDER_ID, modelID: q.alias }, { recent: true })
++        if (!keepHistory && route.data.type === "session" && route.data.sessionID === sessionID) {
++          const draft = prompt.current ? structuredClone(unwrap(prompt.current.current)) : undefined
++          route.navigate({ type: "home", prompt: draft })
++        }
+         toast.show({ variant: "success", title: "Model loaded", message: label })
+         void import("./localcode-vision").then((m) => m.visionHint(toast))
+         return
+@@ -363,6 +406,7 @@
+         footer={
+           <box gap={1}>
+             <text fg={theme.textMuted}>★ Recommended · {props.group.hf_repo}</text>
++            <Show when={data()?.listing}><text fg={theme.textMuted}>Checking available downloads… Installed models can be loaded now.</text></Show>
+             <text fg={theme.textMuted}>
+               <span style={{ fg: theme.text, bold: true }}>enter</span> load / download / cancel ⇣
+               {"   "}<span style={{ fg: theme.text, bold: true }}>esc</span> back
+--- a/packages/tui/src/component/dialog-project-context.tsx
++++ b/packages/tui/src/component/dialog-project-context.tsx
+@@ -26,7 +26,7 @@
+       toast.show({
+         variant: "success",
+         title: "Project context saved",
+-        message: "Used for future replies. Start /new to clear older context from this chat.",
++        message: "Saved. Use --context full to include project instructions, or ask to read LOCALCODE.md for a specific task.",
+       })
+     } catch (error) {
+       toast.show({ variant: "error", title: "Could not save project context", message: String(error) })
+--- a/packages/opencode/src/config/config.ts
++++ b/packages/opencode/src/config/config.ts
+@@ -460,7 +460,7 @@
+           // localcode: the dev build's version is not on npm, so this background
+           // install of @opencode-ai/plugin only produces a failed network request
+           // on every launch. Our discipline plugin is hooks-only and needs no package.
+-          if (InstallationVersion.includes("localcode")) continue
++          if (process.env.LOCALCODE_CONTEXT || InstallationVersion.includes("localcode")) continue
+
+           const dep = yield* npmSvc
+             .install(dir, {

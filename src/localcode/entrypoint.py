@@ -16,6 +16,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="store_true", help="Print the version and exit")
     parser.add_argument("--mode", choices=["chat", "decisions"], default="chat", help="Start in normal chat or typed decision mode")
     parser.add_argument("--trust-project", action="store_true", help="Allow this project's configuration, plugins and MCP startup commands to load")
+    parser.add_argument("--context", choices=["minimal", "full"], default=os.environ.get("LOCALCODE_CONTEXT", "minimal"),
+                        help="Minimal context by default; full includes project instructions, skills and complete tool history")
     parser.add_argument("--model", help="Model alias to load (otherwise the picker asks)")
     parser.add_argument("--resume", dest="resume", metavar="SESSION_ID",
                         help="Resume a session by ID; uses its saved project directory when no project is given")
@@ -59,6 +61,7 @@ def main(argv: list[str] | None = None) -> None:
 
     args = build_parser().parse_args(argv)
     os.environ["LOCALCODE_MODE"] = args.mode
+    os.environ["LOCALCODE_CONTEXT"] = args.context
 
     if args.version:
         from . import __version__

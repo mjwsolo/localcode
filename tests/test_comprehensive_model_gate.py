@@ -1,7 +1,7 @@
 """Contract failures which the local promotion gate must reject."""
 import json
 import subprocess
-from unittest.mock import Mock
+from unittest.mock import Mock, MagicMock
 
 import pytest
 
@@ -98,3 +98,12 @@ def test_invalid_receipts_cannot_publish_a_promotion(mutation):
     else: receipt["models"] = rows[:-1]
     with pytest.raises(AssertionError):
         gate.validate_receipt(receipt, "candidate", {"server": "hash"}, gate.REQUIRED_KEYS)
+
+
+@pytest.fixture(autouse=True)
+def fake_reserved_port(monkeypatch):
+    # These unit tests mock process creation; binding a real port adds no coverage.
+    sock = MagicMock()
+    sock.__enter__.return_value = sock
+    sock.getsockname.return_value = ("127.0.0.1", 8123)
+    monkeypatch.setattr(gate.socket, "socket", lambda *args, **kwargs: sock)

@@ -49,3 +49,16 @@ Full details, including how to add, rebase, and drop a patch: [docs/upstream-for
 ## Large Changes
 
 For architecture changes, open an issue first so the direction can be agreed before you write code.
+
+
+### Restricted test runners
+
+Loopback integration tests probe whether this runner permits local listeners.
+EPERM/EACCES is reported as a skip, with the reason visible under `pytest -ra`.
+Required CI sets `LOCALCODE_REQUIRE_INTEGRATION=1`, which turns a missing
+capability into a failure instead. Use the same flag for an unrestricted local
+integration run. A restricted run does not validate skipped integrations.
+
+Real live speech transcription uses an installed speech model and is opt-in:
+`pytest tests/test_voice_live.py -m real_models`. Set `LOCALCODE_VOICE_GPU=0`
+to exercise CPU speech inference if GPU inference is unavailable.

@@ -11,7 +11,7 @@ from localcode.transfer import download
 
 
 @pytest.fixture
-def source(monkeypatch):
+def source(monkeypatch, loopback_listener):
     monkeypatch.setattr('localcode.transfer.CHUNK_BYTES', 65536)
     data = bytes(range(256)) * 8192
     state = {'etag': '"version1"', 'ranges': [], 'ignore': False, 'bad': False}

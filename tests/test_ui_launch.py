@@ -9,9 +9,20 @@ from pathlib import Path
 
 import pytest
 
-from localcode import entrypoint
+from localcode import entrypoint, __version__
 from localcode.ui import fork_commit, plugin_path, run_dir, ui_binary_path
 from localcode.ui.launch import write_config
+
+
+@pytest.mark.parametrize('version', [None, '0.5.8'])
+def test_upgrade_does_not_silently_attach_to_an_old_supervisor(tmp_path, monkeypatch, capsys, version):
+    from localcode.ui import launch
+    monkeypatch.setattr(launch, 'ui_binary_path', lambda: tmp_path / 'ui')
+    monkeypatch.setattr(launch, '_llama_server', lambda: tmp_path / 'server')
+    monkeypatch.setattr(launch, 'find_running', lambda: (8323, {'version': version, 'port': 8123}))
+    monkeypatch.setattr(launch, 'attach', lambda *a, **k: pytest.fail('must not attach outdated service'))
+    assert launch.main(project=str(tmp_path)) == 1
+    assert 'earlier installation' in capsys.readouterr().err
 
 
 def test_parser_accepts_version_model_and_project():
@@ -152,7 +163,7 @@ def test_second_launch_attaches_to_running_session(monkeypatch, tmp_path, infere
     (tmp_path / "ui").write_bytes(b"x")
     monkeypatch.setattr(launch, "_llama_server", lambda: tmp_path / "ui")
     monkeypatch.setenv("LOCALCODE_AGENT_RUN_DIR", str(tmp_path / "run"))
-    status = {"port": 8123, "ctx": 65536, "current": "gemma-4-12b-it-UD-Q4_K_XL", "state": "ready"}
+    status = {"version": __version__, "port": 8123, "ctx": 65536, "current": "gemma-4-12b-it-UD-Q4_K_XL", "state": "ready"}
     if inference_port:
         status["inference_port"] = inference_port
     monkeypatch.setattr(launch, "find_running", lambda: (8323, status))
@@ -177,7 +188,7 @@ def test_resume_flags_reach_attached_runtime(monkeypatch, tmp_path):
     binary.write_bytes(b"x")
     monkeypatch.setattr(launch, "ui_binary_path", lambda: binary)
     monkeypatch.setattr(launch, "_llama_server", lambda: binary)
-    monkeypatch.setattr(launch, "find_running", lambda: (8323, {"port": 8123, "ctx": 8192}))
+    monkeypatch.setattr(launch, "find_running", lambda: (8323, {"version": __version__, "port": 8123, "ctx": 8192}))
     monkeypatch.setenv("LOCALCODE_AGENT_RUN_DIR", str(tmp_path / "run"))
     calls = []
     monkeypatch.setattr(launch.subprocess, "call", lambda argv, **kwargs: calls.append((argv, kwargs)) or 0)
