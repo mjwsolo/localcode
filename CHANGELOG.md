@@ -3,6 +3,15 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.5.30 — 2026-10-17
+
+### Changed
+
+- The bundled inference server is rebuilt on upstream llama.cpp 62df181 with
+  the TurboQuant, Kolibri, DiffusionGemma and DFlash patches carried forward.
+- The interface is rebuilt on the latest upstream OpenCode before its v2
+  rewrite. Daily upstream checks track that commit until the v2 port lands.
+
 ## 0.5.29 — 2026-10-14
 
 ### Fixed

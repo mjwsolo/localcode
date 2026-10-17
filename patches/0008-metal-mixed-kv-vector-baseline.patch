@@ -1,7 +1,20 @@
+diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
+index d32fd05a0..d1dc09851 100644
+--- a/ggml/src/ggml-metal/ggml-metal-device.m
++++ b/ggml/src/ggml-metal/ggml-metal-device.m
+@@ -97,6 +97,7 @@ void ggml_metal_pipeline_free(ggml_metal_pipeline_t pipeline) {
+ }
+ 
+ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_with_params pipeline) {
++    GGML_ASSERT(pipeline.pipeline != NULL && "Metal pipeline unavailable: check kernel compilation diagnostics");
+     return pipeline.pipeline->obj.maxTotalThreadsPerThreadgroup;
+ }
+ 
 diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+index 3dda0255e..3c8778160 100644
 --- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
 +++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
-@@ -3913,9 +3913,10 @@
+@@ -3933,9 +3933,10 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
          // sparse: the index lists are per query row, so a threadgroup can share KV with Q == 1 only
          auto cfg = use_sparse
                  ? ggml_metal_tuning::fa_vec_baseline_cfg((int) ne00, (int) ne20)
@@ -13,21 +26,11 @@ diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-m
                            (int) ne00, (int) ne20,   // dk, dv (ne00 == dk for FA)
                            ne11, ne01);
  
-diff --git a/ggml/src/ggml-metal/ggml-metal-tuning.h b/ggml/src/ggml-metal/ggml-metal-tuning.h
---- a/ggml/src/ggml-metal/ggml-metal-tuning.h
-+++ b/ggml/src/ggml-metal/ggml-metal-tuning.h
-@@ -72,4 +72,7 @@
- // Keyed by Apple GPU family; an untuned family matches no row and gets the baseline.
- fa_vec_cfg_t fa_vec_pick(int gpu_family, int dtype, int dk, int dv, int64_t ne11, int64_t ne01);
- 
-+// TurboQuant kernels only instantiate the baseline Q/NE variant.
-+fa_vec_cfg_t fa_vec_pick_kv(int gpu_family, int dtype_k, int dtype_v, int dk, int dv, int64_t ne11, int64_t ne01);
-+
- }  // namespace ggml_metal_tuning
 diff --git a/ggml/src/ggml-metal/ggml-metal-tuning.cpp b/ggml/src/ggml-metal/ggml-metal-tuning.cpp
+index 0fe50277e..23e592a60 100644
 --- a/ggml/src/ggml-metal/ggml-metal-tuning.cpp
 +++ b/ggml/src/ggml-metal/ggml-metal-tuning.cpp
-@@ -1172,4 +1172,12 @@
+@@ -1172,4 +1172,12 @@ fa_vec_cfg_t fa_vec_pick(int gpu_family, int dtype, int dk, int dv, int64_t ne11
      return baseline;
  }
  
@@ -40,14 +43,15 @@ diff --git a/ggml/src/ggml-metal/ggml-metal-tuning.cpp b/ggml/src/ggml-metal/ggm
 +}
 +
  }  // namespace ggml_metal_tuning
-diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
---- a/ggml/src/ggml-metal/ggml-metal-device.m
-+++ b/ggml/src/ggml-metal/ggml-metal-device.m
-@@ -97,6 +97,7 @@
- }
+diff --git a/ggml/src/ggml-metal/ggml-metal-tuning.h b/ggml/src/ggml-metal/ggml-metal-tuning.h
+index d36a0b639..1440cdfe0 100644
+--- a/ggml/src/ggml-metal/ggml-metal-tuning.h
++++ b/ggml/src/ggml-metal/ggml-metal-tuning.h
+@@ -72,4 +72,7 @@ fa_vec_cfg_t fa_vec_baseline_cfg(int dk, int dv);
+ // Keyed by Apple GPU family; an untuned family matches no row and gets the baseline.
+ fa_vec_cfg_t fa_vec_pick(int gpu_family, int dtype, int dk, int dv, int64_t ne11, int64_t ne01);
  
- int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_with_params pipeline) {
-+    GGML_ASSERT(pipeline.pipeline != NULL && "Metal pipeline unavailable: check kernel compilation diagnostics");
-     return pipeline.pipeline->obj.maxTotalThreadsPerThreadgroup;
- }
- 
++// TurboQuant kernels only instantiate the baseline Q/NE variant.
++fa_vec_cfg_t fa_vec_pick_kv(int gpu_family, int dtype_k, int dtype_v, int dk, int dv, int64_t ne11, int64_t ne01);
++
+ }  // namespace ggml_metal_tuning
