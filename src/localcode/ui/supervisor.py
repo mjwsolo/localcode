@@ -467,6 +467,37 @@ class Supervisor:
         except Exception:  # noqa: BLE001
             return False
 
+    def crash_watchdog(self, interval: float = 1.0, cooldown: float = 120.0) -> None:
+        """Restart the loaded model once after an unexpected exit.
+
+        A crash mid-reply otherwise leaves every open chat retrying a dead server. One
+        automatic restart lets the runtime's retry succeed; a second crash within the
+        cooldown stays an error so a model that keeps crashing does not loop.
+        """
+        last_restart = float("-inf")
+        while not self._closing.is_set():
+            time.sleep(interval)
+            failure = self._server_failure()
+            alias = getattr(self, "current", None)
+            if not failure or not alias or time.monotonic() - last_restart < cooldown:
+                continue
+            if not self.lock.acquire(blocking=False):
+                continue
+            try:
+                if not self._server_failure():
+                    continue
+                last_restart = time.monotonic()
+                log(f"supervisor: {failure['detail'].split('. ')[0]}; restarting {alias} once")
+                self.state = {"state": "loading", "model": alias, "detail": "restarting after a crash", "pct": None}
+                if self.start(alias):
+                    self.state = {"state": "ready", "model": alias, "detail": "", "pct": None}
+                    log(f"supervisor: {alias} restarted after a crash")
+                else:
+                    self.state = {"state": "error", "model": alias, "pct": None,
+                                  "detail": "Model server crashed and could not restart. Open /server to retry or choose another model."}
+            finally:
+                self.lock.release()
+
     def server_status(self) -> dict:
         """Report current liveness, not just the last successful model load."""
         state = dict(self.state)
@@ -1355,6 +1386,7 @@ def main() -> int:
         # First-run journey: the TUI opens first and its /models picker loads a model.
         sup.state = {"state": "idle", "model": None, "detail": "no model loaded", "pct": None}
     log("ready")
+    threading.Thread(target=sup.crash_watchdog, daemon=True).start()
     # NOT signal.pause(): it returns on ANY signal, including the SIGCHLD from
     # a llama-server we just stopped, which made the supervisor exit mid-switch.
     threading.Event().wait()

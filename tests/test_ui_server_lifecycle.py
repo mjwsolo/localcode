@@ -279,3 +279,45 @@ def test_stop_rejects_non_boolean_confirmation(force):
     from tests.test_ui_server import control_request
     response, _ = control_request('/server/stop', method='POST', body={'force': force})
     assert response == 400
+
+
+def test_crash_watchdog_restarts_a_crashed_model_once(sup, monkeypatch):
+    import localcode.ui.supervisor as module
+    monkeypatch.setattr(module, "log", lambda message: None)
+    sup._closing = threading.Event()
+    sup.proc = SimpleNamespace(poll=lambda: -9, pid=1)
+    starts = []
+
+    def start(alias):
+        starts.append(alias)
+        sup.proc = SimpleNamespace(poll=lambda: -9, pid=2)  # crashes again at once
+        if len(starts) == 1:
+            sup.state = {'state': 'ready', 'model': alias}
+        return True
+
+    sup.start = start
+    ticks = []
+    real_sleep = module.time.sleep
+
+    def sleep(_):
+        ticks.append(1)
+        if len(ticks) >= 5:
+            sup._closing.set()
+        real_sleep(0)
+
+    monkeypatch.setattr(module.time, "sleep", sleep)
+    sup.crash_watchdog(interval=0, cooldown=60)
+    # One automatic restart; the repeat crash inside the cooldown is left for the user.
+    assert starts == ['test-model']
+    assert not sup.lock.locked()
+
+
+def test_crash_watchdog_ignores_a_stopped_server(sup, monkeypatch):
+    import localcode.ui.supervisor as module
+    sup._closing = threading.Event()
+    sup.state = {'state': 'stopped', 'model': 'test-model'}
+    sup.proc = SimpleNamespace(poll=lambda: 0, pid=1)
+    sup.start = lambda alias: pytest.fail('an intentional stop must not restart')
+    calls = []
+    monkeypatch.setattr(module.time, "sleep", lambda _: (calls.append(1), len(calls) >= 3 and sup._closing.set()))
+    sup.crash_watchdog(interval=0)

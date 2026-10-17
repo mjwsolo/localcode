@@ -262,11 +262,12 @@ export default {
         const output = { context: [] as string[] };
         await hooks["experimental.session.compacting"]({}, output);
         if (output.context.length) {
+          // Summarizer guidance rides as its own trailing message, so the cached
+          // conversation prefix is reused. Appended to the user's last turn it read as
+          // something the user said: summaries recorded it as user instructions, and a
+          // weaker model summarized the checklist instead of the work.
           const text = output.context.join("\n\n");
-          const last = messages.at(-1);
-          messages = last?.role === "user" && Array.isArray(last.content)
-            ? [...messages.slice(0, -1), Object.assign(Object.create(Object.getPrototypeOf(last)), last, { content: [...last.content, { type: "text", text }] })]
-            : [...messages, { role: "user", content: [{ type: "text", text }] }];
+          messages = [...messages, { role: "user", content: [{ type: "text", text: `[Summary guidance from LocalCode, not from the user] ${text}` }] }];
         }
       }
       event.messages = messages;
