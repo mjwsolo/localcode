@@ -91,5 +91,8 @@ if [ "${1:-}" = "--check" ]; then
   [ "$SHA" = "$HAVE" ] && echo "bundled binary matches" || { echo "bundled binary sha256 $HAVE differs"; exit 1; }
   exit 0
 fi
-cp "$OUT" "$ROOT/src/localcode/bin/localcode-ui"; chmod 755 "$ROOT/src/localcode/bin/localcode-ui"
+# Install as a new file: overwriting a binary that has already run in place
+# leaves macOS with a stale code-signature cache, and the new one is killed.
+cp "$OUT" "$ROOT/src/localcode/bin/localcode-ui.new"; chmod 755 "$ROOT/src/localcode/bin/localcode-ui.new"
+mv -f "$ROOT/src/localcode/bin/localcode-ui.new" "$ROOT/src/localcode/bin/localcode-ui"
 echo "installed into src/localcode/bin/localcode-ui"

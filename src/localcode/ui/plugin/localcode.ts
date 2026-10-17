@@ -91,7 +91,15 @@ const SERVER_CMD = new RegExp(
   "i",
 );
 const BACKGROUNDED = /&\s*$|\bnohup\b|\bsetsid\b|\bdisown\b|\btimeout\s+\d/;
-const STUB_RE = /(?:^|\W)(TODO:?|FIXME|placeholder|stub|not implemented|demo only|demo-only|coming soon)(?:\W|$)/i;
+// Unfinished-work markers. TODO/FIXME count only in capitals: a todo-list app is
+// full of the word "todo". The other phrases count only inside a comment, so an
+// HTML placeholder attribute or a function named stub_out is not flagged.
+const MARKER_RE = /(?:^|[^A-Za-z0-9_])(TODO|FIXME)(?:[^A-Za-z0-9_]|$)/;
+const COMMENT_PHRASE_RE = /(?:\/\/|#|\/\*|<!--|^\s*\*|^\s*--).*?\b(placeholder|stub|not implemented|demo[ -]only|coming soon)\b/i;
+const STUB_CODE_RE = /raise NotImplementedError|throw new Error\(\s*["'`](?:not implemented|todo)/i;
+export function isStubLine(line: string): boolean {
+  return MARKER_RE.test(line) || COMMENT_PHRASE_RE.test(line) || STUB_CODE_RE.test(line);
+}
 const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", "target", ".venv", "venv", "__pycache__", ".opencode"]);
 const SRC_RE = /\.(ts|tsx|js|jsx|py|rs|go|java|kt|swift|rb|php|vue|svelte)$/;
 
@@ -155,7 +163,7 @@ function stubLines(files: string[]): string[] {
   for (const f of files) {
     let text = ""; try { text = readFileSync(f, "utf8"); } catch { continue; }
     for (const line of text.split("\n")) {
-      if (STUB_RE.test(line)) hits.push(`${f}: ${line.trim().slice(0, 160)}`);
+      if (isStubLine(line)) hits.push(`${f}: ${line.trim().slice(0, 160)}`);
       if (hits.length >= 12) return hits;
     }
   }

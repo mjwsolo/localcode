@@ -3,6 +3,27 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.5.32 — 2026-10-17
+
+### Fixed
+
+- Choosing a model in /models no longer crashes the interface.
+- After switching models with "Start a new chat", the new chat uses the model
+  that was just loaded instead of the one LocalCode started with.
+- The /server panel updates itself while the model server stops or starts.
+- A decision's answer appears on the Run decision row, so it is visible on a
+  short terminal.
+- /speak reads the last reply that has text, even after an interrupted turn.
+- The quant list starts on the recommended quant, not the smallest one.
+- "Completed in" covers the whole task, including automatic continuations.
+- A todo-list project no longer trips the unfinished-work check: TODO and
+  FIXME count only in capitals, and other phrases only inside comments.
+- Compaction summaries no longer show the template's wrapper tags.
+- /status shows the loaded model and whether a language server is running.
+- /stats carries the localcode name.
+- A reported localcode issue is filed in the localcode repository, not the
+  project you are working in.
+
 ## 0.5.31 — 2026-10-17
 
 ### Changed

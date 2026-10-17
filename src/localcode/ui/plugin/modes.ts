@@ -60,6 +60,12 @@ export function answerRows(result: Result): Option[] {
   }));
 }
 
+/** The top answer and its probability, for a one-line summary. */
+export function summary(result: Result): string {
+  const top = answerRows(result).reduce((best, row) => (parseFloat(row.footer ?? "0") > parseFloat(best.footer ?? "0") ? row : best));
+  return `${top.title.replace(/ ✓$/, "")} ${top.footer}`;
+}
+
 export function setupModes(context: ModesContext): () => void {
   let form: Form = { question: "", state: "", kind: "yes-no", options: "", image: "" };
   let status: Status | undefined;
@@ -111,9 +117,11 @@ export function setupModes(context: ModesContext): () => void {
       { title: "Answer type: " + form.kind, value: "kind", category: "Input" },
       ...(form.kind === "yes-no" ? [] : [{ title: form.kind === "score" ? "Levels (lowest to highest)" : "Choices", value: "options", description: form.options.replaceAll("\n", " · ") || "Enter one per line", category: "Input" }]),
       { title: "Image (optional)", value: "image", description: form.image || "PNG, JPEG or WebP file path", category: "Input" },
-      { title: busy ? "Evaluating…" : "Run decision", value: "run", category: "Actions" },
-      ...(result ? [{ title: "Answered by " + result.model, value: "result:model", description: "Prediction only; no tools or code actions executed", category: "Result" }, ...answerRows(result), ...(result.answers.answer.score === undefined ? [] : [{ title: "Score", value: "result:score", footer: result.answers.answer.score.toFixed(3), category: "Result" }])] : []),
+      // The answer also rides on this row: it stays in view when the full result
+      // rows below are cut off on a short terminal.
+      { title: busy ? "Evaluating…" : "Run decision", value: "run", description: result ? "Last answer: " + summary(result) : undefined, category: "Actions" },
       { title: "Back to chat", value: "chat", category: "Actions" },
+      ...(result ? [{ title: "Answered by " + result.model, value: "result:model", description: "Prediction only; no tools or code actions executed", category: "Result" }, ...answerRows(result), ...(result.answers.answer.score === undefined ? [] : [{ title: "Score", value: "result:score", footer: result.answers.answer.score.toFixed(3), category: "Result" }])] : []),
     ];
   }
 
@@ -217,6 +225,29 @@ export function setupModes(context: ModesContext): () => void {
 
   let changingPort = false;
   let changingServer = false;
+  // The /server dialog is a snapshot; while one is open, a start or stop in
+  // progress refreshes it when the server settles instead of leaving it stale.
+  let serverDialogOpen = false;
+  let serverDialogSeq = 0;
+  let watching = false;
+  const settling = (state: string) => ["loading", "downloading", "stopping"].includes(state);
+  async function watchUntilSettled() {
+    if (watching) return;
+    watching = true;
+    try {
+      for (let elapsed = 0; elapsed < 600_000; elapsed += 1500) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        const r = await fetch(control + "/server", { headers, signal: AbortSignal.timeout(5000) }).catch(() => undefined);
+        const state = r?.ok ? ((await r.json()) as { state: string }).state : undefined;
+        if (!state || settling(state)) continue;
+        if (serverDialogOpen) void server();
+        else info(state === "ready" ? "Model server ready" : `Model server ${state}`);
+        return;
+      }
+    } finally {
+      watching = false;
+    }
+  }
   async function changeServer(action: "start" | "stop", force = false) {
     if (changingServer) return;
     changingServer = true;
@@ -288,6 +319,9 @@ export function setupModes(context: ModesContext): () => void {
       if (await proc.exited !== 0) throw new Error("Could not copy to clipboard");
       info(secret ? "Copied with API key. Keep the clipboard contents private." : "Copied to clipboard");
     };
+    if (settling(s.state)) void watchUntilSettled();
+    serverDialogOpen = true;
+    const seq = ++serverDialogSeq;
     const value = await context.ui.dialog.select<string>({ title: "Model server · " + s.state, options: [
       { title: "Status", value: "status", description: s.detail || s.state },
       { title: "Generation", value: "status", description: s.performance?.decode_tps != null ? `${s.performance.decode_tps} tokens/s · recent requests` : "Not enough generation measured yet" },
@@ -309,7 +343,7 @@ export function setupModes(context: ModesContext): () => void {
         description: s.server_running ? "Frees model memory · affects all windows and API clients · chat stays open" : "Reloads the previous model · loading and context processing take time",
       }] : []),
       { title: "Refresh", value: "refresh", description: "Loopback only · available to tools on this Mac" },
-    ] });
+    ] }).finally(() => { if (seq === serverDialogSeq) serverDialogOpen = false; });
     if (value === undefined) return;
     if (value === "refresh" || value === "status") return server();
     if (value === "start" || value === "stop") return changeServer(value);
