@@ -159,3 +159,39 @@ test("the server plugin registers the todo tool, carries turn context, guards to
     else process.env.LOCALCODE_CONTEXT = mode;
   }
 });
+
+test("old tool output is pruned at a new turn using the local model's input budget, then stays fixed within the turn", async () => {
+  const runtime = fakeRuntime();
+  (runtime.ctx as any).model = { async list() { return { data: [{ providerID: "localcode", id: "m", limit: { context: 16384, input: 8192, output: 4096 } }] }; } };
+  const dispose = await plugin.setup(runtime.ctx);
+  try {
+    const turn = (n: number) => [
+      { role: "user", content: [{ type: "text", text: "turn " + n }] },
+      { role: "assistant", content: [{ type: "tool-call", id: "c" + n, name: "read", input: {} }] },
+      { role: "tool", content: [{ type: "tool-result", id: "c" + n, name: "read", result: { type: "text", value: "x".repeat(12000) } }] },
+    ];
+    const request = (messages: any[]) => ({ sessionID: "ses", agent: "build", model: { providerID: "localcode", id: "m" }, system: [], tools: {}, messages });
+    const history = [...turn(1), ...turn(2), ...turn(3), ...turn(4), ...turn(5)];
+    // Budget 8192: protect 2,048 tokens, prune at 1,024 reclaimable. Each output is 3,000 tokens;
+    // the last two user turns are never pruned, so turns 1-3 go.
+    const first: any = request(history);
+    await runtime.sessionHooks.get("context")!(first);
+    const values = (event: any) => event.messages.filter((m: any) => m.role === "tool").map((m: any) => m.content[0].result.value);
+    expect(values(first).map((v: string) => v === "[Old tool result content cleared]")).toEqual([true, true, true, false, false]);
+    // A smaller budget mid-turn changes nothing until the next user turn starts.
+    (runtime.ctx as any).model = { async list() { return { data: [{ providerID: "localcode", id: "m", limit: { context: 4096, input: 2048, output: 1024 } }] }; } };
+    const more: any = request([...history, { role: "assistant", content: [{ type: "text", text: "ok" }] }]);
+    await runtime.sessionHooks.get("context")!(more);
+    expect(values(more).map((v: string) => v === "[Old tool result content cleared]")).toEqual([true, true, true, false, false]);
+    // The next turn: turn 4 falls outside the last two user turns and is pruned.
+    const next: any = request([...history, ...turn(6)]);
+    await runtime.sessionHooks.get("context")!(next);
+    expect(values(next).map((v: string) => v === "[Old tool result content cleared]")).toEqual([true, true, true, true, false, false]);
+    // Another provider keeps opencode's default limits (nothing reaches them here).
+    const other: any = { ...request([...history, ...turn(6)]), sessionID: "other", model: { providerID: "else", id: "x" } };
+    await runtime.sessionHooks.get("context")!(other);
+    expect(values(other).some((v: string) => v === "[Old tool result content cleared]")).toBe(false);
+  } finally {
+    await dispose();
+  }
+});

@@ -9,13 +9,13 @@ that the GPU is unthrottled.
 
 ## Context and verification
 
-LocalCode enables the runtime's old-tool-output pruning. For local models the
+LocalCode prunes old tool output from each request. For local models the
 protected tool window is 25% of the usable input budget (1,024–40,000 estimated
 tokens); pruning needs at least 12.5% reclaimable (512–20,000 tokens). The last
 two user turns, skills, unsuccessful and unfinished tools remain protected.
-Full old outputs remain in session storage. Pruning changes the prefix once;
-it is useful only when the saved future processing outweighs that reread.
-Set `LOCALCODE_PRUNE=0` before launching to disable it.
+Full old outputs remain in session storage. Pruning is decided when a new turn
+starts and changes the prefix once per prune; it is useful only when the saved
+future processing outweighs that reread.
 
 Tool previews are limited to 400 lines and 4–16 KiB depending on the initial
 context size. The native tool implementation saves full truncated output and

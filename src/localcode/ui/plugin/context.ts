@@ -83,3 +83,67 @@ export function leanMessages(messages: any[], workspaceContext = false): any[] {
     return message;
   });
 }
+
+/**
+ * Old tool output pruning (opencode v1's prune pass, with LocalCode's budget-aware limits).
+ * Completed tool results older than the last two user turns are replaced by a short note once
+ * they fall outside a protected window of recent output. A minimum reclaim keeps the cached
+ * prefix from changing for small wins; outputs pruned once stay pruned.
+ */
+export const PRUNED_OUTPUT = "[Old tool result content cleared]";
+const PRUNE_PROTECT = 40_000;
+const PRUNE_MINIMUM = 20_000;
+const PRUNE_PROTECTED_TOOLS = new Set(["skill"]);
+
+/** Keep a meaningful recent tool window on small local context budgets too. */
+export function pruneLimits(inputBudget: number) {
+  if (!Number.isFinite(inputBudget) || inputBudget <= 0) return { protect: PRUNE_PROTECT, minimum: PRUNE_MINIMUM };
+  return {
+    protect: Math.min(PRUNE_PROTECT, Math.max(1024, Math.floor(inputBudget * 0.25))),
+    minimum: Math.min(PRUNE_MINIMUM, Math.max(512, Math.floor(inputBudget * 0.125))),
+  };
+}
+
+function resultText(result: any): string {
+  if (!result || typeof result !== "object") return "";
+  if (typeof result.value === "string") return result.value;
+  if (Array.isArray(result.value)) return result.value.map((item: any) => (item?.type === "text" ? item.text : "")).join("");
+  return result.value === undefined ? "" : JSON.stringify(result.value);
+}
+
+const estimate = (text: string) => Math.ceil(text.length / 4);
+
+/** Tool results to prune now (ids), given the ones already pruned. Empty when the reclaim is too small. */
+export function pruneCandidates(messages: any[], limits: { protect: number; minimum: number }, pruned: ReadonlySet<string>): string[] {
+  let turns = 0;
+  let total = 0;
+  let reclaim = 0;
+  const found: string[] = [];
+  loop: for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (message?.role === "user") turns++;
+    if (turns < 2 || !Array.isArray(message?.content)) continue;
+    for (let part = message.content.length - 1; part >= 0; part--) {
+      const item = message.content[part];
+      if (item?.type !== "tool-result" || item.resultType === "error" || "error" in (item.result ?? {})) continue;
+      if (PRUNE_PROTECTED_TOOLS.has(item.name)) continue;
+      if (pruned.has(item.id)) break loop;
+      const size = estimate(resultText(item.result));
+      total += size;
+      if (total <= limits.protect) continue;
+      reclaim += size;
+      found.push(item.id);
+    }
+  }
+  return reclaim > limits.minimum ? found : [];
+}
+
+/** Replace pruned tool results; nothing else changes. */
+export function applyPruned(messages: any[], pruned: ReadonlySet<string>): any[] {
+  if (!pruned.size) return messages;
+  return messages.map((message) => {
+    if (!Array.isArray(message?.content) || !message.content.some((item: any) => item?.type === "tool-result" && pruned.has(item.id))) return message;
+    return withContent(message, message.content.map((item: any) =>
+      item?.type === "tool-result" && pruned.has(item.id) ? { ...item, result: { type: "text", value: PRUNED_OUTPUT } } : item));
+  });
+}

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { leanMessages } from "../../src/localcode/ui/plugin/context";
+import { applyPruned, leanMessages, PRUNED_OUTPUT, pruneCandidates, pruneLimits } from "../../src/localcode/ui/plugin/context";
 
 // Model-request messages as opencode v2 hands them to session.hook("context"):
 // assistant tool calls, with their results in the following role "tool" message.
@@ -86,4 +86,38 @@ test("requested skills and user decisions remain complete, while old pending cal
   expect(result[1].content).toEqual(results);
   expect(result[0].content[2].input.content.length).toBeLessThanOrEqual(600);
   expect(result[0].content[2].id).toBe("pending");
+});
+
+
+test("local pruning thresholds scale down with context while preserving reclaim hysteresis", () => {
+  expect(pruneLimits(8192)).toEqual({ protect: 2048, minimum: 1024 });
+  expect(pruneLimits(32768)).toEqual({ protect: 8192, minimum: 4096 });
+  expect(pruneLimits(262144)).toEqual({ protect: 40000, minimum: 20000 });
+  for (const value of [0, -1, NaN, Infinity]) expect(pruneLimits(value)).toEqual({ protect: 40000, minimum: 20000 });
+});
+
+test("old tool output outside the protected window is pruned once enough is reclaimable", () => {
+  const turn = (n: number, size: number, name = "read") => [
+    user("turn " + n),
+    { role: "assistant", content: [{ type: "tool-call", id: "c" + n, name, input: {} }] },
+    { role: "tool", content: [{ type: "tool-result", id: "c" + n, name, result: { type: "text", value: "x".repeat(size) } }] },
+  ];
+  const limits = { protect: 1000, minimum: 1500 };
+  // 4,000 chars = 1,000 tokens each. The last two user turns are never pruned.
+  const messages = [...turn(1, 4000), ...turn(2, 4000), ...turn(3, 4000, "skill"), ...turn(4, 4000), ...turn(5, 40000), ...turn(6, 40000)];
+  const pruned = new Set(pruneCandidates(messages, limits, new Set()));
+  // c4 fills the protected window; c3 is a skill; c2 and c1 reclaim 2,000 tokens.
+  expect([...pruned].sort()).toEqual(["c1", "c2"]);
+  const result = applyPruned(messages, pruned);
+  expect(result[2].content[0].result).toEqual({ type: "text", value: PRUNED_OUTPUT });
+  expect(result[5].content[0].result.value).toBe(PRUNED_OUTPUT);
+  expect(result[8].content[0].result.value.length).toBe(4000);
+  expect(messages[2].content[0].result.value.length).toBe(4000);
+  // Below the minimum reclaim nothing changes, and a pruned output stops the scan.
+  expect(pruneCandidates(messages, { protect: 1000, minimum: 5000 }, new Set())).toEqual([]);
+  expect(pruneCandidates(messages, limits, pruned)).toEqual([]);
+  // Failed tools are never pruned.
+  const failed = [...turn(1, 4000), ...turn(2, 0), ...turn(3, 0)];
+  failed[2] = { role: "tool", content: [{ type: "tool-result", id: "c1", name: "bash", resultType: "error", result: { error: { message: "x" }, content: [] } }] };
+  expect(pruneCandidates(failed, { protect: 0, minimum: 0 }, new Set())).toEqual([]);
 });

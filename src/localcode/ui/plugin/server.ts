@@ -6,6 +6,7 @@
  *   ─────────────────────────────────────   ─────────────────────────────────────────────
  *   experimental.chat.system.transform  ->  session.hook("context" | "compaction" | "generate"): event.system
  *   experimental.chat.messages.transform ->  session.hook("context"): event.messages
+ *   (v1 runtime) old tool output pruning ->  session.hook("context"): see pruneCandidates
  *   tool.definition                     ->  session.hook("context"): event.tools[name].description
  *   experimental.session.compacting     ->  session.hook("compaction"): appended to the summary request
  *   chat.message                        ->  session.hook("prompt"); added parts ride in the user
@@ -20,7 +21,7 @@
  *   todowrite (v1 built-in)             ->  a plugin tool with the same name and schema
  */
 import LocalcodePlugin from "./localcode";
-import { leanMessages } from "./context";
+import { applyPruned, leanMessages, pruneCandidates, pruneLimits } from "./context";
 import { LocalcodeRpc } from "./rpc";
 
 /** Tool names the engine was written against (opencode v1) for the v2 tools that replaced them. */
@@ -40,14 +41,14 @@ export const TodoInput = {
   properties: {
     todos: {
       type: "array",
-      description: "The updated todo list",
+      description: "The complete, updated list",
       items: {
         type: "object",
         properties: {
           content: { type: "string", description: "Brief description of the task" },
-          status: { type: "string", enum: [...STATUSES], description: "Current status of the task: pending, in_progress, completed, cancelled" },
-          priority: { type: "string", enum: ["high", "medium", "low"], description: "Priority level of the task" },
-          id: { type: "string", description: "Unique identifier for the todo item" },
+          status: { type: "string", enum: [...STATUSES] },
+          priority: { type: "string", enum: ["high", "medium", "low"] },
+          id: { type: "string" },
         },
         required: ["content", "status"],
       },
@@ -73,10 +74,22 @@ export function parseTodos(input: unknown): Todo[] {
   });
 }
 
-export const TODO_DESCRIPTION =
-  "Create and update the task checklist for the current session. Use it for work with three or more steps: " +
-  "write the whole list once, keep exactly one item in_progress, and mark items completed as soon as they are done. " +
-  "Send the complete list every time; it replaces the previous one.";
+/** The compact description LocalCode's runtime gave this tool under opencode v1. */
+export const TODO_DESCRIPTION = [
+  "Create and update the task list for this session.",
+  "",
+  "Use it for work with 3 or more distinct steps, or when the user gives several tasks. Skip it for a single edit, a single command, or a question.",
+  "",
+  "States: pending, in_progress (exactly one at a time), completed, cancelled.",
+  "",
+  "Rules:",
+  "- Add one item per requirement, including every deliverable the user named.",
+  "- Mark an item in_progress before starting it and completed only after the work and its verification are actually done.",
+  "- Update as you go; do not batch completions.",
+  "- If blocked, keep the item in_progress and add a follow-up describing the blocker.",
+  "- Items are specific and actionable; keep the user's commands verbatim.",
+  "- Send the complete list every time; it replaces the previous one.",
+].join("\n");
 
 export function renderChecklist(todos: readonly Todo[]): string {
   if (!todos.length) return "The todo list is empty.";
@@ -211,13 +224,40 @@ export default {
       });
     });
 
+    // Old tool output pruning: decided when a new user turn starts (where opencode v1 pruned,
+    // at the end of the previous turn), so the prefix stays fixed within a turn.
+    const pruning = new Map<string, { pruned: Set<string>; users: number }>();
+    const inputBudget = async (model: { providerID?: string; id?: string } | undefined) => {
+      if (model?.providerID !== "localcode") return 0;
+      try {
+        const list = await ctx.model.list();
+        const info = (list?.data ?? list ?? []).find((item: any) => item?.providerID === model.providerID && item?.id === model.id);
+        const limit = info?.limit;
+        return limit?.input || (limit?.context ? limit.context - (limit.output || 0) : 0);
+      } catch {
+        return 0;
+      }
+    };
+    const prune = async (event: any, messages: any[], kind: string) => {
+      const sessionID: string | undefined = event.sessionID;
+      if (!sessionID) return;
+      const state = pruning.get(sessionID) ?? { pruned: new Set<string>(), users: -1 };
+      pruning.set(sessionID, state);
+      const users = messages.filter((message) => message?.role === "user").length;
+      if (kind !== "context" || users === state.users) return state;
+      state.users = users;
+      for (const id of pruneCandidates(messages, pruneLimits(await inputBudget(event.model)), state.pruned)) state.pruned.add(id);
+      return state;
+    };
+
     const shape = async (event: any, kind: "context" | "compaction" | "generate") => {
       adapter.setAgent(event.agent);
       event.system = await transformSystem(hooks, event.agent, event.system ?? []);
       let messages = withTurnContext(event.messages ?? []);
+      const pruned = await prune(event, messages, kind);
       const lean = { messages };
       await hooks["experimental.chat.messages.transform"]({}, lean);
-      messages = lean.messages;
+      messages = pruned ? applyPruned(lean.messages, pruned.pruned) : lean.messages;
       if (kind === "compaction") {
         const output = { context: [] as string[] };
         await hooks["experimental.session.compacting"]({}, output);
