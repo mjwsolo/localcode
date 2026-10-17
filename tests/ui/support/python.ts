@@ -1,4 +1,5 @@
-import { existsSync } from "node:fs"
+import { existsSync, mkdtempSync } from "node:fs"
+import { tmpdir } from "node:os"
 import path from "node:path"
 
 /** The interpreter that runs localcode in these tests and the env it needs.
@@ -9,7 +10,14 @@ import path from "node:path"
 const root = path.resolve(import.meta.dir, "../../..")
 const venv = path.join(root, ".venv/bin/python")
 export const python = process.env.LOCALCODE_PY ?? (existsSync(venv) ? venv : "python3")
-export const pythonEnv = { ...process.env, PYTHONPATH: [path.join(root, "src"), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter) }
+// Supervisors started by these tests log and keep state in a throwaway run
+// directory, never the user's real one.
+const runDir = process.env.LOCALCODE_AGENT_RUN_DIR ?? mkdtempSync(path.join(tmpdir(), "localcode-test-run-"))
+export const pythonEnv = {
+  ...process.env,
+  LOCALCODE_AGENT_RUN_DIR: runDir,
+  PYTHONPATH: [path.join(root, "src"), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
+}
 
 
 /** Only skip a real integration test after an explicit capability denial. */
