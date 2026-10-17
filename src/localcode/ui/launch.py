@@ -183,6 +183,8 @@ def write_config(path: Path, *, port: int, ctx: int, alias: str | None) -> None:
         "permissions": [
             {"action": "subagent", "resource": "*", "effect": "deny"},
             {"action": "execute", "resource": "*", "effect": "deny"},
+            # A third identical tool call in one step asks first, as opencode v1 did.
+            {"action": "doom_loop", "resource": "*", "effect": "ask"},
             *_external_directory_rules(),
         ],
         "agents": {"plan": {"disabled": True}},

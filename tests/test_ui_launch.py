@@ -93,7 +93,8 @@ def test_write_config_points_at_local_server_and_plugin(tmp_path):
     assert cfg["share"] == "disabled" and cfg["update"] == "disable"
     # no subagents and no code mode
     assert {(rule["action"], rule["effect"]) for rule in cfg["permissions"]} == {
-        ("subagent", "deny"), ("execute", "deny"), ("external_directory", "ask"), ("external_directory", "allow"),
+        ("subagent", "deny"), ("execute", "deny"), ("doom_loop", "ask"),
+        ("external_directory", "ask"), ("external_directory", "allow"),
     }
     assert cfg["agents"] == {"plan": {"disabled": True}}
     assert cfg["compaction"] == {"buffer": 0}
