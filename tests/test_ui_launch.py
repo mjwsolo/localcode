@@ -108,7 +108,8 @@ def test_write_config_points_at_local_server_and_plugin(tmp_path):
     assert plugin.is_absolute() and (plugin / "server.ts").is_file() and (plugin / "tui.ts").is_file()
     assert not (tmp_path / ".localcode-agent").exists()
     # every v1 key the runtime renamed is written under its current name
-    for legacy in ("provider", "enabled_providers", "plugin", "tools", "agent", "autoupdate", "lsp"):
+    assert cfg["lsp"] is True   # installed language servers start; missing ones only via /lsp
+    for legacy in ("provider", "enabled_providers", "plugin", "tools", "agent", "autoupdate"):
         assert legacy not in cfg
 
 
@@ -353,3 +354,10 @@ def test_entrypoint_routes_mcp(monkeypatch):
         entrypoint.main(["mcp", "list"])
     assert e.value.code == 0 and seen["argv"] == ["list"]
 
+
+
+def test_runtime_env_never_downloads_language_servers_on_its_own(monkeypatch, tmp_path):
+    from localcode.ui.launch import runtime_env
+
+    monkeypatch.delenv("OPENCODE_DISABLE_LSP_DOWNLOAD", raising=False)
+    assert runtime_env(tmp_path / "runtime.json", 1)["OPENCODE_DISABLE_LSP_DOWNLOAD"] == "1"

@@ -77,7 +77,7 @@ json.dump(c, open({str(cfg)!r}, "w"), indent=2)
 subprocess.run([str(PY), "-c", code], check=True)
 
 env = {**os.environ, "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS": "1", "HOME": str(home), "LOCALCODE_CONFIG": str(cfg), "LOCALCODE_CONTROL_URL": f"http://127.0.0.1:{cport}",
-       "LOCALCODE_PARALLEL": str(a.slots), "LOCALCODE_TEST_HOME": str(home), "PWD": str(ws), "LOCALCODE_AGENT_RUN_DIR": str(home / "run")}
+       "OPENCODE_DISABLE_LSP_DOWNLOAD": "1", "LOCALCODE_PARALLEL": str(a.slots), "LOCALCODE_TEST_HOME": str(home), "PWD": str(ws), "LOCALCODE_AGENT_RUN_DIR": str(home / "run")}
 if a.force_compaction: env["LOCALCODE_COMPACTION_CHECKLIST"] = "1"
 turns = ["Read README.md and tell me in one sentence what this project is.",
          "Now plan two steps with todowrite: add a docstring to add() in a.py, then run the tests. Do step 1."]

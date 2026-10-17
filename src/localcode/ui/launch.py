@@ -188,6 +188,9 @@ def write_config(path: Path, *, port: int, ctx: int, alias: str | None) -> None:
             *_external_directory_rules(),
         ],
         "agents": {"plan": {"disabled": True}},
+        # Language servers already installed on this machine start for the
+        # project's files; one that is missing is installed only from /lsp.
+        "lsp": True,
         # The plugin directory: server.ts runs in the agent, tui.ts in the terminal UI.
         "plugins": [str(plugin_path())],
         "share": "disabled",
@@ -241,6 +244,8 @@ def runtime_env(config_path: Path, ctrl: int, *, trust_project: bool = False) ->
     # The branded alias takes precedence in the fork. Set both explicitly so
     # an inherited alias cannot accidentally reopen project code loading.
     disabled = "0" if trust_project else "1"
+    # Nothing downloads a language server on its own; /lsp installs one on request.
+    env.setdefault("OPENCODE_DISABLE_LSP_DOWNLOAD", "1")
     env["LOCALCODE_DISABLE_PROJECT_CONFIG"] = disabled
     env["OPENCODE_DISABLE_PROJECT_CONFIG"] = disabled
     # Claude Code's skill directories (~/.claude/skills, <project>/.claude/skills)
