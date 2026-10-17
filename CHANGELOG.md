@@ -14,6 +14,11 @@ All notable changes to LocalCode will be documented here. The format follows
 - A decision's answer appears on the Run decision row, so it is visible on a
   short terminal.
 - /speak reads the last reply that has text, even after an interrupted turn.
+- The quant list starts on the recommended quant, not the smallest one.
+- "Completed in" covers the whole task, including automatic continuations.
+- A todo-list project no longer trips the unfinished-work check: TODO and
+  FIXME count only in capitals, and other phrases only inside comments.
+- Compaction summaries no longer show the template's wrapper tags.
 - /status shows the loaded model and whether a language server is running.
 - /stats carries the localcode name.
 - A reported localcode issue is filed in the localcode repository, not the
