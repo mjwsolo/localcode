@@ -1,5 +1,5 @@
 import { expect, spyOn, test } from "bun:test";
-import { answerRows, requestFor, setupModes, type ModesContext } from "../../src/localcode/ui/plugin/modes";
+import { answerRows, requestFor, setupModes, summary, type ModesContext } from "../../src/localcode/ui/plugin/modes";
 import tui from "../../src/localcode/ui/plugin/tui";
 
 const form = { question: "Which team?", state: "Charged twice", kind: "choice" as const, options: "billing\nshipping", image: "" };
@@ -21,6 +21,11 @@ test("probability rows have unique identities so the native list keeps every ans
   const rows=answerRows({model:"OpenJev",answers:{answer:{noul:0.8}}});
   expect(rows.map(r=>r.value)).toEqual(["result:yes","result:no"]);
   expect(rows.map(r=>r.footer)).toEqual(["80.0%","20.0%"]);
+});
+
+test("the Run decision row summarises the top answer", () => {
+  expect(summary({model:"OpenJev",answers:{answer:{noul:0.014}}})).toBe("No 98.6%");
+  expect(summary({model:"OpenJev",answers:{answer:{score:0.8,probabilities:{"0":0.2,"1":0.8},legend:{"0":"low","1":"high"}}}})).toBe("high 80.0%");
 });
 
 test("score results show the supplied level names", () => {
