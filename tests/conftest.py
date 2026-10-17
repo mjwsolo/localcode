@@ -14,6 +14,13 @@ import pytest
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+# The supervisor resolves its run directory (logs, auth, warm-up captures) at
+# import time. Point it at a throwaway directory before anything imports it, so
+# tests never write into the user's real supervisor.log.
+if "LOCALCODE_AGENT_RUN_DIR" not in os.environ:
+    import tempfile
+    os.environ["LOCALCODE_AGENT_RUN_DIR"] = tempfile.mkdtemp(prefix="localcode-test-run-")
+
 from localcode.config import (
     AppConfig,
     LoggingConfig,
