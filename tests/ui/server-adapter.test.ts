@@ -128,10 +128,13 @@ test("the server plugin registers the todo tool, carries turn context, guards to
     expect(request.system).toHaveLength(1);
     expect(request.messages[0].content.some((part: any) => part.metadata?.localcode === true && part.text.startsWith("WORKSPACE SNAPSHOT"))).toBe(true);
 
-    // Compaction requests carry LocalCode's checklist.
+    // Compaction requests carry LocalCode's checklist as its own labelled message, never
+    // inside the user's turn (summaries recorded it as the user's words).
     const compaction: any = { agent: "build", system: [{ type: "text", text: "Summarize" }], messages: [{ role: "user", content: [{ type: "text", text: "build it" }] }], tools: {} };
     await runtime.sessionHooks.get("compaction")!(compaction);
-    expect(compaction.messages.at(-1).content.length).toBeGreaterThan(1);
+    expect(compaction.messages).toHaveLength(2);
+    expect(compaction.messages[0].content).toHaveLength(1);
+    expect(compaction.messages[1].content[0].text).toStartWith("[Summary guidance from LocalCode, not from the user]");
 
     // A newline in a file path is refused before the tool runs.
     await expect(runtime.toolHooks.get("execute.before")!({ tool: "read", sessionID: "ses", input: { path: "app.py\nx" } })).rejects.toThrow("newline");

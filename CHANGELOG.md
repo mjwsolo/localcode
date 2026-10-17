@@ -3,6 +3,28 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.5.33 — 2026-10-18
+
+### Security
+
+- A symlink inside the project that points outside it no longer lets the agent
+  read, write, edit, patch, list or run commands there without asking. A
+  cloned repository could ship such a link.
+- Searching a single file with grep needs the same permission as reading it,
+  so `grep SECRET .env` asks first like reading .env does.
+
+### Fixed
+
+- When the model server crashes, LocalCode restarts it once and the reply
+  continues, instead of retrying a dead server indefinitely.
+- The quant list opens on a quant that is already downloaded, so Enter loads
+  it instead of starting a large download.
+- Compaction guidance is sent as LocalCode's own note, not appended to your
+  last message: summaries no longer record it as something you said, and
+  smaller models summarize the conversation instead of the guidance.
+- Automatic continuations are hidden again instead of showing as "LocalCode"
+  rows in the conversation.
+
 ## 0.5.32 — 2026-10-17
 
 ### Fixed
