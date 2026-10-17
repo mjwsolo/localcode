@@ -3,6 +3,18 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.5.31 — 2026-10-17
+
+### Changed
+
+- The interface is rebuilt on upstream OpenCode v2. Every LocalCode change to
+  the interface carries over: the model picker, local-only operation, voice,
+  /thinking, /vision, project context, the todo checklist and code
+  intelligence (/lsp, diagnostics after edits, the status panel).
+- Upstream v2 stopped asking before the agent touches files outside the
+  project. LocalCode still asks, including for shell commands that name
+  outside paths, and still asks when the same tool call repeats in a loop.
+
 ## 0.5.30 — 2026-10-17
 
 ### Changed
