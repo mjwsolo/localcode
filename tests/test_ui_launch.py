@@ -82,27 +82,39 @@ def test_write_config_points_at_local_server_and_plugin(tmp_path):
     path = tmp_path / "session.json"
     write_config(path, port=8123, ctx=32768, alias=None)
     cfg = json.loads(path.read_text())
-    prov = cfg["provider"]["localcode"]
-    assert prov["options"]["baseURL"] == "http://127.0.0.1:8123/v1"
-    assert cfg["enabled_providers"] == ["localcode"]
-    assert cfg["share"] == "disabled" and cfg["autoupdate"] is False
-    assert cfg["tools"] == {"task": False}
+    prov = cfg["providers"]["localcode"]
+    assert prov["settings"]["baseURL"] == "http://127.0.0.1:8123/v1"
+    assert prov["package"] == "aisdk:@ai-sdk/openai-compatible"
+    # only the local provider may be used
+    assert cfg["policies"] == [
+        {"action": "provider.use", "resource": "*", "effect": "deny"},
+        {"action": "provider.use", "resource": "localcode", "effect": "allow"},
+    ]
+    assert cfg["share"] == "disabled" and cfg["update"] == "disable"
+    # no subagents and no code mode
+    assert {(rule["action"], rule["effect"]) for rule in cfg["permissions"]} == {("subagent", "deny"), ("execute", "deny")}
+    assert cfg["agents"] == {"plan": {"disabled": True}}
+    assert cfg["compaction"] == {"buffer": 0}
     assert "model" not in cfg
     assert list(prov["models"]) == ["__pending__"]
-    assert prov["models"]["__pending__"]["limit"]["context"] == 32768
-    assert prov["models"]["__pending__"]["attachment"] is False
-    # the discipline plugin is loaded from the package by absolute path, not copied into the project
-    assert cfg["plugin"] == [str(plugin_path())]
-    assert Path(cfg["plugin"][0]).is_absolute() and Path(cfg["plugin"][0]).is_file()
+    assert prov["models"]["__pending__"]["limit"] == {"context": 32768, "output": 8192, "input": 32768 - 8192}
+    assert prov["models"]["__pending__"]["capabilities"]["input"] == ["text"]
+    # the plugin directory is loaded from the package by absolute path, not copied into the project
+    assert cfg["plugins"] == [str(plugin_path())]
+    plugin = Path(cfg["plugins"][0])
+    assert plugin.is_absolute() and (plugin / "server.ts").is_file() and (plugin / "tui.ts").is_file()
     assert not (tmp_path / ".localcode-agent").exists()
+    # every v1 key the runtime renamed is written under its current name
+    for legacy in ("provider", "enabled_providers", "plugin", "tools", "agent", "autoupdate", "lsp"):
+        assert legacy not in cfg
 
 
 def test_write_config_with_alias(tmp_path):
     path = tmp_path / "s.json"
     write_config(path, port=8200, ctx=8192, alias="gemma-4-12b-it-UD-Q4_K_XL")
     cfg = json.loads(path.read_text())
-    assert cfg["model"] == "localcode/gemma-4-12b-it-UD-Q4_K_XL"
-    assert list(cfg["provider"]["localcode"]["models"]) == ["gemma-4-12b-it-UD-Q4_K_XL"]
+    assert cfg["model"] == {"providerID": "localcode", "model": "gemma-4-12b-it-UD-Q4_K_XL"}
+    assert list(cfg["providers"]["localcode"]["models"]) == ["gemma-4-12b-it-UD-Q4_K_XL"]
     assert not path.with_suffix(".json.tmp").exists()
 
 
@@ -178,8 +190,8 @@ def test_second_launch_attaches_to_running_session(monkeypatch, tmp_path, infere
     assert calls["env"]["LOCALCODE_DISABLE_PROJECT_CONFIG"] == "1"
     assert calls["env"]["OPENCODE_DISABLE_PROJECT_CONFIG"] == "1"
     assert calls["argv"][1:] == ["-m", "localcode/gemma-4-12b-it-UD-Q4_K_XL"]
-    assert calls["cfg"]["provider"]["localcode"]["options"]["baseURL"] == f"http://127.0.0.1:{inference_port or 8123}/v1"
-    assert calls["cfg"]["model"] == "localcode/gemma-4-12b-it-UD-Q4_K_XL"
+    assert calls["cfg"]["providers"]["localcode"]["settings"]["baseURL"] == f"http://127.0.0.1:{inference_port or 8123}/v1"
+    assert calls["cfg"]["model"] == {"providerID": "localcode", "model": "gemma-4-12b-it-UD-Q4_K_XL"}
 
 
 def test_resume_flags_reach_attached_runtime(monkeypatch, tmp_path):
@@ -196,17 +208,21 @@ def test_resume_flags_reach_attached_runtime(monkeypatch, tmp_path):
     assert calls[-1][0][-2:] == ["--session", "ses_example"]
     assert launch.main(project=str(tmp_path), resume="last") == 0
     assert calls[-1][0][-1:] == ["--continue"]
+    # the runtime runs in the chosen project, whatever directory the shell is in
+    assert calls[-1][1]["cwd"] == str(tmp_path) and calls[-1][1]["env"]["PWD"] == str(tmp_path)
 
 
-def test_session_id_uses_its_saved_project(monkeypatch, tmp_path):
+@pytest.mark.parametrize("table", ["session_v2", "session"])
+def test_session_id_uses_its_saved_project(monkeypatch, tmp_path, table):
+    """session_v2 is the runtime's table; `session` is a database it has not migrated yet."""
     from localcode.ui.launch import _session_directory
     data = tmp_path / "data" / "localcode-agent"
     data.mkdir(parents=True)
     project = tmp_path / "original-project"
     project.mkdir()
     with sqlite3.connect(data / "opencode.db") as conn:
-        conn.execute("CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT)")
-        conn.execute("INSERT INTO session VALUES (?, ?)", ("ses_example", str(project)))
+        conn.execute(f"CREATE TABLE {table} (id TEXT PRIMARY KEY, directory TEXT)")
+        conn.execute(f"INSERT INTO {table} VALUES (?, ?)", ("ses_example", str(project)))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     assert _session_directory("ses_example") == project
     assert _session_directory("ses_missing") is None
@@ -219,11 +235,17 @@ def test_cli_accepts_an_explicit_decision_mode():
 
 
 def test_terminal_extension_is_separate_from_agent_tool_hooks(tmp_path):
+    """One plugin directory: the runtime loads server.ts in the agent and tui.ts in
+    the terminal UI. No separate terminal config is written."""
     path=tmp_path / "session.json"
     write_config(path,port=8123,ctx=32768,alias="OpenJev-Q4_K_M")
-    terminal=json.loads(path.with_suffix(".tui.json").read_text())
-    assert terminal["plugin"][0].endswith("/modes.ts")
-    assert json.loads(path.read_text())["plugin"] == [str(plugin_path())]
+    assert not path.with_suffix(".tui.json").exists()
+    plugin = Path(json.loads(path.read_text())["plugins"][0])
+    assert plugin == plugin_path()
+    server = (plugin / "server.ts").read_text()
+    terminal = (plugin / "tui.ts").read_text()
+    assert "session.hook" in server and "setupModes" not in server
+    assert "setupModes" in terminal and "session.hook" not in terminal
 
 
 def test_project_execution_requires_explicit_trust_even_with_an_inherited_alias(monkeypatch, tmp_path):
@@ -283,17 +305,26 @@ def test_mcp_add_explains_project_scope_trust(monkeypatch, tmp_path, capsys):
     monkeypatch.chdir(tmp_path)
 
     def fake_add(argv, cwd, env):   # the runtime writes the server into the project config
-        (tmp_path / "localcode.json").write_text(json.dumps({"mcp": {"mail": {"type": "remote", "url": "https://x"}}}))
+        (tmp_path / "localcode.json").write_text(json.dumps({"mcp": {"servers": {"mail": {"type": "remote", "url": "https://x"}}}}))
         return 0
     monkeypatch.setattr(launch.subprocess, "call", fake_add)
-    assert launch.mcp_main(["add"]) == 0
-    assert "--trust-project" in capsys.readouterr().err
+    assert launch.mcp_main(["add", "mail", "--url", "https://x"]) == 0
+    err = capsys.readouterr().err
+    assert "--trust-project" in err and "--global" in err
 
     monkeypatch.setattr(launch.subprocess, "call", lambda argv, cwd, env: 0)
     launch.mcp_main(["list"])
     assert "hidden" in capsys.readouterr().err
     launch.mcp_main(["list", "--trust-project"])
     assert capsys.readouterr().err == ""
+
+
+def test_project_mcp_names_read_current_and_legacy_layouts(tmp_path):
+    from localcode.ui.launch import _project_mcp_names
+    (tmp_path / "localcode.json").write_text(json.dumps({"mcp": {"servers": {"mail": {"type": "remote", "url": "https://x"}}, "timeout": {"catalog": 5}}}))
+    (tmp_path / ".localcode-agent").mkdir()
+    (tmp_path / ".localcode-agent" / "localcode.jsonc").write_text('// note\n{"mcp": {"files": {"type": "local", "command": ["x"]}}}')
+    assert _project_mcp_names(tmp_path) == ["files", "mail"]
 
 
 def test_entrypoint_routes_mcp(monkeypatch):

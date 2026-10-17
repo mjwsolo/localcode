@@ -69,7 +69,7 @@ def verify(target: str, expected: str, installer: str, previous: str | None):
         check = ('from pathlib import Path; import localcode; '
                  'p=Path(localcode.__file__).parent; '
                  'assert all((p/x).is_file() for x in '
-                 '["bin/llama-server","bin/localcode-ui","ui/plugin/localcode.ts"]); print(p)')
+                 '["bin/llama-server","bin/localcode-ui","ui/plugin/localcode.ts","ui/plugin/server.ts","ui/plugin/tui.ts"]); print(p)')
         package = Path(run([py, '-c', check], work, env)).resolve()
         assert work in package.parents, 'package was imported from outside isolated install'
         for binary in ('llama-server', 'localcode-ui'):
