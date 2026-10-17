@@ -11,7 +11,7 @@ Writes <outdir>/req-NN.json, <outdir>/ui.log, <outdir>/events-turnN.jsonl, <outd
 import argparse, json, os, shutil, signal, subprocess, sys, tempfile, time, urllib.request
 from pathlib import Path
 
-ap = argparse.ArgumentParser(); ap.add_argument("repo"); ap.add_argument("out"); ap.add_argument("--slots", type=int, default=1); ap.add_argument("--plugin"); ap.add_argument("--keep", action="store_true")
+ap = argparse.ArgumentParser(); ap.add_argument("repo"); ap.add_argument("out"); ap.add_argument("--slots", type=int, default=1); ap.add_argument("--plugin", help="a plugin directory to load instead of the bundled one"); ap.add_argument("--keep", action="store_true")
 ap.add_argument("--force-compaction", action="store_true"); ap.add_argument("--installed", action="store_true")
 a = ap.parse_args()
 REPO = Path(a.repo).resolve(); OUT = Path(a.out).resolve(); OUT.mkdir(parents=True, exist_ok=True)
@@ -32,6 +32,9 @@ HERE = Path(__file__).resolve().parent
 home = Path(tempfile.mkdtemp(prefix="lc-check-home-")).resolve(); ws = Path(tempfile.mkdtemp(prefix="lc-check-ws-")).resolve()
 (ws / "README.md").write_text("# demo\n\nA tiny project used by localcode Checks.\n")
 (ws / "a.py").write_text("def add(a, b):\n    return a + b\n")
+# The project predates the session: files written a moment before the first turn
+# would count as this turn's changes (the plugin's change scan allows 1 s of mtime slack).
+for f in ("README.md", "a.py"): os.utime(ws / f, (time.time() - 3600, time.time() - 3600))
 subprocess.run(["git", "init", "-q"], cwd=ws); subprocess.run(["git", "-c", "user.email=c@x", "-c", "user.name=c", "add", "-A"], cwd=ws); subprocess.run(["git", "-c", "user.email=c@x", "-c", "user.name=c", "commit", "-qm", "init"], cwd=ws)
 
 def free_port():
@@ -68,13 +71,13 @@ from localcode.ui.launch import write_config
 write_config(Path({str(cfg)!r}), port={mport}, ctx=32768, alias={alias!r})
 c = json.load(open({str(cfg)!r}))
 plugin = {a.plugin!r}
-if plugin: c["plugin"] = [plugin]
+if plugin: c["plugins"] = [plugin]
 json.dump(c, open({str(cfg)!r}, "w"), indent=2)
 """
 subprocess.run([str(PY), "-c", code], check=True)
 
 env = {**os.environ, "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS": "1", "HOME": str(home), "LOCALCODE_CONFIG": str(cfg), "LOCALCODE_CONTROL_URL": f"http://127.0.0.1:{cport}",
-       "OPENCODE_DISABLE_LSP_DOWNLOAD": "1", "LOCALCODE_PARALLEL": str(a.slots), "LOCALCODE_TEST_HOME": str(home), "PWD": str(ws), "LOCALCODE_AGENT_RUN_DIR": str(home / "run")}
+       "LOCALCODE_PARALLEL": str(a.slots), "LOCALCODE_TEST_HOME": str(home), "PWD": str(ws), "LOCALCODE_AGENT_RUN_DIR": str(home / "run")}
 if a.force_compaction: env["LOCALCODE_COMPACTION_CHECKLIST"] = "1"
 turns = ["Read README.md and tell me in one sentence what this project is.",
          "Now plan two steps with todowrite: add a docstring to add() in a.py, then run the tests. Do step 1."]

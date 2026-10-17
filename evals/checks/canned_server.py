@@ -5,6 +5,7 @@ No model. Every /v1/chat/completions body is written to <outdir>/req-NN.json,
 then answered from a fixed script so a whole multi-turn conversation runs in
 seconds:
   - a request with no tools (title generation, summaries) -> a short text
+  - a compaction request (it carries the agent's tools) -> a short summary
   - first request of a turn (last message is from the user) -> one tool call
       turn 1: read <workspace>/README.md
       turn 2: todowrite with two items
@@ -27,12 +28,15 @@ def script(body):
     if not tools:
         return {"text": "Canned title"}
     last = msgs[-1] if msgs else {}
+    if last.get("role") == "user" and "summarize the conversation" in json.dumps(last.get("content")).lower():
+        # A compaction request: it shares the agent's tools so the cached prefix is reused.
+        return {"text": "## Objective\n- Answer questions about the demo project.\n\n## Next Move\n1. (none)"}
     if last.get("role") == "tool":
         return {"text": "Done. The file was read and the plan is set."}
     users = sum(1 for m in msgs if m.get("role") == "user")
     names = {t.get("function", {}).get("name") for t in tools}
     if users <= 1 and "read" in names:
-        return {"tool": "read", "args": {"filePath": os.path.join(WS, "README.md")}}
+        return {"tool": "read", "args": {"path": os.path.join(WS, "README.md")}}
     if "todowrite" in names:
         return {"tool": "todowrite", "args": {"todos": [
             {"id": "1", "content": "Add a docstring to add()", "status": "in_progress", "priority": "medium"},

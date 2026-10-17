@@ -21,12 +21,18 @@ pytestmark = pytest.mark.skipif(
 
 
 def _marker_plugin(path: Path, marker: Path, *, tui: bool = False) -> None:
+    """A plugin that proves it was imported. With tui=True it is a plugin directory
+    whose terminal entry (tui.ts) writes the marker."""
+    plugin_id = json.dumps("scratch-proof-" + marker.stem)
+    if tui:
+        path.mkdir(parents=True, exist_ok=True)
+        (path / "server.ts").write_text(f"export default {{id: {plugin_id}, setup: async () => {{}}}};\n")
+        path = path / "tui.ts"
     path.parent.mkdir(parents=True, exist_ok=True)
-    export = '({id: "scratch-proof", tui: async () => {}})' if tui else "async () => ({})"
     path.write_text(
         'import {writeFileSync} from "node:fs";\n'
         f'writeFileSync({json.dumps(str(marker))}, "imported");\n'
-        f"export default {export};\n"
+        f"export default {{id: {plugin_id}, setup: async () => {{}}}};\n"
     )
 
 
@@ -57,7 +63,7 @@ def isolated_ui(tmp_path, monkeypatch):
     explicit_marker = tmp_path / "explicit.marker"
     _marker_plugin(explicit, explicit_marker)
     cfg = json.loads(config.read_text())
-    cfg["plugin"].append(str(explicit))
+    cfg["plugins"].append(str(explicit))
     config.write_text(json.dumps(cfg))
     global_dir = tmp_path / "config" / "localcode-agent"
     global_dir.mkdir()
@@ -77,23 +83,36 @@ def isolated_ui(tmp_path, monkeypatch):
 
 
 def _run(binary, project, env, *args):
+    # The runtime's `run` takes its directory from PWD (the shell's logical path).
     return subprocess.run(
-        [str(binary), *args], cwd=project, env=env, stdin=subprocess.DEVNULL,
+        [str(binary), *args], cwd=project, env={**env, "PWD": str(project)}, stdin=subprocess.DEVNULL,
         capture_output=True, text=True, timeout=20, check=False,
     )
+
+
+def _sources(binary, project, env) -> dict:
+    """The configuration sources the runtime resolved: MCP servers, plugins, directories."""
+    resolved = _run(binary, project, env, "debug", "config")
+    assert resolved.returncode == 0, resolved.stdout + resolved.stderr
+    entries = json.loads(resolved.stdout)
+    documents = [entry.get("info") or {} for entry in entries if entry.get("type") == "document"]
+    return {
+        "mcp": {name for info in documents for name in ((info.get("mcp") or {}).get("servers") or {})},
+        "plugins": [str(spec) for info in documents for spec in info.get("plugins") or []],
+        "directories": [entry["path"] for entry in entries if entry.get("type") == "directory"],
+    }
 
 
 @pytest.mark.parametrize("trusted", [False, True])
 def test_project_plugins_and_mcp_require_explicit_trust(isolated_ui, trusted):
     binary, project, config, explicit, configured, discovered = isolated_ui
     env = runtime_env(config, 0, trust_project=trusted)
-    resolved = _run(binary, project, env, "debug", "config")
-    assert resolved.returncode == 0, resolved.stdout + resolved.stderr
-    cfg = json.loads(resolved.stdout)
-    assert "global-proof" in cfg["mcp"]
-    assert ("project-proof" in cfg["mcp"]) is trusted
-    assert any(str(plugin_path()) in str(spec) for spec in cfg["plugin"])
-    assert any("/repository/.opencode/plugins/" in str(spec) for spec in cfg["plugin"]) is trusted
+    sources = _sources(binary, project, env)
+    assert "global-proof" in sources["mcp"]
+    assert ("project-proof" in sources["mcp"]) is trusted
+    assert str(plugin_path()) in sources["plugins"]
+    assert ("./configured.ts" in sources["plugins"]) is trusted
+    assert any("/repository/.opencode" in directory for directory in sources["directories"]) is trusted
     # Startup imports plugins before resolving the deliberately absent model.
     # No inference, network service, or repository build command is required.
     _run(binary, project, env, "run", "--format", "json", "-m", "absent/absent", "scratch check")
@@ -104,22 +123,21 @@ def test_project_plugins_and_mcp_require_explicit_trust(isolated_ui, trusted):
 
 @pytest.mark.parametrize("trusted", [False, True])
 def test_project_tui_plugin_requires_explicit_trust(isolated_ui, trusted, tmp_path):
+    """Terminal plugins: one named in the launcher's terminal config always loads; one
+    in the project's plugin directory loads only for a trusted project."""
     import pty
     import select
 
     binary, project, config, _, _, _ = isolated_ui
     explicit_marker = tmp_path / "explicit-tui.marker"
     project_marker = tmp_path / "project-tui.marker"
-    explicit_plugin = tmp_path / "explicit-tui.ts"
-    project_plugin = project / "project-tui.ts"
+    explicit_plugin = tmp_path / "explicit-tui"
     _marker_plugin(explicit_plugin, explicit_marker, tui=True)
-    _marker_plugin(project_plugin, project_marker, tui=True)
-    tui_config = config.with_suffix(".tui.json")
-    cfg = json.loads(tui_config.read_text())
-    cfg["plugin"].append(str(explicit_plugin))
-    tui_config.write_text(json.dumps(cfg))
-    (project / "tui.json").write_text(json.dumps({"plugin": ["./project-tui.ts"]}))
+    _marker_plugin(project / ".localcode-agent" / "plugins" / "project-tui", project_marker, tui=True)
+    tui_config = tmp_path / "launcher.tui.json"
+    tui_config.write_text(json.dumps({"plugins": [str(explicit_plugin)]}))
     env = runtime_env(config, 0, trust_project=trusted)
+    env["OPENCODE_TUI_CONFIG"] = str(tui_config)
     env["TERM"] = "xterm-256color"
     master, slave = pty.openpty()
     proc = subprocess.Popen([str(binary)], cwd=project, env=env, stdin=slave, stdout=slave, stderr=slave)
