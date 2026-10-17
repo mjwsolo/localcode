@@ -92,7 +92,9 @@ def test_write_config_points_at_local_server_and_plugin(tmp_path):
     ]
     assert cfg["share"] == "disabled" and cfg["update"] == "disable"
     # no subagents and no code mode
-    assert {(rule["action"], rule["effect"]) for rule in cfg["permissions"]} == {("subagent", "deny"), ("execute", "deny")}
+    assert {(rule["action"], rule["effect"]) for rule in cfg["permissions"]} == {
+        ("subagent", "deny"), ("execute", "deny"), ("external_directory", "ask"), ("external_directory", "allow"),
+    }
     assert cfg["agents"] == {"plan": {"disabled": True}}
     assert cfg["compaction"] == {"buffer": 0}
     assert "model" not in cfg
@@ -107,6 +109,19 @@ def test_write_config_points_at_local_server_and_plugin(tmp_path):
     # every v1 key the runtime renamed is written under its current name
     for legacy in ("provider", "enabled_providers", "plugin", "tools", "agent", "autoupdate", "lsp"):
         assert legacy not in cfg
+
+
+def test_write_config_asks_before_leaving_the_project(tmp_path, monkeypatch):
+    from localcode.ui.launch import write_config
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    path = tmp_path / "s.json"
+    write_config(path, port=8123, ctx=32768, alias=None)
+    rules = [r for r in json.loads(path.read_text())["permissions"] if r["action"] == "external_directory"]
+    # The runtime applies the last matching rule: ask everywhere, then allow
+    # only the runtime's own folders.
+    assert rules[0] == {"action": "external_directory", "resource": "*", "effect": "ask"}
+    assert all(r["effect"] == "allow" for r in rules[1:])
+    assert str(tmp_path / "data" / "localcode-agent" / "tool-output" / "*") in {r["resource"] for r in rules}
 
 
 def test_write_config_with_alias(tmp_path):

@@ -119,6 +119,27 @@ def _context_size(models_dir: Path, ctrl: int) -> int:
             return 2048
 
 
+def _external_directory_rules() -> list[dict]:
+    """Ask before touching anything outside the project, as opencode v1 did.
+
+    Upstream v2 stopped asking by default; a local agent writing to arbitrary
+    paths without a prompt is not acceptable here. The runtime's own output,
+    temp and config folders stay allowed so saved tool output can be read back.
+    """
+    import tempfile
+
+    home = Path.home()
+    data = Path(os.environ.get("XDG_DATA_HOME") or home / ".local" / "share") / "localcode-agent"
+    config = Path(os.environ.get("XDG_CONFIG_HOME") or home / ".config") / "localcode-agent"
+    tmp = Path(tempfile.gettempdir()) / "localcode-agent"
+    allowed = [data / "shell" / "*" / "*", data / "tool-output" / "*", tmp / "*", config / "*"]
+    # The runtime compares canonical paths (/var -> /private/var on macOS).
+    allowed += [Path(os.path.realpath(p.parent)) / p.name for p in allowed]
+    return [{"action": "external_directory", "resource": "*", "effect": "ask"}] + [
+        {"action": "external_directory", "resource": str(p), "effect": "allow"} for p in dict.fromkeys(allowed)
+    ]
+
+
 def write_config(path: Path, *, port: int, ctx: int, alias: str | None) -> None:
     """The runtime config for this session, in the runtime's own (v2) schema.
     Provider = the local server only; capabilities are explicit so no cloud
@@ -162,6 +183,7 @@ def write_config(path: Path, *, port: int, ctx: int, alias: str | None) -> None:
         "permissions": [
             {"action": "subagent", "resource": "*", "effect": "deny"},
             {"action": "execute", "resource": "*", "effect": "deny"},
+            *_external_directory_rules(),
         ],
         "agents": {"plan": {"disabled": True}},
         # The plugin directory: server.ts runs in the agent, tui.ts in the terminal UI.
