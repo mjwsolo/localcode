@@ -1,5 +1,5 @@
 diff --git a/common/arg.cpp b/common/arg.cpp
-index 0f0af6d33..2509d0239 100644
+index d727f02df..7e7a167c4 100644
 --- a/common/arg.cpp
 +++ b/common/arg.cpp
 @@ -1914,7 +1914,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
@@ -11,7 +11,7 @@ index 0f0af6d33..2509d0239 100644
      add_opt(common_arg(
          {"-st", "--single-turn"},
          "run conversation for a single turn only, then exit when done\n"
-@@ -4486,11 +4486,26 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+@@ -4496,11 +4496,26 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
          string_format("number of diffusion steps (default: %d)", params.diffusion.steps),
          [](common_params & params, int value) { params.diffusion.steps = value; }
      ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
@@ -38,7 +38,7 @@ index 0f0af6d33..2509d0239 100644
      add_opt(common_arg(
          {"--diffusion-eps"}, "F",
          string_format("epsilon for timesteps (default: %.6f)", (double) params.diffusion.eps),
-@@ -4524,6 +4539,79 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+@@ -4534,6 +4549,79 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
          string_format("add gumbel noise to the logits if temp > 0.0 (default: %s)", params.diffusion.add_gumbel_noise ? "true" : "false"),
          [](common_params & params, const std::string & value) { params.diffusion.add_gumbel_noise = std::stof(value); }
      ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
@@ -119,32 +119,35 @@ index 0f0af6d33..2509d0239 100644
          { "-lr", "--learning-rate" }, "ALPHA",
          string_format("adamw or sgd optimizer alpha (default: %.2g); note: sgd alpha recommended ~10x (no momentum)", (double) params.lr.lr0),
 diff --git a/common/chat.cpp b/common/chat.cpp
-index 87f1e99a2..eda95a9d4 100644
+index 485671308..a7bd5d394 100644
 --- a/common/chat.cpp
 +++ b/common/chat.cpp
-@@ -1633,6 +1633,17 @@ common_chat_session::common_chat_session(const common_chat_templates *        tm
+@@ -1686,6 +1686,20 @@ common_chat_session::common_chat_session(const common_chat_templates *        tm
                                           const common_chat_session_params &   params) {
      auto applied = common_chat_templates_apply(tmpls, inputs);
  
-+    if (params.no_forced_thinking && !applied.thinking_start_tag.empty()) {
++    if (params.no_forced_thinking && !applied.thinking_start_tag.empty() && !applied.prompt.parts.empty() &&
++            !applied.prompt.parts.back().is_input) {
 +        // see common_chat_session_params::no_forced_thinking
++        // the opener is template text, so it can only sit at the end of the last (template) part
++        std::string & last = applied.prompt.parts.back().text;
 +        for (const std::string & opener : { applied.thinking_start_tag + "\n", applied.thinking_start_tag }) {
-+            if (string_ends_with(applied.generation_prompt, opener) && string_ends_with(applied.prompt, opener)) {
++            if (string_ends_with(applied.generation_prompt, opener) && string_ends_with(last, opener)) {
 +                applied.generation_prompt.resize(applied.generation_prompt.size() - opener.size());
-+                applied.prompt.resize(applied.prompt.size() - opener.size());
++                last.resize(last.size() - opener.size());
 +                break;
 +            }
 +        }
 +    }
 +
-     templated   = true;
-     prompt_text = std::move(applied.prompt);
-     result.role = "assistant";
+     templated    = true;
+     prompt_parts = std::move(applied.prompt);
+     result.role  = "assistant";
 diff --git a/common/chat.h b/common/chat.h
-index 775334924..e92568f98 100644
+index dcff94919..b102ec1c0 100644
 --- a/common/chat.h
 +++ b/common/chat.h
-@@ -369,6 +369,10 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena & src_parser, const
+@@ -391,6 +391,10 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena & src_parser, const
  struct common_chat_session_params {
      bool echo  = false; // include the assistant prefill in the output when continuing a message
      bool debug = false; // enable debug output for the PEG parser
@@ -156,7 +159,7 @@ index 775334924..e92568f98 100644
  
  class common_chat_session {
 diff --git a/common/common.cpp b/common/common.cpp
-index 9a71a33ff..c1376d7bf 100644
+index c5db22832..d36337f58 100644
 --- a/common/common.cpp
 +++ b/common/common.cpp
 @@ -20,6 +20,7 @@
@@ -167,7 +170,7 @@ index 9a71a33ff..c1376d7bf 100644
  #include <cstring>
  #include <ctime>
  #include <filesystem>
-@@ -1283,6 +1284,18 @@ common_init_result::common_init_result(common_params & params, bool model_only)
+@@ -1286,6 +1287,18 @@ common_init_result::common_init_result(common_params & params, bool model_only)
          return;
      }
  
@@ -187,10 +190,10 @@ index 9a71a33ff..c1376d7bf 100644
  
      // these decision models return a score for each token via the embeddings output
 diff --git a/common/common.h b/common/common.h
-index d89f803af..6d87e5172 100644
+index 2048d6a79..706c0a5d0 100644
 --- a/common/common.h
 +++ b/common/common.h
-@@ -407,7 +407,10 @@ struct common_params_speculative {
+@@ -409,7 +409,10 @@ struct common_params_speculative {
  
  struct common_params_diffusion {
      int32_t steps         = 128;
@@ -201,7 +204,7 @@ index d89f803af..6d87e5172 100644
  
      float   eps           = 0;        // epsilon for timesteps
      int32_t block_length  = 0;        // block length for generation
-@@ -417,6 +420,18 @@ struct common_params_diffusion {
+@@ -419,6 +422,18 @@ struct common_params_diffusion {
  
      float   cfg_scale     = 0;        // classifier-free guidance scale
      bool    add_gumbel_noise = false; // add gumbel noise to the logits if temp > 0.0
@@ -221,7 +224,7 @@ index d89f803af..6d87e5172 100644
  
  // reasoning API response format (not to be confused as chat template's reasoning format)
 diff --git a/common/parsers/gemma4.cpp b/common/parsers/gemma4.cpp
-index 5ba264889..2a269815b 100644
+index 1a63fa927..07e13757b 100644
 --- a/common/parsers/gemma4.cpp
 +++ b/common/parsers/gemma4.cpp
 @@ -179,6 +179,11 @@ common_chat_params common_chat_params_init_gemma4(const common_chat_template &
@@ -446,7 +449,7 @@ index 000000000..678611e0d
 +        int                  n_tokens,
 +        float                inv_temp);
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 0c95a7600..69605d8b9 100644
+index 765945fdf..e685b93b7 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
 @@ -25,6 +25,7 @@
@@ -457,7 +460,7 @@ index 0c95a7600..69605d8b9 100644
  #include "ggml-cuda/fattn.cuh"
  #include "ggml-cuda/fwht.cuh"
  #include "ggml-cuda/getrows.cuh"
-@@ -6103,6 +6104,9 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
+@@ -6148,6 +6149,9 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
      if (strcmp(name, "ggml_backend_get_features") == 0) {
          return (void *)ggml_backend_cuda_get_features;
      }
@@ -468,10 +471,10 @@ index 0c95a7600..69605d8b9 100644
  }
  
 diff --git a/gguf-py/gguf/constants.py b/gguf-py/gguf/constants.py
-index 0ff427ce3..94d73583a 100644
+index 483581179..de670bbdd 100644
 --- a/gguf-py/gguf/constants.py
 +++ b/gguf-py/gguf/constants.py
-@@ -487,7 +487,14 @@ class Keys:
+@@ -490,7 +490,14 @@ class Keys:
              LAYERNORM_EPS   = "clip.gen.audio.attention.layer_norm_epsilon"
  
      class Diffusion:
@@ -487,7 +490,7 @@ index 0ff427ce3..94d73583a 100644
  
      class xIELU:
          ALPHA_P             = "xielu.alpha_p"
-@@ -564,6 +571,7 @@ class MODEL_ARCH(IntEnum):
+@@ -581,6 +588,7 @@ class MODEL_ARCH(IntEnum):
      GEMMA3N          = auto()
      GEMMA4           = auto()
      GEMMA4_ASSISTANT = auto()
@@ -495,7 +498,7 @@ index 0ff427ce3..94d73583a 100644
      GEMMA_EMBEDDING  = auto()
      GEMMA_EMBEDDING2 = auto()
      STARCODER2       = auto()
-@@ -747,6 +755,11 @@ class MODEL_TENSOR(IntEnum):
+@@ -764,6 +772,11 @@ class MODEL_TENSOR(IntEnum):
      ATTN_K_NORM          = auto()
      LAYER_OUT_NORM       = auto()
      LAYER_OUT_SCALE      = auto()
@@ -507,7 +510,7 @@ index 0ff427ce3..94d73583a 100644
      PER_LAYER_TOKEN_EMBD = auto() # gemma3n
      PER_LAYER_MODEL_PROJ = auto() # gemma3n
      PER_LAYER_INP_GATE   = auto() # gemma3n
-@@ -1348,6 +1361,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
+@@ -1371,6 +1384,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
      MODEL_ARCH.GEMMA3N:          "gemma3n",
      MODEL_ARCH.GEMMA4:           "gemma4",
      MODEL_ARCH.GEMMA4_ASSISTANT: "gemma4-assistant",
@@ -515,7 +518,7 @@ index 0ff427ce3..94d73583a 100644
      MODEL_ARCH.GEMMA_EMBEDDING:  "gemma-embedding",
      MODEL_ARCH.GEMMA_EMBEDDING2: "gemma-embedding2",
      MODEL_ARCH.STARCODER2:       "starcoder2",
-@@ -1530,6 +1544,11 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
+@@ -1553,6 +1567,11 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
      MODEL_TENSOR.MOE_LATENT_UP:             "blk.{bid}.ffn_latent_up",        # nemotron 3 super
      MODEL_TENSOR.LAYER_OUT_NORM:            "blk.{bid}.layer_output_norm",
      MODEL_TENSOR.LAYER_OUT_SCALE:           "blk.{bid}.layer_output_scale",
@@ -527,7 +530,7 @@ index 0ff427ce3..94d73583a 100644
      MODEL_TENSOR.PER_LAYER_TOKEN_EMBD:      "per_layer_token_embd",           # gemma3n
      MODEL_TENSOR.PER_LAYER_MODEL_PROJ:      "per_layer_model_proj",           # gemma3n
      MODEL_TENSOR.PER_LAYER_PROJ_NORM:       "per_layer_proj_norm",            # gemma3n
-@@ -3447,6 +3466,39 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
+@@ -3498,6 +3517,39 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
          MODEL_TENSOR.PER_LAYER_PROJ_NORM,
          MODEL_TENSOR.PER_LAYER_POST_NORM,
      ],
@@ -568,10 +571,10 @@ index 0ff427ce3..94d73583a 100644
          MODEL_TENSOR.ROPE_FREQS,
          MODEL_TENSOR.TOKEN_EMBD,
 diff --git a/gguf-py/gguf/gguf_writer.py b/gguf-py/gguf/gguf_writer.py
-index d14d3fade..5c07ddd02 100644
+index 02ac3e823..961b114c7 100644
 --- a/gguf-py/gguf/gguf_writer.py
 +++ b/gguf-py/gguf/gguf_writer.py
-@@ -1645,6 +1645,27 @@ class GGUFWriter:
+@@ -1688,6 +1688,27 @@ class GGUFWriter:
      def add_diffusion_shift_logits(self, value: bool) -> None:
          self.add_bool(Keys.Diffusion.SHIFT_LOGITS, value)
  
@@ -600,7 +603,7 @@ index d14d3fade..5c07ddd02 100644
          pack_prefix = ''
          if not skip_pack_prefix:
 diff --git a/include/llama.h b/include/llama.h
-index 922dcb833..4bde24a98 100644
+index 5c3a2bd83..87b89d86a 100644
 --- a/include/llama.h
 +++ b/include/llama.h
 @@ -601,6 +601,55 @@ extern "C" {
@@ -660,10 +663,10 @@ index 922dcb833..4bde24a98 100644
      LLAMA_API int32_t llama_model_n_embd       (const struct llama_model * model);
      LLAMA_API int32_t llama_model_n_embd_inp   (const struct llama_model * model);
 diff --git a/src/llama-arch.cpp b/src/llama-arch.cpp
-index 5d9ec1333..b43132b09 100644
+index 1acda79d8..0986b8449 100644
 --- a/src/llama-arch.cpp
 +++ b/src/llama-arch.cpp
-@@ -59,6 +59,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
+@@ -60,6 +60,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
      { LLM_ARCH_GEMMA3N,          "gemma3n"          },
      { LLM_ARCH_GEMMA4,           "gemma4"           },
      { LLM_ARCH_GEMMA4_ASSISTANT, "gemma4-assistant" },
@@ -671,7 +674,7 @@ index 5d9ec1333..b43132b09 100644
      { LLM_ARCH_GEMMA_EMBEDDING,  "gemma-embedding"  },
      { LLM_ARCH_GEMMA_EMBEDDING2, "gemma-embedding2" },
      { LLM_ARCH_STARCODER2,       "starcoder2"       },
-@@ -491,6 +492,11 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
+@@ -505,6 +506,11 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
      { LLM_TENSOR_ATTN_QKV,                               "blk.%d.attn_qkv" },
      { LLM_TENSOR_LAYER_OUT_NORM,                         "blk.%d.layer_output_norm" },
      { LLM_TENSOR_LAYER_OUT_SCALE,                        "blk.%d.layer_output_scale" },
@@ -683,7 +686,7 @@ index 5d9ec1333..b43132b09 100644
      { LLM_TENSOR_ATTN_OUT_NORM,                          "blk.%d.attn_output_norm" },
      { LLM_TENSOR_POS_EMBD,                               "position_embd" },
      { LLM_TENSOR_FFN_ACT,                                "blk.%d.ffn.act" },
-@@ -940,6 +946,11 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
+@@ -964,6 +970,11 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
      {LLM_TENSOR_ATTN_K_NORM,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
      {LLM_TENSOR_LAYER_OUT_NORM,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
      {LLM_TENSOR_LAYER_OUT_SCALE,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
@@ -695,7 +698,7 @@ index 5d9ec1333..b43132b09 100644
      {LLM_TENSOR_ATTN_Q_A_NORM,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
      {LLM_TENSOR_ATTN_KV_A_NORM,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
      {LLM_TENSOR_ATTN_SUB_NORM,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
-@@ -1163,6 +1174,7 @@ bool llm_arch_is_diffusion(const llm_arch & arch) {
+@@ -1187,6 +1198,7 @@ bool llm_arch_is_diffusion(const llm_arch & arch) {
          case LLM_ARCH_LLADA:
          case LLM_ARCH_LLADA_MOE:
          case LLM_ARCH_RND1:
@@ -704,10 +707,10 @@ index 5d9ec1333..b43132b09 100644
          default:
              return false;
 diff --git a/src/llama-arch.h b/src/llama-arch.h
-index ba06be8c6..6a2d2ecfa 100644
+index e6e9bd4b9..16b5c27b6 100644
 --- a/src/llama-arch.h
 +++ b/src/llama-arch.h
-@@ -64,6 +64,7 @@ enum llm_arch {
+@@ -65,6 +65,7 @@ enum llm_arch {
      LLM_ARCH_GEMMA3N,
      LLM_ARCH_GEMMA4,
      LLM_ARCH_GEMMA4_ASSISTANT,
@@ -715,7 +718,7 @@ index ba06be8c6..6a2d2ecfa 100644
      LLM_ARCH_GEMMA_EMBEDDING,
      LLM_ARCH_GEMMA_EMBEDDING2,
      LLM_ARCH_STARCODER2,
-@@ -510,6 +511,11 @@ enum llm_tensor {
+@@ -524,6 +525,11 @@ enum llm_tensor {
      LLM_TENSOR_ATTN_K_NORM,
      LLM_TENSOR_LAYER_OUT_NORM,
      LLM_TENSOR_LAYER_OUT_SCALE,
@@ -728,10 +731,10 @@ index ba06be8c6..6a2d2ecfa 100644
      LLM_TENSOR_POST_MLP_NORM,
      LLM_TENSOR_PER_LAYER_TOKEN_EMBD, // gemma3n
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 24330b942..f52eb918b 100644
+index f7bc347b1..e09dfea54 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -1503,8 +1503,14 @@ int llama_context::encode(const llama_batch_ext & batch_inp) {
+@@ -1596,8 +1596,14 @@ int llama_context::encode(const llama_batch_ext & batch_inp) {
      // eagle3/DFlash: features as encoder input, and non-draft paths fall back to model's input dim
      const int64_t n_vocab = model.vocab.n_tokens();
  
@@ -748,7 +751,7 @@ index 24330b942..f52eb918b 100644
          LLAMA_LOG_ERROR("%s: failed to initialize batch\n", __func__);
          return -1;
      }
-@@ -1533,17 +1539,27 @@ int llama_context::encode(const llama_batch_ext & batch_inp) {
+@@ -1626,17 +1632,27 @@ int llama_context::encode(const llama_batch_ext & batch_inp) {
  
      n_queued_tokens += n_tokens;
  
@@ -782,7 +785,7 @@ index 24330b942..f52eb918b 100644
  
      const auto causal_attn_org = cparams.causal_attn;
  
-@@ -1576,7 +1592,7 @@ int llama_context::encode(const llama_batch_ext & batch_inp) {
+@@ -1669,7 +1685,7 @@ int llama_context::encode(const llama_batch_ext & batch_inp) {
          GGML_ASSERT(backend_res != nullptr);
          GGML_ASSERT(logits.data != nullptr);
  
@@ -792,7 +795,7 @@ index 24330b942..f52eb918b 100644
  
      // extract embeddings
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 6fece1019..dc26fa8dd 100644
+index 923c2c0a2..a18aab6da 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
 @@ -154,6 +154,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
@@ -804,7 +807,7 @@ index 6fece1019..dc26fa8dd 100644
          case LLM_ARCH_GEMMA_EMBEDDING:
              return new llama_model_gemma_embedding(params);
          case LLM_ARCH_GEMMA_EMBEDDING2:
-@@ -2441,6 +2443,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+@@ -2778,6 +2780,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
          case LLM_ARCH_LLADA_MOE:
          case LLM_ARCH_RND1:
          case LLM_ARCH_CLEF:
@@ -812,7 +815,7 @@ index 6fece1019..dc26fa8dd 100644
              {
                  res = nullptr;
              } break;
-@@ -3216,6 +3219,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+@@ -3557,6 +3560,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
          case LLM_ARCH_GEMMA3N:
          case LLM_ARCH_GEMMA4:
          case LLM_ARCH_GEMMA4_ASSISTANT:
@@ -821,7 +824,7 @@ index 6fece1019..dc26fa8dd 100644
          case LLM_ARCH_GEMMA_EMBEDDING2:
          case LLM_ARCH_STARCODER2:
 diff --git a/src/llama-model.h b/src/llama-model.h
-index 3aa5823a5..fb928ea2d 100644
+index bc640e0dd..dd20e2c90 100644
 --- a/src/llama-model.h
 +++ b/src/llama-model.h
 @@ -601,6 +601,9 @@ struct llama_layer {
@@ -834,7 +837,7 @@ index 3aa5823a5..fb928ea2d 100644
      struct llama_layer_posnet posnet;
  
      struct llama_layer_convnext convnext;
-@@ -678,6 +681,12 @@ struct llama_model {
+@@ -721,6 +724,12 @@ struct llama_model {
      // hrm-text initial low-cycle state
      struct ggml_tensor * hrm_z_l_init = nullptr;
  
@@ -1835,10 +1838,10 @@ index 000000000..9a6f4ddd5
 +    return cur;
 +}
 diff --git a/src/models/models.h b/src/models/models.h
-index d6ddf9d16..780b97f8b 100644
+index a55983cfb..2dc3bfec8 100644
 --- a/src/models/models.h
 +++ b/src/models/models.h
-@@ -888,6 +888,66 @@ struct llama_model_gemma4 : public llama_model_base {
+@@ -926,6 +926,66 @@ struct llama_model_gemma4 : public llama_model_base {
  };
  
  
@@ -2132,7 +2135,7 @@ index 000000000..3a1c122f1
 +}
 diff --git a/tools/diffusion-gemma-server/diffusion-gemma-visual-server.cpp b/tools/diffusion-gemma-server/diffusion-gemma-visual-server.cpp
 new file mode 100644
-index 000000000..06df54eef
+index 000000000..47374481e
 --- /dev/null
 +++ b/tools/diffusion-gemma-server/diffusion-gemma-visual-server.cpp
 @@ -0,0 +1,376 @@
@@ -2436,7 +2439,7 @@ index 000000000..06df54eef
 +                inputs.tools = common_chat_tools_parse_oaicompat(creq.at("tools"));
 +            }
 +            inputs.add_generation_prompt = true;
-+            const std::string prompt = common_chat_templates_apply(chat_templates.get(), inputs).prompt;
++            const std::string prompt = common_chat_templates_apply(chat_templates.get(), inputs).prompt.str();
 +            prefix = common_tokenize(vocab, prompt, /*add special*/ true, /*parse special*/ true);
 +        } catch (const std::exception & e) {
 +            printf("ERR parse %s\n", e.what()); fflush(stdout); continue;
@@ -2601,7 +2604,7 @@ index 000000000..6d2fffd64
 +```
 diff --git a/tools/diffusion/diffusion-cli.cpp b/tools/diffusion/diffusion-cli.cpp
 new file mode 100644
-index 000000000..19197643a
+index 000000000..4bb8a3d63
 --- /dev/null
 +++ b/tools/diffusion/diffusion-cli.cpp
 @@ -0,0 +1,604 @@
@@ -3078,7 +3081,7 @@ index 000000000..19197643a
 +        common_chat_templates_inputs inputs;
 +        inputs.messages              = messages;
 +        inputs.add_generation_prompt = true;
-+        return common_chat_templates_apply(chat_templates.get(), inputs).prompt;
++        return common_chat_templates_apply(chat_templates.get(), inputs).prompt.str();
 +    };
 +
 +    // Run one turn, print the reply, then (entropy-bound only) a timing summary just before the next prompt.
@@ -4050,10 +4053,10 @@ index 70b8d7da8..dea14d125 100644
  # llama-server-impl: server logic, reusable by app
  
 diff --git a/tools/server/server-common.cpp b/tools/server/server-common.cpp
-index 5f77d43d0..f6b111656 100644
+index c32c0d1a5..409653438 100644
 --- a/tools/server/server-common.cpp
 +++ b/tools/server/server-common.cpp
-@@ -1430,6 +1430,8 @@ json oaicompat_chat_params_parse(
+@@ -1432,6 +1432,8 @@ json oaicompat_chat_params_parse(
      // Apply chat template to the list of messages
      common_chat_session_params session_params;
      session_params.echo = json_value(body, "echo", false);
@@ -4061,7 +4064,7 @@ index 5f77d43d0..f6b111656 100644
 +    session_params.no_forced_thinking = opt.no_forced_thinking;
      out_session = common_chat_session(opt.tmpls.get(), vocab, inputs, session_params);
  
-     llama_params["prompt"] = out_session.prompt();
+     llama_params["prompt"] = out_session.prompt().str();
 diff --git a/tools/server/server-common.h b/tools/server/server-common.h
 index 5bd2ed57a..79c6ba474 100644
 --- a/tools/server/server-common.h
@@ -4079,7 +4082,7 @@ index 5bd2ed57a..79c6ba474 100644
  
  // used by /completions endpoint
 diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
-index d58aea709..02db2046a 100644
+index 07335c57f..e2c143935 100644
 --- a/tools/server/server-context.cpp
 +++ b/tools/server/server-context.cpp
 @@ -17,6 +17,7 @@
@@ -4090,7 +4093,7 @@ index d58aea709..02db2046a 100644
  
  #include <algorithm>
  #include <cstddef>
-@@ -1030,6 +1031,22 @@ private:
+@@ -1038,6 +1039,22 @@ private:
  
      std::string model_name; // name of the loaded model, to be used by API
      std::set<std::string> model_aliases; // additional names for the model
@@ -4113,7 +4116,7 @@ index d58aea709..02db2046a 100644
      std::set<std::string> model_tags;    // informational tags
  
      bool sleeping = false;
-@@ -1116,6 +1133,10 @@ private:
+@@ -1124,6 +1141,10 @@ private:
          params_base.n_outputs_max = output_limits.total;
          params_base.n_outputs_max_per_seq = output_limits.per_seq;
  
@@ -4124,7 +4127,7 @@ index d58aea709..02db2046a 100644
          const bool has_mmproj = !params.mmproj.path.empty();
          const bool has_draft = params.speculative.has_dft();
          const bool spec_mtp = std::find(params_base.speculative.types.begin(),
-@@ -1233,6 +1254,10 @@ private:
+@@ -1241,6 +1262,10 @@ private:
  
          add_bos_token = llama_vocab_get_add_bos(vocab);
  
@@ -4135,7 +4138,7 @@ index d58aea709..02db2046a 100644
          if (has_spec) {
              // spec_mtp doesn't use load a model internally, so we report 0.0 and 1.0 manually
              load_progress_callback(0.0f, &load_progress_spec);
-@@ -1621,7 +1646,8 @@ private:
+@@ -1629,7 +1654,8 @@ private:
                  /* reasoning_budget      */ params_base.sampling.reasoning_budget_tokens,
                  /* reasoning_budget_msg  */ params_base.sampling.reasoning_budget_message,
                  /* media_path            */ params_base.media_path,
@@ -4145,7 +4148,7 @@ index d58aea709..02db2046a 100644
              };
  
              {
-@@ -3149,6 +3175,341 @@ private:
+@@ -3157,6 +3183,341 @@ private:
      };
  #endif
  
@@ -4487,7 +4490,7 @@ index d58aea709..02db2046a 100644
      void update_slots() {
  #ifdef DEBUG_TIMINGS
          static int64_t t_prev = 0;
-@@ -3190,6 +3551,12 @@ private:
+@@ -3198,6 +3559,12 @@ private:
              }
          }
  

@@ -9,7 +9,7 @@ hole with zero features; drafted tokens are still verified by the target,
 so only post-image draft acceptance degrades, never output.
 
 diff --git a/common/speculative.cpp b/common/speculative.cpp
-index c5043a4a8..b62388c2b 100644
+index 50647dbb2..de0b24183 100644
 --- a/common/speculative.cpp
 +++ b/common/speculative.cpp
 @@ -1190,6 +1190,44 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {

@@ -13,6 +13,13 @@ git -C "$WORK/opencode" fetch origin "$REF"
 CANDIDATE="$(git -C "$WORK/opencode" rev-parse FETCH_HEAD)"
 git -C "$WORK/opencode" fetch "$UPSTREAM" dev
 UPSTREAM_SHA="$(git -C "$WORK/opencode" rev-parse FETCH_HEAD)"
+# Upstream promoted its v2 rewrite to dev on 2026-10-10 (5caf1f9f6f), which
+# removes packages/opencode that the fork and patches/ui build on. Until the
+# fork is ported to v2, track the last pre-v2 commit instead of dev's head.
+PRE_V2=055d95bb7e278c94baf06235a52cac79dd13ba67
+if git -C "$WORK/opencode" merge-base --is-ancestor "$PRE_V2" "$UPSTREAM_SHA"; then
+  UPSTREAM_SHA="$PRE_V2"
+fi
 if ! git -C "$WORK/opencode" merge-base --is-ancestor "$UPSTREAM_SHA" "$CANDIDATE"; then
   echo "Fork $CANDIDATE has not absorbed upstream dev $UPSTREAM_SHA. Merge and verify the fork first." >&2
   exit 20

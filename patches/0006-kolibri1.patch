@@ -1,5 +1,5 @@
 diff --git a/conversion/__init__.py b/conversion/__init__.py
-index 2a62dbac9..83071490c 100644
+index 7f32a87f0..d489b4a8a 100644
 --- a/conversion/__init__.py
 +++ b/conversion/__init__.py
 @@ -19,6 +19,7 @@ __all__ = [
@@ -11,10 +11,10 @@ index 2a62dbac9..83071490c 100644
      "ArceeForCausalLM": "llama",
      "ArcticForCausalLM": "arctic",
 diff --git a/conversion/base.py b/conversion/base.py
-index d1dc6fb77..a26884d28 100644
+index efb7ea72e..dfe8700b8 100644
 --- a/conversion/base.py
 +++ b/conversion/base.py
-@@ -1949,6 +1949,9 @@ class TextModel(ModelBase):
+@@ -2118,6 +2118,9 @@ class TextModel(ModelBase):
          if chkhsh == "a9af07a84191f55098b248ae6f3dfe9e32d3190bebe8eafd91c1ddec9bc3449f":
              # ref: https://huggingface.co/IFM/K2-Horizon-36B
              res = "k2-horizon"
@@ -103,10 +103,10 @@ index 0afbcc7e9..fc62f4298 100755
      {"name": "qwen35",           "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/Qwen/Qwen3.5-9B-Instruct", },
      {"name": "joyai-llm",        "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/jdopensource/JoyAI-LLM-Flash", },
 diff --git a/gguf-py/gguf/constants.py b/gguf-py/gguf/constants.py
-index 94d73583a..be7914ace 100644
+index de670bbdd..be16335ee 100644
 --- a/gguf-py/gguf/constants.py
 +++ b/gguf-py/gguf/constants.py
-@@ -630,6 +630,7 @@ class MODEL_ARCH(IntEnum):
+@@ -647,6 +647,7 @@ class MODEL_ARCH(IntEnum):
      DOTS3NOTE        = auto()
      ARCEE            = auto()
      AFMOE            = auto()
@@ -114,7 +114,7 @@ index 94d73583a..be7914ace 100644
      LAGUNA           = auto()
      ERNIE4_5         = auto()
      ERNIE4_5_MOE     = auto()
-@@ -1420,6 +1421,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
+@@ -1443,6 +1444,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
      MODEL_ARCH.DOTS3NOTE:        "dots3note",
      MODEL_ARCH.ARCEE:            "arcee",
      MODEL_ARCH.AFMOE:            "afmoe",
@@ -122,7 +122,7 @@ index 94d73583a..be7914ace 100644
      MODEL_ARCH.LAGUNA:           "laguna",
      MODEL_ARCH.ERNIE4_5:         "ernie4_5",
      MODEL_ARCH.ERNIE4_5_MOE:     "ernie4_5-moe",
-@@ -4957,6 +4959,29 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
+@@ -5008,6 +5010,29 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
          MODEL_TENSOR.FFN_POST_NORM,
          MODEL_TENSOR.FFN_EXP_PROBS_B,
      ],
@@ -152,7 +152,7 @@ index 94d73583a..be7914ace 100644
      MODEL_ARCH.LAGUNA: [
          MODEL_TENSOR.TOKEN_EMBD,
          MODEL_TENSOR.OUTPUT_NORM,
-@@ -6043,6 +6068,7 @@ class ExpertGatingFuncType(IntEnum):
+@@ -6094,6 +6119,7 @@ class ExpertGatingFuncType(IntEnum):
      SOFTMAX       = 1
      SIGMOID       = 2
      SQRTSOFTPLUS  = 4
@@ -161,10 +161,10 @@ index 94d73583a..be7914ace 100644
  
  # TODO: add GGMLFileType from ggml_ftype in ggml.h
 diff --git a/gguf-py/gguf/tensor_mapping.py b/gguf-py/gguf/tensor_mapping.py
-index 566b7348a..e9a32a8d9 100644
+index 6445784a3..3b9a1d0bc 100644
 --- a/gguf-py/gguf/tensor_mapping.py
 +++ b/gguf-py/gguf/tensor_mapping.py
-@@ -2885,6 +2885,21 @@ class TensorNameMap:
+@@ -2907,6 +2907,21 @@ class TensorNameMap:
  
      # architecture-specific block mappings
      arch_block_mappings_cfg: dict[MODEL_ARCH, dict[MODEL_TENSOR, tuple[str, ...]]] = {
@@ -187,10 +187,10 @@ index 566b7348a..e9a32a8d9 100644
              MODEL_TENSOR.FFN_NORM: (
                  "model.layers.{bid}.residual_layernorm",
 diff --git a/src/llama-arch.cpp b/src/llama-arch.cpp
-index b43132b09..f950580c9 100644
+index 0986b8449..b5676383f 100644
 --- a/src/llama-arch.cpp
 +++ b/src/llama-arch.cpp
-@@ -119,6 +119,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
+@@ -120,6 +120,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
      { LLM_ARCH_ARCEE,            "arcee"            },
      { LLM_ARCH_AFMOE,            "afmoe"            },
      { LLM_ARCH_LAGUNA,           "laguna"           },
@@ -199,10 +199,10 @@ index b43132b09..f950580c9 100644
      { LLM_ARCH_ERNIE4_5_MOE,     "ernie4_5-moe"     },
      { LLM_ARCH_HUNYUAN_MOE,      "hunyuan-moe"      },
 diff --git a/src/llama-arch.h b/src/llama-arch.h
-index 6a2d2ecfa..4d2cf9f5c 100644
+index 16b5c27b6..e89eb17c2 100644
 --- a/src/llama-arch.h
 +++ b/src/llama-arch.h
-@@ -124,6 +124,7 @@ enum llm_arch {
+@@ -125,6 +125,7 @@ enum llm_arch {
      LLM_ARCH_ARCEE,
      LLM_ARCH_AFMOE,
      LLM_ARCH_LAGUNA,
@@ -211,10 +211,10 @@ index 6a2d2ecfa..4d2cf9f5c 100644
      LLM_ARCH_ERNIE4_5_MOE,
      LLM_ARCH_HUNYUAN_MOE,
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 0cfd124c5..34bb4c8b7 100644
+index 8450d21f5..99e8a4643 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
-@@ -2107,7 +2107,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+@@ -2151,7 +2151,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
  
      if (probs_in == nullptr) {
          logits = build_lora_mm(gate_inp, cur); // [n_expert, n_tokens]
@@ -224,7 +224,7 @@ index 0cfd124c5..34bb4c8b7 100644
              ggml_prec_set_acc(logits, GGML_PREC_F32);
          }
          cb(logits, "ffn_moe_logits", il);
-@@ -2127,6 +2128,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+@@ -2171,6 +2172,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                  probs = ggml_soft_max(ctx0, logits); // [n_expert, n_tokens]
              } break;
          case LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID:
@@ -232,7 +232,7 @@ index 0cfd124c5..34bb4c8b7 100644
              {
                  probs = ggml_sigmoid(ctx0, logits); // [n_expert, n_tokens]
              } break;
-@@ -2146,7 +2148,13 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+@@ -2190,7 +2192,13 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
      // add experts selection bias - introduced in DeepSeek V3
      // leave probs unbiased as it's later used to get expert weights
      ggml_tensor * selection_probs = probs;
@@ -260,7 +260,7 @@ index 064de68f3..423e4725b 100644
  
  enum llama_swa_type {
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index dc26fa8dd..84980de7c 100644
+index a18aab6da..04c4051d2 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
 @@ -280,6 +280,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
@@ -272,7 +272,7 @@ index dc26fa8dd..84980de7c 100644
          case LLM_ARCH_ERNIE4_5:
              return new llama_model_ernie4_5(params);
          case LLM_ARCH_ERNIE4_5_MOE:
-@@ -1041,6 +1043,7 @@ static const char * llama_expert_gating_func_name(llama_expert_gating_func_type
+@@ -1043,6 +1045,7 @@ static const char * llama_expert_gating_func_name(llama_expert_gating_func_type
          case LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX: return "softmax";
          case LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID: return "sigmoid";
          case LLAMA_EXPERT_GATING_FUNC_TYPE_SQRT_SOFTPLUS: return "sqrtsoftplus";
@@ -280,7 +280,7 @@ index dc26fa8dd..84980de7c 100644
          default:                                    return "unknown";
      }
  }
-@@ -3252,6 +3255,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+@@ -3593,6 +3596,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
          case LLM_ARCH_PANGU_EMBED:
          case LLM_ARCH_AFMOE:
          case LLM_ARCH_LAGUNA:
@@ -289,10 +289,10 @@ index dc26fa8dd..84980de7c 100644
          case LLM_ARCH_MIMO2:
          case LLM_ARCH_STEP35:
 diff --git a/src/llama-vocab.cpp b/src/llama-vocab.cpp
-index dbadaf100..cd5ce2897 100644
+index 9b5cc2e1c..f24975f58 100644
 --- a/src/llama-vocab.cpp
 +++ b/src/llama-vocab.cpp
-@@ -2376,7 +2376,8 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
+@@ -2389,7 +2389,8 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                      tokenizer_pre == "qwen2" ||
                      tokenizer_pre == "deepseek-r1-qwen" ||
                      tokenizer_pre == "kormo" ||
@@ -517,10 +517,10 @@ index 000000000..d2a952312
 +    ggml_build_forward_expand(gf, cur);
 +}
 diff --git a/src/models/models.h b/src/models/models.h
-index 780b97f8b..19d81aff2 100644
+index 2dc3bfec8..26814af9b 100644
 --- a/src/models/models.h
 +++ b/src/models/models.h
-@@ -2032,6 +2032,19 @@ struct llama_model_afmoe : public llama_model_base {
+@@ -2070,6 +2070,19 @@ struct llama_model_afmoe : public llama_model_base {
  };
  
  
@@ -541,7 +541,7 @@ index 780b97f8b..19d81aff2 100644
      llama_model_laguna(const struct llama_model_params & params) : llama_model_base(params) {}
      void load_arch_hparams(llama_model_loader & ml) override;
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index 78128ebf0..f56e1e94a 100644
+index 1e8e915b1..94c3528a9 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
 @@ -153,7 +153,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
