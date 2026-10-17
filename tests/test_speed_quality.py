@@ -16,17 +16,16 @@ def test_measurements_remain_unknown_and_short_decodes_excluded():
     assert timing_summary([Sample(100, 100, 100, 90, 1)])['decode_tps'] is None
 
 
-def test_context_policy_defaults_and_rollback(tmp_path, monkeypatch):
+def test_context_policy_defaults(tmp_path):
+    """Tool previews scale with the context; old tool output pruning is done by the
+    LocalCode plugin (the runtime has no prune setting), see tests/ui/context.test.ts."""
     file = tmp_path / 'config.json'
-    monkeypatch.delenv('LOCALCODE_PRUNE', raising=False)
     write_config(file, port=9999, ctx=8192, alias='test')
     config = json.loads(file.read_text())
-    assert config['compaction']['prune'] is True
+    assert 'prune' not in config['compaction']
     assert config['tool_output'] == {'max_bytes':8192, 'max_lines':400}
-    monkeypatch.setenv('LOCALCODE_PRUNE', '0')
     write_config(file, port=9999, ctx=131072, alias='test')
     config = json.loads(file.read_text())
-    assert config['compaction']['prune'] is False
     assert config['tool_output']['max_bytes'] == 16384
 
 

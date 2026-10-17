@@ -1,5 +1,6 @@
 import { expect, spyOn, test } from "bun:test";
-import modes, { answerRows, requestFor } from "../../src/localcode/ui/plugin/modes";
+import { answerRows, requestFor, setupModes, type ModesContext } from "../../src/localcode/ui/plugin/modes";
+import tui from "../../src/localcode/ui/plugin/tui";
 
 const form = { question: "Which team?", state: "Charged twice", kind: "choice" as const, options: "billing\nshipping", image: "" };
 
@@ -27,19 +28,20 @@ test("score results show the supplied level names", () => {
   expect(rows.map(r=>r.title)).toEqual(["high","low"]);
 });
 
-// Run the plugin's registered commands and routes, including the actual mode
-// chooser callbacks. Pure request helpers cannot detect session navigation bugs.
+// Run the plugin's registered commands against a fake opencode v2 TUI context with
+// the real dialog semantics: showing a dialog replaces (and so closes) the previous
+// one, closing settles its promise with undefined, choosing settles it with a value.
 async function withTui(run: (host: ReturnType<typeof fakeTui>) => Promise<void> | void, controlUrl = "") {
   const host = fakeTui();
   const startup = process.env.LOCALCODE_MODE;
   const control = process.env.LOCALCODE_CONTROL_URL;
   delete process.env.LOCALCODE_MODE;
   process.env.LOCALCODE_CONTROL_URL = controlUrl;
+  const dispose = setupModes(host.context);
   try {
-    await modes.tui(host.api as unknown as Parameters<typeof modes.tui>[0]);
     await run(host);
   } finally {
-    host.dispose();
+    dispose();
     if (startup === undefined) delete process.env.LOCALCODE_MODE;
     else process.env.LOCALCODE_MODE = startup;
     if (control === undefined) delete process.env.LOCALCODE_CONTROL_URL;
@@ -47,108 +49,121 @@ async function withTui(run: (host: ReturnType<typeof fakeTui>) => Promise<void> 
   }
 }
 
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+
 function fakeTui() {
-  type Current = { name: string; params?: Record<string, unknown> };
-  type Option = { value: string };
-  type Select = { options: Option[]; onSelect: (option: Option) => void };
-  type Prompt = { onConfirm: (value: string) => void };
-  type Confirm = { title: string; message: string; onConfirm?: () => void };
-  let current: Current = { name: "session", params: { sessionID: "ses_first" } };
-  let dialog: Select | Prompt | Confirm | undefined;
-  const commands = new Map<string, () => void>();
+  type Dialog =
+    | { kind: "select"; title: string; options: readonly { value: unknown; title: string }[]; settle: (value: unknown) => void }
+    | { kind: "prompt"; title: string; value?: string; settle: (value: unknown) => void }
+    | { kind: "confirm"; title: string; message: string; settle: (value: unknown) => void };
+  let dialog: Dialog | undefined;
+  const commands = new Map<string, () => void | false | Promise<void>>();
   const slashes = new Map<string, string>();
-  const routes = new Map<string, (input: { params?: Record<string, unknown> }) => unknown>();
-  const disposals: (() => void)[] = [];
-  const navigations: Current[] = [];
-  const toasts: { message: string; variant: string }[] = [];
-  const api = {
-    state: { ready: true },
-    route: {
-      get current() { return current; },
-      navigate(name: string, params?: Record<string, unknown>) {
-        current = { name, ...(params ? { params } : {}) };
-        navigations.push(current);
-      },
-      register(items: { name: string; render: (input: { params?: Record<string, unknown> }) => unknown }[]) {
-        for (const item of items) routes.set(item.name, item.render);
-      },
-    },
+  const dispatched: string[] = [];
+  const toasts: { message: string; variant?: string }[] = [];
+  const sizes: string[] = [];
+  const show = <T,>(next: (settle: (value: T | undefined) => void) => Dialog) => new Promise<T | undefined>((resolve) => {
+    const previous = dialog;
+    dialog = undefined;
+    previous?.settle(undefined);
+    let settled = false;
+    dialog = next((value) => { if (!settled) { settled = true; resolve(value); } });
+  });
+  const close = (value?: unknown) => {
+    const current = dialog;
+    dialog = undefined;
+    current?.settle(value);
+  };
+  const context: ModesContext = {
     keymap: {
-      registerLayer(layer: { commands: { name: string; namespace?: string; slashName?: string; run: () => void }[] }) {
-        for (const command of layer.commands) {
-          commands.set(command.name, command.run);
-          // As the interface does it: the slash menu lists only palette commands
-          // (keymap.tsx, useCommandSlashes). Without the namespace /server, /mode
-          // and /decide register and still never appear.
-          if (command.slashName && command.namespace === "palette") slashes.set(command.slashName, command.name);
+      layer(factory) {
+        for (const command of factory().commands ?? []) {
+          if (!command.id) continue;
+          commands.set(command.id, command.run);
+          // As the v2 keymap does it: only commands with a slash entry appear in the slash menu.
+          if (command.slash) slashes.set(command.slash.name, command.id);
         }
       },
+      dispatch(id) { dispatched.push(id); },
     },
     ui: {
-      Dialog(props: unknown) { return props; },
-      DialogSelect(props: Select) { return props; },
-      DialogPrompt(props: Prompt) { return props; },
-      DialogConfirm(props: Confirm) { return props; },
-      toast(value: { message: string; variant: string }) { toasts.push(value); },
       dialog: {
-        get open() { return dialog !== undefined; },
-        clear() { dialog = undefined; },
-        replace(render: () => Select | Prompt | Confirm) { dialog = render(); },
+        set(options) { sizes.push(options.size ?? "medium"); },
+        clear() { close(undefined); },
+        confirm: (options) => show<boolean>((settle) => ({ kind: "confirm", title: options.title, message: options.message, settle: settle as (value: unknown) => void })),
+        prompt: (options) => show<string>((settle) => ({ kind: "prompt", title: options.title, value: options.value, settle: settle as (value: unknown) => void })),
+        select: (options) => show((settle) => ({ kind: "select", title: options.title, options: options.options, settle: settle as (value: unknown) => void })),
       },
+      toast: { show(options) { toasts.push(options); } },
     },
-    lifecycle: { onDispose(callback: () => void) { disposals.push(callback); } },
+  };
+  const expectDialog = <K extends Dialog["kind"]>(kind: K) => {
+    if (dialog?.kind !== kind) throw new Error(`expected a ${kind} dialog, found ${dialog?.kind ?? "none"} (${dialog?.title ?? ""})`);
+    return dialog as Extract<Dialog, { kind: K }>;
   };
   return {
-    api, navigations, toasts, slashes,
-    current: () => current,
-    dispose: () => disposals.forEach((callback) => callback()),
-    command: (name: string) => commands.get(name)!(),
-    choose(value: string) {
-      const select = dialog as Select;
-      select.onSelect(select.options.find((option) => option.value === value)!);
+    context, toasts, slashes, dispatched, sizes,
+    dialog: () => dialog,
+    command: async (id: string) => { void commands.get(id)!(); await tick(); },
+    async choose(value: string) {
+      const select = expectDialog("select");
+      if (!select.options.some((option) => option.value === value)) throw new Error(`no option ${value} in ${select.title}`);
+      close(value);
+      await tick();
     },
-    confirm: (value: string) => (dialog as Prompt).onConfirm(value),
-    confirmation: () => dialog as Confirm,
-    confirmDialog() { const callback = (dialog as Confirm).onConfirm; dialog = undefined; callback?.(); },
-    cancelDialog() { dialog = undefined; },
-    selectRow(value: string) {
-      const page = routes.get(current.name)!({ params: current.params }) as { children: Select };
-      page.children.onSelect(page.children.options.find((option) => option.value === value)!);
-    },
+    rows: () => expectDialog("select").options.map((option) => option.value),
+    async confirm(value: string) { expectDialog("prompt"); close(value); await tick(); },
+    confirmation: () => expectDialog("confirm"),
+    async confirmDialog() { expectDialog("confirm"); close(true); await tick(); },
+    async cancelDialog() { close(undefined); await tick(); },
   };
 }
 
-test("selecting Chat in an active session preserves that session without navigating", async () => {
-  await withTui((host) => {
-    host.command("localcode.mode");
-    host.choose("chat");
-    expect(host.current()).toEqual({ name: "session", params: { sessionID: "ses_first" } });
-    expect(host.navigations).toEqual([]);
-    expect(host.api.ui.dialog.open).toBe(false);
+test("selecting Chat closes the chooser without opening anything else", async () => {
+  await withTui(async (host) => {
+    await host.command("localcode.mode");
+    expect(host.dialog()?.title).toBe("LocalCode mode");
+    await host.choose("chat");
+    expect(host.dialog()).toBeUndefined();
+    expect(host.dispatched).toEqual([]);
   });
 });
 
-test("Decisions returns to the exact session and Chat never restores a stale session", async () => {
-  await withTui((host) => {
-    const first = host.current();
-    host.command("localcode.mode");
-    host.choose("decisions");
-    expect(host.current().name).toBe("localcode.decisions");
-    host.selectRow("chat");
-    expect(host.current()).toEqual(first);
+test("Decisions opens over the chat, keeps the form across visits and Back closes it", async () => {
+  await withTui(async (host) => {
+    await host.command("localcode.mode");
+    await host.choose("decisions");
+    expect(host.dialog()?.title).toBe("Decisions · System One");
+    expect(host.sizes.at(-1)).toBe("large");
+    await host.choose("question");
+    await host.confirm("Is it relevant?");
+    expect(host.dialog()?.title).toBe("Decisions · System One");
+    await host.choose("chat");
+    expect(host.dialog()).toBeUndefined();
 
-    const second = { name: "session", params: { sessionID: "ses_second", prompt: { input: "keep this" } } };
-    host.api.route.navigate(second.name, second.params);
-    const count = host.navigations.length;
-    host.command("localcode.mode");
-    host.choose("chat");
-    expect(host.current()).toEqual(second);
-    expect(host.navigations).toHaveLength(count);
+    await host.command("localcode.decide");
+    const question = (host.dialog() as any).options.find((option: any) => option.value === "question");
+    expect(question).toBeDefined();
+    await host.cancelDialog();
+    expect(host.dialog()).toBeUndefined();
 
-    host.command("localcode.decide");
-    host.command("localcode.mode");
-    host.choose("chat");
-    expect(host.current()).toEqual(second);
+    // Opening the mode chooser over the form closes the form; Chat then leaves nothing open.
+    await host.command("localcode.decide");
+    await host.command("localcode.mode");
+    await host.choose("chat");
+    expect(host.dialog()).toBeUndefined();
+  });
+});
+
+test("the answer type controls which rows the form shows and the Model row opens the model picker", async () => {
+  await withTui(async (host) => {
+    await host.command("localcode.decide");
+    expect(host.rows()).not.toContain("options");
+    await host.choose("kind");
+    await host.choose("choice");
+    expect(host.rows()).toContain("options");
+    await host.choose("model");
+    expect(host.dispatched).toEqual(["model.list"]);
   });
 });
 
@@ -165,17 +180,18 @@ test("Back cancels image preparation before inference and repeated Run cannot du
   }), { headers: { "content-type": "application/json" } }));
   try {
     await withTui(async (host) => {
-      host.command("localcode.decide");
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      host.selectRow("question"); host.confirm("Is it relevant?");
-      host.selectRow("image"); host.confirm("example.png");
-      host.selectRow("run");
-      host.selectRow("run");
+      await host.command("localcode.decide");
+      await tick();
+      await host.choose("question"); await host.confirm("Is it relevant?");
+      await host.choose("image"); await host.confirm("example.png");
+      await host.choose("run");
+      expect(host.dialog()?.title).toBe("Decisions · System One");
+      await host.choose("run");
       expect(reads).toBe(1);
-      host.selectRow("chat");
+      await host.choose("chat");
       finishRead(new Uint8Array([1]).buffer);
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(host.current()).toEqual({ name: "session", params: { sessionID: "ses_first" } });
+      await tick();
+      expect(host.dialog()).toBeUndefined();
       expect(fetch.mock.calls.map(([url]) => String(url))).toEqual(["http://127.0.0.1:8124/status"]);
     }, "http://127.0.0.1:8124");
   } finally {
@@ -184,7 +200,38 @@ test("Back cancels image preparation before inference and repeated Run cannot du
   }
 });
 
-test("/server fetches authenticated connection info and changes the live API port without navigating", async () => {
+test("a decision result is shown as rows on the redrawn form", async () => {
+  const network = spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    if (String(input).endsWith("/decision")) return Response.json({ model: "OpenJev", answers: { answer: { noul: 0.75 } } });
+    return Response.json({ state: "ready", current: "OpenJev-Q4_K_M", supports_systemone: true });
+  });
+  try {
+    await withTui(async (host) => {
+      await host.command("localcode.decide");
+      await tick();
+      await host.choose("question"); await host.confirm("Is it relevant?");
+      await host.choose("run");
+      for (let i = 0; i < 50 && !host.rows().includes("result:yes"); i++) await Bun.sleep(10);
+      expect(host.rows()).toEqual(expect.arrayContaining(["result:model", "result:yes", "result:no"]));
+    }, "http://127.0.0.1:8125");
+  } finally { network.mockRestore(); }
+});
+
+test("Run without a decision model explains how to pick one", async () => {
+  const network = spyOn(globalThis, "fetch").mockImplementation(async () => Response.json({ state: "ready", current: "Qwen", supports_systemone: false }));
+  try {
+    await withTui(async (host) => {
+      await host.command("localcode.decide");
+      await tick();
+      await host.choose("question"); await host.confirm("Is it relevant?");
+      await host.choose("run");
+      expect(host.toasts.some((t) => t.variant === "error" && t.message.includes("OpenJev"))).toBe(true);
+      expect(network.mock.calls.some(([url]) => String(url).endsWith("/decision"))).toBe(false);
+    }, "http://127.0.0.1:8126");
+  } finally { network.mockRestore(); }
+});
+
+test("/server fetches authenticated connection info and changes the live API port", async () => {
   const token = process.env.LOCALCODE_CONTROL_TOKEN;
   process.env.LOCALCODE_CONTROL_TOKEN = "server-test-token";
   const changes: unknown[] = [];
@@ -201,14 +248,16 @@ test("/server fetches authenticated connection info and changes the live API por
   try {
     await withTui(async (host) => {
       await host.command("localcode.server");
-      host.choose("port");
-      host.confirm("99");
+      await host.choose("port");
+      await host.confirm("99");
       expect(changes).toHaveLength(0);
-      host.confirm("9234");
+      expect(host.toasts.some(t => t.variant === "error" && t.message.includes("1024"))).toBe(true);
+      await host.confirm("9234");
       for (let i = 0; i < 50 && changes.length === 0; i++) await Bun.sleep(10);
       expect(changes).toEqual([{port: 9234}]);
+      for (let i = 0; i < 50 && !host.toasts.some(t => t.message.includes("API moved")); i++) await Bun.sleep(10);
       expect(requests.every(token => token === "server-test-token")).toBe(true);
-      expect(host.navigations).toEqual([]);
+      expect(host.toasts.some(t => t.message.includes("API moved to http://127.0.0.1:9234/v1"))).toBe(true);
     }, "http://127.0.0.1:8323");
   } finally {
     network.mockRestore();
@@ -217,7 +266,7 @@ test("/server fetches authenticated connection info and changes the live API por
   }
 });
 
-test("/server rejects duplicate submissions and surfaces port errors without losing the session", async () => {
+test("/server surfaces port errors and keeps the prompt for a retry", async () => {
   let changes = 0;
   const network = spyOn(globalThis, "fetch").mockImplementation(async (input) => {
     if (String(input).endsWith("/server/port")) {
@@ -229,22 +278,22 @@ test("/server rejects duplicate submissions and surfaces port errors without los
   try {
     await withTui(async (host) => {
       await host.command("localcode.server");
-      host.choose("port");
-      host.confirm("9234");
-      host.confirm("9234");
+      await host.choose("port");
+      await host.confirm("9234");
       for (let i = 0; i < 50 && host.toasts.length === 0; i++) await Bun.sleep(10);
       expect(changes).toBe(1);
       expect(host.toasts.some(t => t.variant === "error" && t.message.includes("Port occupied"))).toBe(true);
       expect(host.toasts.some(t => t.message.includes("API moved"))).toBe(false);
-      expect(host.current()).toEqual({name: "session", params: {sessionID: "ses_first"}});
-      host.confirm("9234"); // failure released the UI guard, allowing a retry
+      expect(host.dialog()?.kind).toBe("prompt");
+      expect((host.dialog() as any).value).toBe("9234");
+      await host.confirm("9234"); // failure released the guard, allowing a retry
       for (let i = 0; i < 50 && changes < 2; i++) await Bun.sleep(10);
       expect(changes).toBe(2);
     }, "http://127.0.0.1:8323");
   } finally { network.mockRestore(); }
 });
 
-test("/server stops and starts without leaving the session and reports rejected operations", async () => {
+test("/server stops and starts and reports rejected operations", async () => {
   let running = true;
   let reject = false;
   const actions: string[] = [];
@@ -263,29 +312,25 @@ test("/server stops and starts without leaving the session and reports rejected 
   try {
     await withTui(async host => {
       await host.command("localcode.server");
-      host.choose("stop");
+      await host.choose("stop");
       await Bun.sleep(20);
       expect(actions).toEqual(["/server/stop"]);
-      host.choose("start");
+      await host.choose("start");
       await Bun.sleep(20);
       expect(actions).toEqual(["/server/stop","/server/start"]);
       reject = true;
-      host.choose("stop");
+      await host.choose("stop");
       await Bun.sleep(20);
       expect(host.toasts.some(t=>t.variant === "error" && t.message.includes("A request is active"))).toBe(true);
-      expect(host.navigations).toEqual([]);
     }, "http://127.0.0.1:8323");
   } finally { fetcher.mockRestore(); }
 });
 
 test("native keymap discovers server, mode and decide slash commands", async () => {
-  const ui = fakeTui();
-  await modes.tui(ui.api as any);
-  try {
-    expect(Object.fromEntries(ui.slashes)).toEqual({server: "localcode.server", mode: "localcode.mode", decide: "localcode.decide"});
-  } finally { ui.dispose(); }
+  await withTui((host) => {
+    expect(Object.fromEntries(host.slashes)).toEqual({server: "localcode.server", mode: "localcode.mode", decide: "localcode.decide"});
+  });
 });
-
 
 test("busy or unverified server stop offers explicit confirmation and retries only after acceptance", async () => {
   const posted: unknown[] = [];
@@ -299,17 +344,37 @@ test("busy or unverified server stop offers explicit confirmation and retries on
   });
   try {
     await withTui(async host => {
-      await host.command("localcode.server"); host.choose("stop");
+      await host.command("localcode.server"); await host.choose("stop");
       await Bun.sleep(20);
       expect(host.confirmation().title).toBe("Stop shared model server?");
       expect(host.confirmation().message).toContain("every LocalCode window and connected app");
       expect(posted).toEqual([{}]);
-      host.cancelDialog(); await Bun.sleep(20);
+      await host.cancelDialog(); await Bun.sleep(20);
       expect(posted).toEqual([{}]);
-      await host.command("localcode.server"); host.choose("stop"); await Bun.sleep(20);
-      host.confirmDialog(); await Bun.sleep(20);
+      await host.command("localcode.server"); await host.choose("stop"); await Bun.sleep(20);
+      await host.confirmDialog(); await Bun.sleep(20);
       expect(posted).toEqual([{}, {}, {force:true}]);
-      expect(host.navigations).toEqual([]);
     }, "http://127.0.0.1:8323");
   } finally { network.mockRestore(); }
+});
+
+test("the terminal entry shows server notifications as toasts and adds the modes", async () => {
+  const host = fakeTui();
+  let handler: ((event: { data: any }) => void) | undefined;
+  let stopped = false;
+  const context = {
+    ...host.context,
+    client: { rpc: (definition: { id: string }) => ({ events: { on(name: string, callback: typeof handler) {
+      expect(definition.id).toBe("localcode");
+      expect(name).toBe("toast");
+      handler = callback;
+      return () => { stopped = true; };
+    } } }) },
+  };
+  const dispose = await tui.setup(context as any);
+  handler!({ data: { message: "Model server stopped", variant: "warning", title: "LocalCode", duration: 5000 } });
+  expect(host.toasts).toEqual([{ message: "Model server stopped", variant: "warning", title: "LocalCode", duration: 5000 }]);
+  expect(host.slashes.size).toBe(3);
+  dispose();
+  expect(stopped).toBe(true);
 });

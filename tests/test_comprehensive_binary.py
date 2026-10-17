@@ -143,7 +143,9 @@ def test_ui_binary_version_matches_package():
     # the 98 MB binary; a fork change bumps FORK_COMMIT and rebuilds anyway.
     want = re.match(r"\d+\.\d+", __version__).group(0)
     out = _version(path).stdout.strip()
-    assert out.startswith(want + "."), f"UI binary reports {out!r}, package is {__version__!r}; rebuild with scripts/build_ui_binary.sh"
+    # The runtime prints "localcode vX.Y.Z".
+    reported = re.fullmatch(r"(?:localcode v)?(\d+\.\d+\.\S+)", out)
+    assert reported and reported.group(1).startswith(want + "."), f"UI binary reports {out!r}, package is {__version__!r}; rebuild with scripts/build_ui_binary.sh"
 
 
 @pytest.mark.skipif(os.environ.get("GITHUB_ACTIONS") == "true", reason="hosted macOS VMs launch the binary in minutes; speed is measured on real hardware")

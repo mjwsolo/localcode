@@ -91,6 +91,8 @@ jobs:
         with:
           python-version: "3.13"
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.2   # the UI runtime (opencode v2) requires bun 1.4.2
       - run: python -m pip install -e .
       - name: bun tests
         working-directory: tests/ui
@@ -139,7 +141,7 @@ jobs:
           python - <<'PY'
           import glob, zipfile
           names = zipfile.ZipFile(glob.glob("dist/*.whl")[0]).namelist()
-          for n in ("localcode/bin/llama-server", "localcode/bin/localcode-ui", "localcode/ui/plugin/localcode.ts", "localcode/ui/FORK_COMMIT"):
+          for n in ("localcode/bin/llama-server", "localcode/bin/localcode-ui", "localcode/ui/plugin/localcode.ts", "localcode/ui/plugin/server.ts", "localcode/ui/plugin/tui.ts", "localcode/ui/plugin/rpc.ts", "localcode/ui/FORK_COMMIT"):
               assert n in names, n
           print("ok")
           PY

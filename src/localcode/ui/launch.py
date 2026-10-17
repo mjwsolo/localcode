@@ -2,7 +2,7 @@
 
   free ports  →  supervisor (owns llama-server, serves the picker API)
   →  a config file in the run dir points the runtime at that server and loads
-     the discipline plugin  →  run the bundled UI binary in the project.
+     the LocalCode plugin directory  →  run the bundled UI binary in the project.
 
 Nothing is written into the user's project. The runtime's own XDG dirs are
 ~/.*/localcode-agent. Network use is limited to features the user asks for.
@@ -119,56 +119,89 @@ def _context_size(models_dir: Path, ctrl: int) -> int:
             return 2048
 
 
+def _external_directory_rules() -> list[dict]:
+    """Ask before touching anything outside the project, as opencode v1 did.
+
+    Upstream v2 stopped asking by default; a local agent writing to arbitrary
+    paths without a prompt is not acceptable here. The runtime's own output,
+    temp and config folders stay allowed so saved tool output can be read back.
+    """
+    import tempfile
+
+    home = Path.home()
+    data = Path(os.environ.get("XDG_DATA_HOME") or home / ".local" / "share") / "localcode-agent"
+    config = Path(os.environ.get("XDG_CONFIG_HOME") or home / ".config") / "localcode-agent"
+    tmp = Path(tempfile.gettempdir()) / "localcode-agent"
+    allowed = [data / "shell" / "*" / "*", data / "tool-output" / "*", tmp / "*", config / "*"]
+    # The runtime compares canonical paths (/var -> /private/var on macOS).
+    allowed += [Path(os.path.realpath(p.parent)) / p.name for p in allowed]
+    return [{"action": "external_directory", "resource": "*", "effect": "ask"}] + [
+        {"action": "external_directory", "resource": str(p), "effect": "allow"} for p in dict.fromkeys(allowed)
+    ]
+
+
 def write_config(path: Path, *, port: int, ctx: int, alias: str | None) -> None:
-    """The runtime config for this session. Provider = the local server only;
-    capabilities are explicit so no cloud default leaks in. With no model yet a
-    hidden template entry carries the wiring; the picker synthesizes the real
-    alias from it once a model is loaded."""
+    """The runtime config for this session, in the runtime's own (v2) schema.
+    Provider = the local server only; capabilities are explicit so no cloud
+    default leaks in. With no model yet a hidden template entry carries the
+    wiring; the runtime's LocalCode provider synthesizes the real alias from it
+    once a model is loaded."""
     model_key = alias or "__pending__"
     cfg: dict = {
         "$schema": "https://localcode.dev/schema/config.json",
-        "provider": {
+        "providers": {
             "localcode": {
-                "npm": "@ai-sdk/openai-compatible",
                 "name": "localcode",
-                "options": {"baseURL": f"http://127.0.0.1:{port}/v1", "apiKey": server_key() or "local"},
+                "package": "aisdk:@ai-sdk/openai-compatible",
+                "settings": {"baseURL": f"http://127.0.0.1:{port}/v1", "apiKey": server_key() or "local"},
                 "models": {
                     model_key: {
                         "name": alias or "no model loaded",
-                        "tool_call": True, "reasoning": False, "temperature": True, "attachment": False,
-                        "modalities": {"input": ["text"], "output": ["text"]},
-                        "limit": {"context": ctx, "output": 8192},
+                        "capabilities": {"tools": True, "input": ["text"], "output": ["text"], "temperature": True},
+                        # Compaction starts at the input limit (no buffer is configured):
+                        # leave room for one response, as opencode v1 did. Once the
+                        # supervisor reports its measured budget, the runtime uses that.
+                        "limit": {"context": ctx, "output": 8192, **({"input": ctx - 8192} if ctx > 8192 else {})},
                     }
                 },
             }
         },
-        "enabled_providers": ["localcode"],
+        # Only the local provider may be used.
+        "policies": [
+            {"action": "provider.use", "resource": "*", "effect": "deny"},
+            {"action": "provider.use", "resource": "localcode", "effect": "allow"},
+        ],
         # The supervisor's /status budget already includes the headroom one step
         # can add (ui/context_budget.step_reserve), and the provider sets it as
         # the model's input limit; a second reserve here would double-count.
-        "compaction": {"reserved": 0, "prune": os.environ.get("LOCALCODE_PRUNE", "1") != "0"},
+        "compaction": {"buffer": 0},
         # The runtime saves the complete result to disk and exposes its path.
         # Keep the preview affordable, including on small context windows.
         "tool_output": {"max_bytes": max(4096, min(16384, ctx)), "max_lines": 400},
-        "tools": {"task": False},
-        "agent": {"plan": {"disable": True}},
+        # No subagents, and no code mode: the model calls each tool directly
+        # (code mode's catalog and execute tool would cost every request).
+        "permissions": [
+            {"action": "subagent", "resource": "*", "effect": "deny"},
+            {"action": "execute", "resource": "*", "effect": "deny"},
+            # A third identical tool call in one step asks first, as opencode v1 did.
+            {"action": "doom_loop", "resource": "*", "effect": "ask"},
+            *_external_directory_rules(),
+        ],
+        "agents": {"plan": {"disabled": True}},
+        # Language servers already installed on this machine start for the
+        # project's files; one that is missing is installed only from /lsp.
         "lsp": True,
-        "plugin": [str(plugin_path())],
+        # The plugin directory: server.ts runs in the agent, tui.ts in the terminal UI.
+        "plugins": [str(plugin_path())],
         "share": "disabled",
-        "autoupdate": False,
+        "update": "disable",
     }
     if alias:
-        cfg["model"] = f"localcode/{alias}"
+        cfg["model"] = {"providerID": "localcode", "model": alias}
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(cfg, indent=2))
     os.replace(tmp, path)
-    # Keep terminal-only UI extensions separate from server/tool hooks. The
-    # pinned runtime supports this through its native TUI plugin config.
-    tui_path = path.with_suffix(".tui.json")
-    tui_tmp = tui_path.with_suffix(".json.tmp")
-    tui_tmp.write_text(json.dumps({"plugin": [str(plugin_path().with_name("modes.ts"))]}))
-    os.replace(tui_tmp, tui_path)
 
 
 def _resume_args(resume: str | None) -> list[str]:
@@ -186,15 +219,18 @@ def _session_directory(session_id: str) -> Path | None:
                data_home / "localcode-agent" / "opencode-localcode.db"):
         if not db.is_file():
             continue
-        try:
-            with sqlite3.connect(f"file:{quote(str(db))}?mode=ro", uri=True) as conn:
-                row = conn.execute("SELECT directory FROM session WHERE id = ?", (session_id,)).fetchone()
-        except sqlite3.Error:
-            continue
-        if row and row[0]:
-            directory = Path(row[0]).expanduser()
-            if directory.is_dir():
-                return directory.resolve()
+        # session_v2 is the current runtime's table; `session` is an older
+        # database the runtime has not opened (and migrated) yet.
+        for table in ("session_v2", "session"):
+            try:
+                with sqlite3.connect(f"file:{quote(str(db))}?mode=ro", uri=True) as conn:
+                    row = conn.execute(f"SELECT directory FROM {table} WHERE id = ?", (session_id,)).fetchone()
+            except sqlite3.Error:
+                continue
+            if row and row[0]:
+                directory = Path(row[0]).expanduser()
+                if directory.is_dir():
+                    return directory.resolve()
     return None
 
 
@@ -205,13 +241,13 @@ def runtime_env(config_path: Path, ctrl: int, *, trust_project: bool = False) ->
     bypass_local_proxies(env)
     env["LOCALCODE_CONTROL_URL"] = f"http://127.0.0.1:{ctrl}"
     env["LOCALCODE_CONFIG"] = str(config_path)
-    env["OPENCODE_TUI_CONFIG"] = str(config_path.with_suffix(".tui.json"))
     # The branded alias takes precedence in the fork. Set both explicitly so
     # an inherited alias cannot accidentally reopen project code loading.
     disabled = "0" if trust_project else "1"
+    # Nothing downloads a language server on its own; /lsp installs one on request.
+    env.setdefault("OPENCODE_DISABLE_LSP_DOWNLOAD", "1")
     env["LOCALCODE_DISABLE_PROJECT_CONFIG"] = disabled
     env["OPENCODE_DISABLE_PROJECT_CONFIG"] = disabled
-    env.setdefault("OPENCODE_DISABLE_LSP_DOWNLOAD", "1")
     # Claude Code's skill directories (~/.claude/skills, <project>/.claude/skills)
     # are written for Claude and listed in full in every request's system
     # prompt: one install put 63 of them (~12k tokens) in front of a 12B
@@ -222,15 +258,16 @@ def runtime_env(config_path: Path, ctrl: int, *, trust_project: bool = False) ->
     return env
 
 
-MCP_HELP = """usage: localcode mcp <add|list|auth|logout|debug> [args] [--trust-project]
+MCP_HELP = """usage: localcode mcp <add|list|auth|logout> [args] [--trust-project]
 
 Manage the MCP servers the agent can use. The commands are the runtime's own:
-  add       interactive: scope (this project or your user config), name, type,
-            command or URL; writes the server into localcode.json
+  add       localcode mcp add <name> -- <command> [args...]   (a local server)
+            localcode mcp add <name> --url <url>              (a remote server)
+            writes the server into this project's localcode.json; add --global
+            to write it into your user config so it loads in every project
   list      servers and their status (OAuth state for remote servers)
   auth      sign in to a remote server that uses OAuth: localcode mcp auth <name>
   logout    forget a remote server's OAuth tokens
-  debug     connect to a server and print what it exposes
 
 Servers declared in the project's localcode.json load only when you launch
 with --trust-project (project configuration can run code). Pass the same flag
@@ -238,10 +275,26 @@ here to see them in `list`. Servers in ~/.config/localcode-agent/localcode.json
 always load. In a session, /mcps toggles servers on and off.
 """
 
+PROJECT_CONFIGS = (
+    "localcode.json", "localcode.jsonc", ".localcode-agent/localcode.json", ".localcode-agent/localcode.jsonc",
+    "opencode.json", "opencode.jsonc", ".opencode/opencode.json", ".opencode/opencode.jsonc",
+)
+
+
+def _mcp_server_names(mcp: object) -> list[str]:
+    """Server names in an `mcp` block: `mcp.servers` (current) or flat entries (legacy)."""
+    if not isinstance(mcp, dict):
+        return []
+    names = set(mcp["servers"]) if isinstance(mcp.get("servers"), dict) else set()
+    names.update(name for name, value in mcp.items()
+                 if name not in {"servers", "timeout"} and isinstance(value, dict))
+    return sorted(names)
+
 
 def _project_mcp_names(project_dir: Path) -> list[str]:
-    """Server names declared in the project's own config, if any."""
-    for name in ("localcode.json", "localcode.jsonc", "opencode.json", "opencode.jsonc"):
+    """Server names declared in the project's own config files, if any."""
+    names: set[str] = set()
+    for name in PROJECT_CONFIGS:
         f = project_dir / name
         if not f.is_file():
             continue
@@ -251,9 +304,9 @@ def _project_mcp_names(project_dir: Path) -> list[str]:
             data = json.loads(text)
         except (OSError, ValueError):
             continue
-        if isinstance(data.get("mcp"), dict):
-            return sorted(data["mcp"])
-    return []
+        if isinstance(data, dict):
+            names.update(_mcp_server_names(data.get("mcp")))
+    return sorted(names)
 
 
 def mcp_main(argv: list[str]) -> int:
@@ -291,7 +344,8 @@ def mcp_main(argv: list[str]) -> int:
     if args[0] == "add" and added:
         print(f"localcode: {', '.join(added)} is declared in this project's localcode.json. "
               "Project servers load only when you launch with `localcode --trust-project`; "
-              "for every project, add it to your user config instead (scope: user).", file=sys.stderr)
+              "for every project, add it to your user config instead (localcode mcp add --global ...).",
+              file=sys.stderr)
     elif args[0] == "list" and after and not trust:
         print(f"localcode: this project also declares {', '.join(after)}; they are hidden here and in sessions "
               "until you pass --trust-project.", file=sys.stderr)
@@ -321,6 +375,7 @@ def attach(ctrl: int, status: dict, ui_bin: Path, project_dir: Path, alias: str 
     config_path = rd / f"session-{os.getpid()}.json"
     write_config(config_path, port=port, ctx=ctx, alias=current)
     env = runtime_env(config_path, ctrl, trust_project=trust_project)
+    env["PWD"] = str(project_dir)   # the runtime's non-TUI modes take their directory from PWD
     argv = [str(ui_bin)] + (["-m", f"localcode/{current}"] if current else []) + _resume_args(resume)
     try:
         return subprocess.call(argv, cwd=str(project_dir), env=env)
@@ -428,6 +483,7 @@ def main(model: str | None = None, project: str | None = None,
         write_config(config_path, port=int(status["inference_port"]), ctx=ctx, alias=alias)
 
         env = runtime_env(config_path, ctrl, trust_project=trust_project)
+        env["PWD"] = str(project_dir)   # the runtime's non-TUI modes take their directory from PWD
         argv = [str(ui_bin)]
         if alias:
             argv += ["-m", f"localcode/{alias}"]

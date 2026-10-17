@@ -1,69 +1,123 @@
 import { expect, test } from "bun:test";
-import { leanHistory } from "../../src/localcode/ui/plugin/context";
+import { applyPruned, leanMessages, PRUNED_OUTPUT, pruneCandidates, pruneLimits } from "../../src/localcode/ui/plugin/context";
+
+// Model-request messages as opencode v2 hands them to session.hook("context"):
+// assistant tool calls, with their results in the following role "tool" message.
+const user = (text: string, extra: any[] = []) => ({ role: "user", content: [{ type: "text", text }, ...extra] });
 
 test("older tool data is bounded without mutating saved messages or breaking tool pairing", () => {
   const messages = [
-    { info: { role: "user" }, parts: [{ type: "text", text: "edit this file" }] },
-    { info: { role: "assistant" }, parts: [
+    user("edit this file"),
+    { role: "assistant", content: [
       { type: "reasoning", text: "private old reasoning" },
-      { type: "tool", callID: "call-1", tool: "read", state: { status: "completed", input: { filePath: "app.py", content: "a".repeat(9000) }, output: "b".repeat(24000), attachments: [{ mime: "image/png", url: "data:large" }] } },
+      { type: "tool-call", id: "call-1", name: "read", input: { filePath: "app.py", content: "a".repeat(9000) } },
       { type: "text", text: "I updated the file." },
     ] },
-    { info: { role: "user" }, parts: [{ type: "text", text: "now explain it" }] },
-    { info: { role: "assistant" }, parts: [{ type: "tool", callID: "call-2", state: { status: "completed", input: {}, output: "c".repeat(9000) } }] },
+    { role: "tool", content: [
+      { type: "tool-result", id: "call-1", name: "read", result: { type: "content", value: [
+        { type: "text", text: "b".repeat(24000) },
+        { type: "media", mediaType: "image/png", data: "large" },
+      ] } },
+    ] },
+    user("now explain it"),
+    { role: "assistant", content: [{ type: "tool-call", id: "call-2", name: "read", input: {} }] },
+    { role: "tool", content: [{ type: "tool-result", id: "call-2", name: "read", result: { type: "text", value: "c".repeat(9000) } }] },
   ];
   const original = JSON.stringify(messages);
-  const result = leanHistory(messages);
+  const result = leanMessages(messages);
   expect(JSON.stringify(messages)).toBe(original);
-  const tool = result[1].parts.find((part: any) => part.type === "tool");
-  expect(tool.callID).toBe("call-1");
-  expect(tool.state.input.filePath).toBe("app.py");
-  expect(tool.state.output.length).toBeLessThanOrEqual(800);
-  expect(tool.state.input.content.length).toBeLessThanOrEqual(600);
-  expect(tool.state.attachments).toEqual([]);
-  expect(result[1].parts.some((part: any) => part.type === "reasoning")).toBe(false);
-  expect(result[1].parts.at(-1).text).toBe("I updated the file.");
-  expect(result[3].parts[0].state.output.length).toBe(9000);
+  const call = result[1].content.find((part: any) => part.type === "tool-call");
+  expect(call.id).toBe("call-1");
+  expect(call.input.filePath).toBe("app.py");
+  expect(call.input.content.length).toBeLessThanOrEqual(600);
+  const output = result[2].content[0];
+  expect(output.id).toBe("call-1");
+  expect(output.result.value).toHaveLength(1);
+  expect(output.result.value[0].text.length).toBeLessThanOrEqual(800);
+  expect(result[1].content.some((part: any) => part.type === "reasoning")).toBe(false);
+  expect(result[1].content.at(-1).text).toBe("I updated the file.");
+  expect(result[5].content[0].result.value.length).toBe(9000);
 });
 
-test("only synthetic automatic workspace context is removed", () => {
+test("only automatic workspace context added by LocalCode is removed", () => {
   const parts = [
     { type: "text", text: "WORKSPACE SNAPSHOT AT SESSION START is what I want to discuss" },
-    { type: "text", text: "WORKSPACE SNAPSHOT AT SESSION START: files", synthetic: true },
+    { type: "text", text: "WORKSPACE SNAPSHOT AT SESSION START: files", metadata: { localcode: true } },
   ];
-  const messages = [{ info: { role: "user" }, parts }];
-  expect(leanHistory(messages)[0].parts).toEqual([parts[0]]);
-  expect(leanHistory(messages, true)[0].parts).toEqual(parts);
+  const messages = [{ role: "user", content: parts }];
+  expect(leanMessages(messages)[0].content).toEqual([parts[0]]);
+  expect(leanMessages(messages, true)[0].content).toEqual(parts);
 });
 
 test("interrupted tool output is also abbreviated and file identifiers remain exact", () => {
   const filePath = "a/".repeat(400) + "file.py";
-  const original = { type: "tool", callID: "interrupted", state: {
-    status: "error", input: { filePath }, error: "cancelled",
-    metadata: { interrupted: true, output: "log".repeat(9000) },
+  const failed = { type: "tool-result", id: "interrupted", name: "bash", resultType: "error", result: {
+    error: { message: "cancelled " + "x".repeat(2000) },
+    content: [{ type: "text", text: "log".repeat(9000) }],
   } };
-  const result = leanHistory([
-    { info: { role: "assistant" }, parts: [original] },
-    { info: { role: "user" }, parts: [{ type: "text", text: "continue" }] },
+  const result = leanMessages([
+    { role: "assistant", content: [{ type: "tool-call", id: "interrupted", name: "bash", input: { filePath } }] },
+    { role: "tool", content: [failed] },
+    user("continue"),
   ]);
-  expect(result[0].parts[0].state.input.filePath).toBe(filePath);
-  expect(result[0].parts[0].state.metadata.output.length).toBeLessThanOrEqual(800);
-  expect(original.state.metadata.output.length).toBe(27000);
+  expect(result[0].content[0].input.filePath).toBe(filePath);
+  expect(result[1].content[0].result.content[0].text.length).toBeLessThanOrEqual(800);
+  expect(result[1].content[0].result.error.message.length).toBeLessThanOrEqual(400);
+  expect(failed.result.content[0].text.length).toBe(27000);
 });
 
 test("requested skills and user decisions remain complete, while old pending calls shrink", () => {
-  const parts = [
-    { type: "tool", tool: "skill", state: { status: "completed", input: { name: "requested" }, output: "rules".repeat(2000) } },
-    { type: "tool", tool: "question", state: { status: "completed", input: {}, output: "decision".repeat(200) } },
-    { type: "tool", tool: "write", callID: "pending", state: { status: "pending", input: { content: "x".repeat(9000) } } },
+  const calls = [
+    { type: "tool-call", id: "s", name: "skill", input: { name: "requested" } },
+    { type: "tool-call", id: "q", name: "question", input: { text: "pick".repeat(400) } },
+    { type: "tool-call", id: "pending", name: "write", input: { content: "x".repeat(9000) } },
   ];
-  const result = leanHistory([
-    { info: { role: "assistant" }, parts },
-    { info: { role: "user" }, parts: [{ type: "text", text: "continue" }] },
+  const results = [
+    { type: "tool-result", id: "s", name: "skill", result: { type: "text", value: "rules".repeat(2000) } },
+    { type: "tool-result", id: "q", name: "question", result: { type: "text", value: "decision".repeat(200) } },
+  ];
+  const result = leanMessages([
+    { role: "assistant", content: calls },
+    { role: "tool", content: results },
+    user("continue"),
   ]);
-  expect(result[0].parts[0]).toEqual(parts[0]);
-  expect(result[0].parts[1]).toEqual(parts[1]);
-  expect(result[0].parts[2].state.input.content.length).toBeLessThanOrEqual(600);
-  expect(result[0].parts[2].callID).toBe("pending");
-  expect(result[0].parts[2].state.status).toBe("pending");
+  expect(result[0].content[0]).toEqual(calls[0]);
+  expect(result[0].content[1]).toEqual(calls[1]);
+  expect(result[1].content).toEqual(results);
+  expect(result[0].content[2].input.content.length).toBeLessThanOrEqual(600);
+  expect(result[0].content[2].id).toBe("pending");
+});
+
+
+test("local pruning thresholds scale down with context while preserving reclaim hysteresis", () => {
+  expect(pruneLimits(8192)).toEqual({ protect: 2048, minimum: 1024 });
+  expect(pruneLimits(32768)).toEqual({ protect: 8192, minimum: 4096 });
+  expect(pruneLimits(262144)).toEqual({ protect: 40000, minimum: 20000 });
+  for (const value of [0, -1, NaN, Infinity]) expect(pruneLimits(value)).toEqual({ protect: 40000, minimum: 20000 });
+});
+
+test("old tool output outside the protected window is pruned once enough is reclaimable", () => {
+  const turn = (n: number, size: number, name = "read") => [
+    user("turn " + n),
+    { role: "assistant", content: [{ type: "tool-call", id: "c" + n, name, input: {} }] },
+    { role: "tool", content: [{ type: "tool-result", id: "c" + n, name, result: { type: "text", value: "x".repeat(size) } }] },
+  ];
+  const limits = { protect: 1000, minimum: 1500 };
+  // 4,000 chars = 1,000 tokens each. The last two user turns are never pruned.
+  const messages = [...turn(1, 4000), ...turn(2, 4000), ...turn(3, 4000, "skill"), ...turn(4, 4000), ...turn(5, 40000), ...turn(6, 40000)];
+  const pruned = new Set(pruneCandidates(messages, limits, new Set()));
+  // c4 fills the protected window; c3 is a skill; c2 and c1 reclaim 2,000 tokens.
+  expect([...pruned].sort()).toEqual(["c1", "c2"]);
+  const result = applyPruned(messages, pruned);
+  expect(result[2].content[0].result).toEqual({ type: "text", value: PRUNED_OUTPUT });
+  expect(result[5].content[0].result.value).toBe(PRUNED_OUTPUT);
+  expect(result[8].content[0].result.value.length).toBe(4000);
+  expect(messages[2].content[0].result.value.length).toBe(4000);
+  // Below the minimum reclaim nothing changes, and a pruned output stops the scan.
+  expect(pruneCandidates(messages, { protect: 1000, minimum: 5000 }, new Set())).toEqual([]);
+  expect(pruneCandidates(messages, limits, pruned)).toEqual([]);
+  // Failed tools are never pruned.
+  const failed = [...turn(1, 4000), ...turn(2, 0), ...turn(3, 0)];
+  failed[2] = { role: "tool", content: [{ type: "tool-result", id: "c1", name: "bash", resultType: "error", result: { error: { message: "x" }, content: [] } }] };
+  expect(pruneCandidates(failed, { protect: 0, minimum: 0 }, new Set())).toEqual([]);
 });

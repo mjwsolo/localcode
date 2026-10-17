@@ -102,8 +102,8 @@ def test_launch_config_leaves_the_reserve_to_the_supervisor(tmp_path):
     p = tmp_path / "c.json"
     write_config(p, port=8123, ctx=40000, alias="m")
     cfg = json.loads(p.read_text())
-    assert cfg["compaction"]["reserved"] == 0
-    assert cfg["provider"]["localcode"]["models"]["m"]["limit"]["context"] == 40000
+    assert cfg["compaction"]["buffer"] == 0
+    assert cfg["providers"]["localcode"]["models"]["m"]["limit"]["context"] == 40000
 
 
 def test_supervisor_status_reports_per_slot_context_and_budget(tmp_path, monkeypatch):

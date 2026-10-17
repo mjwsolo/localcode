@@ -120,19 +120,28 @@ def test_local_titles_do_not_issue_inference(four, one):
     assert all(r["id_slot"] is None for r in one["reqs"]), [(r["name"], r["id_slot"]) for r in one["reqs"]]
 
 
-def test_compaction_request_is_pinned_to_last_slot():
+def test_compaction_request_reuses_the_conversation_prefix():
+    """The runtime sends a compaction request with the agent's own system prompt and
+    tools, so the server reuses the conversation's cached prefix instead of reading
+    the whole conversation cold on another slot; it is therefore never pinned away."""
     run = _run(4, force_compaction=True)
     side = [r for r in run["reqs"] if "Preserve in the summary:" in json.dumps(r["body"])]
     assert side, "the runtime never issued a real compaction request"
-    assert all(r["id_slot"] == 3 for r in side), [(r["name"], r["id_slot"]) for r in side]
-    assert all(r["id_slot"] is None for r in _agent_requests(run))
+    agent = [r for r in _agent_requests(run) if r not in side]
+    assert agent, [r["name"] for r in run["reqs"]]
+    assert all(r["sys_sha"] == agent[0]["sys_sha"] and r["tools_sha"] == agent[0]["tools_sha"] for r in side)
+    for r in side:
+        prior = [a for a in agent if a["name"] < r["name"]][-1]["body"]["messages"]
+        assert r["body"]["messages"][: len(prior)] == prior, "compaction did not extend the cached conversation"
+    assert all(r["id_slot"] is None for r in run["reqs"]), [(r["name"], r["id_slot"]) for r in run["reqs"]]
+    assert all(t["rc"] == 0 for t in run["summary"]["turns"])
 
 
 # ── Fidelity: the model is told the truth about itself ───────────────
 
 def test_model_name_in_system_prompt(four):
     agent = _agent_requests(four)
-    assert "powered by the model named canned-model" in agent[0]["system"]
+    assert "- Name: canned-model" in agent[0]["system"]
     assert "__pending__" not in agent[0]["system"]
 
 
@@ -144,15 +153,14 @@ def test_no_todo_list_in_system_prompt(four):
 
 def test_prefix_check_detects_a_changing_prompt():
     src = (REPO / "src/localcode/ui/plugin/localcode.ts").read_text()
-    anchor = '"experimental.chat.system.transform": async (input, output) => {'
+    anchor = '"experimental.chat.system.transform": async (input: { agent?: string }, output: { system: string[] }) => {'
     assert anchor in src
     mutated = src.replace(anchor, anchor + '\n      output.system.push("stamp " + String(Date.now()));', 1)
     # Copy the whole plugin directory: the plugin imports its sibling modules.
     plugin_dir = Path(tempfile.mkdtemp(prefix="lc-mutant-")) / "plugin"
     shutil.copytree(REPO / "src/localcode/ui/plugin", plugin_dir)
-    tmp = plugin_dir / "localcode.ts"
-    tmp.write_text(mutated)
-    run = _run(4, plugin=str(tmp))
+    (plugin_dir / "localcode.ts").write_text(mutated)
+    run = _run(4, plugin=str(plugin_dir))
     shas = [r["sys_sha"] for r in _agent_requests(run)]
     assert len(set(shas)) == len(shas), "mutant went undetected: prefixes were identical"
 
