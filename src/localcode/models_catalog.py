@@ -65,7 +65,7 @@ class Drafter:
         return model_dir() / self.filename
 
 
-# Draft widths (`n_max`), measured 2026-10-18 on an M5 Max with the bundled
+# Draft widths (`n_max`), measured 2026-10-18 on Apple Silicon with the bundled
 # server, greedy, over two rounds of a whole-file rewrite, two tool-call turns
 # and a prose answer (decode tok/s over all turns, drafter off -> width):
 #   Qwen 3.6 35B-A3B Q8 + DFlash: off 92 | 2: 112 | 3: 117-123 | 4: 113 | 6: 93

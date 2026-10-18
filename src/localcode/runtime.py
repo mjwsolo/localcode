@@ -46,7 +46,7 @@ PROMPT_CACHE_MAX_MIB = 8192
 # (one tool output), so upstream's 8192 lets most turns go without one.
 CHECKPOINT_MIN_STEP = 2048
 # Compute-buffer growth per prefill micro-batch token above 512 (MiB), the
-# largest measured across the catalog at 128K on an M5 Max (MTL0 + CPU
+# largest measured across the catalog at 128K on Apple Silicon (MTL0 + CPU
 # buffers of the target and, when present, the drafter contexts):
 # no drafter 0.63-0.75, Gemma 4 MTP drafter 1.35, Qwen 3.6 DFlash 3.6.
 UBATCH_EXTRA_MIB_PER_TOKEN = {"": 0.75, "draft-mtp": 1.4, "draft-dflash": 3.7}
@@ -991,7 +991,7 @@ class LocalCodeRuntimeGateway:
     def _prefill_ubatch(self, model_path: str | None, batch: int, spec_type: str, n_ctx: int) -> int:
         """Prefill micro-batch (-ub). Larger micro-batches only help MoE
         models, where more tokens per expert make the expert matmuls
-        efficient; measured on an M5 Max (pp4096, ub 512 -> 1024 -> 2048):
+        efficient; measured on Apple Silicon (pp4096, ub 512 -> 1024 -> 2048):
         Qwen 3.6 35B-A3B +13% / +22%, Gemma 4 26B-A4B +6.5% / +7.6%, while
         dense Qwen 3.8 27B lost 2% / 7% and dense Gemma 4 12B gained 3-4%.
         The cost is compute-buffer memory, which grows with the micro-batch
