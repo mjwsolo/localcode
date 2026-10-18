@@ -53,12 +53,25 @@ class Drafter:
     size_bytes: int        # exact, from the HF API (download completeness)
     sha256: str            # verified after download
     revision: str = "main"
+    # --spec-draft-n-max: tokens drafted per step, measured per drafter on
+    # Apple Silicon over a mix of agent turns (whole-file rewrite, tool-call
+    # JSON, prose). Long drafts win on rewrites and lose more on short tool
+    # turns, where a miss throws the block away; MoE targets also pay to
+    # verify every drafted token's experts. See the record comments below.
+    n_max: int = 3
 
     @property
     def local_path(self) -> Path:
         return model_dir() / self.filename
 
 
+# Draft widths (`n_max`), measured 2026-10-18 on an M5 Max with the bundled
+# server, greedy, over two rounds of a whole-file rewrite, two tool-call turns
+# and a prose answer (decode tok/s over all turns, drafter off -> width):
+#   Qwen 3.6 35B-A3B Q8 + DFlash: off 92 | 2: 112 | 3: 117-123 | 4: 113 | 6: 93
+#   Gemma 4 26B-A4B Q8 + MTP:     off 57 | 2: 79  | 3: 79      | 4: 74  | 6: 70
+# Short drafts win on tool-call and prose turns, where a miss throws the block
+# away; long drafts only pay off on verbatim rewrites.
 # Verified live 2026-10-09 (greedy, same coding prompt, bundled v0.6.0 server):
 # gemma-4-12b Q4_K_XL 55 -> 120-139 tok/s; Qwen3.6-35B IQ2_M 129 -> 224 (DFlash);
 # Muse Glimmer Q4_K_XL 30 -> 45 (DFlash). Qwen 3.8 27B carries its head inside

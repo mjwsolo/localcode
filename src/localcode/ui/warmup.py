@@ -14,11 +14,16 @@ load of the same model it replays those ids through /completion with
 n_predict=1: the slot (and the host cache) then hold the exact prefix
 before the user has typed anything.
 
-Why tokens and not the saved state: restoring the state file skips the
-prompt-checkpoints that sliding-window models (Gemma) need for prefix reuse,
-so a restored slot re-evaluates everything; replaying tokens rebuilds the
-checkpoints (measured: 5,176-token prompt, 3,900 ms cold -> 540 ms after
-replay + an intervening title request).
+The saved state itself is kept too, and the next load of the same model
+with the same launch settings restores it instead of replaying: since
+upstream preserves context checkpoints in slot files (llama.cpp #26004,
+#30580) a restored hybrid (Qwen 3.6) or sliding-window (Gemma 4) slot
+resumes from the checkpoint at the first user message. Measured on a
+3.3k-token first turn: restore 0.04 s / 0.08 s and the next turn
+re-reads 20 / 22 tokens (Qwen 3.6 35B / Gemma 4 26B), against 1.2 s / 1.1 s
+for a token replay whose next turn re-read 511 / 18. The state file is
+model- and settings-specific (hundreds of MB), so it is restored only when
+the launch key matches and the token replay stays as the fallback.
 
 Two sessions' captures are merged to their common prefix, so the stored
 tokens converge on the part that never changes (system prompt, tool
@@ -45,6 +50,9 @@ MAX_TOKENS = 12288           # never replay more than this (bounds the launch-ti
 SETTLE_S = 3.0               # the slot must stay idle on the same task this long before we capture
 CAPTURE_WINDOW_S = 20 * 60   # give up capturing if no turn happens within this
 SLOT_FILE = "warm.bin"
+STATE_PREFIX = "warm-"       # kept slot states, inside slot_save_dir() (the server restores only from there)
+# Launch flags that do not change the saved state's layout.
+_VOLATILE_FLAGS = {"--port", "--host", "--api-key", "--alias", "--slot-save-path"}
 
 
 def enabled() -> bool:
@@ -91,6 +99,29 @@ def parse_slot_tokens(path: Path) -> list[int]:
             raise ValueError("truncated token list")
         return toks
     return packed
+
+
+def launch_key(cmd: list[str]) -> str:
+    """Identity of a server launch for restoring its slot state: the fork
+    build and every flag that shapes the state (model, KV types, context,
+    drafter, batch sizes), not the port or the session secret."""
+    import hashlib
+    kept: list[str] = []
+    skip = False
+    for arg in cmd[1:]:
+        if skip:
+            skip = False
+            continue
+        if arg in _VOLATILE_FLAGS:
+            skip = True
+            continue
+        kept.append(arg)
+    return hashlib.sha256("\0".join([fork_commit() or "", *kept]).encode()).hexdigest()[:32]
+
+
+def state_name(alias: str) -> str:
+    safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in alias)
+    return f"{STATE_PREFIX}{safe}.bin"
 
 
 def common_prefix(a: list[int], b: list[int]) -> list[int]:
@@ -195,7 +226,7 @@ def load(alias: str, model_path: Path | None = None) -> list[int] | None:
     return toks[:MAX_TOKENS]
 
 
-def store(alias: str, tokens: list[int], model_path: Path | None = None) -> None:
+def store(alias: str, tokens: list[int], model_path: Path | None = None, state_key: str | None = None) -> None:
     path = _warm_file(alias)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".json.tmp")
@@ -203,17 +234,34 @@ def store(alias: str, tokens: list[int], model_path: Path | None = None) -> None
             "prefix_revision": "lean-v1", "context": os.environ.get("LOCALCODE_CONTEXT", "minimal")}
     if model_path is not None:
         data["model"] = model_identity(model_path)
+    if state_key:
+        data["state_key"] = state_key
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "w") as f:
         json.dump(data, f)
     os.replace(tmp, path)
 
 
-def forget(alias: str) -> None:
+def saved_state(alias: str, model_path: Path | None, key: str) -> str | None:
+    """File name of a kept slot state for this exact launch, else None."""
+    if load(alias, model_path) is None:
+        return None
     try:
-        _warm_file(alias).unlink()
-    except OSError:
-        pass
+        data = json.loads(_warm_file(alias).read_text())
+    except (OSError, ValueError):
+        return None
+    name = state_name(alias)
+    if data.get("state_key") != key or not (slot_save_dir() / name).is_file():
+        return None
+    return name
+
+
+def forget(alias: str) -> None:
+    for path in (_warm_file(alias), slot_save_dir() / state_name(alias)):
+        try:
+            path.unlink()
+        except OSError:
+            pass
 
 
 # ---- server I/O --------------------------------------------------------------
@@ -279,16 +327,28 @@ def replay(port: int, tokens: list[int], timeout: float = 900.0) -> dict:
     return Replay(port, timeout).run(tokens)
 
 
-def capture(port: int, slot_id: int) -> list[int]:
-    """Save the slot, keep its token ids, drop the state file."""
+def capture(port: int, slot_id: int, keep_as: str | None = None) -> list[int]:
+    """Save the slot and return its token ids. With `keep_as` the state file
+    is kept under that name (owner-only: it holds the first turn's text) for
+    restore(); otherwise it is deleted."""
     d = slot_save_dir()
     d.mkdir(parents=True, exist_ok=True)
     path = d / SLOT_FILE
     try:
         _post(port, f"/slots/{slot_id}?action=save", {"filename": SLOT_FILE}, 120)
-        return parse_slot_tokens(path)
+        toks = parse_slot_tokens(path)
+        if keep_as:
+            os.chmod(path, 0o600)
+            os.replace(path, d / keep_as)
+        return toks
     finally:
         try:
             path.unlink()
         except OSError:
             pass
+
+
+def restore(port: int, name: str, slot_id: int = 0, timeout: float = 120) -> int:
+    """Load a kept slot state into the server. Returns the tokens restored."""
+    r = _post(port, f"/slots/{slot_id}?action=restore", {"filename": name}, timeout)
+    return int(r.get("n_restored") or 0)

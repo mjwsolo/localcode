@@ -279,6 +279,8 @@ class Supervisor:
                 self.pp_prior = None
                 self._budget = None
                 self._budget_info = {}
+            from localcode.ui import warmup
+            self._launch_key = warmup.launch_key(cmd)
             from localcode.ui.process_guard import spawn_owned
             self.proc = spawn_owned(cmd, stdout=self.log, lease_fd=getattr(self, "lease_fd", None))
             process = self.proc
@@ -310,11 +312,28 @@ class Supervisor:
         port = self.port
         baseline: int | None = None
         model_path = self.models_dir / f"{alias}.gguf"
+        launch_key = getattr(self, "_launch_key", "")
         try:
             toks = warmup.load(alias, model_path)
             if stop.is_set():
                 return
             self._warm_status = "warming" if toks else "cold"
+            state = warmup.saved_state(alias, model_path, launch_key) if toks and launch_key else None
+            if state:
+                # A kept slot state of this exact launch: restoring it is a
+                # file read, with the checkpoints the next turn resumes from.
+                t0 = time.time()
+                try:
+                    n = warmup.restore(port, state)
+                except Exception as e:  # noqa: BLE001
+                    n = 0
+                    log(f"warmup: restore failed for {alias}, replaying tokens: {e}")
+                if n > 0:
+                    toks = None
+                    if not stop.is_set():
+                        self._warm_status = "warm"
+                        self._context_ready = True
+                    log(f"warmup: restored {n} tokens for {alias} in {time.time() - t0:.2f}s")
             if toks:
                 t0 = time.time()
                 rp = warmup.Replay(port)
@@ -344,13 +363,13 @@ class Supervisor:
                 finally:
                     if self._warm_replay is rp:
                         self._warm_replay = None
-                if stop.is_set():
-                    return
-                for s in warmup.slots(port) or []:
-                    try:
-                        baseline = max(baseline or -1, int(s.get("id_task") if s.get("id_task") is not None else -1))
-                    except (TypeError, ValueError):
-                        pass
+            if stop.is_set():
+                return
+            for s in warmup.slots(port) or []:
+                try:
+                    baseline = max(baseline or -1, int(s.get("id_task") if s.get("id_task") is not None else -1))
+                except (TypeError, ValueError):
+                    pass
         except Exception as e:  # noqa: BLE001
             if not stop.is_set():
                 self._warm_status = "failed"
@@ -364,9 +383,9 @@ class Supervisor:
                 slot_id = tracker.observe(snap, time.time())
                 if slot_id is not None:
                     try:
-                        new = warmup.capture(port, slot_id)
+                        new = warmup.capture(port, slot_id, keep_as=warmup.state_name(alias))
                         merged = warmup.merge_tokens(warmup.load(alias, model_path), new)
-                        warmup.store(alias, merged, model_path)
+                        warmup.store(alias, merged, model_path, state_key=launch_key)
                         log(f"warmup: captured {len(new)} tokens for {alias}, stored {len(merged)}")
                     except Exception as e:  # noqa: BLE001
                         log(f"warmup: capture failed for {alias}: {e}")
@@ -423,6 +442,30 @@ class Supervisor:
             self.ctx = max(1, self.ctx_total // self.slots)
         log(f"supervisor: context per slot {self.ctx} (total {self.ctx_total}, slots {self.slots})")
 
+    def _log_request_perf(self, samples: list, added: int) -> None:
+        """One supervisor.log line per finished request, so a slow-down over a
+        long session can be attributed: context depth, the idle gap before the
+        request (macOS unwires idle GPU buffers), power source and swap. Debug
+        diagnostics only; nothing here changes behaviour."""
+        try:
+            from localcode.ui.diagnostics import machine_observations
+            machine = machine_observations()
+        except Exception:  # noqa: BLE001
+            machine = {}
+        start = len(samples) - added
+        for i in range(max(0, start), len(samples)):
+            s, prev = samples[i], samples[i - 1] if i > 0 else None
+            idle = None
+            if s.t_end is not None and prev is not None and prev.t_end is not None:
+                idle = max(0.0, s.t_end - s.busy_s - prev.t_end)
+            pp = f"{s.pp_tps:.0f}" if s.pp_tps else "-"
+            tg = f"{s.tg_tps:.1f}" if s.tg_tps else "-"
+            swap = machine.get("swap_used_bytes")
+            log(f"perf: ctx={s.n_tokens} prefill={s.pp_n}@{pp}/s decode={s.tg_n}@{tg}/s "
+                f"idle_before={'-' if idle is None else f'{idle:.0f}s'} "
+                f"power={'battery' if machine.get('on_battery') else 'ac' if machine.get('on_battery') is False else '?'} "
+                f"swap={'-' if swap is None else f'{swap / 2**30:.1f}G'}")
+
     def context_info(self) -> dict:
         """ctx (per slot), the speed-derived budget, and the measurements behind it.
         Reads whatever llama-server has appended to server.log since the last call."""
@@ -436,7 +479,9 @@ class Supervisor:
                         chunk = f.read()
                     self._log_offset += len(chunk)
                     if chunk:
-                        table.feed(chunk.decode("utf-8", "replace"))
+                        added = table.feed(chunk.decode("utf-8", "replace"))
+                        if added:
+                            self._log_request_perf(table.samples, added)
                 except OSError:
                     pass
             samples = table.samples if table is not None else []

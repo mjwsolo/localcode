@@ -34,6 +34,23 @@ from .model_families import (
     strip_thinking_tokens as _family_strip,
 )
 
+# llama-server context checkpoints (see _checkpoint_and_cache_budget).
+# One request creates up to three (last user message, n_ubatch + 4 and 4
+# tokens before the prompt end), so fewer cannot carry even the previous turn.
+CHECKPOINTS_PER_REQUEST = 3
+# Upstream's own defaults for the count and the host prompt cache size; the
+# launcher only ever lowers them to fit memory.
+CHECKPOINTS_MAX = 32
+PROMPT_CACHE_MAX_MIB = 8192
+# Minimum distance between checkpoints. Agent turns add a few thousand tokens
+# (one tool output), so upstream's 8192 lets most turns go without one.
+CHECKPOINT_MIN_STEP = 2048
+# Compute-buffer growth per prefill micro-batch token above 512 (MiB), the
+# largest measured across the catalog at 128K on an M5 Max (MTL0 + CPU
+# buffers of the target and, when present, the drafter contexts):
+# no drafter 0.63-0.75, Gemma 4 MTP drafter 1.35, Qwen 3.6 DFlash 3.6.
+UBATCH_EXTRA_MIB_PER_TOKEN = {"": 0.75, "draft-mtp": 1.4, "draft-dflash": 3.7}
+
 
 def _strip_thinking_tokens(text: str, family: ModelFamily | None = None) -> str:
     """Strip thinking-channel tokens that leak through in decoded text.
@@ -507,11 +524,11 @@ class LocalCodeRuntimeGateway:
             # `Drafter`: Gemma 4 MTP heads, Qwen 3.6 / Muse DFlash). Downloaded
             # with the model; only used when the file is present and complete.
             drafter, path = self._catalog_drafter_path(model_path)
-            cmd.extend(["--model-draft", str(path), "--spec-type", drafter.spec_type])
-            if drafter.spec_type == "draft-mtp":
-                # A DFlash drafter emits a whole block per step; its length is
-                # the drafter's own. MTP drafts token by token: 4 measured best.
-                cmd.extend(["--spec-draft-n-max", str(self.config.llama_cpp_mtp_draft)])
+            # The draft length is the drafter's own measured best (catalog
+            # `Drafter.n_max`), always passed so it never silently follows a
+            # changed upstream default. DFlash caps it at its trained block.
+            cmd.extend(["--model-draft", str(path), "--spec-type", drafter.spec_type,
+                        "--spec-draft-n-max", str(drafter.n_max)])
         elif (not spec_type and self.config.llama_cpp_mtp_draft > 0
               and self._gguf_mtp_layers(model_path) > 0):
             # The model ships its own multi-token-prediction head(s)
@@ -541,7 +558,9 @@ class LocalCodeRuntimeGateway:
         # the known-unstable Qwen-35B-on-16GB shape.
         if mode in ("turbo", "turbo-think", "context"):
             batch = self._effective_llama_batch_size(model_path)
-            cmd.extend(["-b", str(batch), "-ub", str(min(512, batch))])
+            spec = cmd[cmd.index("--spec-type") + 1] if "--spec-type" in cmd else ""
+            ubatch = self._prefill_ubatch(model_path, batch, spec, self._target_num_ctx(model_path=model_path))
+            cmd.extend(["-b", str(batch), "-ub", str(ubatch)])
         else:
             batch = self.config.llama_cpp_batch_size
             if batch <= 0:
@@ -550,86 +569,42 @@ class LocalCodeRuntimeGateway:
         # Honor the GGUF's embedded jinja chat template (Unsloth Apr-2026 GGUFs ship
         # the corrected Gemma 4 template that fixes tool-call special-token round-tripping)
         cmd.extend(["--jinja"])
-        # Enable context shifting so sessions that exceed our ctx-size degrade
-        # gracefully instead of hard-crashing the request. llama.cpp's
-        # `--context-shift` updates RoPE frequencies of existing tokens and
-        # evicts the oldest to make room for new ones, without re-processing
-        # the rest of the KV cache. Default in llama-server is DISABLED — we
-        # verified via `--help`. Our application-layer compaction
-        # (_compact_messages in agent.py) is the primary defence, but when
-        # a turn's own payload blows past the budget mid-decode, shifting is
-        # the safety net. Cost is effectively zero (only fires on overflow).
-        cmd.extend(["--context-shift"])
-        # KV-cache defragmentation. Long agentic sessions with context-shift on
-        # churn the KV cache (oldest tokens evicted, new ones appended, cache-reuse
-        # salvaging chunks after compaction gaps), which fragments the cache into
-        # unusable holes and slowly wastes cells until decode stalls or the slot
-        # can't fit a new prompt. `--defrag-thold 0.1` triggers a compaction pass
-        # whenever fragmentation exceeds 10%, reclaiming those holes automatically.
-        # Cheap (only fires when fragmented) and directly helps the long multi-turn
-        # coding sessions this agent runs. Default is off (-1.0).
-        cmd.extend(["--defrag-thold", "0.1"])
-        # SSM context checkpoints — critical for hybrid-memory models like
-        # Qwen 3.6 where the Mamba-2 state is recurrent and llama-server
-        # cannot naturally reuse KV cache across requests. Checkpointing
-        # serializes the ~63 MiB recurrent state at periodic boundaries so
-        # subsequent multi-turn requests can restore and skip prefix
-        # re-evaluation. Measured 19× speedup on turn 2 vs cold turn 1
-        # (5932 ms → 302 ms prompt eval at 2K ctx).
-        # --ctx-checkpoints N      keep up to N rolling state snapshots
-        # --checkpoint-min-step 2048  snapshot at most every 2K tokens during prefill
-        #   (upstream renamed --checkpoint-every-n-tokens to this in the
-        #   2026-08 bump; the bundled binary rejects the old spelling)
-        # For pure-attention models these are no-ops; cheap to always set.
-        # Note: --swa-full would additionally warm the attention SWA cache
-        # but causes Metal OOM at our 14336 MiB sysctl on 16 GB Macs. Skip.
-        # Scale the snapshot count DOWN as context grows: a checkpoint stores
-        # the model's recurrent/KV state, and at 256K each one is far larger
-        # than at 8K. 32 snapshots × a 256K state is gigabytes of extra RSS
-        # that pushed the server into the memory killer on long tasks. 32 is
-        # only worth it at small contexts where each snapshot is tiny; at big
-        # windows a handful still gives the multi-turn prefix-reuse speedup.
-        #
-        # ── -9 CRASH MITIGATION (UNVERIFIED CANDIDATE) ──────────────────────
-        # At 262144 ctx we now DISABLE checkpoints entirely (0). Field report:
-        # server SIGKILL'd (-9) with ~68 GB of 128 GB free, pressure_kill=false,
-        # server-log tail "created context checkpoint N", flags
-        # `--ctx-size 262144 --cache-type-v turbo4 --ctx-checkpoints 4`. Likely
-        # cause: creating a 256K context checkpoint serializes the full KV/
-        # recurrent state into a fresh multi-GB Metal buffer; that allocation
-        # path is NOT covered by GGML_METAL_NO_RESIDENCY (which only marks the
-        # primary weight/KV/compute buffers evictable), so the creation spike
-        # crosses Metal's wired working-set ceiling (recommendedMaxWorkingSetSize,
-        # ~75% of RAM — independent of free system RAM) and the kernel kills the
-        # process mid-serialization. Lowering the COUNT (4→2→1) doesn't help: the
-        # crash is during a single checkpoint's CREATION, so only disabling all
-        # creation removes the spike. Trade-off: at 256K (96 GB+ Macs only) turn-2
-        # prompt eval loses the checkpoint prefix-reuse speedup — a slowdown, not
-        # a crash. Reversible/tunable via LOCALCODE_CTX_CHECKPOINTS (a positive
-        # int forces that count at every tier; "0" force-disables).
-        _ckpt_ctx = self._target_num_ctx(model_path=model_path)
-        _ckpt_override = os.environ.get("LOCALCODE_CTX_CHECKPOINTS")
-        if _ckpt_override is not None and _ckpt_override.strip().lstrip("-").isdigit():
-            _ckpts = str(max(0, int(_ckpt_override)))
-        elif _ckpt_ctx >= 262144:
-            _ckpts = "0"   # disabled — see -9 crash mitigation above
-        elif _ckpt_ctx >= 131072:
-            _ckpts = "4"
-        elif _ckpt_ctx >= 65536:
-            _ckpts = "8"
-        elif _ckpt_ctx >= 32768:
-            _ckpts = "16"
-        else:
-            _ckpts = "32"
-        if _ckpts == "0":
-            # Explicitly request zero rolling snapshots; omit the cadence flag
-            # (moot with checkpoints off) so nothing triggers a serialization.
-            cmd.extend(["--ctx-checkpoints", "0"])
-        else:
-            cmd.extend([
-                "--ctx-checkpoints", _ckpts,
-                "--checkpoint-min-step", "2048",
-            ])
+        # No `--context-shift` and no KV defragmentation flag. Context shift
+        # was the overflow "safety net": on a full context it silently evicts
+        # the oldest tokens (the system prompt, the user's request, early tool
+        # results) and keeps decoding, which is the blind-eviction pattern that
+        # collapses coding agents. Without it llama-server refuses an
+        # over-long prompt with "exceeds the available context size", which
+        # the UI classifies as a context overflow and answers by compacting;
+        # a reply that runs into the end of the context stops with
+        # finish_reason "length". `--defrag-thold` is deprecated upstream
+        # (a no-op that only logs a warning).
+        # Context checkpoints and the host-RAM prompt cache, both sized from
+        # this Mac's memory. Hybrid (Qwen 3.6 / 3.8) and sliding-window (Gemma 4,
+        # Muse, Kolibri) models cannot roll their cache back: a prompt that
+        # diverges from the cached one (the harness masking an old tool output)
+        # resumes only from a checkpoint at or before the edit, else it re-reads
+        # everything. The server creates about three per request (at the last
+        # user message and just before the prompt end), so a handful reach back
+        # one turn. The host prompt cache keeps the main conversation's state
+        # while a side request (title, subagent) uses the slot.
+        # Measured on a 12-turn replay that masks a tool output five turns back
+        # twice and makes two side requests (Qwen 3.6 35B and Gemma 4 26B):
+        # 4 checkpoints and no RAM cache re-read 70.3k / 70.8k tokens; 32
+        # checkpoints, a 2048-token spacing and an 8 GiB cache re-read
+        # 47.8k / 48.0k (-32% / -31%). Upstream's 8192 spacing reused less
+        # (52.5k): with tool outputs of 2-3k tokens it skips most turns.
+        # A checkpoint holds only that non-rewindable state (62-170 MiB for
+        # the catalog, the same at 8K and 128K), not the whole KV cache, so
+        # the old context ladder (4 at 128K, 0 at 256K) protected nothing.
+        n_ctx = self._target_num_ctx(model_path=model_path)
+        n_ubatch = int(cmd[cmd.index("-ub") + 1]) if "-ub" in cmd else 512
+        n_ckpt, cache_mib = self._checkpoint_and_cache_budget(model_path, n_ctx, n_ubatch)
+        cmd.extend([
+            "--ctx-checkpoints", str(n_ckpt),
+            "--checkpoint-min-step", str(CHECKPOINT_MIN_STEP),
+            "--cache-ram", str(cache_mib),
+        ])
         # Single slot, disable fit check (we manage memory via sysctl)
         cmd.extend(["-np", "1", "-fit", "off"])
         # Tuned launch params: a stored model-opt recommendation applies first,
@@ -809,6 +784,17 @@ class LocalCodeRuntimeGateway:
                             ".attention.head_count", ".attention.key_length", ".attention.value_length",
                             ".embedding_length", ".nextn_predict_layers",
                         )
+                        # What a context checkpoint holds (the state that
+                        # cannot be rolled back): recurrent SSM state and the
+                        # sliding-window cache. See _checkpoint_bytes.
+                        extra_keys = (
+                            ".attention.sliding_window", ".attention.sliding_window_pattern",
+                            ".attention.key_length_swa", ".attention.value_length_swa",
+                            ".attention.head_count_kv", ".full_attention_interval",
+                            ".ssm.conv_kernel", ".ssm.state_size", ".ssm.group_count",
+                            ".ssm.time_step_rank", ".ssm.inner_size", ".expert_count",
+                        )
+                        extra: dict = {}
                         for _ in range(n_kv):
                             k = _rs()
                             t, = struct.unpack("<I", f.read(4))
@@ -818,6 +804,9 @@ class LocalCodeRuntimeGateway:
                             for suf in wanted:
                                 if k.endswith(suf) and isinstance(v, int):
                                     found[suf] = v
+                            for suf in extra_keys:
+                                if k.endswith(suf) and isinstance(v, (int, list)):
+                                    extra[suf.lstrip(".")] = v
                         n_layers = found.get(".block_count")
                         n_heads = found.get(".attention.head_count")
                         n_kv_heads = found.get(".attention.head_count_kv", n_heads)
@@ -834,6 +823,7 @@ class LocalCodeRuntimeGateway:
                                 # Multi-token-prediction heads shipped inside
                                 # the GGUF (Qwen 3.6+/3.8 `nextn_predict_layers`).
                                 "n_mtp_layers": found.get(".nextn_predict_layers", 0),
+                                "extra": extra,
                             }
         except Exception:
             meta = None
@@ -892,7 +882,18 @@ class LocalCodeRuntimeGateway:
         vb = self._KV_DTYPE_BYTES.get(vt)
         if kb is None or vb is None:
             return None  # unknown storage format → defer to ceilings
-        layers = meta["n_layers"]
+        # Only full-attention layers grow with the context. Recurrent layers
+        # (Qwen 3.6 / 3.8 Gated DeltaNet) keep a fixed state and sliding-window
+        # layers (Gemma 4, Muse) a fixed window; both are small next to the
+        # OS reserve and are counted with the checkpoints (_checkpoint_bytes).
+        full = self._full_attention_layers(meta)
+        layers = len(full)
+        heads_kv = (meta.get("extra") or {}).get("attention.head_count_kv")
+        if isinstance(heads_kv, list):
+            n_heads = [heads_kv[i] if i < len(heads_kv) else meta["n_kv_heads"] for i in full]
+            heads_mean = sum(n_heads) / max(1, len(n_heads))
+        else:
+            heads_mean = meta["n_kv_heads"]
         kd = meta["head_dim"]
         vd = meta.get("value_head_dim", kd)
         # TurboQuant stores a complete 128-element rotation group per head.
@@ -911,7 +912,133 @@ class LocalCodeRuntimeGateway:
             # by q8 rather than underestimating an adaptive allocation.
             k_bytes = max(k_bytes, layers * kd * self._KV_DTYPE_BYTES["q8_0"])
             v_bytes = max(v_bytes, layers * vd * self._KV_DTYPE_BYTES["q8_0"])
-        return meta["n_kv_heads"] * (k_bytes + v_bytes)
+        return heads_mean * (k_bytes + v_bytes)
+
+    @staticmethod
+    def _full_attention_layers(meta: dict) -> list[int]:
+        """Indices of the layers that keep a KV entry for every token."""
+        x = meta.get("extra") or {}
+        n_layers = max(1, int(meta["n_layers"]) - int(meta.get("n_mtp_layers") or 0))
+        interval = x.get("full_attention_interval")
+        if x.get("ssm.state_size") and isinstance(interval, int) and interval > 0:
+            return [i for i in range(n_layers) if (i + 1) % interval == 0]
+        if isinstance(x.get("attention.sliding_window"), int) and x["attention.sliding_window"] > 0:
+            pattern = x.get("attention.sliding_window_pattern")
+            if isinstance(pattern, list):
+                return [i for i in range(n_layers) if i >= len(pattern) or not pattern[i]]
+            if isinstance(pattern, int) and pattern > 1:
+                return [i for i in range(n_layers) if i % pattern == pattern - 1]
+        return list(range(n_layers))
+
+    def _prefill_ubatch(self, model_path: str | None, batch: int, spec_type: str, n_ctx: int) -> int:
+        """Prefill micro-batch (-ub). Larger micro-batches only help MoE
+        models, where more tokens per expert make the expert matmuls
+        efficient; measured on an M5 Max (pp4096, ub 512 -> 1024 -> 2048):
+        Qwen 3.6 35B-A3B +13% / +22%, Gemma 4 26B-A4B +6.5% / +7.6%, while
+        dense Qwen 3.8 27B lost 2% / 7% and dense Gemma 4 12B gained 3-4%.
+        The cost is compute-buffer memory, which grows with the micro-batch
+        and much faster with a drafter (UBATCH_EXTRA_MIB_PER_TOKEN), so the
+        larger sizes are used only when that growth fits in one memory share.
+        """
+        base = min(512, batch)
+        meta = self._gguf_kv_meta(model_path) or {}
+        experts = (meta.get("extra") or {}).get("expert_count")
+        if not isinstance(experts, int) or experts <= 1:
+            return base
+        per_token = UBATCH_EXTRA_MIB_PER_TOKEN.get(spec_type, UBATCH_EXTRA_MIB_PER_TOKEN[""]) * 1024 ** 2
+        share = self._memory_share(model_path, n_ctx)
+        for ub in (2048, 1024):
+            if ub <= batch and (ub - base) * per_token <= share:
+                return ub
+        return base
+
+    def _checkpoint_bytes(self, model_path: str | None, n_ubatch: int, n_ctx: int) -> int | None:
+        """Bytes of one llama-server context checkpoint for this model, from
+        the GGUF header. A checkpoint copies only the state that cannot be
+        rolled back: the recurrent (Gated DeltaNet / SSM) state of hybrid
+        models and the sliding-window KV of SWA models. Neither grows with the
+        context. Measured at 128K, q8_0 KV: Qwen 3.6 35B 62.8 MiB, Qwen 3.8 27B
+        149.6 MiB (both matched exactly), Gemma 4 26B 106 MiB (this estimate is
+        167, an upper bound: it counts the window plus one ubatch). None when
+        the header can't be read; 0 for a model that never checkpoints."""
+        meta = self._gguf_kv_meta(model_path)
+        if not meta:
+            return None
+        x = meta.get("extra") or {}
+        n_layers = max(1, int(meta["n_layers"]) - int(meta.get("n_mtp_layers") or 0))
+        total = 0
+        d_state = x.get("ssm.state_size")
+        if isinstance(d_state, int) and d_state > 0:
+            interval = x.get("full_attention_interval")
+            n_full = n_layers // interval if isinstance(interval, int) and interval > 0 else 0
+            heads = x.get("ssm.time_step_rank") or x.get("ssm.group_count") or 1
+            inner = x.get("ssm.inner_size") or heads * d_state
+            groups = x.get("ssm.group_count") or 0
+            conv = max(0, (x.get("ssm.conv_kernel") or 4) - 1) * (inner + 2 * groups * d_state) * 4
+            total += (n_layers - n_full) * (heads * d_state * (inner // heads) * 4 + conv)
+        window = x.get("attention.sliding_window")
+        if isinstance(window, int) and window > 0:
+            pattern = x.get("attention.sliding_window_pattern")
+            if isinstance(pattern, list):
+                swa = [i for i, p in enumerate(pattern[:n_layers]) if p]
+            elif isinstance(pattern, int) and pattern > 1:
+                swa = [i for i in range(n_layers) if i % pattern < pattern - 1]
+            else:
+                swa = list(range(n_layers))
+            heads_kv = x.get("attention.head_count_kv")
+            kd = x.get("attention.key_length_swa") or meta["head_dim"]
+            vd = x.get("attention.value_length_swa") or meta.get("value_head_dim", kd)
+            kt, vt = self._effective_kv_dtypes(model_path)
+            kb = self._KV_DTYPE_BYTES.get(kt, 2.0)
+            vb = self._KV_DTYPE_BYTES.get(vt, 2.0)
+            per_token = 0.0
+            for i in swa:
+                h = heads_kv[i] if isinstance(heads_kv, list) and i < len(heads_kv) else meta["n_kv_heads"]
+                per_token += h * (kd * kb + vd * vb)
+            total += int(per_token * min(int(n_ctx), window + int(n_ubatch)))
+        return int(total)
+
+    def _memory_share(self, model_path: str | None, n_ctx: int) -> int:
+        """A quarter of the memory left once the weights (model, projector,
+        drafter), the full-context KV cache and the OS reserve are counted.
+        Checkpoints, the host prompt cache and a larger prefill batch may each
+        use one share, so together they never take more than three quarters
+        of what is left."""
+        from pathlib import Path as _P
+        from .model_config import KV_FIT_RESERVE_FRACTION, KV_FIT_RESERVE_GB
+        total = self._system_ram_gb() * 1024 ** 3
+        weights = self._model_file_bytes(model_path)
+        try:
+            from .models_catalog import by_filename
+            choice = by_filename(_P(str(model_path or "")).name)
+            for side in (getattr(choice, "mmproj_path", None), getattr(getattr(choice, "drafter", None), "local_path", None)):
+                if side is not None and _P(side).is_file():
+                    weights += _P(side).stat().st_size
+        except Exception:
+            pass
+        kv = int((self._kv_bytes_per_token(model_path) or 0) * n_ctx)
+        reserve = max(KV_FIT_RESERVE_GB * 1024 ** 3, int(total * KV_FIT_RESERVE_FRACTION))
+        return max(0, total - weights - kv - reserve) // 4
+
+    def _checkpoint_and_cache_budget(self, model_path: str | None, n_ctx: int, n_ubatch: int) -> tuple[int, int]:
+        """(--ctx-checkpoints, --cache-ram MiB) for this launch.
+
+        Each may take up to a quarter of the memory left once the weights,
+        the full-context KV cache and the OS reserve are counted
+        (_memory_share). Checkpoints: as many as that share holds, between one
+        request's worth (CHECKPOINTS_PER_REQUEST) and upstream's own default
+        (CHECKPOINTS_MAX). The prompt cache: the share in MiB, at most
+        upstream's default (PROMPT_CACHE_MAX_MIB); upstream's 8 GiB default on
+        a 16 GB Mac was what pushed the server out of memory.
+        """
+        share = self._memory_share(model_path, n_ctx)
+        ckpt = self._checkpoint_bytes(model_path, n_ubatch, n_ctx)
+        if not ckpt:
+            n_ckpt = CHECKPOINTS_MAX  # nothing to copy (full attention) or unknown header
+        else:
+            n_ckpt = max(CHECKPOINTS_PER_REQUEST, min(CHECKPOINTS_MAX, share // ckpt))
+        cache_mib = min(PROMPT_CACHE_MAX_MIB, share // 1024 ** 2)
+        return int(n_ckpt), int(cache_mib)
 
     def _model_file_bytes(self, model_path: str | None = None) -> int:
         from pathlib import Path as _Path

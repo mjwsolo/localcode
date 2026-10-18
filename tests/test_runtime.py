@@ -106,46 +106,81 @@ class TestLlamaServerCommand:
         assert "--cache-type-k" not in cmd
         assert "--cache-type-v" not in cmd
 
-    def test_defrag_thold_flag_present(self) -> None:
-        """KV-cache defrag must be enabled at 0.1 for long agentic sessions
-        (context-shift churns the cache and fragments it)."""
+    def test_no_context_shift_or_defrag(self) -> None:
+        """Overflow must reach the UI as an error (which compacts), never be
+        absorbed by silently evicting the oldest tokens. --defrag-thold is a
+        deprecated no-op upstream."""
         gw = self._make_gw()
         cmd = gw.llama_server_command("/path/model.gguf")
-        assert "--defrag-thold" in cmd
-        idx = cmd.index("--defrag-thold")
-        assert cmd[idx + 1] == "0.1"
+        assert "--context-shift" not in cmd
+        assert "--defrag-thold" not in cmd
 
-    def test_ctx_checkpoints_disabled_at_256k(self) -> None:
-        """-9 crash mitigation: at 262144 ctx, checkpoint creation serializes a
-        multi-GB Metal buffer that can breach the wired working-set cap, so we
-        disable checkpoints entirely (0) and omit the cadence flag."""
-        gw = self._make_gw()
-        gw._target_num_ctx = lambda **kw: 262144  # type: ignore[assignment]
-        cmd = gw.llama_server_command("/path/model.gguf")
-        idx = cmd.index("--ctx-checkpoints")
-        assert cmd[idx + 1] == "0"
-        assert "--checkpoint-min-step" not in cmd
-
-    def test_ctx_checkpoints_enabled_below_256k(self) -> None:
-        """Below the 256K crash tier checkpoints stay on (128K → 4 snapshots)
-        with the 2K cadence flag."""
+    def test_checkpoints_and_prompt_cache_sized_from_memory(self) -> None:
+        """Checkpoint count and --cache-ram come from the memory left after
+        weights, KV and the OS reserve: one request's worth at minimum,
+        upstream's defaults at most, never a context-size ladder."""
+        from localcode import runtime as rt
         gw = self._make_gw()
         gw._target_num_ctx = lambda **kw: 131072  # type: ignore[assignment]
+        gw._checkpoint_bytes = lambda *a, **k: 64 * 1024 ** 2  # type: ignore[assignment]
+        gw._kv_bytes_per_token = lambda *a, **k: 10 * 1024  # type: ignore[assignment]
+        gw._model_file_bytes = lambda *a, **k: 38 * 1024 ** 3  # type: ignore[assignment]
+        gw._cached_ram_gb = 128
         cmd = gw.llama_server_command("/path/model.gguf")
-        idx = cmd.index("--ctx-checkpoints")
-        assert cmd[idx + 1] == "4"
-        assert "--checkpoint-min-step" in cmd
+        assert cmd[cmd.index("--ctx-checkpoints") + 1] == str(rt.CHECKPOINTS_MAX)
+        assert cmd[cmd.index("--cache-ram") + 1] == str(rt.PROMPT_CACHE_MAX_MIB)
+        assert cmd[cmd.index("--checkpoint-min-step") + 1] == str(rt.CHECKPOINT_MIN_STEP)
+        # a Mac where the weights leave almost nothing: floor count, no RAM cache
+        gw._cached_ram_gb = 44
+        cmd = gw.llama_server_command("/path/model.gguf")
+        assert cmd[cmd.index("--ctx-checkpoints") + 1] == str(rt.CHECKPOINTS_PER_REQUEST)
+        assert cmd[cmd.index("--cache-ram") + 1] == "0"
+        # in between: a quarter of the headroom each
+        gw._cached_ram_gb = 64
+        n, cache = gw._checkpoint_and_cache_budget("/path/model.gguf", 131072, 512)
+        reserve = max(3 * 1024 ** 3, int(64 * 1024 ** 3 * 0.15))
+        share = (64 * 1024 ** 3 - 38 * 1024 ** 3 - 10 * 1024 * 131072 - reserve) // 4
+        assert cache == min(rt.PROMPT_CACHE_MAX_MIB, share // 1024 ** 2)
+        assert n == max(rt.CHECKPOINTS_PER_REQUEST, min(rt.CHECKPOINTS_MAX, share // (64 * 1024 ** 2)))
 
-    def test_ctx_checkpoints_env_override(self, monkeypatch) -> None:
-        """LOCALCODE_CTX_CHECKPOINTS forces the count at every tier (reversibility
-        knob for the mitigation)."""
-        monkeypatch.setenv("LOCALCODE_CTX_CHECKPOINTS", "2")
+    def test_prefill_ubatch_grows_only_for_moe_with_memory_to_spare(self) -> None:
+        from localcode import runtime as rt
         gw = self._make_gw()
-        gw._target_num_ctx = lambda **kw: 262144  # type: ignore[assignment]
-        cmd = gw.llama_server_command("/path/model.gguf")
-        idx = cmd.index("--ctx-checkpoints")
-        assert cmd[idx + 1] == "2"
-        assert "--checkpoint-min-step" in cmd
+        gw._gguf_meta_cache = {"/moe.gguf": {"n_layers": 40, "n_kv_heads": 2, "head_dim": 256, "n_mtp_layers": 0,
+                                             "extra": {"expert_count": 256}},
+                               "/dense.gguf": {"n_layers": 64, "n_kv_heads": 4, "head_dim": 256, "n_mtp_layers": 0,
+                                               "extra": {}}}
+        gw._memory_share = lambda *a, **k: 8 * 1024 ** 3  # type: ignore[assignment]
+        assert gw._prefill_ubatch("/moe.gguf", 2048, "draft-dflash", 131072) == 2048
+        assert gw._prefill_ubatch("/dense.gguf", 2048, "", 131072) == 512
+        assert gw._prefill_ubatch("/moe.gguf", 512, "", 131072) == 512      # never above -b
+        # the drafter's buffers decide what fits: 2048 with DFlash needs ~5.5 GB
+        gw._memory_share = lambda *a, **k: 3 * 1024 ** 3  # type: ignore[assignment]
+        assert gw._prefill_ubatch("/moe.gguf", 2048, "draft-dflash", 131072) == 1024
+        assert gw._prefill_ubatch("/moe.gguf", 2048, "", 131072) == 2048
+        gw._memory_share = lambda *a, **k: 0  # type: ignore[assignment]
+        assert gw._prefill_ubatch("/moe.gguf", 2048, "", 131072) == 512
+        assert set(rt.UBATCH_EXTRA_MIB_PER_TOKEN) >= {"", "draft-mtp", "draft-dflash"}
+
+    def test_checkpoint_bytes_from_gguf_header(self) -> None:
+        """Hybrid and sliding-window checkpoint sizes from the header match
+        what llama-server reports (Qwen 3.6 35B: 62.8 MiB measured)."""
+        gw = self._make_gw(kv_cache_type_v="q8_0")
+        gw._gguf_meta_cache = {"/q36.gguf": {
+            "n_layers": 40, "n_kv_heads": 2, "head_dim": 256, "value_head_dim": 256, "n_mtp_layers": 0,
+            "extra": {"ssm.state_size": 128, "ssm.time_step_rank": 32, "ssm.group_count": 16,
+                      "ssm.inner_size": 4096, "ssm.conv_kernel": 4, "full_attention_interval": 4}}}
+        assert round(gw._checkpoint_bytes("/q36.gguf", 512, 131072) / 2 ** 20, 1) == 62.8
+        # only every fourth layer keeps per-token KV
+        assert gw._full_attention_layers(gw._gguf_meta_cache["/q36.gguf"]) == [3, 7, 11, 15, 19, 23, 27, 31, 35, 39]
+        gw._gguf_meta_cache["/swa.gguf"] = {
+            "n_layers": 6, "n_kv_heads": 8, "head_dim": 512, "value_head_dim": 512, "n_mtp_layers": 0,
+            "extra": {"attention.sliding_window": 1024, "attention.key_length_swa": 256,
+                      "attention.value_length_swa": 256, "attention.head_count_kv": [8, 8, 8, 8, 8, 2],
+                      "attention.sliding_window_pattern": [True] * 5 + [False]}}
+        per_tok = 5 * 8 * 512 * gw._KV_DTYPE_BYTES["q8_0"]
+        assert gw._checkpoint_bytes("/swa.gguf", 512, 131072) == int(per_tok * (1024 + 512))
+        assert gw._full_attention_layers(gw._gguf_meta_cache["/swa.gguf"]) == [5]
 
     def test_custom_binary_used(self, tmp_path) -> None:
         # A configured binary is honored only when it exists on disk; the

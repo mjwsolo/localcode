@@ -36,6 +36,8 @@ FLOOR_DIV = 4          # never budget below n_ctx/4: the fixed prefix must fit w
 
 _TIMING = re.compile(r"task +(\d+) \| +(prompt eval time|eval time) = +([\d.]+) ms / +(\d+) tokens")
 _RELEASE = re.compile(r"task +(\d+) \| stop processing: n_tokens = (\d+)")
+# llama-server prefixes each line with the time since it started: minutes.seconds.ms.us
+_STAMP = re.compile(r"^(\d+)\.(\d{2})\.(\d{3})\.(\d{3}) ")
 
 
 class Sample(NamedTuple):
@@ -44,6 +46,8 @@ class Sample(NamedTuple):
     pp_n: int              # tokens prefilled
     tg_tps: float | None   # decode tokens/s
     tg_n: int              # tokens decoded
+    t_end: float | None = None  # seconds since server start when the request finished
+    busy_s: float = 0.0    # prefill + decode wall time of the request
 
 
 class TimingTable:
@@ -66,6 +70,7 @@ class TimingTable:
                 ms, n = float(m.group(3)), int(m.group(4))
                 tps = n / (ms / 1000.0) if ms > 0 else None
                 d = self._pending.setdefault(task, {})
+                d["ms"] = d.get("ms", 0.0) + ms
                 if m.group(2).startswith("prompt"):
                     d["pp_tps"], d["pp_n"] = tps, n
                 else:
@@ -77,8 +82,11 @@ class TimingTable:
                 d = self._pending.pop(task, None)
                 if d is None:
                     continue
+                st = _STAMP.match(line)
+                t_end = (int(st.group(1)) * 60 + int(st.group(2)) + int(st.group(3)) / 1e3) if st else None
                 self.samples.append(Sample(n_tokens, d.get("pp_tps"), int(d.get("pp_n", 0)),
-                                           d.get("tg_tps"), int(d.get("tg_n", 0))))
+                                           d.get("tg_tps"), int(d.get("tg_n", 0)), t_end,
+                                           d.get("ms", 0.0) / 1000.0))
                 added += 1
         if len(self._pending) > 512:  # a request whose release line never came
             for k in sorted(self._pending)[:-256]:

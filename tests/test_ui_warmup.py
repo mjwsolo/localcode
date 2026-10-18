@@ -212,3 +212,46 @@ def test_start_warmup_resets_readiness_even_when_prefetch_disabled(monkeypatch):
     sup._start_warmup("new-model")
     assert sup._context_ready is False
     assert sup._warm_status == "disabled"
+
+
+def test_launch_key_ignores_port_and_secret_but_not_state_shape():
+    base = ["llama-server", "--model", "m.gguf", "--port", "1", "--api-key", "a", "--ctx-size", "131072",
+            "--cache-type-v", "q8_0", "--slot-save-path", "/x"]
+    same = list(base); same[same.index("--port") + 1] = "2"; same[same.index("--api-key") + 1] = "b"
+    assert warmup.launch_key(base) == warmup.launch_key(same)
+    other = list(base); other[other.index("--cache-type-v") + 1] = "turbo4"
+    assert warmup.launch_key(base) != warmup.launch_key(other)
+    smaller = list(base); smaller[smaller.index("--ctx-size") + 1] = "65536"
+    assert warmup.launch_key(base) != warmup.launch_key(smaller)
+
+
+def test_kept_state_is_restored_only_for_the_same_launch(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALCODE_AGENT_RUN_DIR", str(tmp_path))
+    warmup.store("model", list(range(700)), state_key="k1")
+    assert warmup.saved_state("model", None, "k1") is None      # no state file yet
+    warmup.slot_save_dir().mkdir(parents=True)
+    (warmup.slot_save_dir() / warmup.state_name("model")).write_bytes(b"state")
+    assert warmup.saved_state("model", None, "k1") == warmup.state_name("model")
+    assert warmup.saved_state("model", None, "k2") is None      # settings changed
+    warmup.forget("model")
+    assert not (warmup.slot_save_dir() / warmup.state_name("model")).exists()
+
+
+def test_capture_keeps_the_state_file_owner_only(tmp_path, monkeypatch):
+    import os
+    import struct
+    monkeypatch.setenv("LOCALCODE_AGENT_RUN_DIR", str(tmp_path))
+    toks = list(range(600))
+
+    def fake_post(port, path, body, timeout):
+        p = warmup.slot_save_dir() / body["filename"]
+        p.write_bytes(struct.pack("<III", 0x67677371, 1, len(toks)) + struct.pack(f"<{len(toks)}I", *toks))
+        return {}
+
+    monkeypatch.setattr(warmup, "_post", fake_post)
+    assert warmup.capture(0, 0, keep_as=warmup.state_name("m")) == toks
+    kept = warmup.slot_save_dir() / warmup.state_name("m")
+    assert kept.is_file() and oct(os.stat(kept).st_mode & 0o777) == "0o600"
+    assert not (warmup.slot_save_dir() / warmup.SLOT_FILE).exists()
+    assert warmup.capture(0, 0) == toks
+    assert not (warmup.slot_save_dir() / warmup.SLOT_FILE).exists()

@@ -191,12 +191,13 @@ def test_catalog_drafter_is_launched_only_when_its_file_is_complete(tmp_path, mo
     cmd = g.llama_server_command(str(tmp_path / gemma.filename), 8081)
     assert cmd[cmd.index("--model-draft") + 1] == str(f)
     assert cmd[cmd.index("--spec-type") + 1] == "draft-mtp"
-    assert cmd[cmd.index("--spec-draft-n-max") + 1] == "4"
+    # the drafter's own measured width, not a global default
+    assert cmd[cmd.index("--spec-draft-n-max") + 1] == str(gemma.drafter.n_max)
     f = tmp_path / qwen.drafter.filename
     f.write_bytes(b"\0"); os.truncate(f, qwen.drafter.size_bytes)
     cmd = g.llama_server_command(str(tmp_path / qwen.filename), 8081)
     assert cmd[cmd.index("--spec-type") + 1] == "draft-dflash"
-    assert "--spec-draft-n-max" not in cmd
+    assert cmd[cmd.index("--spec-draft-n-max") + 1] == str(qwen.drafter.n_max)
     # opt-out switches both kinds off
     g0 = LocalCodeRuntimeGateway(RuntimeConfig(llama_cpp_mtp_draft=0))
     assert "--model-draft" not in g0.llama_server_command(str(tmp_path / qwen.filename), 8081)
