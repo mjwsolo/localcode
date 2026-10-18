@@ -1,0 +1,16 @@
+id = "direction-change-compaction"
+quality = "fidelity"          # capability | reliability | safety_scope | efficiency | fidelity
+component = "harness"
+purpose = "tracking"          # regression | tracking
+turns = 4
+trials = 1
+require_all_trials = false
+budget_steps = 40
+budget_seconds = 2400
+allowed_paths = ['app/report.py', 'tests/test_report.py']
+null_passes = false
+notes = ""
+setup = ""
+teardown = ""
+mcp = {}
+env = {"LOCALCODE_OVERRIDE_NCTX" = "16384"}

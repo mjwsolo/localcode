@@ -85,49 +85,79 @@ export function leanMessages(messages: any[], workspaceContext = false): any[] {
 }
 
 /**
- * Old tool output pruning (opencode v1's prune pass, with LocalCode's budget-aware limits).
- * Completed tool results older than the last two user turns are replaced by a short note once
- * they fall outside a protected window of recent output. A minimum reclaim keeps the cached
- * prefix from changing for small wins; outputs pruned once stay pruned.
+ * Observation masking: mask first, summarize late.
+ *
+ * Every edit to an old message makes the server re-read everything after it, and the hybrid
+ * (Qwen 3.6) and sliding-window (Gemma 4) models re-read the whole prompt when no cache
+ * checkpoint precedes the edit. So history is left alone until the prompt nears the context
+ * budget; then, in one large batch, every completed tool result outside a protected window of
+ * recent output is replaced by a one-line stub naming the tool, its arguments and a file holding
+ * the full output, so the model can read it again. Masked results stay masked, and a pass never
+ * reaches back past an already-masked result, so the cached prefix before the batch is kept.
+ * Only when masking cannot bring the prompt down does the runtime's compaction summarize.
+ * All thresholds are shares of the measured budget, never fixed token counts.
  */
-export const PRUNED_OUTPUT = "[Old tool result content cleared]";
-const PRUNE_PROTECT = 40_000;
-const PRUNE_MINIMUM = 20_000;
-const PRUNE_PROTECTED_TOOLS = new Set(["skill"]);
+const MASK_AT = 0.7;          // start a batch when the prompt reaches this share of the budget
+const MASK_PROTECT = 0.25;    // newest tool output kept verbatim, as a share of the budget
+const MASK_MINIMUM = 0.125;   // a batch must reclaim at least this share, or nothing changes
+const MASK_PROTECTED_TOOLS = new Set(["skill"]);
+/** Where masked outputs are saved, relative to the project directory. */
+export const MASK_DIR = ".localcode-agent/tool-out";
 
-/** Keep a meaningful recent tool window on small local context budgets too. */
-export function pruneLimits(inputBudget: number) {
-  if (!Number.isFinite(inputBudget) || inputBudget <= 0) return { protect: PRUNE_PROTECT, minimum: PRUNE_MINIMUM };
+export type MaskLimits = { trigger: number; protect: number; minimum: number };
+
+export function maskLimits(inputBudget: number): MaskLimits | undefined {
+  if (!Number.isFinite(inputBudget) || inputBudget <= 0) return undefined;
   return {
-    protect: Math.min(PRUNE_PROTECT, Math.max(1024, Math.floor(inputBudget * 0.25))),
-    minimum: Math.min(PRUNE_MINIMUM, Math.max(512, Math.floor(inputBudget * 0.125))),
+    trigger: Math.floor(inputBudget * MASK_AT),
+    protect: Math.floor(inputBudget * MASK_PROTECT),
+    minimum: Math.floor(inputBudget * MASK_MINIMUM),
   };
 }
 
-function resultText(result: any): string {
+export function resultText(result: any): string {
   if (!result || typeof result !== "object") return "";
   if (typeof result.value === "string") return result.value;
   if (Array.isArray(result.value)) return result.value.map((item: any) => (item?.type === "text" ? item.text : "")).join("");
   return result.value === undefined ? "" : JSON.stringify(result.value);
 }
 
-const estimate = (text: string) => Math.ceil(text.length / 4);
+export const estimate = (text: string) => Math.ceil(text.length / 4);
 
-/** Tool results to prune now (ids), given the ones already pruned. Empty when the reclaim is too small. */
-export function pruneCandidates(messages: any[], limits: { protect: number; minimum: number }, pruned: ReadonlySet<string>): string[] {
-  let turns = 0;
+/** Rough size of a request as the server will see it (calibrated against measured counts by the caller). */
+export function estimateRequest(messages: any[], system: any[] = [], tools: Record<string, any> = {}): number {
+  let chars = 0;
+  for (const part of system) chars += String(typeof part === "string" ? part : part?.text ?? "").length;
+  for (const [name, tool] of Object.entries(tools)) chars += name.length + String(tool?.description ?? "").length + JSON.stringify(tool?.input ?? tool?.inputSchema ?? {}).length;
+  for (const message of messages) {
+    if (typeof message?.content === "string") { chars += message.content.length; continue; }
+    for (const part of message?.content ?? []) {
+      if (part?.type === "text" || part?.type === "reasoning") chars += String(part.text ?? "").length;
+      else if (part?.type === "tool-call") chars += String(part.name ?? "").length + (JSON.stringify(part.input) ?? "").length;
+      else if (part?.type === "tool-result") chars += resultText(part.result).length + (typeof part.result?.error === "string" ? part.result.error.length : 0);
+    }
+  }
+  return Math.ceil(chars / 4);
+}
+
+const isFailed = (item: any) => item?.resultType === "error" || "error" in (item?.result ?? {});
+
+/**
+ * Tool results to mask now (ids), given the ones already masked and the prompt's current size.
+ * Empty until the prompt reaches the trigger, or when the batch would reclaim too little.
+ */
+export function maskCandidates(messages: any[], limits: MaskLimits | undefined, masked: ReadonlySet<string>, promptTokens: number): string[] {
+  if (!limits || promptTokens < limits.trigger) return [];
   let total = 0;
   let reclaim = 0;
   const found: string[] = [];
   loop: for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
-    if (message?.role === "user") turns++;
-    if (turns < 2 || !Array.isArray(message?.content)) continue;
+    if (!Array.isArray(message?.content)) continue;
     for (let part = message.content.length - 1; part >= 0; part--) {
       const item = message.content[part];
-      if (item?.type !== "tool-result" || item.resultType === "error" || "error" in (item.result ?? {})) continue;
-      if (PRUNE_PROTECTED_TOOLS.has(item.name)) continue;
-      if (pruned.has(item.id)) break loop;
+      if (item?.type !== "tool-result" || isFailed(item) || MASK_PROTECTED_TOOLS.has(item.name)) continue;
+      if (masked.has(item.id)) break loop;
       const size = estimate(resultText(item.result));
       total += size;
       if (total <= limits.protect) continue;
@@ -135,15 +165,79 @@ export function pruneCandidates(messages: any[], limits: { protect: number; mini
       found.push(item.id);
     }
   }
-  return reclaim > limits.minimum ? found : [];
+  return reclaim >= limits.minimum && reclaim > 0 ? found : [];
 }
 
-/** Replace pruned tool results; nothing else changes. */
-export function applyPruned(messages: any[], pruned: ReadonlySet<string>): any[] {
-  if (!pruned.size) return messages;
+/** The saved-output file for a tool call id, relative to the project directory. */
+export const maskPath = (id: string) => `${MASK_DIR}/${String(id).replace(/[^A-Za-z0-9_-]/g, "_")}.txt`;
+
+const ARG_KEYS = ["filePath", "file_path", "path", "pattern", "command", "url", "query", "include", "glob"];
+
+/** A short, deterministic summary of a tool call's arguments. */
+export function argsSummary(input: any): string {
+  if (!input || typeof input !== "object") return "";
+  const keys = [...ARG_KEYS.filter((key) => key in input), ...Object.keys(input).filter((key) => !ARG_KEYS.includes(key))];
+  const parts: string[] = [];
+  for (const key of keys) {
+    const value = input[key];
+    if (value === undefined || value === null || typeof value === "object") continue;
+    const text = String(value).replace(/\s+/g, " ").trim();
+    parts.push(`${key}=${text.length > 80 ? text.slice(0, 77) + "..." : text}`);
+    if (parts.join(", ").length > 160) break;
+  }
+  const out = parts.join(", ");
+  return out.length > 200 ? out.slice(0, 197) + "..." : out;
+}
+
+export function maskStub(name: string, input: any, id: string): string {
+  return `[Old tool output masked to save context: ${name}(${argsSummary(input)}). Full output saved in ${maskPath(id)}; read that file if you need it again.]`;
+}
+
+/** Replace masked tool results with their stubs; nothing else changes. */
+export function applyMasked(messages: any[], masked: ReadonlySet<string>): any[] {
+  if (!masked.size) return messages;
+  const inputs = new Map<string, any>();
+  for (const message of messages) {
+    if (message?.role !== "assistant" || !Array.isArray(message.content)) continue;
+    for (const part of message.content) if (part?.type === "tool-call") inputs.set(part.id, part.input);
+  }
   return messages.map((message) => {
-    if (!Array.isArray(message?.content) || !message.content.some((item: any) => item?.type === "tool-result" && pruned.has(item.id))) return message;
+    if (!Array.isArray(message?.content) || !message.content.some((item: any) => item?.type === "tool-result" && masked.has(item.id))) return message;
     return withContent(message, message.content.map((item: any) =>
-      item?.type === "tool-result" && pruned.has(item.id) ? { ...item, result: { type: "text", value: PRUNED_OUTPUT } } : item));
+      item?.type === "tool-result" && masked.has(item.id)
+        ? { ...item, result: { type: "text", value: maskStub(String(item.name ?? "tool"), inputs.get(item.id), item.id) } }
+        : item));
   });
+}
+
+/** Text of the tool results with these ids, for saving before they are masked. */
+export function maskedOutputs(messages: any[], ids: readonly string[]): Map<string, string> {
+  const wanted = new Set(ids);
+  const out = new Map<string, string>();
+  for (const message of messages) {
+    if (!Array.isArray(message?.content)) continue;
+    for (const item of message.content) if (item?.type === "tool-result" && wanted.has(item.id)) out.set(item.id, resultText(item.result));
+  }
+  return out;
+}
+
+/**
+ * After a compaction the request opens with the runtime's checkpoint message. Open todos at the
+ * time of the compaction ride at its tail (snapshot frozen per checkpoint, so the prefix is stable).
+ */
+export const CHECKPOINT_START = "<conversation-checkpoint>";
+
+export function checkpointIndex(messages: any[]): number {
+  return messages.findIndex((message) => {
+    if (message?.role !== "user") return false;
+    const first = typeof message.content === "string" ? message.content : message.content?.find?.((part: any) => part?.type === "text")?.text;
+    return typeof first === "string" && first.startsWith(CHECKPOINT_START);
+  });
+}
+
+export function withCheckpointTodos(messages: any[], index: number, text: string): any[] {
+  if (index < 0 || !text) return messages;
+  const message = messages[index];
+  const content = typeof message.content === "string" ? [{ type: "text", text: message.content }] : [...message.content];
+  return messages.map((item, i) => i === index ? withContent(item, [...content, { type: "text", text, metadata: { localcode: true } }]) : item);
 }

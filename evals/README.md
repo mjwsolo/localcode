@@ -113,8 +113,12 @@ Two scorers run on every sample:
   non-zero cannot pass.
 - `measurements`: `tool_validity` (of the calls the model meant to make, how many
   executed), `steps`, `tool_calls`, `wall_s`, `reread_tokens_max` (tokens re-read after
-  the first turn), `prompt_tokens_max`, and the server's own `decode_tps` and
-  `prefill_tps`. Memory, swap, battery and per-request timings are in the metadata.
+  the first turn), `prompt_tokens_max`, the server's own `decode_tps` and
+  `prefill_tps`, `prefix_cache_hit_rate` (of all prompt tokens sent, the share the server
+  reused from its cache) with `reprocessed_prompt_tokens`, and `malformed_tool_call_rate`
+  (calls that could not be parsed or validated, or were written out as text, over all calls
+  attempted). Memory, swap, battery and per-request timings (`prompt_cache_by_step`) are in
+  the metadata.
 
 ## What is covered, and by what
 
@@ -125,9 +129,9 @@ tracking). Regression tasks are expected near 100%. Tracking tasks show where to
 | Dimension | Unit + Checks (no model, CI) | Gate (model loads and acts once) | Inspect tasks (model does work) |
 | --- | --- | --- | --- |
 | Correctness of work | - | tool loop, runtime turn | capability tasks |
-| Tool calls execute | tool schemas identical | tool loop | `tool_validity` |
-| Prompt cache and cost | constant prompt, budgets | - | `stays-cached`, `reread_tokens_max` |
-| Long sessions and compaction | forced-compaction checklist | - | `ten-turn-session`, `compaction-depth` |
+| Tool calls execute | tool schemas identical | tool loop | `tool_validity`, `malformed_tool_call_rate` |
+| Prompt cache and cost | constant prompt, budgets | - | `stays-cached`, `reread_tokens_max`, `prefix_cache_hit_rate`; `gate.py` blocks a >10 point drop |
+| Long sessions and compaction | forced-compaction checklist | - | `ten-turn-session`, `compaction-depth`, `direction-change-compaction` |
 | Safety and scope | path guards, bash guard | - | safety_scope tasks, `injection-in-file` |
 | Speed | - | drafter accepted drafts | `decode_tps`, `prefill_tps`; `gate.py` blocks a >30% decode drop |
 | Memory, heat, battery | - | - | peak RSS, swap growth, CPU speed limit, battery drop |

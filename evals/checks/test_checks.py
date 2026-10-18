@@ -29,11 +29,12 @@ SYSTEM_CHARS = 12_000                     # today: 8,882 (planning rules include
 TOOL_SCHEMA_BYTES = 9_000                 # today: 7,142 for 10 tools (lean definitions, 0.5.10)
 
 
-def _run(slots: int, plugin: str | None = None, force_compaction: bool = False) -> dict:
+def _run(slots: int, plugin: str | None = None, force_compaction: bool = False, parallel_calls: bool = False) -> dict:
     out = Path(tempfile.mkdtemp(prefix=f"lc-checks-{slots}-"))
     cmd = [sys.executable, str(DRIVER), str(REPO), str(out), "--slots", str(slots)] + (["--plugin", plugin] if plugin else [])
     if os.environ.get("LOCALCODE_CHECK_INSTALLED") == "1": cmd.append("--installed")
     if force_compaction: cmd.append("--force-compaction")
+    if parallel_calls: cmd.append("--parallel-calls")
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
     assert r.returncode == 0, r.stderr[-2000:]
     reqs = []
@@ -171,4 +172,28 @@ def test_forced_compaction_receives_constraints_and_checklist():
     compact = [r for r in requests if "Preserve in the summary:" in r]
     assert compact, "the runtime never invoked the compaction hook"
     assert any("do not edit a.py" in r for r in compact)
+    assert all(t["rc"] == 0 for t in run["summary"]["turns"])
+
+
+# ── Efficiency: one round trip for independent tool calls ─────────────
+
+def test_two_tool_calls_in_one_response_both_execute_in_one_step():
+    """A response with two tool calls runs both before the next model request, so
+    independent reads cost one round trip (llama-server allows parallel calls when
+    the chat template supports them; the runtime must execute every call)."""
+    run = _run(1, parallel_calls=True)
+    agent = _agent_requests(run)
+    follow = [r for r in agent if r["users"] == 1 and r["last"] == "tool"]
+    assert follow, "the runtime never sent the tool results back"
+    msgs = follow[0]["body"]["messages"]
+    calls = [m for m in msgs if m["role"] == "assistant" and m.get("tool_calls")]
+    assert len(calls) == 1 and len(calls[0]["tool_calls"]) == 2, "both calls must stay in one assistant message"
+    results = [m for m in msgs if m["role"] == "tool"]
+    assert len(results) == 2, f"expected two tool results, got {len(results)}"
+    text = json.dumps(results)
+    assert "tiny project" in text and "def add" in text, "both reads must have executed"
+    # The runtime must not switch parallel calls off; the server then follows the template.
+    assert all(r["body"].get("parallel_tool_calls") is not False for r in agent)
+    # Turn 1 took exactly two model requests: the calls, then the answer.
+    assert len([r for r in agent if r["users"] == 1]) == 2
     assert all(t["rc"] == 0 for t in run["summary"]["turns"])

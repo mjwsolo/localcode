@@ -13,6 +13,7 @@ from pathlib import Path
 
 ap = argparse.ArgumentParser(); ap.add_argument("repo"); ap.add_argument("out"); ap.add_argument("--slots", type=int, default=1); ap.add_argument("--plugin", help="a plugin directory to load instead of the bundled one"); ap.add_argument("--keep", action="store_true")
 ap.add_argument("--force-compaction", action="store_true"); ap.add_argument("--installed", action="store_true")
+ap.add_argument("--parallel-calls", action="store_true", help="the first response carries two tool calls")
 a = ap.parse_args()
 REPO = Path(a.repo).resolve(); OUT = Path(a.out).resolve(); OUT.mkdir(parents=True, exist_ok=True)
 for f in OUT.glob("req-*.json"): f.unlink()
@@ -42,6 +43,7 @@ def free_port():
 mport, cport = free_port(), free_port(); alias = "canned-model"
 env0 = {**os.environ, "CANNED_SLOTS": str(a.slots), "CANNED_WORKSPACE": str(ws)}
 if a.force_compaction: env0["CANNED_FORCE_COMPACTION"] = "1"
+if a.parallel_calls: env0["CANNED_PARALLEL"] = "1"
 import atexit
 srv_log = open(OUT / "servers.log", "ab")
 model = subprocess.Popen([sys.executable, str(HERE / "canned_server.py"), str(mport), str(OUT)], env=env0, stdout=srv_log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)

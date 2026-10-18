@@ -7,7 +7,7 @@ seconds:
   - a request with no tools (title generation, summaries) -> a short text
   - a compaction request (it carries the agent's tools) -> a short summary
   - first request of a turn (last message is from the user) -> one tool call
-      turn 1: read <workspace>/README.md
+      turn 1: read <workspace>/README.md (CANNED_PARALLEL=1: README.md and a.py in one response)
       turn 2: todowrite with two items
   - a request whose last message is a tool result -> a short text answer
 Also serves GET /slots (CANNED_SLOTS entries), /health, /v1/models, /props.
@@ -36,6 +36,8 @@ def script(body):
     users = sum(1 for m in msgs if m.get("role") == "user")
     names = {t.get("function", {}).get("name") for t in tools}
     if users <= 1 and "read" in names:
+        if os.environ.get("CANNED_PARALLEL") == "1":
+            return {"tools": [("read", {"path": os.path.join(WS, "README.md")}), ("read", {"path": os.path.join(WS, "a.py")})]}
         return {"tool": "read", "args": {"path": os.path.join(WS, "README.md")}}
     if "todowrite" in names:
         return {"tool": "todowrite", "args": {"todos": [
@@ -46,7 +48,9 @@ def script(body):
 def chunks(rid, model, action):
     global FORCED
     prompt_tokens = 100
-    if "tool" in action and not FORCED and os.environ.get("CANNED_FORCE_COMPACTION") == "1":
+    if "tools" not in action and "tool" in action:
+        action = {**action, "tools": [(action["tool"], action["args"])]}
+    if "tools" in action and not FORCED and os.environ.get("CANNED_FORCE_COMPACTION") == "1":
         prompt_tokens = 32700
         FORCED = True
     base = {"id": rid, "object": "chat.completion.chunk", "created": int(time.time()), "model": model}
@@ -54,9 +58,10 @@ def chunks(rid, model, action):
         yield {**base, "choices": [{"index": 0, "delta": {"role": "assistant", "content": action["text"]}, "finish_reason": None}]}
         yield {**base, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 100, "completion_tokens": 8, "total_tokens": 108}}
         return
-    call = {"index": 0, "id": "call_" + uuid.uuid4().hex[:8], "type": "function", "function": {"name": action["tool"], "arguments": ""}}
-    yield {**base, "choices": [{"index": 0, "delta": {"role": "assistant", "tool_calls": [call]}, "finish_reason": None}]}
-    yield {**base, "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "function": {"arguments": json.dumps(action["args"])}}]}, "finish_reason": None}]}
+    for index, (name, args) in enumerate(action["tools"]):
+        call = {"index": index, "id": "call_" + uuid.uuid4().hex[:8], "type": "function", "function": {"name": name, "arguments": ""}}
+        yield {**base, "choices": [{"index": 0, "delta": {**({"role": "assistant"} if index == 0 else {}), "tool_calls": [call]}, "finish_reason": None}]}
+        yield {**base, "choices": [{"index": 0, "delta": {"tool_calls": [{"index": index, "function": {"arguments": json.dumps(args)}}]}, "finish_reason": None}]}
     yield {**base, "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}], "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": 20, "total_tokens": prompt_tokens + 20}}
 
 class H(http.server.BaseHTTPRequestHandler):
@@ -87,10 +92,11 @@ class H(http.server.BaseHTTPRequestHandler):
             self.wfile.write(b"data: [DONE]\n\n"); self.wfile.flush()
             return
         msg = {"role": "assistant", "content": action.get("text")}
-        if "tool" in action:
-            msg = {"role": "assistant", "content": None, "tool_calls": [{"id": "call_" + uuid.uuid4().hex[:8], "type": "function", "function": {"name": action["tool"], "arguments": json.dumps(action["args"])}}]}
+        calls = action.get("tools") or ([(action["tool"], action["args"])] if "tool" in action else [])
+        if calls:
+            msg = {"role": "assistant", "content": None, "tool_calls": [{"id": "call_" + uuid.uuid4().hex[:8], "type": "function", "function": {"name": name, "arguments": json.dumps(args)}} for name, args in calls]}
         self._json({"id": rid, "object": "chat.completion", "created": int(time.time()), "model": model,
-                    "choices": [{"index": 0, "message": msg, "finish_reason": "tool_calls" if "tool" in action else "stop"}],
+                    "choices": [{"index": 0, "message": msg, "finish_reason": "tool_calls" if calls else "stop"}],
                     "usage": {"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110}})
 
 LoopbackHTTPServer(("127.0.0.1", PORT), H).serve_forever()

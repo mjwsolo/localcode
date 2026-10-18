@@ -73,3 +73,29 @@ def test_loopback_fixture_never_uses_reverse_dns(monkeypatch):
     with fixture.LoopbackHTTPServer(('127.0.0.1', 0), BaseHTTPRequestHandler) as server:
         assert server.server_name == '127.0.0.1'
         assert server.server_port > 0
+
+
+def test_prefix_cache_hit_rate_per_step():
+    steps = [{'type': 'step_finish', 'part': {'tokens': {'input': processed, 'output': 5, 'cache': {'read': cached, 'write': 0}}}}
+             for processed, cached in ((1000, 0), (100, 1900), (0, 0))]
+    result = module('performance').summarize(steps, '')
+    assert result['prompt_cache_by_step'] == [{'cached': 0, 'processed': 1000}, {'cached': 1900, 'processed': 100}]
+    assert result['prefix_cache_hit_rate'] == 0.6333
+    assert result['reprocessed_prompt_tokens'] == 1100
+    assert module('performance').summarize([], '')['prefix_cache_hit_rate'] is None
+
+
+def test_malformed_tool_calls_are_counted_from_the_transcript():
+    def call(cid, status, error=''):
+        return {'type': 'tool_use', 'part': {'callID': cid, 'tool': 'edit', 'state': {'status': status, 'input': {}, 'error': error}}}
+    events = [
+        call('a', 'completed'),
+        call('b', 'error', 'The tool input could not be parsed as JSON, so the call was not executed.'),
+        call('c', 'error', 'Invalid arguments for tool "edit":\n- path: missing'),
+        call('d', 'error', 'oldString not found in file'),            # ran and failed: not malformed
+        {'type': 'text', 'part': {'text': 'I will call <tool_call>{"name": "read"}</tool_call>'}},
+    ]
+    result = module('performance').summarize(events, '')
+    assert result['malformed_tool_calls'] == 3
+    assert result['malformed_tool_call_rate'] == 0.6
+    assert module('performance').summarize([], '')['malformed_tool_call_rate'] is None
