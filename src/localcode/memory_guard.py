@@ -241,7 +241,7 @@ def should_disable_metal_residency(model_path: str, ctx_size: int) -> bool:
     residency sets keep the model weights + KV cache + compute buffers WIRED
     for ~3 minutes (ggml-metal-device.m). During a long generation the wired
     total grows, and when a decode-step spike crosses the GPU's
-    `recommendedMaxWorkingSetSize` (~75% of RAM — a hard ceiling independent of
+    `recommendedMaxWorkingSetSize` (2/3 to 3/4 of RAM — a hard ceiling independent of
     free system RAM), the kernel kills the process outright. This is the exact
     bug class in ggml-org/llama.cpp#16646 on the same M4 Max / 128 GB hardware.
 
@@ -260,8 +260,15 @@ def should_disable_metal_residency(model_path: str, ctx_size: int) -> bool:
         total_mb = int(r.stdout.strip()) // (1024 * 1024)
     except Exception:
         return False
-    # Metal's wired ceiling is ~75% of physical RAM.
-    wired_cap_mb = int(total_mb * 0.75)
+    # Metal's wired ceiling: the live GPU working-set limit (iogpu.wired_limit_mb
+    # when set, else Metal's recommendedMaxWorkingSetSize, else macOS's default
+    # 2/3 of RAM on small Macs and 3/4 on large ones). A flat 75% overstated a
+    # 16 GB Mac's limit by about 1.3 GB.
+    try:
+        from .gpu_memory import working_set_bytes
+        wired_cap_mb = working_set_bytes(total_mb // 1024) // (1024 * 1024)
+    except Exception:
+        wired_cap_mb = int(total_mb * (2 / 3 if total_mb <= 36 * 1024 else 0.75))
     if ctx_size >= 131072:
         return True
     try:

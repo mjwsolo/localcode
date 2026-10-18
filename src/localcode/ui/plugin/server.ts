@@ -18,11 +18,14 @@
  *   client.session.prompt (nudge)       ->  session.synthetic (steer delivery, wakes the session)
  *   client.session.abort                ->  session.interrupt
  *   client.tui.showToast                ->  an RPC event the terminal UI entry (`tui.ts`) shows
+ *   (lazy image projector)              ->  session.hook(...): a request carrying an image first
+ *                                            loads the projector (vision.ts, POST /vision/load)
  *   todowrite (v1 built-in)             ->  a plugin tool with the same name and schema
  */
 import LocalcodePlugin from "./localcode";
 import { applyPruned, leanMessages, pruneCandidates, pruneLimits } from "./context";
 import { LocalcodeRpc } from "./rpc";
+import { createVisionLoader } from "./vision";
 
 /** Tool names the engine was written against (opencode v1) for the v2 tools that replaced them. */
 const ENGINE_TOOL: Record<string, string> = { shell: "bash", patch: "apply_patch" };
@@ -250,6 +253,13 @@ export default {
       return state;
     };
 
+    // The projector loads with the first image a request carries (see vision.ts).
+    const ensureVision = createVisionLoader({
+      control: process.env.LOCALCODE_CONTROL_URL,
+      headers: () => ({ "content-type": "application/json", "x-localcode-token": process.env.LOCALCODE_CONTROL_TOKEN ?? "" }),
+      toast: (input) => adapter.client.tui.showToast(input),
+    });
+
     const shape = async (event: any, kind: "context" | "compaction" | "generate") => {
       adapter.setAgent(event.agent);
       event.system = await transformSystem(hooks, event.agent, event.system ?? []);
@@ -271,6 +281,7 @@ export default {
         }
       }
       event.messages = messages;
+      await ensureVision(messages);
       for (const [name, tool] of Object.entries<any>(event.tools ?? {})) {
         const output = { description: tool.description };
         await hooks["tool.definition"]({ toolID: engineTool(name) }, output);

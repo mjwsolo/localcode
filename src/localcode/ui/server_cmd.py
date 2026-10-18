@@ -15,11 +15,15 @@ from localcode.config import load_config
 from localcode.runtime import LocalCodeRuntimeGateway
 
 
-def server_command(gguf: str, port: int, alias: str | None = None) -> list[str]:
+def server_command(gguf: str, port: int, alias: str | None = None, vision: bool = False) -> list[str]:
+    """`vision`: load the image projector. The supervisor asks for it only once
+    an image is sent in the session (lazy projector), so a text-only session
+    never spends its 0.2-3.9 GB."""
     cfg = load_config()
     g = LocalCodeRuntimeGateway(cfg.runtime)
-    validate_model_memory(gguf, g._system_ram_gb())
+    validate_model_memory(gguf, g._system_ram_gb(), vision=vision)
     cmd = g.llama_server_command(gguf, port)
+    _drop_flag(cmd, "--mmproj", 1)
     validate_kv_cache_settings(cmd)
     # Validate AFTER stored tuning and environment overrides have rewritten flags.
     ram_gb = g._system_ram_gb()
@@ -80,11 +84,12 @@ def server_command(gguf: str, port: int, alias: str | None = None) -> list[str]:
     mode = os.environ.get("LOCALCODE_INTERNAL_THINKING_MODE") or cfg.runtime.internal_thinking_mode or "off"
     if control in ("server", "chat_template") and str(mode).strip().lower() != "on":
         cmd += ["--reasoning", "off", "--reasoning-budget", "0"]
-    # Vision: same rule as classic localcode (runtime.py) — pass --mmproj when the
-    # catalog says this model ships a projector and the sidecar is on disk.
-    mm = mmproj_for(gguf)
-    if mm is not None and "--mmproj" not in cmd:
+    # Vision: pass --mmproj only when the projector was asked for (an image was
+    # sent) and the sidecar is on disk.
+    mm = mmproj_for(gguf) if vision else None
+    if mm is not None:
         cmd += ["--mmproj", str(mm)]
+    _fit_drafter(g, gguf, cmd)
     # Budget every weight file actually passed to the server, including an
     # explicit user drafter. A 2048-token floor must not override lack of RAM.
     loaded_paths = {Path(gguf)}
@@ -92,6 +97,10 @@ def server_command(gguf: str, port: int, alias: str | None = None) -> list[str]:
         if flag in cmd:
             loaded_paths.add(Path(cmd[cmd.index(flag) + 1]))
     loaded_weights = sum(p.stat().st_size for p in loaded_paths if p.is_file())
+    # Sliding-window caches and the projector's compute buffer do not grow
+    # with the context but share the same memory.
+    from localcode import gpu_memory
+    loaded_weights += g._kv_fixed_bytes(gguf) + (gpu_memory.VISION_COMPUTE_BYTES if "--mmproj" in cmd else 0)
     bpt = g._kv_bytes_per_token(gguf)
     draft = cmd[cmd.index("--model-draft") + 1] if "--model-draft" in cmd else None
     spec = cmd[cmd.index("--spec-type") + 1] if "--spec-type" in cmd else ""
@@ -116,6 +125,13 @@ def server_command(gguf: str, port: int, alias: str | None = None) -> list[str]:
         fit = int((total - loaded_weights - reserve) / bpt) // 2048 * 2048
         if fit < 2048:
             raise ValueError("Insufficient RAM for model weights and minimum context; choose a smaller quantization in /models.")
+        # When the weights fit the GPU working set, keep the KV cache inside it
+        # too: past it Metal pages or the kernel kills the server mid-turn.
+        # Weights already over it (a quant the picker marks tight) keep the
+        # RAM-based context.
+        ws_free = gpu_memory.working_set_bytes(ram_gb) - loaded_weights - gpu_memory.COMPUTE_RESERVE_BYTES
+        if ws_free > 0:
+            fit = min(fit, max(2048, int(ws_free / bpt) // 2048 * 2048))
         ctx_index = cmd.index("--ctx-size") + 1
         cmd[ctx_index] = str(min(int(cmd[ctx_index]), fit))
     # Prompt warm-up (ui/warmup.py) reads the first turn's token ids back out
@@ -130,6 +146,37 @@ def server_command(gguf: str, port: int, alias: str | None = None) -> list[str]:
     except Exception:  # noqa: BLE001, S110
         pass
     return cmd
+
+
+def _drop_flag(cmd: list[str], flag: str, nargs: int) -> None:
+    while flag in cmd:
+        i = cmd.index(flag)
+        del cmd[i:i + 1 + nargs]
+
+
+def _fit_drafter(g, gguf: str, cmd: list[str]) -> None:
+    """Leave the catalog's speculative drafter out when it does not fit beside
+    the model, a working context and compute buffers in the GPU working set
+    (models_catalog.quant_plan uses the same rule for the picker). On a 16 GB
+    Mac the 0.4-1.7 GB drafter is the difference between a better quant and a
+    worse one; where it fits it stays (1.5-2x decode)."""
+    if "--model-draft" not in cmd:
+        return
+    drafter = g._catalog_drafter_path(gguf)
+    draft = Path(cmd[cmd.index("--model-draft") + 1])
+    if drafter is None or draft != Path(drafter[1]):
+        return  # a user-chosen draft model is the user's call
+    from localcode import gpu_memory
+    paths = {Path(gguf), draft}
+    if "--mmproj" in cmd:
+        paths.add(Path(cmd[cmd.index("--mmproj") + 1]))
+    weights = sum(p.stat().st_size for p in paths if p.is_file())
+    fixed = g._kv_fixed_bytes(gguf) + (gpu_memory.VISION_COMPUTE_BYTES if "--mmproj" in cmd else 0)
+    bpt = g._kv_bytes_per_token(gguf) or 0
+    if gpu_memory.fit(weights, g._system_ram_gb(), bpt, fixed) != "fits":
+        _drop_flag(cmd, "--model-draft", 1)
+        _drop_flag(cmd, "--spec-type", 1)
+        _drop_flag(cmd, "--spec-draft-n-max", 1)
 
 
 def catalog_choice(gguf: str):
@@ -178,20 +225,16 @@ def validate_kv_cache_settings(cmd: list[str]) -> None:
         )
 
 
-def validate_model_memory(gguf: str, ram_gb: float) -> None:
+def validate_model_memory(gguf: str, ram_gb: float, vision: bool = False) -> None:
     """Reject definite over-capacity loads; passing is not a fit guarantee.
 
     Include installed projector/drafter weights and OS reserve. Actual KV and
     Metal workspace peaks are measured by the local hardware gate.
     """
     paths = {Path(gguf)}
-    projector = mmproj_for(gguf)
+    projector = mmproj_for(gguf) if vision else None
     if projector:
         paths.add(projector)
-    choice = catalog_choice(gguf)
-    drafter = getattr(choice, "drafter", None)
-    if drafter:
-        paths.add(Path(drafter.local_path))
     weights = sum(p.stat().st_size for p in paths if p.is_file())
     total = int(ram_gb * 1024 ** 3)
     if total <= 0:

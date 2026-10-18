@@ -34,7 +34,7 @@ def test_tuned_launcher_context_cannot_bypass_machine_ceiling(source, monkeypatc
     cfg = AppConfig(runtime=RuntimeConfig(), ui=UIConfig())
     cfg.runtime.kv_cache_type_v = 'turbo4'
     monkeypatch.setattr(server_cmd, 'load_config', lambda: cfg)
-    monkeypatch.setattr(server_cmd, 'validate_model_memory', lambda *_: None)
+    monkeypatch.setattr(server_cmd, 'validate_model_memory', lambda *_, **__: None)
     monkeypatch.setattr(LocalCodeRuntimeGateway, '_system_ram_gb', lambda _: 24)
     monkeypatch.setenv('LOCALCODE_AGENT_RUN_DIR', str(tmp_path / 'run'))
     monkeypatch.setenv('LOCALCODE_PROMPT_WARMUP', '0')

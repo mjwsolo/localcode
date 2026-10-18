@@ -3,7 +3,7 @@
 Owns the bundled llama-server and exposes a tiny localhost control API that
 the in-TUI `/model` picker talks to. The picker itself is NOT reimplemented
 here: the catalog comes from localcode's own modules (MODEL_GROUPS, recommend,
-hf_quants.fetch_quants, fit_badge, estimate_decode_tok_s) and downloads flow
+hf_quants.fetch_quants, quant_plan, estimate_decode_tok_s) and downloads flow
 through bootstrap.download_model — the same code the Textual picker uses.
 
     GET  /catalog            level 1: every catalog model, ★ from recommend()
@@ -13,6 +13,7 @@ through bootstrap.download_model — the same code the Textual picker uses.
     GET  /status             {"state": idle|downloading|loading|ready|error, ...}
     POST /cancel             stop the download in progress (the .part is discarded)
     POST /warmup/cancel      stop the prompt warm-up prefill (the user just sent a turn)
+    POST /vision/load        an image was sent: restart with the (downloaded) projector
     GET  /models_dir         {"path", "free_gb"}
     GET  /progress           prompt-fill progress of the running request (from llama-server /slots)
     GET  /voice/status       {"ready", "recording", "detail"}   (whisper env + STT model)
@@ -44,13 +45,16 @@ from urllib.parse import parse_qs, urlparse
 import localcode
 from localcode import bootstrap
 from localcode.model_files import model_files, find_model
-from localcode.hf_quants import fetch_quants, fit_badge
+from localcode.hf_quants import fetch_quants
 from localcode.models_catalog import (
     MODEL_GROUPS,
     _system_ram_gb,
     choice_for_quant,
     estimate_decode_tok_s,
+    is_degraded,
+    quant_plan,
     recommend,
+    recommended_quant_index,
 )
 
 MIN_SPEED_FRACTION = 0.5  # same rule as tui/screens/model_picker.py
@@ -97,6 +101,11 @@ class Supervisor:
         self.active: dict = {}  # {"group": key, "filename": ..} while a download/switch runs
         self.ram_gb = _system_ram_gb()
         self.bandwidth = _bandwidth()
+        # Lazy vision projector: the server starts text-only; the first image
+        # in a session asks for the projector (POST /vision/load) and the
+        # server restarts with it for the rest of that model's load.
+        self.vision_wanted: str | None = None   # alias whose projector was asked for
+        self.vision_loaded = False              # the running server has --mmproj
         self.log = open(HERE / "server.log", "ab", buffering=0)  # noqa: SIM115 (lives with the server)
         self._drop_retired_sidecars()
         # Context budget (ui/context_budget.py): the per-slot context the server
@@ -181,19 +190,24 @@ class Supervisor:
 
     def vision_info(self) -> dict:
         """What the loaded model could see with, and whether it is on disk. Nothing
-        is downloaded here: the user asks via POST /vision/install (the TUI's /vision)."""
+        is downloaded here: the user asks via POST /vision/install (the TUI's /vision).
+
+        `vision` means images work: the projector is on disk and loads with the
+        first image (`vision_loaded` says whether it is in memory now)."""
         if not self.current:
-            return {"vision": False, "vision_available": False, "vision_size_gb": 0.0}
+            return {"vision": False, "vision_available": False, "vision_size_gb": 0.0, "vision_loaded": False}
         from localcode.ui.server_cmd import catalog_choice, mmproj_for
         choice = catalog_choice(str(self.models_dir / f"{self.current}.gguf"))
         available = bool(choice is not None and getattr(choice, "supports_vision", False))
         return {"vision": mmproj_for(str(self.models_dir / f"{self.current}.gguf")) is not None,
                 "vision_available": available,
-                "vision_size_gb": round(float(getattr(choice, "mmproj_size_gb", 0.0) or 0.0), 2) if available else 0.0}
+                "vision_size_gb": round(float(getattr(choice, "mmproj_size_gb", 0.0) or 0.0), 2) if available else 0.0,
+                "vision_loaded": bool(getattr(self, "vision_loaded", False) and getattr(self, "vision_wanted", None) == self.current)}
 
     def vision_install(self) -> dict:
-        """User-requested: download the projector for the loaded model, then restart
-        the server with it. Progress is in /status like any download."""
+        """User-requested: download the projector for the loaded model. It loads
+        with the first image (vision_load); a running server is not restarted.
+        Progress is in /status like any download."""
         if not self.current:
             return {"error": "no model loaded"}
         if not self.lock.acquire(blocking=False):
@@ -203,8 +217,10 @@ class Supervisor:
             try:
                 self.active = {"group": None, "filename": None}
                 self.ensure_mmproj(alias)
-                self.state = {"state": "loading", "model": alias, "detail": "restarting with vision…", "pct": None}
-                if self.start(alias):
+                process = getattr(self, "proc", None)
+                if process is not None and process.poll() is None and self.healthy():
+                    self.state = {"state": "ready", "model": alias, "detail": "", "pct": None}
+                elif self.start(alias):
                     self.state = {"state": "ready", "model": alias, "detail": "", "pct": None}
                 else:
                     self.state = {"state": "error", "model": alias, "detail": "llama-server failed to restart", "pct": None}
@@ -213,6 +229,53 @@ class Supervisor:
                 self.lock.release()
         threading.Thread(target=work, daemon=True).start()
         return {"ok": True}
+
+    def vision_load(self) -> dict:
+        """An image was sent: restart the server with the projector that is
+        already on disk. Never downloads (a missing projector stays the
+        ask-first /vision flow). Returns at once; /status reports `loading`
+        and then `vision_loaded`."""
+        if not self.current:
+            return {"error": "no model loaded"}
+        info = self.vision_info()
+        if info["vision_loaded"]:
+            return {"ok": True, "loaded": True}
+        if not info["vision"]:
+            return {"error": "This model's image projector is not downloaded. Run /vision to download it.",
+                    "vision_available": info["vision_available"], "vision_size_gb": info["vision_size_gb"]}
+        if not self.lock.acquire(blocking=False):
+            if self.state.get("state") == "loading" and self.vision_wanted == self.current:
+                return {"ok": True, "loading": True}
+            return {"error": "a model switch is already in progress"}
+        alias = self.current
+        self.vision_wanted = alias
+        self.state = {"state": "loading", "model": alias, "detail": "loading the image projector…", "pct": None}
+        def work() -> None:
+            try:
+                # The request that carries the image waits on this; a reply
+                # still streaming (a tool step that just ended) finishes first.
+                try:
+                    self.cancel_warmup()
+                except Exception:  # noqa: BLE001, S110
+                    pass
+                for _ in range(60):
+                    if self.progress().get("phase") == "idle":
+                        break
+                    time.sleep(0.5)
+                if self.start(alias):
+                    self.state = {"state": "ready", "model": alias, "detail": "", "pct": None}
+                    log(f"supervisor: image projector loaded for {alias}")
+                else:
+                    self.vision_wanted = None
+                    self.state = {"state": "error", "model": alias, "detail": "llama-server failed to restart with the image projector", "pct": None}
+            except Exception as exc:  # noqa: BLE001
+                self.vision_wanted = None
+                log(f"supervisor: image projector load failed: {type(exc).__name__}: {exc}")
+                self.state = {"state": "error", "model": alias, "detail": "Could not load the image projector; see supervisor.log", "pct": None}
+            finally:
+                self.lock.release()
+        threading.Thread(target=work, daemon=True).start()
+        return {"ok": True, "loading": True, "size_gb": info["vision_size_gb"]}
 
     def ensure_mmproj(self, alias: str) -> None:
         """Fetch the model's vision projector (mmproj sidecar). Only called on an
@@ -262,7 +325,7 @@ class Supervisor:
         # localcode's own per-machine server command (RAM-tier context, KV
         # compression, flash-attn, checkpoints) — nothing hardcoded here.
         from localcode.ui.server_cmd import server_command
-        cmd = server_command(str(gguf), self.port, alias)
+        cmd = server_command(str(gguf), self.port, alias, vision=getattr(self, "vision_wanted", None) == alias)
         with self._process_lock:
             if self._closing.is_set():
                 return False
@@ -280,6 +343,7 @@ class Supervisor:
                 self._budget = None
                 self._budget_info = {}
             from localcode.ui.process_guard import spawn_owned
+            self.vision_loaded = "--mmproj" in cmd
             self.proc = spawn_owned(cmd, stdout=self.log, lease_fd=getattr(self, "lease_fd", None))
             process = self.proc
             log(f"supervisor: started model process guard pid {self.proc.pid} for {alias}")
@@ -581,7 +645,7 @@ class Supervisor:
     # ---- catalog ------------------------------------------------------------
     def _rec_repo(self) -> str | None:
         try:
-            return recommend(self.ram_gb).hf_repo
+            return recommend(self.ram_gb, self.bandwidth).hf_repo
         except Exception:  # noqa: BLE001
             return None
 
@@ -631,7 +695,7 @@ class Supervisor:
 
     def _quant_rows(self, g, refresh: bool = False):
         from localcode.hf_quants import Quant, _parse_label, _read_cache
-        from localcode.models_catalog import CHOICES
+        from localcode.models_catalog import known_quants
         cached = _read_cache(g.hf_repo)
         memory = self.__dict__.setdefault("_quant_memory", {})
         rows, fetched = memory.get(g.hf_repo, cached or ([], 0))
@@ -657,12 +721,13 @@ class Supervisor:
                         threading.Thread(target=fetch, daemon=True).start()
                     except RuntimeError:
                         pending.discard(g.hf_repo)
-        # Trusted curated choices keep a first-time/offline picker usable too.
+        # Trusted curated choices and the recorded repo sizes keep a
+        # first-time/offline picker usable too.
         known = {q.filename: q for q in rows if not q.is_mmproj}
-        for choice in CHOICES:
-            label = _parse_label(choice.filename)
-            if choice.hf_repo == g.hf_repo and label:
-                known.setdefault(choice.filename, Quant(choice.filename, choice.size_gb, label, False))
+        for filename, size_gb in known_quants(g):
+            label = _parse_label(filename)
+            if label:
+                known.setdefault(filename, Quant(filename, size_gb, label, False))
         return list(known.values())
 
     def quants(self, key: str) -> dict:
@@ -684,19 +749,24 @@ class Supervisor:
                 except OSError:
                     continue
         rows.sort(key=lambda q: q.size_gb)
-        rec_idx = self._recommended_quant_idx(rows, g.display_name)
+        rec_idx = self._recommended_quant_idx(rows, g)
         process = getattr(self, "proc", None)
         loaded = process is not None and process.poll() is None and self.state["state"] == "ready"
         out = []
-        # A vendor-trained drafter ships with the model (downloaded with it,
-        # loaded with it), so the size the user sees and the RAM fit include it.
+        # A vendor-trained drafter ships with the model and loads with it when
+        # it fits beside the quant (quant_plan, the launcher's own rule); the
+        # size the user sees includes it only then.
         draft_gb = float(getattr(getattr(g, "drafter", None), "size_gb", 0.0) or 0.0)
         for i, q in enumerate(rows):
             spd = estimate_decode_tok_s(q.size_gb, g.display_name, self.bandwidth)
-            total_gb = q.size_gb + draft_gb
+            plan = quant_plan(g, q.size_gb, self.ram_gb)
+            degraded = is_degraded(q.label, g)
             out.append({
-                "filename": q.filename, "alias": _alias(q.filename), "label": q.label,
-                "size_gb": round(total_gb, 1), "fit": fit_badge(total_gb, self.ram_gb),
+                "filename": q.filename, "alias": _alias(q.filename),
+                # Below UD-Q2_K_XL agent quality falls off; say so where the user picks.
+                "label": f"{q.label} · degraded" if degraded else q.label,
+                "degraded": degraded, "drafter": plan["drafter"],
+                "size_gb": round(plan["size_gb"], 1), "fit": plan["fit"],
                 "tok_s": spd, "recommended": i == rec_idx,
                 "downloaded": q.filename in installed,
                 "current": _alias(q.filename) == self.current,
@@ -710,20 +780,12 @@ class Supervisor:
                 "drafter_size_gb": round(draft_gb, 2),
                 "vision_size_gb": round(float(getattr(g, "mmproj_size_gb", 0.0) or 0.0), 2) if getattr(g, "mmproj_filename", None) else 0.0}
 
-    def _recommended_quant_idx(self, rows, name: str) -> int | None:
-        if not rows:
-            return None
-        fitting = [i for i, q in enumerate(rows) if q.size_gb <= 0.55 * self.ram_gb]
-        if not fitting:
-            return 0
-        speeds = {i: (estimate_decode_tok_s(rows[i].size_gb, name, self.bandwidth) or 0)
-                  for i in fitting}
-        fastest = max(speeds.values()) or 0
-        if fastest <= 0:
-            return max(fitting, key=lambda i: rows[i].size_gb)
-        bar = fastest * MIN_SPEED_FRACTION
-        responsive = [i for i in fitting if speeds[i] >= bar]
-        return max(responsive or fitting, key=lambda i: rows[i].size_gb)
+    def _recommended_quant_idx(self, rows, g) -> int | None:
+        """The starred quant: fits this Mac, not degraded (models_catalog)."""
+        return recommended_quant_index(
+            rows, g, self.ram_gb,
+            lambda size: estimate_decode_tok_s(size, g.display_name, self.bandwidth),
+            MIN_SPEED_FRACTION)
 
     # ---- select (download + switch), runs on its own thread ------------------
     def select(self, key: str, filename: str) -> dict:
@@ -836,6 +898,8 @@ class Supervisor:
                               "detail": "Model files are ready, but another request is active. Retry the selection when it finishes.", "pct": None}
                 return
             self.state = {"state": "loading", "model": alias, "detail": "loading model…", "pct": None}
+            if getattr(self, "vision_wanted", None) != alias:
+                self.vision_wanted = None  # a newly loaded model starts text-only
             load_started = True
             if self.start(alias):
                 self.state = {"state": "ready", "model": alias, "detail": "", "pct": None}
@@ -1258,6 +1322,8 @@ def make_handler(sup: Supervisor):
             if u.path == "/models_dir":
                 res = sup.set_models_dir(str(body.get("path", "")))
                 return self._json(res, 200 if "error" not in res else 400)
+            if u.path == "/vision/load":
+                return self._json(sup.vision_load())
             if u.path == "/vision/install":
                 res = sup.vision_install()
                 return self._json(res, 200 if "error" not in res else 409)

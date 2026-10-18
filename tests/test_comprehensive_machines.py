@@ -28,8 +28,11 @@ RAM_LADDER = [8, 16, 18, 24, 32, 36, 48, 64, 96, 128]
 
 @pytest.mark.parametrize("ram", RAM_LADDER)
 def test_recommend_returns_a_real_catalog_entry(ram):
+    """A curated entry, or a quant the vendor repo really ships (recorded size)."""
     choice = catalog.recommend(ram)
-    assert choice in catalog.CHOICES
+    group = catalog.group_for_filename(choice.filename)
+    assert choice in catalog.CHOICES or (
+        group is not None and choice.filename in catalog.KNOWN_QUANT_BYTES[group.hf_repo])
     assert choice.size_gb > 0
 
 
@@ -46,12 +49,14 @@ def test_small_ram_gets_smallest_model():
     assert catalog.recommend(8) is smallest
 
 
-def test_16gb_mac_gets_the_new_12b():
-    """The user's headline case: a 16 GB Mac should land on a model that
-    fits its ~55% budget — the Gemma 4 12B Q4 we just added."""
+def test_16gb_mac_gets_the_12b_with_its_drafter():
+    """A 16 GB Mac (10.7 GiB GPU working set) lands on Gemma 4 12B UD-Q5_K_XL:
+    no 26B/35B quant above the degraded line fits beside a working context,
+    and Q5 + the 0.47 GB MTP drafter still does."""
     choice = catalog.recommend(16)
-    assert choice.size_gb <= 16 * 0.55
-    assert "12b" in choice.key
+    assert choice.filename == "gemma-4-12b-it-UD-Q5_K_XL.gguf"
+    plan = catalog.quant_plan(catalog.group_for_filename(choice.filename), choice.size_gb, 16)
+    assert plan["fit"] == "fits" and plan["drafter"]
 
 
 def test_large_ram_gets_a_large_model():
@@ -61,10 +66,15 @@ def test_large_ram_gets_a_large_model():
 
 
 @pytest.mark.parametrize("ram", RAM_LADDER)
-def test_recommended_model_fits_budget_or_is_smallest(ram):
+def test_recommended_model_fits_and_is_not_degraded(ram):
     choice = catalog.recommend(ram)
-    smallest = min(catalog.CHOICES, key=lambda c: c.size_gb)
-    assert choice.size_gb <= ram * 0.55 or choice is smallest
+    group = catalog.group_for_filename(choice.filename)
+    plan = catalog.quant_plan(group, choice.size_gb, ram)
+    if plan["fit"] != "fits":  # only when nothing fits: the smallest runnable model
+        assert all(catalog.recommended_quant_index(catalog.known_quants(g), g, ram) is None
+                   for g in catalog._groups_by_capability())
+        return
+    assert not catalog.is_degraded(catalog._quant_label(choice.filename), group)
 
 
 # ── GPU-offload decision per RAM ────────────────────────────────────

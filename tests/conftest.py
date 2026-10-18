@@ -31,6 +31,16 @@ from localcode.config import (
 from localcode.runtime import LocalCodeRuntimeGateway
 
 
+@pytest.fixture(autouse=True)
+def _gpu_working_set_from_ram(monkeypatch):
+    """Tests see macOS's default GPU working set for the RAM size, never this
+    machine's live limit (no sysctl read, no llama-server device probe)."""
+    from localcode import gpu_memory
+    monkeypatch.setattr(gpu_memory, "probe_metal_working_set", lambda memsize: None)
+    monkeypatch.setattr(gpu_memory, "_sysctl_wired_limit_bytes", lambda: None)
+    monkeypatch.setattr(gpu_memory, "_LIVE", {})
+
+
 @pytest.fixture
 def tmp_repo(tmp_path: Path) -> Path:
     """Create a temporary git repository with a few Python files."""
