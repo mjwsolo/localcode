@@ -4,7 +4,8 @@ One directory per task, Harbor-style:
 
 ```
 <id>/instruction.md      what the user says (multi-turn tasks: one "## Turn N" section per turn)
-<id>/task.toml           quality, component, purpose, budgets, allowed_paths, null_passes
+<id>/task.toml           quality, component, purpose, budgets, allowed_paths, null_passes,
+                         optional env (launcher settings; the runtime is restarted for them)
 <id>/workspace/          staged into a fresh git repo per trial
 <id>/tests/test.sh       hidden from the agent; run in the workspace after the agent stops;
                          writes .eval/reward.json {"pass": bool, "notes": str}

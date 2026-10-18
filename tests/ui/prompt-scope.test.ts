@@ -59,7 +59,8 @@ test("compaction checklist is on by default, additive and leaves the stable prom
     delete process.env.LOCALCODE_COMPACTION_CHECKLIST;
     await hooks["experimental.session.compacting"]({}, output);
     expect(output.context).toHaveLength(2);
-    expect(output.context[1]).toContain("exact constraints");
+    expect(output.context[1]).toContain("keeps the user's messages verbatim");
+    expect(output.context[1]).not.toContain("current objective");
     expect(output.context[1]).toContain("checks actually run");
     expect(output.prompt).toBe("Custom prompt");
   } finally {

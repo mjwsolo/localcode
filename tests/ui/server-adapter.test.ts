@@ -1,8 +1,8 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import plugin, { engineEvents, engineTool, parseTodos, renderChecklist, transformSystem, withTurnContext } from "../../src/localcode/ui/plugin/server";
+import plugin, { engineEvents, engineTool, lowPowerModeOn, parseTodos, renderChecklist, transformSystem, withTurnContext } from "../../src/localcode/ui/plugin/server";
 import LocalcodePluginDefault from "../../src/localcode/ui/plugin/localcode";
 
 const { editedPaths } = LocalcodePluginDefault as any;
@@ -163,37 +163,87 @@ test("the server plugin registers the todo tool, carries turn context, guards to
   }
 });
 
-test("old tool output is pruned at a new turn using the local model's input budget, then stays fixed within the turn", async () => {
+test("old tool output is masked near the budget in one batch, saved to disk, and the decision survives a restart", async () => {
   const runtime = fakeRuntime();
   (runtime.ctx as any).model = { async list() { return { data: [{ providerID: "localcode", id: "m", limit: { context: 16384, input: 8192, output: 4096 } }] }; } };
-  const dispose = await plugin.setup(runtime.ctx);
+  let dispose = await plugin.setup(runtime.ctx);
+  const turn = (n: number, size = 8000) => [
+    { role: "user", content: [{ type: "text", text: "turn " + n }] },
+    { role: "assistant", content: [{ type: "tool-call", id: "c" + n, name: "read", input: { filePath: `f${n}.py` } }] },
+    { role: "tool", content: [{ type: "tool-result", id: "c" + n, name: "read", result: { type: "text", value: `out${n} ` + "x".repeat(size) } }] },
+  ];
+  const request = (messages: any[]) => ({ sessionID: "ses", agent: "build", model: { providerID: "localcode", id: "m" }, system: [], tools: {}, messages });
+  const values = (event: any) => event.messages.filter((m: any) => m.role === "tool").map((m: any) => m.content[0].result.value);
+  const isStub = (v: string) => v.startsWith("[Old tool output masked");
   try {
-    const turn = (n: number) => [
-      { role: "user", content: [{ type: "text", text: "turn " + n }] },
-      { role: "assistant", content: [{ type: "tool-call", id: "c" + n, name: "read", input: {} }] },
-      { role: "tool", content: [{ type: "tool-result", id: "c" + n, name: "read", result: { type: "text", value: "x".repeat(12000) } }] },
-    ];
-    const request = (messages: any[]) => ({ sessionID: "ses", agent: "build", model: { providerID: "localcode", id: "m" }, system: [], tools: {}, messages });
-    const history = [...turn(1), ...turn(2), ...turn(3), ...turn(4), ...turn(5)];
-    // Budget 8192: protect 2,048 tokens, prune at 1,024 reclaimable. Each output is 3,000 tokens;
-    // the last two user turns are never pruned, so turns 1-3 go.
+    // Budget 8192: masking starts at ~5,734 tokens. Three outputs of ~2,000 tokens stay below it.
+    const small: any = request([...turn(1), ...turn(2)]);
+    await runtime.sessionHooks.get("context")!(small);
+    expect(values(small).some(isStub)).toBe(false);
+    // Past the trigger every output outside the protected window (2,048 tokens) is masked at once,
+    // including ones from the current turn.
+    const history = [...turn(1), ...turn(2), ...turn(3), ...turn(4)];
     const first: any = request(history);
     await runtime.sessionHooks.get("context")!(first);
-    const values = (event: any) => event.messages.filter((m: any) => m.role === "tool").map((m: any) => m.content[0].result.value);
-    expect(values(first).map((v: string) => v === "[Old tool result content cleared]")).toEqual([true, true, true, false, false]);
-    // A smaller budget mid-turn changes nothing until the next user turn starts.
-    (runtime.ctx as any).model = { async list() { return { data: [{ providerID: "localcode", id: "m", limit: { context: 4096, input: 2048, output: 1024 } }] }; } };
+    expect(values(first).map(isStub)).toEqual([true, true, true, false]);
+    expect(values(first)[0]).toContain("read(filePath=f1.py)");
+    expect(readFileSync(join(runtime.directory, ".localcode-agent/tool-out/c1.txt"), "utf8")).toStartWith("out1 ");
+    // Growing a little does not edit history again.
     const more: any = request([...history, { role: "assistant", content: [{ type: "text", text: "ok" }] }]);
     await runtime.sessionHooks.get("context")!(more);
-    expect(values(more).map((v: string) => v === "[Old tool result content cleared]")).toEqual([true, true, true, false, false]);
-    // The next turn: turn 4 falls outside the last two user turns and is pruned.
-    const next: any = request([...history, ...turn(6)]);
-    await runtime.sessionHooks.get("context")!(next);
-    expect(values(next).map((v: string) => v === "[Old tool result content cleared]")).toEqual([true, true, true, true, false, false]);
-    // Another provider keeps opencode's default limits (nothing reaches them here).
-    const other: any = { ...request([...history, ...turn(6)]), sessionID: "other", model: { providerID: "else", id: "x" } };
+    expect(values(more).map(isStub)).toEqual([true, true, true, false]);
+    // A new process (a headless run is one per turn) sends the identical prefix.
+    await dispose();
+    dispose = await plugin.setup(runtime.ctx);
+    const again: any = request(history);
+    await runtime.sessionHooks.get("context")!(again);
+    expect(values(again)).toEqual(values(first));
+    // Another provider has no measured budget: nothing is masked.
+    const other: any = { ...request([...turn(1), ...turn(2), ...turn(3), ...turn(4)]), sessionID: "other", model: { providerID: "else", id: "x" } };
     await runtime.sessionHooks.get("context")!(other);
-    expect(values(other).some((v: string) => v === "[Old tool result content cleared]")).toBe(false);
+    expect(values(other).some(isStub)).toBe(false);
+  } finally {
+    await dispose();
+  }
+});
+
+test("the step's cached and processed prompt tokens are logged per request", async () => {
+  const runtime = fakeRuntime();
+  const dispose = await plugin.setup(runtime.ctx);
+  try {
+    runtime.publish({ type: "session.step.ended", id: "s1", data: { sessionID: "ses", finish: "stop", tokens: { input: 250, output: 10, reasoning: 0, cache: { read: 750, write: 0 } } } });
+    const file = join(runtime.directory, ".localcode-agent/localcode-plugin.log");
+    await settle(() => { try { return readFileSync(file, "utf8").includes("[localcode cache]"); } catch { return false; } });
+    expect(readFileSync(file, "utf8")).toContain("[localcode cache] prompt 1000 tokens: cached 750, processed 250 (hit 75%)");
+  } finally {
+    await dispose();
+  }
+});
+
+test("Low Power Mode is read from pmset", () => {
+  expect(lowPowerModeOn("System-wide power settings:\nCurrently in use:\n standby              1\n lowpowermode         1\n")).toBe(true);
+  expect(lowPowerModeOn(" lowpowermode         0\n")).toBe(false);
+  expect(lowPowerModeOn("Currently in use:\n sleep 1\n")).toBe(false);
+});
+
+test("open todos at a compaction ride at the checkpoint's tail, frozen for that checkpoint", async () => {
+  const runtime = fakeRuntime();
+  const dispose = await plugin.setup(runtime.ctx);
+  try {
+    const todo = runtime.tools.find((tool) => tool.name === "todowrite");
+    await todo.execute({ todos: [{ content: "write app", status: "in_progress" }, { content: "plan", status: "completed" }] }, { sessionID: "ses" });
+    const checkpoint = () => ({ id: "cmp1", role: "user", content: [{ type: "text", text: "<conversation-checkpoint>\nsummary\n</conversation-checkpoint>" }] });
+    const request = () => ({ sessionID: "ses", agent: "build", system: [], tools: {}, messages: [checkpoint()] });
+    const first: any = request();
+    await runtime.sessionHooks.get("context")!(first);
+    const tail = first.messages[0].content.at(-1).text;
+    expect(tail).toContain("[>] write app");
+    expect(tail).not.toContain("plan");
+    // Later todo changes do not rewrite this checkpoint (the cached prefix stays the same).
+    await todo.execute({ todos: [{ content: "write app", status: "completed" }] }, { sessionID: "ses" });
+    const later: any = request();
+    await runtime.sessionHooks.get("context")!(later);
+    expect(later.messages[0].content.at(-1).text).toBe(tail);
   } finally {
     await dispose();
   }

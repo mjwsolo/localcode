@@ -8,6 +8,17 @@ import json
 import re
 
 
+# A tool call written out as prose instead of emitted: JSON with a tool name and
+# arguments, or the XML-ish wrappers some chat templates use.
+NARRATED_CALL_RE = re.compile(
+    r'<(?:tool_call|function_call|invoke|function=)[\s>]|"(?:name|tool_name|function)"\s*:\s*"[a-z_]+"\s*,\s*"(?:arguments|parameters|input)"\s*:', re.I)
+# Errors the runtime returns for a tool call it could not parse or validate (the model's
+# fault), as opposed to a tool that ran and failed. Wording from the v2 runtime.
+MALFORMED_CALL_RE = re.compile(
+    r'could not be parsed as JSON|arguments were not completed|before you could complete the arguments'
+    r'|^Invalid arguments for tool|^Unknown tool:|is not a valid tool|invalid tool input', re.I | re.M)
+
+
 def _median(xs):
     xs = sorted(x for x in xs if isinstance(x, (int, float)))
     return None if not xs else (xs[len(xs) // 2] if len(xs) % 2 else (xs[len(xs) // 2 - 1] + xs[len(xs) // 2]) / 2)
@@ -15,6 +26,8 @@ def _median(xs):
 
 def summarize(events, server_log):
     calls, seen, repeats, failures, durations = {}, set(), 0, 0, []
+    malformed = narrated = 0
+    prompt_cache = []          # per model step: tokens served from cache vs processed again
     tokens = {k: 0 for k in ('input', 'output', 'cache_read', 'cache_write')}
     usage_seen = False
     seen_ids = set()
@@ -29,6 +42,11 @@ def summarize(events, server_log):
                 cache = usage.get('cache') or {}
                 tokens['cache_read'] += cache.get('read', 0) or 0
                 tokens['cache_write'] += cache.get('write', 0) or 0
+                processed, cached = usage.get('input', 0) or 0, cache.get('read', 0) or 0
+                if processed + cached > 0:
+                    prompt_cache.append({'cached': cached, 'processed': processed})
+        if event.get('type') == 'text' and NARRATED_CALL_RE.search(str(part.get('text') or event.get('text') or '')):
+            narrated += 1
         if event.get('type') != 'tool_use':
             continue
         state = part.get('state') or {}
@@ -46,6 +64,8 @@ def summarize(events, server_log):
         repeats += signature in seen
         seen.add(signature)
         failures += state.get('status') == 'error'
+        if state.get('status') == 'error' and MALFORMED_CALL_RE.search(str(state.get('error') or '')):
+            malformed += 1
         timing = state.get('time') or {}
         if isinstance(timing.get('start'), (int, float)) and isinstance(timing.get('end'), (int, float)):
             durations.append(max(0, timing['end'] - timing['start']) / 1000)
@@ -55,8 +75,20 @@ def summarize(events, server_log):
         prefix = 'prefill' if kind.startswith('prompt') else 'decode'
         requests.setdefault(task, {})[prefix + '_ms'] = float(ms)
         requests[task][prefix + '_tokens'] = int(count)
+    attempted = sum(calls.values()) + narrated
+    cached_total = sum(r['cached'] for r in prompt_cache)
+    prompt_total = cached_total + sum(r['processed'] for r in prompt_cache)
     return {
         'usage_tokens': tokens if usage_seen else None,
+        # Prefix-cache hit rate: of all prompt tokens the server was sent, the share it reused
+        # from its cache (llama.cpp cached_tokens). Each history edit lowers it.
+        'prompt_cache_by_step': prompt_cache,
+        'prefix_cache_hit_rate': round(cached_total / prompt_total, 4) if prompt_total else None,
+        'reprocessed_prompt_tokens': prompt_total - cached_total if prompt_total else None,
+        # Calls the model emitted that could not be parsed or validated, plus calls written as
+        # text instead of emitted, over every call it attempted.
+        'malformed_tool_calls': malformed + narrated,
+        'malformed_tool_call_rate': round((malformed + narrated) / attempted, 4) if attempted else None,
         'tool_calls_by_name': calls, 'repeated_tool_calls': repeats,
         'tool_errors': failures, 'tool_duration_s': sum(durations) if durations else None,
         'server_requests': list(requests.values()),

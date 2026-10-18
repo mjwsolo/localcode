@@ -6,7 +6,8 @@
  *   ─────────────────────────────────────   ─────────────────────────────────────────────
  *   experimental.chat.system.transform  ->  session.hook("context" | "compaction" | "generate"): event.system
  *   experimental.chat.messages.transform ->  session.hook("context"): event.messages
- *   (v1 runtime) old tool output pruning ->  session.hook("context"): see pruneCandidates
+ *   (v1 runtime) old tool output pruning ->  session.hook("context"): observation masking near the
+ *                                            budget, see maskCandidates (context.ts)
  *   tool.definition                     ->  session.hook("context"): event.tools[name].description
  *   experimental.session.compacting     ->  session.hook("compaction"): appended to the summary request
  *   chat.message                        ->  session.hook("prompt"); added parts ride in the user
@@ -21,7 +22,10 @@
  *   todowrite (v1 built-in)             ->  a plugin tool with the same name and schema
  */
 import LocalcodePlugin from "./localcode";
-import { applyPruned, leanMessages, pruneCandidates, pruneLimits } from "./context";
+import { execFile } from "node:child_process";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { applyMasked, checkpointIndex, estimateRequest, leanMessages, maskCandidates, maskedOutputs, maskLimits, maskPath, withCheckpointTodos } from "./context";
 import { LocalcodeRpc } from "./rpc";
 
 /** Tool names the engine was written against (opencode v1) for the v2 tools that replaced them. */
@@ -132,6 +136,11 @@ export async function transformSystem(hooks: any, agent: string | undefined, sys
 
 type Ctx = any;
 
+/** `pmset -g` lists `lowpowermode 1` while macOS Low Power Mode is on. */
+export function lowPowerModeOn(pmset: string): boolean {
+  return /^\s*lowpowermode\s+1\b/m.test(pmset);
+}
+
 export function createAdapter(ctx: Ctx) {
   const directory: string = ctx.location?.directory ?? process.cwd();
   let currentAgent: string | undefined;
@@ -224,9 +233,34 @@ export default {
       });
     });
 
-    // Old tool output pruning: decided when a new user turn starts (where opencode v1 pruned,
-    // at the end of the previous turn), so the prefix stays fixed within a turn.
-    const pruning = new Map<string, { pruned: Set<string>; users: number }>();
+    // Observation masking (context.ts): history is edited only when the prompt nears the budget,
+    // in one large batch. Decisions and saved outputs live on disk per session, so a restarted
+    // process (a headless run is one process per turn) sends the same prefix.
+    const stateDir = join(adapter.directory, ".localcode-agent");
+    const statePath = (sessionID: string) => join(stateDir, `context-${sessionID.replace(/[^A-Za-z0-9_-]/g, "_")}.json`);
+    type ContextState = { masked: string[]; checkpoints: Record<string, string> };
+    const states = new Map<string, { masked: Set<string>; checkpoints: Record<string, string> }>();
+    const contextState = (sessionID: string) => {
+      let state = states.get(sessionID);
+      if (!state) {
+        let saved: Partial<ContextState> = {};
+        try { saved = JSON.parse(readFileSync(statePath(sessionID), "utf8")); } catch { /* new session */ }
+        state = { masked: new Set(Array.isArray(saved.masked) ? saved.masked : []), checkpoints: saved.checkpoints && typeof saved.checkpoints === "object" ? saved.checkpoints : {} };
+        states.set(sessionID, state);
+      }
+      return state;
+    };
+    const saveState = (sessionID: string) => {
+      const state = states.get(sessionID);
+      if (!state) return;
+      try { mkdirSync(stateDir, { recursive: true }); writeFileSync(statePath(sessionID), JSON.stringify({ masked: [...state.masked], checkpoints: state.checkpoints })); } catch { /* best effort */ }
+    };
+    const logFile = join(stateDir, "localcode-plugin.log");
+    const log = (line: string) => { try { mkdirSync(stateDir, { recursive: true }); appendFileSync(logFile, `${new Date().toISOString()} ${line}\n`); } catch { /* best effort */ } };
+
+    // Estimates are calibrated by the server's own prompt counts: the last request's estimate
+    // against the prompt tokens the step reported.
+    const calibration = new Map<string, { estimate: number; ratio: number }>();
     const inputBudget = async (model: { providerID?: string; id?: string } | undefined) => {
       if (model?.providerID !== "localcode") return 0;
       try {
@@ -238,26 +272,56 @@ export default {
         return 0;
       }
     };
-    const prune = async (event: any, messages: any[], kind: string) => {
+    const mask = async (event: any, messages: any[], kind: string) => {
       const sessionID: string | undefined = event.sessionID;
-      if (!sessionID) return;
-      const state = pruning.get(sessionID) ?? { pruned: new Set<string>(), users: -1 };
-      pruning.set(sessionID, state);
-      const users = messages.filter((message) => message?.role === "user").length;
-      if (kind !== "context" || users === state.users) return state;
-      state.users = users;
-      for (const id of pruneCandidates(messages, pruneLimits(await inputBudget(event.model)), state.pruned)) state.pruned.add(id);
+      if (!sessionID) return undefined;
+      const state = contextState(sessionID);
+      if (kind !== "context") return state;
+      const current = applyMasked(messages, state.masked);
+      const raw = estimateRequest(current, event.system ?? [], event.tools ?? {});
+      const cal = calibration.get(sessionID);
+      const prompt = Math.round(raw * (cal?.ratio ?? 1));
+      calibration.set(sessionID, { estimate: raw, ratio: cal?.ratio ?? 1 });
+      const budget = await inputBudget(event.model);
+      const ids = maskCandidates(messages, maskLimits(budget), state.masked, prompt);
+      if (!ids.length) return state;
+      // Save the full outputs first: the stub points the model at these files.
+      for (const [id, text] of maskedOutputs(messages, ids)) {
+        const file = join(adapter.directory, maskPath(id));
+        try { if (!existsSync(file)) { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, text); } } catch { /* the stub still names the tool and arguments */ }
+      }
+      for (const id of ids) state.masked.add(id);
+      saveState(sessionID);
+      calibration.set(sessionID, { estimate: estimateRequest(applyMasked(messages, state.masked), event.system ?? [], event.tools ?? {}), ratio: cal?.ratio ?? 1 });
+      log(`[localcode context] masked ${ids.length} old tool output(s): prompt ~${prompt} of budget ${budget} tokens`);
       return state;
+    };
+
+    /** Open todos at a compaction, frozen per checkpoint so the prefix after it stays the same. */
+    const checkpointTodos = (sessionID: string | undefined, messages: any[]) => {
+      if (!sessionID) return messages;
+      const index = checkpointIndex(messages);
+      if (index < 0) return messages;
+      const id = String(messages[index]?.id ?? "checkpoint");
+      const state = contextState(sessionID);
+      if (!(id in state.checkpoints)) {
+        const open = (todos.get(sessionID) ?? []).filter((todo) => todo.status !== "completed" && todo.status !== "cancelled");
+        state.checkpoints[id] = open.length
+          ? `Open todos when the conversation was compacted (keep them current with todowrite):\n${renderChecklist(open)}`
+          : "";
+        saveState(sessionID);
+      }
+      return withCheckpointTodos(messages, index, state.checkpoints[id]);
     };
 
     const shape = async (event: any, kind: "context" | "compaction" | "generate") => {
       adapter.setAgent(event.agent);
       event.system = await transformSystem(hooks, event.agent, event.system ?? []);
-      let messages = withTurnContext(event.messages ?? []);
-      const pruned = await prune(event, messages, kind);
+      let messages = checkpointTodos(event.sessionID, withTurnContext(event.messages ?? []));
+      const state = await mask(event, messages, kind);
       const lean = { messages };
       await hooks["experimental.chat.messages.transform"]({}, lean);
-      messages = pruned ? applyPruned(lean.messages, pruned.pruned) : lean.messages;
+      messages = state ? applyMasked(lean.messages, state.masked) : lean.messages;
       if (kind === "compaction") {
         const output = { context: [] as string[] };
         await hooks["experimental.session.compacting"]({}, output);
@@ -281,7 +345,42 @@ export default {
     await ctx.session.hook("compaction", (event: any) => shape(event, "compaction"));
     await ctx.session.hook("generate", (event: any) => shape(event, "generate"));
 
+    // Per-request prefix-cache measurement: the server reports how much of each prompt it
+    // served from cache (llama.cpp's cached_tokens); the rest it had to process again.
+    const onStepUsage = (data: any) => {
+      const tokens = data?.tokens;
+      if (!tokens || typeof tokens.input !== "number") return;
+      const cached = Number(tokens.cache?.read ?? 0) || 0;
+      const processed = Number(tokens.input) || 0;
+      const prompt = cached + processed + (Number(tokens.cache?.write ?? 0) || 0);
+      if (prompt <= 0) return;
+      const sessionID = data.sessionID;
+      const cal = sessionID ? calibration.get(sessionID) : undefined;
+      if (sessionID && cal && cal.estimate > 0) {
+        calibration.set(sessionID, { estimate: cal.estimate, ratio: Math.min(3, Math.max(0.5, prompt / cal.estimate)) });
+      }
+      log(`[localcode cache] prompt ${prompt} tokens: cached ${cached}, processed ${processed} (hit ${Math.round((100 * cached) / prompt)}%)`);
+    };
+
+    // Low Power Mode roughly halves local generation speed; say so once, the first time a
+    // prompt is sent while it is on.
+    let lowPowerShown = false;
+    const lowPowerCheck = () => {
+      if (lowPowerShown || process.platform !== "darwin") return;
+      execFile("pmset", ["-g"], { timeout: 1500 }, (error, stdout) => {
+        if (error || lowPowerShown || !lowPowerModeOn(String(stdout))) return;
+        lowPowerShown = true;
+        void adapter.client.tui.showToast({ body: {
+          title: "Low Power Mode is on",
+          message: "Local models can run up to about 2x slower in Low Power Mode. Turn it off in System Settings > Battery for full speed.",
+          variant: "warning",
+          duration: 12000,
+        } }).catch(() => {});
+      });
+    };
+
     await ctx.session.hook("prompt", async (event: any) => {
+      lowPowerCheck();
       const session = await ctx.session.get({ sessionID: event.sessionID }).catch(() => undefined);
       const agent = session?.agent ?? session?.data?.agent;
       adapter.setAgent(agent);
@@ -308,6 +407,7 @@ export default {
     const controller = new AbortController();
     void (async () => {
       for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+        if (event?.type === "session.step.ended") onStepUsage(event.data ?? {});
         for (const translated of engineEvents(event, adapter.agent())) await hooks.event({ event: translated }).catch(() => {});
       }
     })().catch(() => {});

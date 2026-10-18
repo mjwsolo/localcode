@@ -85,3 +85,13 @@ def test_task_stderr_survives_model_deleting_eval_directory(tmp_path):
     env = {"Path": Path, "ev": tmp_path / ".eval", "i": 1, "r": SimpleNamespace(stderr="diagnostic")}
     exec(compile(ast.Module(body=[write, statement], type_ignores=[]), "runner-write", "exec"), env)
     assert (tmp_path / ".eval/stderr-turn1.txt").read_text() == "diagnostic"
+
+
+@pytest.mark.parametrize("hit_b,hit_c,code", [(0.9, 0.85, 0), (0.9, 0.7, 1), (None, 0.5, 0)])
+def test_gate_blocks_on_a_prefix_cache_hit_rate_drop(tmp_path, hit_b, hit_c, code):
+    baseline, candidate = tmp_path / "b", tmp_path / "c"
+    baseline.write_text(json.dumps(dict(row(), prefix_cache_hit_rate=hit_b)) + "\n")
+    candidate.write_text(json.dumps(dict(row(), prefix_cache_hit_rate=hit_c)) + "\n")
+    result = subprocess.run([sys.executable, str(ROOT / "evals/gate.py"), str(baseline), str(candidate)], capture_output=True, text=True)
+    assert result.returncode == code, result.stdout
+    assert "prefix-cache hit rate" in result.stdout

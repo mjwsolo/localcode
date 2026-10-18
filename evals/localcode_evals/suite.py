@@ -78,13 +78,15 @@ def hidden_tests() -> Scorer:
     return score
 
 
-NUMBERS = ("tool_validity", "steps", "tool_calls", "wall_s", "reread_tokens_max", "prompt_tokens_max", "decode_tps", "prefill_tps")
+NUMBERS = ("tool_validity", "steps", "tool_calls", "wall_s", "reread_tokens_max", "prompt_tokens_max", "decode_tps", "prefill_tps",
+           "prefix_cache_hit_rate", "reprocessed_prompt_tokens", "malformed_tool_call_rate", "malformed_tool_calls")
 
 
 @scorer(metrics={k: [mean()] for k in NUMBERS})
 def measurements() -> Scorer:
     """How the run went, apart from whether it passed: valid tool calls, steps,
-    time, tokens re-read after the first turn, and the server's own speeds."""
+    time, tokens re-read after the first turn, the server's own speeds, the
+    prefix-cache hit rate and the malformed tool-call rate."""
     async def score(state: TaskState, target: Target) -> Score:
         m = state.store.get("metrics") or {}
         later = (m.get("reread_tokens") or [])[1:]

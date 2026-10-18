@@ -36,7 +36,7 @@ from inspect_ai.solver import Generate, Solver, TaskState, solver
 from inspect_ai.tool import ToolCall, ToolCallError
 from inspect_ai.util import concurrency, sandbox
 
-from .performance import ResourceMeter, summarize
+from .performance import NARRATED_CALL_RE, ResourceMeter, summarize
 from .process import run_bounded
 
 EVALS = Path(__file__).resolve().parent.parent
@@ -45,10 +45,6 @@ UI = REPO / "src/localcode/bin/localcode-ui"
 SERVER = REPO / "src/localcode/bin/llama-server"
 MODELS_DIR = Path.home() / ".local/share/localcode/models"
 
-# A tool call written out as prose instead of emitted: JSON with a tool name and
-# arguments, or the XML-ish wrappers some chat templates use.
-NARRATED_CALL_RE = re.compile(
-    r'<(?:tool_call|function_call|invoke|function=)[\s>]|"(?:name|tool_name|function)"\s*:\s*"[a-z_]+"\s*,\s*"(?:arguments|parameters|input)"\s*:', re.I)
 CACHE_NOISE_RE = re.compile(r"(^|/)(__pycache__/|\.pytest_cache/|\.mypy_cache/)|\.pyc$")
 
 
@@ -428,7 +424,11 @@ def localcode_ui(ram_gb: int | None = None, env: dict[str, str] | None = None) -
         workspace = Path((await sandbox().exec(["pwd", "-P"])).stdout.strip())
         # One model in memory, one trial at a time; time spent queued is not working time.
         async with concurrency("localcode", 1):
-            rt = await anyio.to_thread.run_sync(runtime_for, state.model.name, ram_gb, overrides)
+            # A task may need its own launcher settings (direction-change-compaction runs with a
+            # 16k context so it always compacts); -T env overrides win. The runtime is restarted
+            # only when the settings differ from the loaded one.
+            task_env = {str(k): str(v) for k, v in (state.metadata.get("env") or {}).items()}
+            rt = await anyio.to_thread.run_sync(runtime_for, state.model.name, ram_gb, {**task_env, **overrides})
             # The last user message, so a setup solver can fill in placeholders first.
             messages, metrics = await anyio.to_thread.run_sync(run_trial, rt, workspace, turns_of(state.user_prompt.text), state.metadata)
             runtime = rt.describe()

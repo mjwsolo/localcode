@@ -20,8 +20,10 @@ def w(path: Path, text: str, exe=False):
 
 def task(id, *, quality, purpose, component="harness", turns, workspace: dict, test: str, solve: str,
          allowed=None, steps=20, seconds=900, null_passes=False, trials=1, require_all=False, notes="",
-         setup="", teardown="", mcp: dict | None = None):
+         setup="", teardown="", mcp: dict | None = None, env: dict | None = None):
     d = ROOT / id
+    # Launcher settings for this task's runtime (the solver restarts the runtime for them).
+    env_line = f"\n        env = {toml_value(env)}" if env else ""
     w(d / "instruction.md", "\n".join(f"## Turn {i+1}\n\n{t}\n" for i, t in enumerate(turns)) if len(turns) > 1 else turns[0] + "\n")
     w(d / "task.toml", f'''
         id = "{id}"
@@ -38,7 +40,7 @@ def task(id, *, quality, purpose, component="harness", turns, workspace: dict, t
         notes = "{notes}"
         setup = {json.dumps(setup)}
         teardown = {json.dumps(teardown)}
-        mcp = {toml_value(mcp or {})}
+        mcp = {toml_value(mcp or {})}{env_line}
     ''')
     for rel, content in workspace.items():
         w(d / "workspace" / rel, content)
@@ -623,6 +625,98 @@ doc("app/geo.py", [("area", "Return w times h."), ("perimeter", "Return the peri
 doc("app/units.py", [("km_to_miles", "Convert km to miles."), ("c_to_f", "Convert Celsius to Fahrenheit.")])
 PY
 ''')
+
+
+# 23b direction-change-compaction (fidelity, harness, tracking) -------------------------
+# The user plans one thing, then changes direction; the session must cross a
+# compaction and the final work must follow the latest request, not the plan the
+# summary may still describe. The task runs its own runtime with a 16k context so
+# the compaction always happens.
+def _history_doc():
+    regions = ["North", "South", "East", "West", "Central"]
+    lines = ["# Sales history", "", "One entry per week. Units are whole widgets; revenue is in dollars.", ""]
+    for i in range(1, 121):
+        units = 40 + (i * 37) % 160
+        lines.append(f"- Week {i:03d}: region {regions[i % 5]} sold {units} units of widget-{1 + i % 9} for ${units * (12 + i % 7)} revenue; returns {i % 4}.")
+    return "\n".join(lines) + "\n"
+
+def _background_doc():
+    para = ("The reporting tool turns weekly sales records into short reports for the regional managers. "
+            "Managers read the reports in chat, in email and in the team wiki, so output must be plain text. "
+            "Records come from the warehouse export as JSON: a list of objects with the same keys in the same order. ")
+    return "# Background\n\n" + "\n\n".join(f"## Section {n}\n\n" + para * 4 for n in range(1, 9)) + "\n"
+
+def _fields_doc():
+    fields = [("week", "integer, 1-based week number"), ("region", "one of North, South, East, West, Central"),
+              ("units", "integer units sold"), ("revenue", "integer dollars"), ("returns", "integer units returned")]
+    body = "\n".join(f"- `{name}`: {desc}." for name, desc in fields)
+    notes = "\n".join(f"- Note {n}: exports before week {n * 10} used the same field order; no field is optional." for n in range(1, 41))
+    return "# Fields\n\nEvery record has these keys, in this order:\n\n" + body + "\n\n## Export notes\n\n" + notes + "\n"
+
+DIRECTION = {
+    "app/__init__.py": "",
+    "app/report.py": '"""Report helpers for the weekly sales records."""\nimport json\n\n\ndef load(path):\n    with open(path) as f:\n        return json.load(f)\n',
+    "tests/__init__.py": "",
+    "tests/test_report.py": 'import json\n\nfrom app.report import load\n\n\ndef test_load(tmp_path):\n    p = tmp_path / "r.json"\n    p.write_text(json.dumps([{"week": 1}]))\n    assert load(p) == [{"week": 1}]\n',
+    "docs/background.md": _background_doc(),
+    "docs/fields.md": _fields_doc(),
+    "docs/history.md": _history_doc(),
+}
+_DIRECTION_CHECK = r'''
+[ -s .eval/ui_errors.txt ] && { pass_json false "runtime errors: $(head -c 160 .eval/ui_errors.txt)"; exit 0; }
+python3 - <<'PY' > .eval/check.txt 2>&1; ok=$?
+import ast, json, os, re, sys
+m=json.load(open(".eval/metrics.json")) if os.path.exists(".eval/metrics.json") else {}
+assert not m.get("timed_out"), "session timed out"
+assert (m.get("compactions") or 0) >= 1, "no compaction happened, so the direction change was not tested (the task runs with a 16k context)"
+tree=ast.parse(open("app/report.py").read())
+names={n.name for n in tree.body if isinstance(n, ast.FunctionDef)}
+assert "to_csv" not in names, "followed the abandoned plan: to_csv was added"
+csv_import=[n for n in ast.walk(tree) if (isinstance(n, ast.Import) and any(a.name == "csv" for a in n.names)) or (isinstance(n, ast.ImportFrom) and n.module == "csv")]
+assert not csv_import, "followed the abandoned plan: csv is imported"
+assert "to_markdown" in names, "to_markdown(rows) was not added"
+sys.path.insert(0, os.getcwd())
+from app.report import to_markdown
+out=to_markdown([{"week": 1, "region": "North"}, {"week": 2, "region": "South"}])
+lines=[re.sub(r"\s+", " ", l.strip()) for l in str(out).strip().splitlines() if l.strip()]
+assert len(lines) == 4, f"expected 4 table lines, got {lines!r}"
+assert lines[0] == "| week | region |", f"header row: {lines[0]!r}"
+assert re.fullmatch(r"\|( ?:?-{3,}:? ?\|){2}", lines[1]), f"separator row: {lines[1]!r}"
+assert lines[2:] == ["| 1 | North |", "| 2 | South |"], f"data rows: {lines[2:]!r}"
+PY
+'''
+_DIRECTION_SOLVE = r'''
+python3 - <<'PY'
+import json
+json.dump({"steps": 12, "tool_calls": 10, "compactions": 1, "timed_out": False}, open(".eval/metrics.json", "w"))
+with open("app/report.py", "a") as f:
+    f.write("""
+
+def to_markdown(rows):
+    keys = list(rows[0]) if rows else []
+    lines = ["| " + " | ".join(keys) + " |", "| " + " | ".join("---" for _ in keys) + " |"]
+    lines += ["| " + " | ".join(str(row.get(k, "")) for k in keys) + " |" for row in rows]
+    return "\\n".join(lines)
+""")
+with open("tests/test_report.py", "a") as f:
+    f.write("""
+
+def test_to_markdown():
+    from app.report import to_markdown
+    assert to_markdown([{"a": 1}]) == "| a |\\n| --- |\\n| 1 |"
+""")
+PY
+'''
+task("direction-change-compaction", quality="fidelity", purpose="tracking", steps=40, seconds=2400,
+     env={"LOCALCODE_OVERRIDE_NCTX": "16384"},
+     turns=["Read every file under docs/ and summarize each one in one line. Do not write any code yet.",
+            "Plan for today: add a function to_csv(rows) to app/report.py that returns the rows (a list of dicts) as CSV text with a header line. Before coding, read docs/fields.md again and list the field names in order. Do not write code yet.",
+            "Change of direction: do not add CSV output at all. Instead add to_markdown(rows) to app/report.py. It returns a Markdown table as a string: a header row with the keys of the first dict in order, then a separator row with a --- cell per column, then one row per dict. Every row starts with '| ', ends with ' |' and separates cells with ' | '; rows are joined with newlines. Do not write code yet: first read docs/history.md again and tell me in one line how many weekly entries it has.",
+            "Now implement it in app/report.py, add a test for it to tests/test_report.py, and run the tests."],
+     workspace=DIRECTION, allowed=["app/report.py", "tests/test_report.py"],
+     test=diff_ok("app/report.py|tests/test_report.py") + _DIRECTION_CHECK
+          + verdict(f"[ $ok = 0 ] && {PYTEST} tests >/dev/null 2>&1", "crossed a compaction and built what the latest request asked for, tests green", "$(tail -1 .eval/check.txt)"),
+     solve=_DIRECTION_SOLVE)
 
 
 # 24/25 browser-errand, browser-injection (tracking) ------------------------------------

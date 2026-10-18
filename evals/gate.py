@@ -11,6 +11,8 @@ on identical, nonempty task/model/trial sets. Invalid or incomplete inputs fail 
 Blocks when the mean drop exceeds max(min_drop points, se_mult * SE) AND at least one task
 went from all-pass to all-fail (a reproducible regression, not noise). Exit 1 = blocked.
 Also lists tasks that regressed, improved, or are new, and the efficiency medians.
+Per model, also blocks when median decode tok/s falls by more than --max-speed-drop, or when the
+median prefix-cache hit rate (cached / all prompt tokens) falls by more than --max-cache-drop.
 """
 import argparse, json, math, statistics, sys
 from collections import defaultdict
@@ -18,6 +20,7 @@ from collections import defaultdict
 ap = argparse.ArgumentParser(); ap.add_argument("baseline"); ap.add_argument("candidate")
 ap.add_argument("--min-drop", type=float, default=5.0); ap.add_argument("--se-mult", type=float, default=2.0); ap.add_argument("--set", default="regression")
 ap.add_argument('--max-speed-drop', type=float, default=0.30, help='block when median decode tok/s falls by more than this fraction (default 0.30)')
+ap.add_argument('--max-cache-drop', type=float, default=0.10, help='block when the median prefix-cache hit rate falls by more than this many points of 1.0 (default 0.10)')
 ap.add_argument('--require-performance', action='store_true', help='fail closed when any model lacks finite positive decode measurements')
 a = ap.parse_args()
 
@@ -104,10 +107,24 @@ for model in sorted({key[1] for key in common}):
         continue
     print(f"  {model} median decode tok/s: {dB:.1f} -> {dC:.1f} ({(dC/dB-1)*100:+.0f}%)")
     speed_blocked |= dC < dB * (1 - a.max_speed_drop)
+# Cache: a harness change that edits history more often shows up as a lower prefix-cache hit
+# rate long before pass rates move (every miss re-reads the prompt: minutes at 64k on a Mac).
+cache_blocked = False
+for model in sorted({key[1] for key in common}):
+    rows_b = [r for key in common if key[1] == model for r in B[key]]
+    rows_c = [r for key in common if key[1] == model for r in C[key]]
+    hB, hC = med(rows_b, "prefix_cache_hit_rate"), med(rows_c, "prefix_cache_hit_rate")
+    if hB is None or hC is None:
+        print(f"  {model}: prefix-cache hit rate unknown")
+        continue
+    print(f"  {model} median prefix-cache hit rate: {hB:.1%} -> {hC:.1%} ({(hC - hB) * 100:+.1f} points)")
+    cache_blocked |= hC < hB - a.max_cache_drop
+mB, mC = med(allB, "malformed_tool_call_rate"), med(allC, "malformed_tool_call_rate")
+if mB is not None and mC is not None: print(f"  median malformed tool-call rate: baseline {mB:.1%} -> candidate {mC:.1%}")
 pB, pC = med(allB, "prefill_tps"), med(allC, "prefill_tps")
 if pB and pC: print(f"  median prefill tok/s: baseline {pB:.1f} -> candidate {pC:.1f} ({(pC / pB - 1) * 100:+.0f}%)")
 vB, vC = med(allB, "tool_validity"), med(allC, "tool_validity")
 if vB is not None and vC is not None: print(f"  median tool-call validity: baseline {vB:.2f} -> candidate {vC:.2f}")
-blocked = ((-mean > threshold) and bool(regressed)) or speed_blocked
+blocked = ((-mean > threshold) and bool(regressed)) or speed_blocked or cache_blocked
 print("\nRESULT:", "BLOCKED" if blocked else "OK", "(reproducible regressions confirmed)" if regressed and blocked else "")
 sys.exit(1 if blocked else 0)

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { applyPruned, leanMessages, PRUNED_OUTPUT, pruneCandidates, pruneLimits } from "../../src/localcode/ui/plugin/context";
+import { applyMasked, argsSummary, checkpointIndex, leanMessages, maskCandidates, maskLimits, maskPath, maskStub, withCheckpointTodos } from "../../src/localcode/ui/plugin/context";
 
 // Model-request messages as opencode v2 hands them to session.hook("context"):
 // assistant tool calls, with their results in the following role "tool" message.
@@ -89,35 +89,58 @@ test("requested skills and user decisions remain complete, while old pending cal
 });
 
 
-test("local pruning thresholds scale down with context while preserving reclaim hysteresis", () => {
-  expect(pruneLimits(8192)).toEqual({ protect: 2048, minimum: 1024 });
-  expect(pruneLimits(32768)).toEqual({ protect: 8192, minimum: 4096 });
-  expect(pruneLimits(262144)).toEqual({ protect: 40000, minimum: 20000 });
-  for (const value of [0, -1, NaN, Infinity]) expect(pruneLimits(value)).toEqual({ protect: 40000, minimum: 20000 });
+test("masking thresholds are shares of the measured budget, never fixed token counts", () => {
+  expect(maskLimits(8192)).toEqual({ trigger: 5734, protect: 2048, minimum: 1024 });
+  expect(maskLimits(262144)).toEqual({ trigger: 183500, protect: 65536, minimum: 32768 });
+  for (const value of [0, -1, NaN, Infinity]) expect(maskLimits(value)).toBeUndefined();
 });
 
-test("old tool output outside the protected window is pruned once enough is reclaimable", () => {
+test("old tool output is masked only near the budget, in one batch, with a stub that points at the saved output", () => {
   const turn = (n: number, size: number, name = "read") => [
     user("turn " + n),
-    { role: "assistant", content: [{ type: "tool-call", id: "c" + n, name, input: {} }] },
+    { role: "assistant", content: [{ type: "tool-call", id: "c" + n, name, input: { filePath: `src/f${n}.py` } }] },
     { role: "tool", content: [{ type: "tool-result", id: "c" + n, name, result: { type: "text", value: "x".repeat(size) } }] },
   ];
-  const limits = { protect: 1000, minimum: 1500 };
-  // 4,000 chars = 1,000 tokens each. The last two user turns are never pruned.
-  const messages = [...turn(1, 4000), ...turn(2, 4000), ...turn(3, 4000, "skill"), ...turn(4, 4000), ...turn(5, 40000), ...turn(6, 40000)];
-  const pruned = new Set(pruneCandidates(messages, limits, new Set()));
-  // c4 fills the protected window; c3 is a skill; c2 and c1 reclaim 2,000 tokens.
-  expect([...pruned].sort()).toEqual(["c1", "c2"]);
-  const result = applyPruned(messages, pruned);
-  expect(result[2].content[0].result).toEqual({ type: "text", value: PRUNED_OUTPUT });
-  expect(result[5].content[0].result.value).toBe(PRUNED_OUTPUT);
+  const limits = { trigger: 9000, protect: 1000, minimum: 1500 };
+  // 4,000 chars = 1,000 tokens each.
+  const messages = [...turn(1, 4000), ...turn(2, 4000), ...turn(3, 4000, "skill"), ...turn(4, 4000), ...turn(5, 4000)];
+  // Below the trigger nothing is masked, however much is reclaimable.
+  expect(maskCandidates(messages, limits, new Set(), 8999)).toEqual([]);
+  expect(maskCandidates(messages, undefined, new Set(), 1e9)).toEqual([]);
+  // At the trigger: c5 fills the protected window; c3 is a skill; c4, c2, c1 reclaim 3,000 tokens,
+  // including output from the current turn (no turn-count exemption).
+  const masked = new Set(maskCandidates(messages, limits, new Set(), 9000));
+  expect([...masked].sort()).toEqual(["c1", "c2", "c4"]);
+  const result = applyMasked(messages, masked);
+  const stub = maskStub("read", { filePath: "src/f1.py" }, "c1");
+  expect(result[2].content[0].result).toEqual({ type: "text", value: stub });
+  expect(stub).toBe("[Old tool output masked to save context: read(filePath=src/f1.py). Full output saved in .localcode-agent/tool-out/c1.txt; read that file if you need it again.]");
   expect(result[8].content[0].result.value.length).toBe(4000);
+  expect(result[14].content[0].result.value.length).toBe(4000);
   expect(messages[2].content[0].result.value.length).toBe(4000);
-  // Below the minimum reclaim nothing changes, and a pruned output stops the scan.
-  expect(pruneCandidates(messages, { protect: 1000, minimum: 5000 }, new Set())).toEqual([]);
-  expect(pruneCandidates(messages, limits, pruned)).toEqual([]);
-  // Failed tools are never pruned.
-  const failed = [...turn(1, 4000), ...turn(2, 0), ...turn(3, 0)];
+  // Too little to reclaim: nothing changes. A masked output stops the scan, so a later batch
+  // never edits history older than the previous one.
+  expect(maskCandidates(messages, { ...limits, minimum: 5000 }, new Set(), 9000)).toEqual([]);
+  expect(maskCandidates(messages, limits, masked, 1e9)).toEqual([]);
+  // Failed tools are never masked.
+  const failed = [...turn(1, 4000), ...turn(2, 0)];
   failed[2] = { role: "tool", content: [{ type: "tool-result", id: "c1", name: "bash", resultType: "error", result: { error: { message: "x" }, content: [] } }] };
-  expect(pruneCandidates(failed, { protect: 0, minimum: 0 }, new Set())).toEqual([]);
+  expect(maskCandidates(failed, { trigger: 0, protect: 0, minimum: 0 }, new Set(), 1)).toEqual([]);
+});
+
+test("argument summaries are short and deterministic, and saved-output paths are safe", () => {
+  expect(argsSummary({ command: "pytest -q\n  tests", description: "run" })).toBe("command=pytest -q tests, description=run");
+  expect(argsSummary({ content: "x".repeat(500), filePath: "a.py" })).toBe("filePath=a.py, content=" + "x".repeat(77) + "...");
+  expect(argsSummary(undefined)).toBe("");
+  expect(maskPath("call/../1:2")).toBe(".localcode-agent/tool-out/call____1_2.txt");
+});
+
+test("open todos ride at the tail of the compaction checkpoint", () => {
+  const messages = [{ role: "user", content: [{ type: "text", text: "<conversation-checkpoint>\nsummary" }] }, user("next")];
+  expect(checkpointIndex(messages)).toBe(0);
+  expect(checkpointIndex([user("hello")])).toBe(-1);
+  const out = withCheckpointTodos(messages, 0, "Open todos: [ ] b");
+  expect(out[0].content.map((part: any) => part.text)).toEqual(["<conversation-checkpoint>\nsummary", "Open todos: [ ] b"]);
+  expect(messages[0].content).toHaveLength(1);
+  expect(withCheckpointTodos(messages, 0, "")).toBe(messages);
 });
