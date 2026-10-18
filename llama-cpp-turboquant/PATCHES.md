@@ -12,11 +12,15 @@ The machine-readable form of this inventory lives at the repo root:
 | `patches/PINNED_UPSTREAM` | the upstream commit the series applies to |
 | `patches/000N-*.patch` | numbered patches, applied in order with `git apply` |
 
-**Pinned upstream:** `62df1815bc053066761f4eac58e288f23778e164` (2026-10-14,
-master, `cuda, hip: GDN chunked kernel (#29353)`, 75 commits after
-`5c8854fd8`, the previous pin).
+**Pinned upstream:** `797de63b2fa7396dcc8caca76834c699ac84e1c3` (2026-10-17,
+master, `hexagon: add support for Q1_0 and Q2_0 (#30122)`, 84 commits after
+`62df1815b`, the previous pin). Brings the server cache fixes #30580 (SWA
+reuse off-by-two), #30574 (drafter state in slot files), #30498 (only
+restorable states in the prompt cache) and #30567, and upstream Kolibri-1
+(#30673).
 
-**Previous pins:** `5c8854fd88319125125dc4b836c98b1b215b0f23` (2026-10-11),
+**Previous pins:** `62df1815bc053066761f4eac58e288f23778e164` (2026-10-14),
+`5c8854fd88319125125dc4b836c98b1b215b0f23` (2026-10-11),
 `62a6f74bab748b1755f4cd8dfc0871caf865c6c8` (2026-10-11), `836d57176dc699a726c55418e4f96b8ca628e1bf` (2026-10-03),
 `3f545beccee69d9975f466ec7e45fd9aacd8ba90` (2026-08-22), and before it `c08d28d08871715fd68accffaeeb76ddcaede658` (2026-04-05). That
 commit was never recorded anywhere; it was recovered for this bump by
@@ -153,6 +157,9 @@ parallel, with shared code in `kernels/*.h`. The TurboQuant shader delta
 | `kernels/fa_vec_common.metal` | the `TURBO_SPARSE_V` skip in the quantized-V loop |
 | `kernels/mul_mv.metal`, `mul_mm.metal`, `quantize.metal` | TQ3_1S / TQ4_1S mat-vec kernels and `mul_mm` / `mul_mm_id` / `mul_mv_ext` / `mul_mv_id` / `cpy` / `get_rows` instantiations; larger `mul_mm_id_map0` tiles (32…256) |
 
+At the 2026-10-17 bump upstream added `kernels/fa_tensor.metal` (BF16 tensor-API
+flash attention, #30491) next to `fa_turbo.metal`; both stay registered.
+
 **A new kernel file must be registered twice**: in `METALLIB_KERNEL_SOURCES`
 (`ggml-metal/CMakeLists.txt`) and in the `GGML_METAL_LIBS` X-macro
 (`ggml-metal-device.m`). The bump script asserts both for the three turbo files.
@@ -263,6 +270,14 @@ small sample; treat the ranking as solid and the exact numbers as rough.
   `!model.attn_rot || (env ? atoi(env) != 0 : true)`, so the fork default
   (off) and the env opt-in are unchanged and the model switch can only turn
   it further off.
+  **Re-evaluated at the 2026-10-17 bump** (llama-perplexity KL divergence
+  against f16 KV, Qwen 3.6 35B-A3B Q8, 3 x 8192 tokens of Python): nothing
+  stacks (the fork rotates only turbo K/V; upstream's rotation is off), and
+  turning upstream's rotation on does not help the shipped q8_0 / q8_0 cache
+  (mean KLD 0.00169 off vs 0.00191 on, same top-1 98.54% vs 98.53%, max KLD
+  0.33 vs 6.3) or q8_0 / turbo4 (0.0095 vs 0.0103). It helps q5_0 / q5_0
+  (0.0054 -> 0.0045, top-1 97.17% -> 97.49%), so revisit it if a q5_0 tier
+  is ever shipped.
 - **`mul_mm_id_map0` threadgroup memory cap (32 KB).** At the 2026-10-14 bump
   upstream rewrote `kernel_mul_mm_id_map0` (#30373, duplicate expert ids): its
   smem is now `2*ne02*4 + ne02*ne20*2` (per-expert count + base, then id
@@ -438,57 +453,28 @@ and `tools/diffusion-gemma-server/diffusion-gemma-visual-server.cpp` take
 dimension (#30416); the DiffusionGemma masks are built at the exact K/V
 length, so no padding is added for them.
 
-### `0006-kolibri1.patch` — Aleph Alpha Kolibri-1 (`kolibri1` architecture)
+### `0006-kolibri1.patch` — dropped at the 2026-10-17 bump
 
-**Status: not upstream.** Tracking issue
-[ggml-org/llama.cpp#29922](https://github.com/ggml-org/llama.cpp/issues/29922),
-no upstream PR at the time of the bump. **When upstream ships `kolibri1`,
-delete this patch** and re-verify the catalog GGUF against upstream's loader
-(metadata keys may differ; a re-converted GGUF may be needed).
+Upstream shipped the `kolibri1` architecture (#30673), so the community patch
+is gone (do not resurrect it). Upstream's loader and graph match the model
+(same tensor names and metadata keys, the biased expert selection is built in
+the graph), with two differences for GGUFs converted with the community
+patch, such as the catalog's `Hob-forge/Kolibri-1-GGUF` quant: the
+pre-tokenizer is named `kolibri1` (upstream registers the same split as
+`qwen2` by hash) and the gating function is stored as `5`. `0009` covers both.
 
-Source: the four-commit series published with the community quant at
-`Hob-forge/Kolibri-1-GGUF` (`kolibri1-llama.cpp.patch`, revision `b08405e1`),
-written against exactly the upstream commit this tree is pinned to. Carried
-here as one plain diff. It was read in full before adoption: it is a standard
-model addition with no build-system, network or filesystem side effects.
+### `0009-kolibri1-community-gguf-compat.patch` — load community Kolibri-1 GGUFs
 
-What it adds:
+`src/llama-vocab.cpp` accepts `tokenizer.ggml.pre = kolibri1` as the qwen2
+split, and `src/models/kolibri1.cpp` maps `expert_gating_func = 5` to
+`SIGMOID` (upstream's converter writes `SIGMOID`; its graph selects experts on
+logits + bias and weights them with the sigmoid of the unbiased logits, which
+is what `5` meant). **Delete this patch when the catalog points at an
+upstream-converted Kolibri-1 GGUF.**
 
-- `LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID_LOGIT_ADD = 5` in `build_moe_ffn`:
-  experts are selected on `logits + expert_bias` and weighted by the unbiased
-  `sigmoid(logits)`. The DeepSeek-V3 path selects on `sigmoid(logits) + bias`,
-  which picks different experts whenever the bias is non-zero.
-- `src/models/kolibri1.cpp`: Qwen3-MoE style GQA with q/k RMSNorm, sandwich
-  norms around attention and MoE, one ungated shared expert per layer, and
-  interleaved attention through iSWA (sliding-window layers use RoPE,
-  full-attention layers use no positional encoding).
-- `kolibri1` pre-tokenizer name (same split regex as `qwen2`), the GGUF
-  constants / tensor mapping, and `conversion/kolibri.py`.
-
-#### Verified (2026-10-04, shipped binary, `Kolibri-1-Q4_K_M.gguf`, sha256 `c2ac1301…`)
-
-- Loads in about 2 s; `Reply`-style generation correct; German output fluent.
-- Tool calling through the OpenAI `tools` key (Hermes `<tool_call>` JSON,
-  parsed by the stock chat parser): single call, tool selection between two
-  tools, and a two-step loop that reads a tool result and answers from it.
-- Reasoning: with `--reasoning off --reasoning-budget 0` the answer costs 2
-  completion tokens and the reasoning channel is empty; with reasoning on, the
-  `<think>` text arrives in `reasoning_content` and `content` stays clean.
-- Long context on Metal, which the quant's author had not tested beyond 8,192
-  tokens: exact recall of a planted string at 6K, 24K and 61,785 prompt tokens.
-  The last one ran under localcode's own generated command (`--ctx-size 131072`,
-  q8_0 KV, `--cache-reuse`, `--ctx-checkpoints 4`, `--context-shift`); the
-  follow-up turn re-read 25 tokens, so the prefix cache and checkpoints work
-  with the sliding-window / full-attention interleave.
-- Resident memory about 46 GB at that context.
-
-- turbo4 K + turbo4 V also passes the tool loop and the 6K / 24K recall checks
-  (the turbo Q pre-rotation runs through the iSWA attention path).
-
-Not verified: coding benchmarks, turbo2 / turbo3 KV with this architecture,
-the Q8_0 split files, CUDA.
-
----
+Verified 2026-10-18 on the bumped binary with `Kolibri-1-Q4_K_M.gguf`: plain
+answer ("Paris", then three German rivers) at 116 tok/s and an OpenAI-`tools`
+call `get_weather({"city": "Berlin"})`.
 
 ### `0007-dflash-mtmd-zero-fill.patch` — images with a DFlash drafter
 

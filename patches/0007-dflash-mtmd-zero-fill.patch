@@ -9,10 +9,10 @@ hole with zero features; drafted tokens are still verified by the target,
 so only post-image draft acceptance degrades, never output.
 
 diff --git a/common/speculative.cpp b/common/speculative.cpp
-index 50647dbb2..de0b24183 100644
+index d8afd4095..ae5dec01b 100644
 --- a/common/speculative.cpp
 +++ b/common/speculative.cpp
-@@ -1190,6 +1190,44 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
+@@ -1206,6 +1206,44 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
  
          const int32_t n_ubatch = (int32_t) llama_n_ubatch(ctx_dft);
  

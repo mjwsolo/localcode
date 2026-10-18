@@ -1,0 +1,34 @@
+diff --git a/src/llama-vocab.cpp b/src/llama-vocab.cpp
+index 05d2527dc..c8eecdcb1 100644
+--- a/src/llama-vocab.cpp
++++ b/src/llama-vocab.cpp
+@@ -2389,7 +2389,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
+                     tokenizer_pre == "qwen2" ||
+                     tokenizer_pre == "deepseek-r1-qwen" ||
+                     tokenizer_pre == "kormo" ||
+-                    tokenizer_pre == "f2llmv2") {
++                    tokenizer_pre == "f2llmv2" ||
++                    // fork: Kolibri-1 GGUFs converted before upstream support (#30673)
++                    // name their pre-tokenizer "kolibri1"; it is the qwen2 split.
++                    tokenizer_pre == "kolibri1") {
+                 pre_type = LLAMA_VOCAB_PRE_TYPE_QWEN2;
+                 clean_spaces = false;
+             } else if (
+diff --git a/src/models/kolibri1.cpp b/src/models/kolibri1.cpp
+index acc1dd159..048c723bb 100644
+--- a/src/models/kolibri1.cpp
++++ b/src/models/kolibri1.cpp
+@@ -7,6 +7,13 @@ void llama_model_kolibri1::load_arch_hparams(llama_model_loader & ml) {
+     ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp);
+     ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,               hparams.expert_weights_norm);
+     ml.get_key(LLM_KV_EXPERT_GATING_FUNC,                hparams.expert_gating_func);
++    // fork: GGUFs converted with the pre-upstream community patch store
++    // gating func 5 ("sigmoid of logits, select on logits + bias"). This graph
++    // builds that selection itself and weights with the sigmoid, which is what
++    // upstream's converter writes as SIGMOID.
++    if (hparams.expert_gating_func == 5) {
++        hparams.expert_gating_func = LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID;
++    }
+     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,          hparams.n_swa);
+ 
+     if (hparams.n_swa == 0 || hparams.n_expert_shared != 1 || hparams.n_ff_shexp == 0) {

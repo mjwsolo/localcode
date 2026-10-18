@@ -2390,6 +2390,8 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                     tokenizer_pre == "deepseek-r1-qwen" ||
                     tokenizer_pre == "kormo" ||
                     tokenizer_pre == "f2llmv2" ||
+                    // fork: Kolibri-1 GGUFs converted before upstream support (#30673)
+                    // name their pre-tokenizer "kolibri1"; it is the qwen2 split.
                     tokenizer_pre == "kolibri1") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_QWEN2;
                 clean_spaces = false;
@@ -3030,6 +3032,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
 
             if (false
                     || t.first == "<|eot_id|>"
+                    || t.first == "<|eot|>"    // muse-spark
                     || t.first == "<|im_end|>"
                     || t.first == "<|end|>"
                     || t.first == "<|return|>" // o200k_harmony
@@ -3142,9 +3145,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             }
         }
 
-        // gemma4 and plamo have a normal </s> token, unlike paddleocr
+        // gemma4, plamo and beam have a normal </s> token, unlike paddleocr
         {
-            bool has_normal_s_marker = false;
+            // beam's tool call marker is not an EOG token, so it is looked up in the whole vocab
+            bool has_normal_s_marker = token_to_id.count("<rfl:parameter name=\"") > 0;
             bool has_s = false;
 
             llama_token s_id = LLAMA_TOKEN_NULL;

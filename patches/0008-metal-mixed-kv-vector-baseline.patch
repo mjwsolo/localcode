@@ -1,5 +1,5 @@
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
-index d32fd05a0..d1dc09851 100644
+index 00793b3f5..76f90f913 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.m
 +++ b/ggml/src/ggml-metal/ggml-metal-device.m
 @@ -97,6 +97,7 @@ void ggml_metal_pipeline_free(ggml_metal_pipeline_t pipeline) {
@@ -11,7 +11,7 @@ index d32fd05a0..d1dc09851 100644
  }
  
 diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
-index 3dda0255e..3c8778160 100644
+index 07027f9e1..ebbc160df 100644
 --- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
 +++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
 @@ -3933,9 +3933,10 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {

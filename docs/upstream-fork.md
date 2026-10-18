@@ -38,7 +38,7 @@ drift and a broken model.
 | TQ3_1S / TQ4_1S | fork-local weight quant types | never |
 | Fused MoE router | performance | upstream fuses it |
 | Muse thinking-tag fix | 3 lines, from **still-open upstream PR #27475** | **the day #27475 merges — delete it then** |
-| Kolibri-1 (`kolibri1` arch) | Aleph Alpha's MoE: sigmoid-logit-add expert routing, one shared expert, sliding-window / full attention interleave, sandwich norms. Community patch, upstream issue **#29922** | **the day upstream ships `kolibri1` - delete `0006` then** |
+| Kolibri-1 GGUF compatibility | upstream shipped `kolibri1` (#30673) and `0006` was dropped; `0009` only lets GGUFs converted with the earlier community patch load (pre-tokenizer name `kolibri1`, gating id 5) | **when the catalog points at an upstream-converted GGUF - delete `0009` then** |
 
 `llama-cpp-turboquant/PATCHES.md` is the authoritative, human-readable
 inventory. This table is orientation, not the contract.
