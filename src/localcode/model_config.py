@@ -147,6 +147,20 @@ KV_FIT_RESERVE_GB = 3
 KV_FIT_RESERVE_FRACTION = 0.15
 KV_FIT_CTX_MULTIPLE = 2048
 KV_FIT_MIN_CTX = 2048
+# Smallest context a coding session can work in, used only to decide whether a
+# quant FITS a Mac (gpu_memory.fit), never as a launch cap. The fixed prompt
+# prefix (system prompt, tool schemas) measures 4-6k tokens on this harness and
+# the context budget floors at twice that; 32K leaves room for several file
+# reads and tool results on top before compaction.
+MIN_WORKING_CTX = 32768
+# Quant recommendation (models_catalog.recommended_quant_index). Above 5 bits
+# the measured KLD gain is small (Qwen3.5-35B-A3B, Unsloth: Q5_K_XL 0.0069 vs
+# Q8_K_XL 0.0026) while every token reads 45% more bytes, so below
+# FULL_PRECISION_MIN_RAM_GB the star stops at a 5-bit quant. From 64 GB a Q8 of
+# a 35B leaves most of the GPU working set free, so the largest fitting quant
+# is starred as before.
+NEAR_LOSSLESS_BITS = 5
+FULL_PRECISION_MIN_RAM_GB = 64
 
 
 # ─────────────────────────────────────────────────────────────────────

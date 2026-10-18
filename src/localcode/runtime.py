@@ -288,6 +288,47 @@ def apply_param_overrides(cmd: list[str], env: dict | None = None) -> list[str]:
     return cmd
 
 
+def _kv_layer_geometry(n_layers: int, n_kv_heads: int, head_dim: int, value_dim: int,
+                       found: dict, arrays: dict) -> dict | None:
+    """Which layers own a KV cache that grows with the context, and which own
+    only a sliding window, the way llama.cpp allocates them. None when every
+    layer is a plain full-attention layer (the legacy n_layers formula holds).
+
+    * Hybrid recurrent models (Qwen 3.5/3.6/3.8, `full_attention_interval`):
+      only every Nth layer is attention; the rest keep a fixed recurrent state
+      (llama-memory-hybrid filters KV to the attention layers). Measured on
+      Qwen 3.6: "131072 cells, 10 layers" for a 40-block model.
+    * Interleaved sliding-window models (Gemma 4, `sliding_window_pattern`):
+      SWA layers hold n_swa + n_ubatch cells (llama-kv-cache-iswa), not the
+      full context, and use their own head width (`key_length_swa`). Global
+      layers may have fewer KV heads (per-layer `head_count_kv`).
+    Entries are (layer_index, kv_heads, k_dim, v_dim)."""
+    kv_arr = arrays.get(".attention.head_count_kv")
+    heads = [int(kv_arr[i]) if kv_arr and i < len(kv_arr) else n_kv_heads for i in range(n_layers)]
+    interval = found.get(".full_attention_interval") or 0
+    pattern = arrays.get(".attention.sliding_window_pattern")
+    n_swa = found.get(".attention.sliding_window") or 0
+    if interval > 0:
+        attn = [(i, heads[i], head_dim, value_dim) for i in range(n_layers) if (i + 1) % interval == 0]
+        return {"attn_layers": attn, "swa_layers": [], "n_swa": 0}
+    if pattern and n_swa > 0 and any(bool(x) for x in pattern):
+        kd_swa = found.get(".attention.key_length_swa") or head_dim
+        vd_swa = found.get(".attention.value_length_swa") or kd_swa
+        attn, swa = [], []
+        for i in range(n_layers):
+            if heads[i] <= 0:
+                continue
+            if i < len(pattern) and bool(pattern[i]):
+                swa.append((i, heads[i], kd_swa, vd_swa))
+            else:
+                attn.append((i, heads[i], head_dim, value_dim))
+        return {"attn_layers": attn, "swa_layers": swa, "n_swa": n_swa}
+    if kv_arr and len(set(heads)) > 1:
+        return {"attn_layers": [(i, heads[i], head_dim, value_dim) for i in range(n_layers) if heads[i] > 0],
+                "swa_layers": [], "n_swa": 0}
+    return None
+
+
 class LocalCodeRuntimeGateway:
     """Talks to the local llama.cpp (llama-server) backend."""
 
@@ -783,6 +824,8 @@ class LocalCodeRuntimeGateway:
                             ".block_count", ".attention.head_count_kv",
                             ".attention.head_count", ".attention.key_length", ".attention.value_length",
                             ".embedding_length", ".nextn_predict_layers",
+                            ".full_attention_interval", ".attention.sliding_window",
+                            ".attention.key_length_swa", ".attention.value_length_swa",
                         )
                         # What a context checkpoint holds (the state that
                         # cannot be rolled back): recurrent SSM state and the
@@ -795,6 +838,7 @@ class LocalCodeRuntimeGateway:
                             ".ssm.time_step_rank", ".ssm.inner_size", ".expert_count",
                         )
                         extra: dict = {}
+                        arrays: dict[str, list] = {}
                         for _ in range(n_kv):
                             k = _rs()
                             t, = struct.unpack("<I", f.read(4))
@@ -802,13 +846,21 @@ class LocalCodeRuntimeGateway:
                             if k == "general.architecture" and isinstance(v, str):
                                 architecture = v
                             for suf in wanted:
-                                if k.endswith(suf) and isinstance(v, int):
+                                if k.endswith(suf) and isinstance(v, int) and not isinstance(v, bool):
                                     found[suf] = v
                             for suf in extra_keys:
                                 if k.endswith(suf) and isinstance(v, (int, list)):
                                     extra[suf.lstrip(".")] = v
+                            # Per-layer arrays (Gemma 4: KV heads differ between
+                            # sliding-window and global layers).
+                            for suf in (".attention.head_count_kv", ".attention.sliding_window_pattern"):
+                                if k.endswith(suf) and isinstance(v, list):
+                                    arrays[suf] = v
                         n_layers = found.get(".block_count")
                         n_heads = found.get(".attention.head_count")
+                        kv_arr = arrays.get(".attention.head_count_kv")
+                        if ".attention.head_count_kv" not in found and kv_arr:
+                            found[".attention.head_count_kv"] = max(int(x) for x in kv_arr)
                         n_kv_heads = found.get(".attention.head_count_kv", n_heads)
                         head_dim = found.get(".attention.key_length")
                         if head_dim is None and n_heads and found.get(".embedding_length"):
@@ -825,6 +877,10 @@ class LocalCodeRuntimeGateway:
                                 "n_mtp_layers": found.get(".nextn_predict_layers", 0),
                                 "extra": extra,
                             }
+                            layers = _kv_layer_geometry(n_layers, n_kv_heads, head_dim,
+                                                        meta["value_head_dim"], found, arrays)
+                            if layers is not None:
+                                meta.update(layers)
         except Exception:
             meta = None
         cache[path] = meta
@@ -882,6 +938,8 @@ class LocalCodeRuntimeGateway:
         vb = self._KV_DTYPE_BYTES.get(vt)
         if kb is None or vb is None:
             return None  # unknown storage format → defer to ceilings
+        if meta.get("attn_layers") is not None:
+            return self._layer_kv_bytes(meta["attn_layers"], meta["n_layers"], kt, vt, kb, vb)
         # Only full-attention layers grow with the context. Recurrent layers
         # (Qwen 3.6 / 3.8 Gated DeltaNet) keep a fixed state and sliding-window
         # layers (Gemma 4, Muse) a fixed window; both are small next to the
@@ -1039,6 +1097,38 @@ class LocalCodeRuntimeGateway:
             n_ckpt = max(CHECKPOINTS_PER_REQUEST, min(CHECKPOINTS_MAX, share // ckpt))
         cache_mib = min(PROMPT_CACHE_MAX_MIB, share // 1024 ** 2)
         return int(n_ckpt), int(cache_mib)
+
+    def _layer_kv_bytes(self, layers: list, n_layers: int, kt: str, vt: str, kb: float, vb: float) -> float:
+        """Bytes per cache cell summed over the given (index, heads, k_dim, v_dim) layers."""
+        adaptive = os.environ.get("TURBO_LAYER_ADAPTIVE")
+        q8 = self._KV_DTYPE_BYTES["q8_0"]
+        total = 0.0
+        for il, heads, kd, vd in layers:
+            if kt.startswith("turbo"):
+                kd = (kd + 127) // 128 * 128
+            if vt.startswith("turbo"):
+                vd = (vd + 127) // 128 * 128
+            k_b, v_b = kb, vb
+            if adaptive is None and vt == "turbo2" and n_layers >= 8 and (il < 2 or il >= n_layers - 2):
+                v_b = q8  # backend default: boundary value layers use q8
+            elif adaptive not in (None, "0"):
+                k_b, v_b = max(kb, q8), max(vb, q8)
+            total += heads * (kd * k_b + vd * v_b)
+        return total
+
+    def _kv_fixed_bytes(self, model_path: str | None = None, n_ubatch: int = 512) -> int:
+        """KV memory that does not grow with --ctx-size: the sliding-window
+        caches of iSWA models (n_swa + n_ubatch cells, padded to 256 as in
+        llama-kv-cache-iswa). 0 for other models or unknown metadata."""
+        meta = self._gguf_kv_meta(model_path)
+        if not meta or not meta.get("swa_layers"):
+            return 0
+        kt, vt = self._effective_kv_dtypes(model_path)
+        kb, vb = self._KV_DTYPE_BYTES.get(kt), self._KV_DTYPE_BYTES.get(vt)
+        if kb is None or vb is None:
+            return 0
+        cells = (meta["n_swa"] + n_ubatch + 255) // 256 * 256
+        return int(cells * self._layer_kv_bytes(meta["swa_layers"], meta["n_layers"], kt, vt, kb, vb))
 
     def _model_file_bytes(self, model_path: str | None = None) -> int:
         from pathlib import Path as _Path

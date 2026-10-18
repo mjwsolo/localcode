@@ -7,16 +7,24 @@ localcode has **no fixed default model**. When it starts, it checks your Mac's u
 
 ## The rule
 
-Model weights must use about **55% of unified memory** or less. The rest is for the KV cache, activations, and macOS. localcode recommends the most capable model that fits. It never recommends experimental architectures automatically, but you can choose them yourself.
+A model runs fully on the GPU, so its weights, its KV cache and the server's working buffers must fit in the memory macOS lets the GPU use: about two thirds of unified memory on smaller Macs and more on larger ones. localcode reads that limit from your Mac and never changes it. A quant **fits** when its weights, a 32K-token working context and about 1 GB of buffers sit inside the limit. It is **tight** when it would still load, but with a short context or over the limit. localcode recommends the most capable model that fits. It never recommends experimental architectures automatically, but you can choose them yourself.
+
+The image projector is not counted: it loads only when you send an image (see [Vision](#vision)). A model's speculative drafter is counted, and on a tight Mac it is left out so a better quant fits.
+
+Quants below Unsloth's UD-Q2_K_XL (1-bit and IQ2 quants of models under 40B) are labelled **degraded** in the picker. Agent quality drops sharply at that size, so they are never recommended. You can still choose one.
 
 ## Recommendations for each Mac
 
 | Unified memory | Recommended | Quant | Weights |
 | ---: | --- | --- | ---: |
-| 16 GB | Gemma 4 12B | UD-Q4_K_XL | 7.37 GB |
-| 24–48 GB | Qwen 3.6 35B-A3B | Q2 | 10.7 GB |
-| 64 GB | Gemma 4 26B-A4B | Q8 | 28.0 GB |
-| 96 GB+ | Qwen 3.6 35B-A3B | UD-Q8_K_XL | 38.5 GB |
+| 16 GB | Gemma 4 12B | UD-Q5_K_XL | 8.61 GB |
+| 24 GB | Qwen 3.6 35B-A3B | UD-IQ3_S | 13.68 GB |
+| 32 GB | Qwen 3.6 35B-A3B | UD-Q4_K_S | 20.89 GB |
+| 36 GB | Qwen 3.6 35B-A3B | UD-Q4_K_XL | 22.36 GB |
+| 48 GB | Qwen 3.6 35B-A3B | UD-Q5_K_XL | 26.59 GB |
+| 64 GB+ | Qwen 3.6 35B-A3B | UD-Q8_K_XL | 38.45 GB |
+
+Below 64 GB the star stops at a 5-bit quant: higher bits change the output very little while every token reads more memory.
 
 ## The model picker
 
@@ -63,6 +71,8 @@ Hidden reasoning ("thinking") is off by default for every model. The model serve
 ## Vision
 
 After a vision-capable model loads, a hint says its image projector is available. `/vision` shows the projector's size and downloads it after you confirm. From then on that model can see images: drag or paste one into the prompt, or let the `read` tool open a PNG. The projector is per model.
+
+The projector stays out of memory until the first image of a session. Then a notice says it is loading, the model server restarts once with it, and the model reads the conversation again. It stays loaded until you switch models.
 
 ## Next
 

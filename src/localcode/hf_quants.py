@@ -172,32 +172,24 @@ def fetch_quants(hf_repo: str) -> list[Quant]:
     return quants
 
 
-def fit_badge(size_gb: float, ram_gb: int) -> str:
+def fit_badge(size_gb: float, ram_gb: int, kv_per_token: float = 0.0, kv_fixed: int = 0) -> str:
     """Fit badge for a quant on a machine with ``ram_gb`` unified memory.
 
-    Same rule as models_catalog.recommend(): weights should sit inside ~55% of
-    unified RAM. Returns "fits" | "tight" | "too_big".
+    Same rule as models_catalog.recommend() (gpu_memory.fit): the weights, a
+    working context of KV cache (``kv_per_token`` bytes per token plus
+    ``kv_fixed``) and compute buffers must sit inside the GPU working set.
+    Returns "fits" | "tight" | "too_big".
     """
-    if size_gb <= 0.55 * ram_gb:
-        return "fits"
-    if size_gb <= 0.65 * ram_gb:
-        return "tight"
-    return "too_big"
+    from .gpu_memory import fit
+    return fit(int(size_gb * 1e9), ram_gb, kv_per_token, kv_fixed)
 
 
 if __name__ == "__main__":  # pragma: no cover - tiny self-test
-    # Badge logic on a 16 GB Mac: 0.55*16=8.8, 0.65*16=10.4.
-    assert fit_badge(7.0, 16) == "fits"      # 7.0 <= 8.8
-    assert fit_badge(9.5, 16) == "tight"     # 8.8 < 9.5 <= 10.4
-    assert fit_badge(11.0, 16) == "too_big"  # 11.0 > 10.4
-    assert fit_badge(28.0, 16) == "too_big"
-    # Label parsing.
     assert _parse_label("gemma-4-12b-it-UD-Q4_K_XL.gguf") == "UD-Q4_K_XL"
     assert _parse_label("Qwen3.6-35B-A3B-Q8_0.gguf") == "Q8_0"
     assert _parse_label("model-BF16.gguf") == "BF16"
     assert _parse_label("model-IQ2_M.gguf") == "IQ2_M"
     print("self-test ok")
-    # Live smoke test (best-effort; offline-safe).
     qs = fetch_quants("unsloth/gemma-4-12b-it-GGUF")
     print(f"fetched {len(qs)} quants")
     for q in qs[:5]:

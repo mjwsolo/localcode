@@ -679,29 +679,57 @@ def _capability_rank(choice) -> int:
     return order.get(choice.key, len(_RECOMMEND_ORDER) + 1)
 
 
-def recommend(ram_gb: int | None = None) -> ModelChoice:
+def recommend(ram_gb: int | None = None, bandwidth_gbps: float | None = None) -> ModelChoice:
     """Pick the best model for THIS machine's RAM — capability-ranked, never the
     research diffusion architecture, and never a hardcoded default.
 
-    Weights must fit in ~55% of unified memory (leaves room for KV cache,
-    activations, OS). Among the production-ready models that fit, return the
-    most capable (see ``_RECOMMEND_ORDER``) so the recommendation scales with
-    the user's hardware instead of defaulting to any one model.
+    Groups are tried in capability order (see ``_RECOMMEND_ORDER``); each gets
+    the quant ``recommended_quant_index`` stars on this Mac, from the repo's
+    real file sizes. The first group with a starred quant wins, so a degraded
+    or non-fitting quant is never the recommendation while a better model fits.
+    Returns the curated (pinned) entry when the starred file is one.
     """
     if ram_gb is None:
         ram_gb = _system_ram_gb()
-    budget = ram_gb * 0.55
-    candidates = [
-        c for c in CHOICES
-        if _auto_recommendable(c) and c.size_gb <= budget
-    ]
-    if candidates:
-        # Most capable that fits; tie-break toward the larger (better-quant) file.
-        return min(candidates, key=lambda c: (_capability_rank(c), -c.size_gb))
-    # Nothing fits the budget — smallest production-ready model so the user still
+    for g in _groups_by_capability():
+        rows = known_quants(g)
+        speed = (lambda size, g=g: estimate_decode_tok_s(size, g.display_name, bandwidth_gbps)) if bandwidth_gbps else None
+        idx = recommended_quant_index(rows, g, ram_gb, speed)
+        if idx is None:
+            continue
+        filename, size_gb = rows[idx]
+        curated = by_filename_curated(filename)
+        return curated or choice_for_quant(g, filename, size_gb)
+    # Nothing fits this Mac — smallest production-ready model so the user still
     # gets something runnable rather than an impossible recommendation.
     prod = [c for c in CHOICES if _auto_recommendable(c)]
     return min(prod or CHOICES, key=lambda c: c.size_gb)
+
+
+def by_filename_curated(filename: str) -> ModelChoice | None:
+    return next((c for c in CHOICES if c.filename == filename), None)
+
+
+def _groups_by_capability() -> list["ModelGroup"]:
+    """Auto-recommendable groups, most capable first: the curated ranking, then
+    any other production group in catalog order."""
+    ordered: list[ModelGroup] = []
+    for key in _RECOMMEND_ORDER:
+        c = by_key(key)
+        g = next((g for g in MODEL_GROUPS if c is not None and g.hf_repo == c.hf_repo), None)
+        if g is not None and g not in ordered:
+            ordered.append(g)
+    for g in MODEL_GROUPS:
+        if g not in ordered:
+            ordered.append(g)
+    return [g for g in ordered if _group_recommendable(g)]
+
+
+def _group_recommendable(g: "ModelGroup") -> bool:
+    if g.architecture in _NO_AUTO_RECOMMEND_ARCHS:
+        return False
+    curated = [c for c in CHOICES if c.hf_repo == g.hf_repo]
+    return bool(curated) and all(c.key not in _NO_AUTO_RECOMMEND_KEYS for c in curated)
 
 
 def by_key(key: str) -> ModelChoice | None:
@@ -806,6 +834,13 @@ class ModelGroup:
     supports_systemone: bool = False
     # Vendor-trained speculative drafter, same file for every quant of the model.
     drafter: Drafter | None = None
+    # KV cache geometry, the same for every quant of the model, at the default
+    # q8_0 K / q8_0 V cache, as llama.cpp allocates it (runtime._kv_bytes_per_token
+    # and _kv_fixed_bytes on the GGUF headers): bytes per context token over the
+    # layers whose cache grows with the context, and fixed bytes (sliding-window
+    # caches, recurrent state). Decides which quants fit a Mac before download.
+    kv_bytes_per_token: float = 0.0
+    kv_fixed_bytes: int = 0
 
     @property
     def supports_vision(self) -> bool:
@@ -830,6 +865,7 @@ MODEL_GROUPS: list[ModelGroup] = [
         mmproj_size_gb=1.2,
         mmproj_hf_filename="mmproj-F16.gguf",
         drafter=DRAFTER_GEMMA_26B,
+        kv_bytes_per_token=10880, kv_fixed_bytes=167116800,  # 5 global layers x 2 KV heads; 25 sliding-window layers hold 1536 cells
     ),
     ModelGroup(
         key="gemma-4-12b",
@@ -848,6 +884,7 @@ MODEL_GROUPS: list[ModelGroup] = [
         mmproj_size_gb=0.18,  # 175 MB on HF as of 2026-09 (repo re-exported the projector)
         mmproj_hf_filename="mmproj-F16.gguf",
         drafter=DRAFTER_GEMMA_12B,
+        kv_bytes_per_token=8704, kv_fixed_bytes=267386880,  # 8 global layers x 1 KV head; 40 sliding-window layers hold 1536 cells
     ),
     ModelGroup(
         key="qwen-3.6-35b-a3b",
@@ -867,6 +904,7 @@ MODEL_GROUPS: list[ModelGroup] = [
         mmproj_size_gb=0.9,
         mmproj_hf_filename="mmproj-F16.gguf",
         drafter=DRAFTER_QWEN36,
+        kv_bytes_per_token=10880, kv_fixed_bytes=65861059,  # 10 attention layers of 40 (server.log: 10 layers); 62.81 MiB recurrent state
     ),
     ModelGroup(
         key="qwen-3.8-27b",
@@ -886,6 +924,7 @@ MODEL_GROUPS: list[ModelGroup] = [
         mmproj_filename="mmproj-Qwen3.8-27B-F16.gguf",
         mmproj_size_gb=0.9,
         mmproj_hf_filename="mmproj-F16.gguf",
+        kv_bytes_per_token=34816, kv_fixed_bytes=156893184,  # 16 attention layers of 64; recurrent state of the other 48
     ),
     ModelGroup(
         key="north-mini-code-1.0",
@@ -901,6 +940,7 @@ MODEL_GROUPS: list[ModelGroup] = [
             "builds a dedicated llama-server from llama.cpp PR #24260 on first "
             "use and serves it with stock flags. 256K context. Text-only."
         ),
+        kv_bytes_per_token=26624, kv_fixed_bytes=339738624,  # f16 cache: 13 global, 36 sliding-window layers
     ),
     ModelGroup(
         key="muse-glimmer-30b",
@@ -923,6 +963,7 @@ MODEL_GROUPS: list[ModelGroup] = [
         mmproj_size_gb=3.85,
         mmproj_hf_filename="mmproj-Muse-Glimmer-30B-BF16.gguf",
         drafter=DRAFTER_MUSE,
+        kv_bytes_per_token=28288, kv_fixed_bytes=0,  # every layer full attention
     ),
     ModelGroup(
         key="diffusiongemma-26b-a4b",
@@ -944,6 +985,7 @@ MODEL_GROUPS: list[ModelGroup] = [
             "Text-only."
         ),
         # Text-only: no vision sidecar.
+        kv_bytes_per_token=10880, kv_fixed_bytes=167116800,  # Gemma 4 26B-A4B layout
     ),
     ModelGroup(
         key="saluki-27b",
@@ -956,6 +998,7 @@ MODEL_GROUPS: list[ModelGroup] = [
         notes="Mixed 2-bit Qwen 3.8 27B: 7.9 GB weights, with additional RAM needed for context and runtime. Coding quality unmeasured on LocalCode; opt-in. Optional F16 projector enables images. No bundled speculative drafter.",
         mmproj_filename="mmproj-Underdog-Saluki-27B-1.0-F16.gguf",
         mmproj_size_gb=0.928,
+        kv_bytes_per_token=34816, kv_fixed_bytes=156893184,  # Qwen 3.8 27B layout
     ),
     ModelGroup(
         key="kolibri-1",
@@ -971,6 +1014,7 @@ MODEL_GROUPS: list[ModelGroup] = [
             "community quant. Qwen-style reasoning tags and Hermes tool calls. "
             "Text-only."
         ),
+        kv_bytes_per_token=10880, kv_fixed_bytes=55705600,  # 10 global layers, 40 sliding-window layers
     ),
     ModelGroup(
         key="openjev",
@@ -989,8 +1033,152 @@ MODEL_GROUPS: list[ModelGroup] = [
         mmproj_filename="mmproj-OpenJev-Q8_0.gguf",
         mmproj_size_gb=0.6,
         mmproj_hf_filename="mmproj-OpenJev-Q8_0.gguf",
+        kv_bytes_per_token=34816, kv_fixed_bytes=156893184,  # Qwen 3.5 27B layout: 16 attention layers of 64
     ),
 ]
+
+
+# Exact file sizes (bytes) of the model-weight quants each vendor repo ships,
+# from the Hugging Face API (2026-10-18). The picker's live listing replaces
+# these when it has one; this copy lets the recommendation (and its ★) work
+# offline, on a first run, and in tests with the same real sizes.
+KNOWN_QUANT_BYTES: dict[str, dict[str, int]] = {
+    "unsloth/Muse-Glimmer-30B-GGUF": {
+        "Muse-Glimmer-30B-UD-IQ2_XXS.gguf": 10746373152,
+        "Muse-Glimmer-30B-UD-IQ2_XS.gguf": 11513104416,
+        "Muse-Glimmer-30B-UD-IQ2_M.gguf": 12255421472,
+        "Muse-Glimmer-30B-UD-Q2_K_XL.gguf": 12444212256,
+        "Muse-Glimmer-30B-UD-IQ3_XXS.gguf": 13130658848,
+        "Muse-Glimmer-30B-UD-Q3_K_XL.gguf": 13360983072,
+        "Muse-Glimmer-30B-UD-IQ3_M.gguf": 14122705696,
+        "Muse-Glimmer-30B-UD-Q4_K_XL.gguf": 15878222368,
+        "Muse-Glimmer-30B-UD-Q5_K_M.gguf": 19194274848,
+        "Muse-Glimmer-30B-UD-Q5_K_L.gguf": 19768527904,
+        "Muse-Glimmer-30B-UD-Q5_K_XL.gguf": 21789618976,
+        "Muse-Glimmer-30B-UD-Q6_K_XL.gguf": 26265362976,
+        "Muse-Glimmer-30B-Q8_0.gguf": 29612957984,
+        "Muse-Glimmer-30B-UD-Q8_K_XL.gguf": 32300651040,
+    },
+    "unsloth/North-Mini-Code-1.0-GGUF": {
+        "North-Mini-Code-1.0-UD-IQ1_M.gguf": 9379799136,
+        "North-Mini-Code-1.0-UD-IQ2_XXS.gguf": 9782452320,
+        "North-Mini-Code-1.0-UD-IQ2_M.gguf": 9863438432,
+        "North-Mini-Code-1.0-UD-Q2_K_XL.gguf": 10480001120,
+        "North-Mini-Code-1.0-UD-IQ3_XXS.gguf": 11708375136,
+        "North-Mini-Code-1.0-UD-IQ3_S.gguf": 12765339744,
+        "North-Mini-Code-1.0-UD-Q3_K_M.gguf": 14213013600,
+        "North-Mini-Code-1.0-UD-Q3_K_XL.gguf": 14343037024,
+        "North-Mini-Code-1.0-UD-IQ4_XS.gguf": 15230132320,
+        "North-Mini-Code-1.0-UD-IQ4_NL.gguf": 15532122208,
+        "North-Mini-Code-1.0-UD-Q4_K_S.gguf": 18045558880,
+        "North-Mini-Code-1.0-MXFP4_MOE.gguf": 18662121568,
+        "North-Mini-Code-1.0-UD-Q4_K_M.gguf": 19203186784,
+        "North-Mini-Code-1.0-UD-Q4_K_XL.gguf": 19253518432,
+        "North-Mini-Code-1.0-UD-Q5_K_S.gguf": 21619105888,
+        "North-Mini-Code-1.0-UD-Q5_K_M.gguf": 22946603104,
+        "North-Mini-Code-1.0-UD-Q5_K_XL.gguf": 23000080480,
+        "North-Mini-Code-1.0-UD-Q6_K.gguf": 25513517152,
+        "North-Mini-Code-1.0-UD-Q6_K_XL.gguf": 27853938784,
+        "North-Mini-Code-1.0-Q8_0.gguf": 32437264480,
+        "North-Mini-Code-1.0-UD-Q8_K_XL.gguf": 33209933920,
+    },
+    "unsloth/Qwen3.6-35B-A3B-GGUF": {
+        "Qwen3.6-35B-A3B-UD-IQ1_M.gguf": 10047749088,
+        "Qwen3.6-35B-A3B-UD-IQ2_XXS.gguf": 10756586464,
+        "Qwen3.6-35B-A3B-UD-IQ2_M.gguf": 11522702304,
+        "Qwen3.6-35B-A3B-UD-Q2_K_XL.gguf": 12290628576,
+        "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf": 13211155424,
+        "Qwen3.6-35B-A3B-UD-IQ3_S.gguf": 13676723168,
+        "Qwen3.6-35B-A3B-UD-Q3_K_S.gguf": 15359196128,
+        "Qwen3.6-35B-A3B-UD-Q3_K_M.gguf": 16600710112,
+        "Qwen3.6-35B-A3B-UD-Q3_K_XL.gguf": 16845511648,
+        "Qwen3.6-35B-A3B-UD-IQ4_XS.gguf": 17730509792,
+        "Qwen3.6-35B-A3B-UD-IQ4_NL.gguf": 18040888288,
+        "Qwen3.6-35B-A3B-UD-IQ4_NL_XL.gguf": 19500506080,
+        "Qwen3.6-35B-A3B-UD-Q4_K_S.gguf": 20893015008,
+        "Qwen3.6-35B-A3B-MXFP4_MOE.gguf": 21706144736,
+        "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf": 22134528992,
+        "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf": 22360456160,
+        "Qwen3.6-35B-A3B-UD-Q5_K_S.gguf": 24942050272,
+        "Qwen3.6-35B-A3B-UD-Q5_K_M.gguf": 26456194016,
+        "Qwen3.6-35B-A3B-UD-Q5_K_XL.gguf": 26592508896,
+        "Qwen3.6-35B-A3B-UD-Q6_K.gguf": 29308320736,
+        "Qwen3.6-35B-A3B-UD-Q6_K_XL.gguf": 31843777504,
+        "Qwen3.6-35B-A3B-Q8_0.gguf": 36903140320,
+        "Qwen3.6-35B-A3B-UD-Q8_K_XL.gguf": 38451182560,
+    },
+    "unsloth/Qwen3.8-27B-GGUF": {
+        "Qwen3.8-27B-UD-IQ1_S.gguf": 6192222208,
+        "Qwen3.8-27B-UD-IQ1_M.gguf": 6729166848,
+        "Qwen3.8-27B-UD-IQ2_XXS.gguf": 7266070528,
+        "Qwen3.8-27B-UD-IQ2_S.gguf": 8371970048,
+        "Qwen3.8-27B-UD-Q2_K_XL.gguf": 9828981664,
+        "Qwen3.8-27B-UD-IQ3_XXS.gguf": 10934860704,
+        "Qwen3.8-27B-UD-IQ3_S.gguf": 12040883104,
+        "Qwen3.8-27B-UD-Q3_K_XL.gguf": 13146393504,
+        "Qwen3.8-27B-UD-IQ4_XS.gguf": 14252845984,
+        "Qwen3.8-27B-UD-Q4_K_S.gguf": 15358213024,
+        "Qwen3.8-27B-Q4_0.gguf": 16056478688,
+        "Qwen3.8-27B-UD-Q4_K_M.gguf": 16464440224,
+        "Qwen3.8-27B-Q4_1.gguf": 17540705248,
+        "Qwen3.8-27B-UD-Q4_K_XL.gguf": 17559178144,
+        "Qwen3.8-27B-UD-Q5_K_S.gguf": 18665753504,
+        "Qwen3.8-27B-UD-Q5_K_M.gguf": 19771509664,
+        "Qwen3.8-27B-UD-Q5_K_XL.gguf": 20876938144,
+        "Qwen3.8-27B-UD-Q6_K.gguf": 21983677344,
+        "Qwen3.8-27B-UD-Q6_K_M.gguf": 23088409504,
+        "Qwen3.8-27B-UD-Q6_K_L.gguf": 24193919904,
+        "Qwen3.8-27B-UD-Q6_K_XL.gguf": 25299061664,
+        "Qwen3.8-27B-UD-Q8_K_L.gguf": 28045695904,
+        "Qwen3.8-27B-Q8_0.gguf": 29047086048,
+        "Qwen3.8-27B-UD-Q8_K_XL.gguf": 31457991680,
+    },
+    "unsloth/gemma-4-12b-it-GGUF": {
+        "gemma-4-12b-it-UD-IQ2_M.gguf": 4213353280,
+        "gemma-4-12b-it-UD-IQ3_XXS.gguf": 4639716160,
+        "gemma-4-12b-it-UD-Q2_K_XL.gguf": 4661419840,
+        "gemma-4-12b-it-Q3_K_S.gguf": 5135014720,
+        "gemma-4-12b-it-Q3_K_M.gguf": 5693872960,
+        "gemma-4-12b-it-UD-Q3_K_XL.gguf": 6022684480,
+        "gemma-4-12b-it-IQ4_XS.gguf": 6375734080,
+        "gemma-4-12b-it-IQ4_NL.gguf": 6716357440,
+        "gemma-4-12b-it-Q4_0.gguf": 6738475840,
+        "gemma-4-12b-it-Q4_K_S.gguf": 6764526400,
+        "gemma-4-12b-it-Q4_K_M.gguf": 7121861440,
+        "gemma-4-12b-it-UD-Q4_K_XL.gguf": 7366423360,
+        "gemma-4-12b-it-Q4_1.gguf": 7397604160,
+        "gemma-4-12b-it-Q5_K_S.gguf": 8204680000,
+        "gemma-4-12b-it-Q5_K_M.gguf": 8413576000,
+        "gemma-4-12b-it-UD-Q5_K_XL.gguf": 8606021440,
+        "gemma-4-12b-it-Q6_K.gguf": 9786022720,
+        "gemma-4-12b-it-UD-Q6_K_XL.gguf": 10685012800,
+        "gemma-4-12b-it-Q8_0.gguf": 12669647680,
+        "gemma-4-12b-it-UD-Q8_K_XL.gguf": 13637327680,
+        "gemma-4-12b-it-BF16.gguf": 23832066656,
+    },
+    "unsloth/gemma-4-26B-A4B-it-GGUF": {
+        "gemma-4-26B-A4B-it-UD-IQ2_XXS.gguf": 9922480608,
+        "gemma-4-26B-A4B-it-UD-IQ2_M.gguf": 10014755296,
+        "gemma-4-26B-A4B-it-UD-Q2_K_XL.gguf": 10546934240,
+        "gemma-4-26B-A4B-it-UD-IQ3_S.gguf": 11289671136,
+        "gemma-4-26B-A4B-it-UD-IQ3_XXS.gguf": 11416548832,
+        "gemma-4-26B-A4B-it-UD-Q3_K_M.gguf": 12728497888,
+        "gemma-4-26B-A4B-it-UD-Q3_K_XL.gguf": 12907280096,
+        "gemma-4-26B-A4B-it-UD-IQ4_XS.gguf": 13597177568,
+        "gemma-4-26B-A4B-it-UD-IQ4_NL.gguf": 13613037280,
+        "gemma-4-26B-A4B-it-UD-Q4_K_S.gguf": 16487610080,
+        "gemma-4-26B-A4B-it-MXFP4_MOE.gguf": 16551048928,
+        "gemma-4-26B-A4B-it-UD-Q4_K_M.gguf": 16947541728,
+        "gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf": 17010980576,
+        "gemma-4-26B-A4B-it-UD-Q5_K_S.gguf": 18850707168,
+        "gemma-4-26B-A4B-it-UD-Q5_K_M.gguf": 21150365408,
+        "gemma-4-26B-A4B-it-UD-Q5_K_XL.gguf": 21217769184,
+        "gemma-4-26B-A4B-it-UD-Q6_K.gguf": 23172478688,
+        "gemma-4-26B-A4B-it-UD-Q6_K_XL.gguf": 23295391456,
+        "gemma-4-26B-A4B-it-Q8_0.gguf": 26859861728,
+        "gemma-4-26B-A4B-it-UD-Q8_K_XL.gguf": 27636232928,
+    },
+}
 
 
 def _quant_label(filename: str) -> str:
@@ -1156,3 +1344,128 @@ def by_group(key: str) -> ModelGroup | None:
         if g.key == key:
             return g
     return None
+
+
+# ---------------------------------------------------------------------------
+# Fit and quant recommendation (shared by recommend(), the picker and the
+# launcher). Memory math lives in gpu_memory.
+# ---------------------------------------------------------------------------
+
+
+def known_quants(group: "ModelGroup") -> list[tuple[str, float]]:
+    """(filename, size_gb) of the group's quants, smallest first: the recorded
+    repo listing plus the curated entries."""
+    rows = {f: b / 1e9 for f, b in KNOWN_QUANT_BYTES.get(group.hf_repo, {}).items()}
+    for c in CHOICES:
+        if c.hf_repo == group.hf_repo:
+            rows.setdefault(c.filename, (c.size_bytes / 1e9) if c.size_bytes else c.size_gb)
+    return sorted(rows.items(), key=lambda r: r[1])
+
+
+def quant_bits(label: str) -> float:
+    """Nominal bits per weight of a quant label ("UD-IQ3_XXS" -> 3, "BF16" -> 16)."""
+    import re
+    t = label.upper().removeprefix("UD-")
+    if t.startswith(("BF16", "F16")):
+        return 16.0
+    if t.startswith("F32"):
+        return 32.0
+    if t.startswith("MXFP4"):
+        return 4.0
+    m = re.match(r"I?Q(\d)", t)
+    if not m:
+        return 16.0
+    bits = float(m.group(1))
+    if bits == 2 and t.startswith("Q2_K"):
+        return 2.5  # K-quant 2-bit mixes keep attention and embeddings higher
+    return bits
+
+
+def is_degraded(label: str, group: "ModelGroup | None" = None) -> bool:
+    """Below Unsloth's UD-Q2_K_XL: 1-bit and IQ2 quants of models under 40B.
+    That is where agent quality falls off a cliff (Qwen 3.8: Divergence-300
+    25% at UD-Q2_K_XL vs 8-10% at UD-IQ2_S; 2-bit experts corrupt tool-call
+    JSON), so the picker marks them and never stars them."""
+    t = label.upper().removeprefix("UD-")
+    if t.startswith(("IQ1", "Q1", "TQ1")):
+        return True
+    if not t.startswith("IQ2"):
+        return False
+    total_b = _parse_total_active_b(group.display_name)[0] if group is not None else 0.0
+    return not total_b or total_b < 40
+
+
+def _quality_tier(label: str, group: "ModelGroup") -> int:
+    """0 degraded, 1 low-bit (2.5-3.x), 2 near-lossless (4-bit and up)."""
+    if is_degraded(label, group):
+        return 0
+    return 2 if quant_bits(label) >= 4 else 1
+
+
+def quant_plan(group: "ModelGroup", size_gb: float, ram_gb: float) -> dict:
+    """How a quant of `group` would run on a Mac with `ram_gb`: its fit badge
+    (weights + a working context + compute in the GPU working set) and whether
+    its speculative drafter also fits. The launcher applies the same rule, so a
+    drafter that does not fit is left out rather than squeezing the context."""
+    from . import gpu_memory
+    weights = int(size_gb * 1e9)
+    bpt, fixed = group.kv_bytes_per_token, group.kv_fixed_bytes
+    badge = gpu_memory.fit(weights, ram_gb, bpt, fixed)
+    drafter = group.drafter
+    with_drafter = False
+    if drafter is not None and badge == "fits":
+        with_drafter = gpu_memory.fit(weights + drafter.size_bytes, ram_gb, bpt, fixed) == "fits"
+    return {"fit": badge, "drafter": with_drafter,
+            "size_gb": size_gb + (drafter.size_gb if with_drafter and drafter else 0.0)}
+
+
+def recommended_quant_index(rows, group: "ModelGroup", ram_gb: float,
+                            speed=None, min_speed_fraction: float = 0.5) -> int | None:
+    """Index of the quant to star among `rows` ((filename or label, size_gb)
+    pairs, any object with .filename/.size_gb works too), or None when no
+    non-degraded quant fits this Mac.
+
+    1. Only quants that fit (gpu_memory.fit) and are not degraded.
+    2. Below FULL_PRECISION_MIN_RAM_GB, at most NEAR_LOSSLESS_BITS bits.
+    3. Keep the speculative drafter, unless dropping it reaches a better
+       quality tier (e.g. 2.5-3 bit -> 4 bit): a near-lossless quant without
+       drafting beats a low-bit one with it; within a tier the drafter's
+       1.5-2x decode wins.
+    4. Among the rest, the largest file that still decodes at least
+       `min_speed_fraction` of the fastest one (`speed(size_gb)` -> tok/s).
+    """
+    from .model_config import FULL_PRECISION_MIN_RAM_GB, NEAR_LOSSLESS_BITS
+
+    def parts(row):
+        if isinstance(row, tuple):
+            return row[0], row[1]
+        return getattr(row, "filename", getattr(row, "label", "")), row.size_gb
+
+    cands = []
+    for i, row in enumerate(rows):
+        name, size = parts(row)
+        label = _quant_label(name) if name.lower().endswith(".gguf") else name
+        if is_degraded(label, group):
+            continue
+        plan = quant_plan(group, size, ram_gb)
+        if plan["fit"] == "fits":
+            cands.append((i, label, size, plan["drafter"]))
+    if not cands:
+        return None
+    if ram_gb < FULL_PRECISION_MIN_RAM_GB:
+        capped = [c for c in cands if quant_bits(c[1]) <= NEAR_LOSSLESS_BITS]
+        cands = capped or cands
+    best_tier = max(_quality_tier(c[1], group) for c in cands)
+    if group.drafter is not None:
+        drafted = [c for c in cands if c[3]]
+        if drafted and max(_quality_tier(c[1], group) for c in drafted) == best_tier:
+            cands = drafted
+        else:
+            cands = [c for c in cands if _quality_tier(c[1], group) == best_tier]
+    if speed is not None:
+        speeds = {c[0]: (speed(c[2]) or 0) for c in cands}
+        fastest = max(speeds.values()) or 0
+        if fastest > 0:
+            responsive = [c for c in cands if speeds[c[0]] >= fastest * min_speed_fraction]
+            cands = responsive or cands
+    return max(cands, key=lambda c: c[2])[0]

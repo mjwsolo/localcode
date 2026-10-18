@@ -88,16 +88,16 @@ def test_oversize_model_rejected_before_spawn(tmp_path, monkeypatch):
     server_cmd.validate_model_memory(str(model), 16)
 
 
-def test_memory_guard_counts_sidecars(monkeypatch, tmp_path):
-    from types import SimpleNamespace
-    paths = [tmp_path / name for name in ('model.gguf', 'mmproj.gguf', 'draft.gguf')]
+def test_memory_guard_counts_the_projector_only_when_it_loads(monkeypatch, tmp_path):
+    paths = [tmp_path / name for name in ('model.gguf', 'mmproj.gguf')]
     for path in paths:
         with path.open('wb') as f:
-            f.truncate(2 * 1024**3)
+            f.truncate(3 * 1024**3)
     monkeypatch.setattr(server_cmd, 'mmproj_for', lambda _: paths[1])
-    monkeypatch.setattr(server_cmd, 'catalog_choice', lambda _: SimpleNamespace(drafter=SimpleNamespace(local_path=paths[2])))
+    # Text-only start (the projector is lazy): 3 GiB weights + 3 GiB reserve fit 8 GiB.
+    server_cmd.validate_model_memory(str(paths[0]), 8)
     with pytest.raises(ValueError, match='Insufficient RAM'):
-        server_cmd.validate_model_memory(str(paths[0]), 8)
+        server_cmd.validate_model_memory(str(paths[0]), 8, vision=True)
 
 
 def test_rejected_load_keeps_existing_server(monkeypatch, tmp_path):
@@ -108,7 +108,7 @@ def test_rejected_load_keeps_existing_server(monkeypatch, tmp_path):
     sup.port = 8000
     stopped = []
     sup.stop = lambda: stopped.append(True)
-    def refuse(*args):
+    def refuse(*args, **kwargs):
         raise ValueError('Insufficient RAM')
     monkeypatch.setattr(server_cmd, 'server_command', refuse)
     with pytest.raises(ValueError, match='Insufficient RAM'):
