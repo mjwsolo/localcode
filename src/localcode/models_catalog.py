@@ -575,6 +575,56 @@ CHOICES: list[ModelChoice] = [
         mmproj_size_gb=0.6,
         mmproj_hf_filename="mmproj-OpenJev-Q8_0.gguf",
     ),
+    ModelChoice(
+        key="flint",
+        revision="20468edfc38ab43d6914cc88b08cbecb05d0fc62",
+        sha256="63c2ecc461ca545134b670c660e76fa20f47240f8d39b6510bfd21c4dd6e072f",
+        size_bytes=25054688704,
+        name="Flint 40B-A2.5B (Q4)",
+        hf_repo="unsloth/flint-GGUF",
+        filename="flint-UD-Q4_K_XL.gguf",
+        size_gb=25.1,
+        active_params="2.5B active (40B total MoE, top-6 of 256 experts + 1 shared)",
+        architecture="flint",
+        license="Apache 2.0",
+        humaneval_pass_at_1=None,
+        notes=(
+            "Recursive's coding-agent MoE (Oct 2026): 39.8B total, ~2.5B active "
+            "per token, sliding-window / full attention interleave, 256K context. "
+            "Trained for investigating codebases, fixing bugs and tool use. "
+            "UD-Q4_K_XL keeps sensitive layers above 4-bit. ~25 GB weights: "
+            "needs 48 GB unified memory, comfortable on 64 GB. Text-only. "
+            "It reasons on every step and cannot be told not to, so agent "
+            "tasks run slower than on Qwen 3.6. Opt-in, never auto-recommended."
+        ),
+        # Flint reasons on every turn and has no off switch: with the server's
+        # reasoning flags it still opens <think>, and the thought leaked into the
+        # reply. "always" leaves the parser on so it lands in reasoning_content.
+        reasoning_control="always",
+        reasoning_budget_tokens=0,
+    ),
+    ModelChoice(
+        key="flint-q8",
+        revision="20468edfc38ab43d6914cc88b08cbecb05d0fc62",
+        sha256="5df42b56859c7b5142228005d7d63c327ec9e34c99c72548016d805309a0d284",
+        size_bytes=42301076928,
+        name="Flint 40B-A2.5B (Q8)",
+        hf_repo="unsloth/flint-GGUF",
+        filename="flint-Q8_0.gguf",
+        size_gb=42.3,
+        active_params="2.5B active (40B total MoE, top-6 of 256 experts + 1 shared)",
+        architecture="flint",
+        license="Apache 2.0",
+        humaneval_pass_at_1=None,
+        notes=(
+            "Same Flint MoE as the Q4 entry at near-lossless Q8_0. Same 2.5B "
+            "active parameters, so decode speed stays in the same class. "
+            "~42 GB weights: the high-RAM pick, for 96-128 GB unified memory. "
+            "Text-only."
+        ),
+        reasoning_control="always",
+        reasoning_budget_tokens=0,
+    ),
 ]
 
 
@@ -636,8 +686,9 @@ _NO_AUTO_RECOMMEND_ARCHS = {"diffusion_gemma", "kolibri1"}
 # Entries excluded by key, for models that share an architecture with a
 # recommended one: OpenJev is a qwen35 like Qwen 3.8, but it is a decision
 # model and must never be a first-run coding default. Saluki remains opt-in
-# until coding quality has been measured on this stack.
-_NO_AUTO_RECOMMEND_KEYS = {"openjev", "saluki"}
+# until coding quality has been measured on this stack. Flint reasons on every
+# step (no off switch) and timed out where Qwen 3.6 finished on the 48 GB tier.
+_NO_AUTO_RECOMMEND_KEYS = {"openjev", "saluki", "flint", "flint-q8"}
 
 
 def _auto_recommendable(c: "ModelChoice") -> bool:
@@ -956,6 +1007,21 @@ MODEL_GROUPS: list[ModelGroup] = [
             "Aleph Alpha's open-weight English/German sparse MoE — 78B total, "
             "~3.5B active. Experimental: community-patched architecture and a "
             "community quant. Qwen-style reasoning tags and Hermes tool calls. "
+            "Text-only."
+        ),
+    ),
+    ModelGroup(
+        key="flint",
+        display_name="Flint 40B-A2.5B",
+        maker="Recursive",
+        hf_repo="unsloth/flint-GGUF",
+        family="flint",
+        architecture="flint",
+        license="Apache 2.0",
+        notes=(
+            "Recursive's coding-agent sparse MoE — 40B total, ~2.5B active. "
+            "Sliding-window / full attention interleave, 256K context, "
+            "reasoning and multi-turn tool use. Unsloth Dynamic quants. "
             "Text-only."
         ),
     ),

@@ -15,6 +15,7 @@ def _median(xs):
 
 def summarize(events, server_log):
     calls, seen, repeats, failures, durations = {}, set(), 0, 0, []
+    tool_seconds, slowest = {}, []
     tokens = {k: 0 for k in ('input', 'output', 'cache_read', 'cache_write')}
     usage_seen = False
     seen_ids = set()
@@ -49,6 +50,8 @@ def summarize(events, server_log):
         timing = state.get('time') or {}
         if isinstance(timing.get('start'), (int, float)) and isinstance(timing.get('end'), (int, float)):
             durations.append(max(0, timing['end'] - timing['start']) / 1000)
+            tool_seconds[tool] = round(tool_seconds.get(tool, 0) + durations[-1], 3)
+            slowest.append((durations[-1], tool))
     requests = {}
     pattern = r'task\s+(\d+)\s*\|\s*(prompt eval time|eval time)\s*=\s*([\d.]+) ms /\s*(\d+) tokens'
     for task, kind, ms, count in re.findall(pattern, server_log):
@@ -57,7 +60,8 @@ def summarize(events, server_log):
         requests[task][prefix + '_tokens'] = int(count)
     return {
         'usage_tokens': tokens if usage_seen else None,
-        'tool_calls_by_name': calls, 'repeated_tool_calls': repeats,
+        'tool_calls_by_name': calls, 'tool_seconds_by_name': tool_seconds,
+        'slowest_tool_calls': [[t, round(d, 1)] for d, t in sorted(slowest, reverse=True)[:5]], 'repeated_tool_calls': repeats,
         'tool_errors': failures, 'tool_duration_s': sum(durations) if durations else None,
         'server_requests': list(requests.values()),
         # Medians over this trial's requests, from the server's own timing lines.
