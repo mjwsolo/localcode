@@ -593,7 +593,9 @@ CHOICES: list[ModelChoice] = [
             "per token, sliding-window / full attention interleave, 256K context. "
             "Trained for investigating codebases, fixing bugs and tool use. "
             "UD-Q4_K_XL keeps sensitive layers above 4-bit. ~25 GB weights: "
-            "needs 48 GB unified memory, comfortable on 64 GB. Text-only."
+            "needs 48 GB unified memory, comfortable on 64 GB. Text-only. "
+            "It reasons on every step and cannot be told not to, so agent "
+            "tasks run slower than on Qwen 3.6. Opt-in, never auto-recommended."
         ),
         # Flint reasons on every turn and has no off switch: with the server's
         # reasoning flags it still opens <think>, and the thought leaked into the
@@ -684,8 +686,9 @@ _NO_AUTO_RECOMMEND_ARCHS = {"diffusion_gemma", "kolibri1"}
 # Entries excluded by key, for models that share an architecture with a
 # recommended one: OpenJev is a qwen35 like Qwen 3.8, but it is a decision
 # model and must never be a first-run coding default. Saluki remains opt-in
-# until coding quality has been measured on this stack.
-_NO_AUTO_RECOMMEND_KEYS = {"openjev", "saluki"}
+# until coding quality has been measured on this stack. Flint reasons on every
+# step (no off switch) and timed out where Qwen 3.6 finished on the 48 GB tier.
+_NO_AUTO_RECOMMEND_KEYS = {"openjev", "saluki", "flint", "flint-q8"}
 
 
 def _auto_recommendable(c: "ModelChoice") -> bool:
