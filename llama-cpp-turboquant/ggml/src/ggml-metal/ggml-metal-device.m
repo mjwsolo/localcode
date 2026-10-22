@@ -513,6 +513,48 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
 #undef X
     };
 
+    // Compiling the embedded sources takes 20-30 s whenever macOS's shader cache
+    // is cold (first launch after an install or update). A library compiled
+    // ahead of time from these exact sources, with these exact macros, may sit
+    // next to the binary as ggml-metal-<key>.metallib; the key hashes both, so a
+    // stale or mismatched file is never used. Anything else falls back to the
+    // runtime compile below. scripts/build_metallibs.py computes the same key.
+    {
+        uint64_t h_src = 0;
+        for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
+            uint64_t h = 1469598103934665603ULL;
+            for (const char * p = lib_start[kind]; p < lib_end[kind]; ++p) {
+                h = (h ^ (uint8_t) *p) * 1099511628211ULL;
+            }
+            h_src ^= h;
+        }
+        NSMutableString * desc = [NSMutableString stringWithFormat:@"lang=%d", ggml_metal_device_get_props(dev)->has_tensor ? 4 : 0];
+        for (NSString * k in [[prep allKeys] sortedArrayUsingSelector:@selector(compare:)]) {
+            [desc appendFormat:@";%@=%@", k, prep[k]];
+        }
+        uint64_t key = h_src;
+        for (const char * p = [desc UTF8String]; *p; ++p) {
+            key = (key ^ (uint8_t) *p) * 1099511628211ULL;
+        }
+        NSString * exe  = [[[NSBundle mainBundle] executablePath] stringByResolvingSymlinksInPath];
+        NSString * name = [NSString stringWithFormat:@"ggml-metal-%016llx.metallib", (unsigned long long) key];
+        NSString * path = exe ? [[exe stringByDeletingLastPathComponent] stringByAppendingPathComponent:name] : nil;
+        if (path && [[NSFileManager defaultManager] isReadableFileAtPath:path]) {
+            const int64_t t0 = ggml_time_us();
+            NSError * error = nil;
+            id<MTLLibrary> lib = [device newLibraryWithURL:[NSURL fileURLWithPath:path] error:&error];
+            if (lib) {
+                res->objs[0]        = lib;
+                res->single_library = true;
+                GGML_LOG_INFO("%s: loaded precompiled '%s' in %.3f sec\n", __func__, [name UTF8String], (ggml_time_us() - t0) / 1e6);
+                return res;
+            }
+            GGML_LOG_WARN("%s: could not load '%s' (%s), compiling sources\n", __func__, [name UTF8String], [[error description] UTF8String]);
+        } else {
+            GGML_LOG_INFO("%s: no precompiled library '%s' (%s), compiling sources\n", __func__, [name UTF8String], [desc UTF8String]);
+        }
+    }
+
     const bool ok = ggml_metal_library_compile_all(res, device, prep,
         ^NSString * (int kind, NSError ** err) {
             (void) err;

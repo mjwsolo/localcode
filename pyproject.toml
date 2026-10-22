@@ -82,6 +82,7 @@ where = ["src"]
 "localcode" = [
     "bin/llama-server",
     "bin/localcode-ui",
+    "bin/*.metallib",
     "ui/plugin/*.ts",
     "ui/FORK_COMMIT",
     "ui/UPSTREAM_COMMIT",

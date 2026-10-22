@@ -13,10 +13,14 @@ name: TurboQuant binaries
 on:
   push:
     paths:
+      - "scripts/build_metallibs.py"
+      - "src/localcode/bin/*.metallib"
       - "llama-cpp-turboquant/**"
       - ".github/workflows/turboquant.yml"
   pull_request:
     paths:
+      - "scripts/build_metallibs.py"
+      - "src/localcode/bin/*.metallib"
       - "llama-cpp-turboquant/**"
       - ".github/workflows/turboquant.yml"
   workflow_dispatch:
@@ -72,6 +76,20 @@ jobs:
             "./$b" --help >/dev/null 2>&1 || "./$b" -h >/dev/null 2>&1 || true
           done
           exit $fail
+
+      - name: Precompile Metal kernels
+        # The server compiles its embedded Metal sources at startup, 20-30 s with
+        # a cold shader cache. These libraries let it skip that (see
+        # scripts/build_metallibs.py); download this artifact into src/localcode/bin.
+        run: python3 scripts/build_metallibs.py llama-cpp-turboquant/build-ci metallibs
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: metallibs
+          path: metallibs/*.metallib
+
+      - name: Shipped Metal libraries match the sources
+        run: python3 scripts/build_metallibs.py --check llama-cpp-turboquant/build-ci src/localcode/bin
 
       - uses: actions/upload-artifact@v4
         with:
