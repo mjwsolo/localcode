@@ -3,6 +3,17 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.5.34 — 2026-10-22
+
+### Added
+
+- Recursive Flint 40B-A2.5B, a coding-agent MoE (about 2.5B active
+  parameters), in /models: UD-Q4_K_XL (25 GB, for 48 GB Macs and up) and
+  Q8_0 (42 GB, for 96-128 GB), plus every Unsloth quant in the quant list.
+  Flint reasons on every step and has no off switch, so its thinking is kept
+  hidden and agent tasks run slower than on Qwen 3.6. It is never picked
+  automatically.
+
 ## 0.5.33 — 2026-10-18
 
 ### Security
