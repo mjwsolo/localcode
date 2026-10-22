@@ -599,9 +599,9 @@ shadowed by dict methods). Drop all of it at the next bump past 2026-10-22.
 The shipped binary embeds its Metal sources, and compiling them took 20-30 s on
 every launch with a cold macOS shader cache (first run after an install or
 update). `ggml_metal_library_init` now first looks next to the executable for
-`ggml-metal-<key>.metallib`, where `<key>` is an FNV-1a hash of every embedded
+`ggml-metal-<key>.bundle`, where `<key>` is an FNV-1a hash of every embedded
 kind's source plus the exact runtime macro set and language version. A match
-loads in well under a second as a single library; anything else (other sources,
+loads each kind's precompiled library from that one file (the kinds share helper symbols, so they cannot be linked into a single metallib); anything else (other sources,
 other hardware, an override environment variable, a load error) falls back to
 the runtime compile. `scripts/build_metallibs.py` builds the two variants
 (Metal 4 tensor devices, and the rest) on the CI runner and `--check` fails the

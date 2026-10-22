@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "localcode"
-version = "0.5.34"
+version = "0.5.35"
 description = "High-performance AI coding on consumer hardware."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -82,7 +82,7 @@ where = ["src"]
 "localcode" = [
     "bin/llama-server",
     "bin/localcode-ui",
-    "bin/*.metallib",
+    "bin/ggml-metal-*.bundle",
     "ui/plugin/*.ts",
     "ui/FORK_COMMIT",
     "ui/UPSTREAM_COMMIT",

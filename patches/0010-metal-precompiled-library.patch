@@ -1,15 +1,15 @@
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
-index d1dc0985..4a6fa102 100644
+index d1dc0985..352621d4 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.m
 +++ b/ggml/src/ggml-metal/ggml-metal-device.m
-@@ -513,6 +513,48 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
+@@ -513,6 +513,90 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
  #undef X
      };
  
 +    // Compiling the embedded sources takes 20-30 s whenever macOS's shader cache
 +    // is cold (first launch after an install or update). A library compiled
 +    // ahead of time from these exact sources, with these exact macros, may sit
-+    // next to the binary as ggml-metal-<key>.metallib; the key hashes both, so a
++    // next to the binary as ggml-metal-<key>.bundle; the key hashes both, so a
 +    // stale or mismatched file is never used. Anything else falls back to the
 +    // runtime compile below. scripts/build_metallibs.py computes the same key.
 +    {
@@ -30,19 +30,61 @@ index d1dc0985..4a6fa102 100644
 +            key = (key ^ (uint8_t) *p) * 1099511628211ULL;
 +        }
 +        NSString * exe  = [[[NSBundle mainBundle] executablePath] stringByResolvingSymlinksInPath];
-+        NSString * name = [NSString stringWithFormat:@"ggml-metal-%016llx.metallib", (unsigned long long) key];
++        NSString * name = [NSString stringWithFormat:@"ggml-metal-%016llx.bundle", (unsigned long long) key];
 +        NSString * path = exe ? [[exe stringByDeletingLastPathComponent] stringByAppendingPathComponent:name] : nil;
-+        if (path && [[NSFileManager defaultManager] isReadableFileAtPath:path]) {
++        // Bundle layout (scripts/build_metallibs.py): "LCMETAL1", u32 count, then per
++        // kind: u32 name length, name, u64 size, metallib bytes. One library per kind,
++        // exactly like the runtime compile, so kernels are routed the same way.
++        NSData * bundle = path ? [[NSData alloc] initWithContentsOfFile:path options:NSDataReadingMappedIfSafe error:nil] : nil;
++        if (bundle) {
 +            const int64_t t0 = ggml_time_us();
-+            NSError * error = nil;
-+            id<MTLLibrary> lib = [device newLibraryWithURL:[NSURL fileURLWithPath:path] error:&error];
-+            if (lib) {
-+                res->objs[0]        = lib;
-+                res->single_library = true;
++            const uint8_t * b = bundle.bytes;
++            const size_t n = bundle.length;
++            size_t off = 8;
++            bool good = n >= 12 && memcmp(b, "LCMETAL1", 8) == 0;
++            uint32_t count = 0;
++            if (good) { memcpy(&count, b + off, 4); off += 4; }
++            id<MTLLibrary> libs[GGML_METAL_LIB_COUNT] = { nil };
++            for (uint32_t i = 0; good && i < count; ++i) {
++                uint32_t len = 0; uint64_t size = 0;
++                if (off + 4 > n) { good = false; break; }
++                memcpy(&len, b + off, 4); off += 4;
++                if (off + len + 8 > n) { good = false; break; }
++                NSString * kname = [[NSString alloc] initWithBytes:b + off length:len encoding:NSUTF8StringEncoding];
++                off += len;
++                memcpy(&size, b + off, 8); off += 8;
++                if (off + size > n) { [kname release]; good = false; break; }
++                int kind = -1;
++                for (int k = 0; k < GGML_METAL_LIB_COUNT; ++k) {
++                    if ([kname isEqualToString:@(k_lib_names[k])]) { kind = k; break; }
++                }
++                [kname release];
++                if (kind >= 0 && libs[kind] == nil) {
++                    dispatch_data_t data = dispatch_data_create(b + off, size, nil, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
++                    NSError * error = nil;
++                    libs[kind] = [device newLibraryWithData:data error:&error];
++                    dispatch_release(data);
++                    if (!libs[kind]) { good = false; }
++                }
++                off += size;
++            }
++            for (int k = 0; good && k < GGML_METAL_LIB_COUNT; ++k) {
++                if (libs[k] == nil) { good = false; }
++            }
++            if (good) {
++                for (int k = 0; k < GGML_METAL_LIB_COUNT; ++k) {
++                    res->objs[k] = libs[k];
++                }
++                ggml_metal_library_build_index(res);
++                [bundle release];
 +                GGML_LOG_INFO("%s: loaded precompiled '%s' in %.3f sec\n", __func__, [name UTF8String], (ggml_time_us() - t0) / 1e6);
 +                return res;
 +            }
-+            GGML_LOG_WARN("%s: could not load '%s' (%s), compiling sources\n", __func__, [name UTF8String], [[error description] UTF8String]);
++            for (int k = 0; k < GGML_METAL_LIB_COUNT; ++k) {
++                if (libs[k]) { [libs[k] release]; }
++            }
++            [bundle release];
++            GGML_LOG_WARN("%s: could not use '%s', compiling sources\n", __func__, [name UTF8String]);
 +        } else {
 +            GGML_LOG_INFO("%s: no precompiled library '%s' (%s), compiling sources\n", __func__, [name UTF8String], [desc UTF8String]);
 +        }

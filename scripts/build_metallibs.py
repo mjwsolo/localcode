@@ -2,7 +2,7 @@
 
 llama-server embeds its Metal sources and compiles them when it starts, which
 takes 20-30 s whenever macOS's shader cache is cold. This builds the same
-sources into ggml-metal-<key>.metallib files that the server loads instead
+sources into ggml-metal-<key>.bundle files that the server loads instead
 (see ggml_metal_library_init). <key> hashes the embedded sources plus the
 compile macros the server would use, so a file built from other sources or for
 other hardware is ignored and the server falls back to compiling.
@@ -16,6 +16,7 @@ Needs Xcode's `metal` compiler (CI macOS runners have it).
 current sources need, so a shipped library can never silently go stale.
 """
 import re
+import struct
 import subprocess
 import sys
 import tempfile
@@ -63,8 +64,8 @@ def main(build: Path, out: Path, check: bool = False) -> int:
         sys.exit(f"embedded sources not generated: {missing[:3]} (build the ggml-metal target first)")
     sources = [f.read_bytes() for f in files]
     if check:
-        want = {f"ggml-metal-{key(sources, v):016x}.metallib" for v in VARIANTS.values()}
-        have = {p.name for p in out.glob("ggml-metal-*.metallib")}
+        want = {f"ggml-metal-{key(sources, v):016x}.bundle" for v in VARIANTS.values()}
+        have = {p.name for p in out.glob("ggml-metal-*.bundle")}
         if want != have:
             sys.exit(f"shipped Metal libraries do not match the sources: need {sorted(want)}, have {sorted(have)}. "
                      "Download the 'metallibs' artifact of the TurboQuant workflow into src/localcode/bin.")
@@ -73,17 +74,21 @@ def main(build: Path, out: Path, check: bool = False) -> int:
     out.mkdir(parents=True, exist_ok=True)
     for name, v in VARIANTS.items():
         k = key(sources, v)
-        target = out / f"ggml-metal-{k:016x}.metallib"
+        target = out / f"ggml-metal-{k:016x}.bundle"
+        # One library per kind, like the runtime compile: the kinds share helper
+        # symbols, so they cannot be linked into a single metallib.
+        blob = bytearray(b"LCMETAL1") + struct.pack("<I", len(files))
         with tempfile.TemporaryDirectory() as tmp:
-            airs = []
-            for f in files:
-                air = Path(tmp) / (f.stem + ".air")
+            for kind, f in zip(kinds(), files):
+                air, lib = Path(tmp) / f"{kind}.air", Path(tmp) / f"{kind}.metallib"
                 cmd = ["xcrun", "-sdk", "macosx", "metal", "-c", str(f), "-o", str(air),
                        f"-std={v['std']}", f"-mmacosx-version-min={v['min']}"]
                 cmd += [f"-D{m}={val}" for m, val in v["macros"].items()]
                 subprocess.run(cmd, check=True)
-                airs.append(str(air))
-            subprocess.run(["xcrun", "-sdk", "macosx", "metallib", *airs, "-o", str(target)], check=True)
+                subprocess.run(["xcrun", "-sdk", "macosx", "metallib", str(air), "-o", str(lib)], check=True)
+                data, encoded = lib.read_bytes(), kind.encode()
+                blob += struct.pack("<I", len(encoded)) + encoded + struct.pack("<Q", len(data)) + data
+        target.write_bytes(bytes(blob))
         print(f"{name}: {target.name} ({target.stat().st_size / 1e6:.1f} MB)")
     return 0
 

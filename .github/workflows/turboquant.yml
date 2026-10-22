@@ -14,13 +14,13 @@ on:
   push:
     paths:
       - "scripts/build_metallibs.py"
-      - "src/localcode/bin/*.metallib"
+      - "src/localcode/bin/*.bundle"
       - "llama-cpp-turboquant/**"
       - ".github/workflows/turboquant.yml"
   pull_request:
     paths:
       - "scripts/build_metallibs.py"
-      - "src/localcode/bin/*.metallib"
+      - "src/localcode/bin/*.bundle"
       - "llama-cpp-turboquant/**"
       - ".github/workflows/turboquant.yml"
   workflow_dispatch:
@@ -86,7 +86,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: metallibs
-          path: metallibs/*.metallib
+          path: metallibs/*.bundle
 
       - name: Shipped Metal libraries match the sources
         run: python3 scripts/build_metallibs.py --check llama-cpp-turboquant/build-ci src/localcode/bin
