@@ -20,6 +20,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "AfmoeForCausalLM": "afmoe",
     "LagunaForCausalLM": "laguna",
     "Kolibri1ForCausalLM": "kolibri",
+    "FlintForCausalLM": "flint",
     "ApertusForCausalLM": "llama",
     "ArceeForCausalLM": "llama",
     "ArcticForCausalLM": "arctic",

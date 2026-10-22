@@ -35,7 +35,7 @@ from localcode import models_catalog as catalog
 from localcode.ui import auth
 from localcode.ui.server_cmd import server_command
 
-REQUIRED_KEYS = {"gemma-12b", "qwen", "qwen38", "diffusiongemma", "north-mini-code", "muse-glimmer", "kolibri", "openjev", "saluki"}
+REQUIRED_KEYS = {"gemma-12b", "qwen", "qwen38", "diffusiongemma", "north-mini-code", "muse-glimmer", "kolibri", "openjev", "saluki", "flint"}
 TOOL = {"type": "function", "function": {"name": "get_weather", "description": "Get weather in a city.", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}}
 
 

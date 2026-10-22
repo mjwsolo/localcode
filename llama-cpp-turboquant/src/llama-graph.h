@@ -1008,6 +1008,11 @@ struct llm_graph_qkv {
     ggml_tensor * v; // [n_embd_head, n_head_kv, n_tokens]
 };
 
+struct llm_graph_amax_src1 {
+    ggml_tensor * res;     // cur rescaled
+    ggml_tensor * scale_s; // scale to undo on the matmul result, or nullptr
+};
+
 struct llm_graph_context {
     const llm_arch arch;
 
@@ -1110,6 +1115,11 @@ struct llm_graph_context {
               ggml_tensor * ids,
               ggml_tensor * w_s   = nullptr,
               ggml_tensor * slots = nullptr) const;
+
+    // rescale `cur` (the src1 of a matmul) by a power of two, computed from its maximum absolute
+    // keep both individual values and Q8 activation block sums within F16 range
+    llm_graph_amax_src1 build_amax_src1_f16(
+              ggml_tensor * cur) const;
 
     ggml_tensor * build_norm(
              ggml_tensor * cur,

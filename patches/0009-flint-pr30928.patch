@@ -1,0 +1,801 @@
+diff --git a/common/jinja/lexer.cpp b/common/jinja/lexer.cpp
+index 598982c2f..bf2dfacda 100644
+--- a/common/jinja/lexer.cpp
++++ b/common/jinja/lexer.cpp
+@@ -1,7 +1,9 @@
+ #include "lexer.h"
+ #include "runtime.h"
++#include "unicode.h"
+ 
+ #include <cctype>
++#include <charconv>
+ #include <functional>
+ #include <map>
+ #include <string>
+@@ -75,6 +77,24 @@ lexer_result lexer::tokenize(const std::string & source) {
+                 }
+                 // add escaped char
+                 char escaped_char = src[pos++];
++                if (escaped_char == 'x') {
++                    if (pos + 1 >= src.size()) {
++                        throw lexer_exception("incomplete hexadecimal escape", source, pos);
++                    }
++
++                    unsigned int value = 0;
++                    const char * first = &src[pos];
++                    const char * last  = first + 2;
++
++                    auto [ptr, ec] = std::from_chars(first, last, value, 16);
++                    if (ec != std::errc{} || ptr != last) {
++                        throw lexer_exception("invalid hexadecimal escape", source, pos);
++                    }
++
++                    str += common_unicode_cpt_to_utf8(value);
++                    pos += 2;
++                    continue;
++                }
+                 if (escape_chars.find(escaped_char) == escape_chars.end()) {
+                     throw lexer_exception(std::string("unknown escape character \\") + escaped_char, source, pos);
+                 }
+diff --git a/common/jinja/value.cpp b/common/jinja/value.cpp
+index aed834ce4..b67576390 100644
+--- a/common/jinja/value.cpp
++++ b/common/jinja/value.cpp
+@@ -423,7 +423,12 @@ const func_builtins & global_builtins() {
+             throw raised_exception("Jinja Exception: " + msg);
+         }},
+         {"dict", toobject},
+-        {"namespace", toobject},
++        {"namespace", [](const func_args & args) -> value {
++            // unlike a dict, a namespace has no methods: ns.items is the attribute, as in jinja2
++            value out = toobject(args);
++            cast_val<value_object>(out)->has_builtins = false;
++            return out;
++        }},
+         {"strftime_now", [](const func_args & args) -> value {
+             args.ensure_vals<value_string>();
+             std::string format = args.get_pos(0)->as_string().str();
+diff --git a/conversion/__init__.py b/conversion/__init__.py
+index d489b4a8a..a52f82560 100644
+--- a/conversion/__init__.py
++++ b/conversion/__init__.py
+@@ -20,6 +20,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
+     "AfmoeForCausalLM": "afmoe",
+     "LagunaForCausalLM": "laguna",
+     "Kolibri1ForCausalLM": "kolibri",
++    "FlintForCausalLM": "flint",
+     "ApertusForCausalLM": "llama",
+     "ArceeForCausalLM": "llama",
+     "ArcticForCausalLM": "arctic",
+diff --git a/conversion/base.py b/conversion/base.py
+index dfe8700b8..a478b5b61 100644
+--- a/conversion/base.py
++++ b/conversion/base.py
+@@ -1700,7 +1700,7 @@ class TextModel(ModelBase):
+             self.gguf_writer.add_expert_group_used_count(n_group_used)
+             logger.info(f"gguf: expert groups used count = {n_group_used}")
+ 
+-        if (score_func := self.find_hparam(["score_function", "scoring_func", "score_func", "moe_router_activation", "moe_router_activation_func", "expert_selection_fn", "router_score_func"], optional=True)) is not None:
++        if (score_func := self.find_hparam(["score_function", "scoring_func", "score_func", "moe_router_activation", "moe_router_activation_func", "expert_selection_fn", "router_score_func", "router_score_function"], optional=True)) is not None:
+             if score_func == "sigmoid":
+                 self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
+             elif score_func == "softmax":
+@@ -1932,6 +1932,9 @@ class TextModel(ModelBase):
+         if chkhsh == "52df12b4c8d4176e7481aab4b6e8454d1fd0a210a04a574f6d4e067d10e23c3e":
+             # ref: https://huggingface.co/CohereLabs/North-Mini-Code-1.0
+             res = "cohere2moe"
++        if chkhsh == "d5420e601e979078c670bc503d9ac411c311fa76b76a76267c31e0d6ba816637":
++            # ref: https://huggingface.co/RecursiveSI/flint
++            res = "flint"
+         if chkhsh == "e636dc30a262dcc0d8c323492e32ae2b70728f4df7dfe9737d9f920a282b8aea":
+             # ref: https://huggingface.co/Qwen/Qwen1.5-7B
+             res = "qwen2"
+diff --git a/conversion/flint.py b/conversion/flint.py
+new file mode 100644
+index 000000000..a69314a9b
+--- /dev/null
++++ b/conversion/flint.py
+@@ -0,0 +1,38 @@
++from __future__ import annotations
++
++from .base import ModelBase, gguf
++from .qwen import Qwen2MoeModel
++
++
++@ModelBase.register("FlintForCausalLM")
++@ModelBase.example("RecursiveSI/flint")
++class FlintModel(Qwen2MoeModel):
++    model_arch = gguf.MODEL_ARCH.FLINT
++
++    def set_gguf_parameters(self):
++        super().set_gguf_parameters()
++        dense = self.hparams["mlp_only_layers"]
++        if dense != list(range(len(dense))):
++            raise ValueError("Flint dense layers must precede the MoE layers")
++        self.gguf_writer.add_leading_dense_block_count(len(dense))
++        self.gguf_writer.add_expert_shared_count(
++            self.hparams["shared_expert_intermediate_size"] // self.hparams["moe_intermediate_size"]
++        )
++        self.gguf_writer.add_expert_weights_norm(self.hparams["norm_topk_prob"])
++        self.gguf_writer.add_expert_weights_scale(1.0)
++        self.gguf_writer.add_sliding_window(self.hparams["sliding_window"])
++        self.gguf_writer.add_sliding_window_pattern([
++            kind == "sliding_attention" for kind in self.hparams["layer_types"]
++        ])
++        self.gguf_writer.add_rope_pattern([
++            i not in self.hparams["no_rope_layer_indices"] for i in range(self.block_count)
++        ])
++
++    def modify_tensors(self, data_torch, name, bid):
++        if name.endswith(".softmax_offset"):
++            name += ".weight"
++        if name.endswith(".gate.expert_bias"):
++            if not self.hparams["router_expert_bias"]:
++                return
++            name += ".bias"
++        yield from super().modify_tensors(data_torch, name, bid)
+diff --git a/convert_hf_to_gguf_update.py b/convert_hf_to_gguf_update.py
+index fc62f4298..63b7ac40e 100755
+--- a/convert_hf_to_gguf_update.py
++++ b/convert_hf_to_gguf_update.py
+@@ -101,6 +101,7 @@ models = [
+     {"name": "command-r",        "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/CohereForAI/c4ai-command-r-v01", },
+     {"name": "tiny_aya",         "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/CohereLabs/tiny-aya-base", },
+     {"name": "cohere2moe",       "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/CohereLabs/North-Mini-Code-1.0", },
++    {"name": "flint",            "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/RecursiveSI/flint", },
+     {"name": "qwen2",            "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/Qwen/Qwen1.5-7B", },
+     {"name": "olmo",             "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/allenai/OLMo-1.7-7B-hf", },
+     {"name": "dbrx",             "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/databricks/dbrx-base", },
+diff --git a/gguf-py/gguf/constants.py b/gguf-py/gguf/constants.py
+index be16335ee..cbd79c2b1 100644
+--- a/gguf-py/gguf/constants.py
++++ b/gguf-py/gguf/constants.py
+@@ -562,6 +562,7 @@ class MODEL_ARCH(IntEnum):
+     QWEN2VL          = auto()
+     QWEN3            = auto()
+     QWEN3MOE         = auto()
++    FLINT            = auto()
+     QWEN3NEXT        = auto()
+     HRM_TEXT         = auto()
+     QWEN3VL          = auto()
+@@ -1358,6 +1359,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
+     MODEL_ARCH.QWEN2MOE:         "qwen2moe",
+     MODEL_ARCH.QWEN2VL:          "qwen2vl",
+     MODEL_ARCH.QWEN3:            "qwen3",
++    MODEL_ARCH.FLINT:            "flint",
+     MODEL_ARCH.QWEN3MOE:         "qwen3moe",
+     MODEL_ARCH.QWEN3NEXT:        "qwen3next",
+     MODEL_ARCH.HRM_TEXT:         "hrm_text",
+@@ -2897,6 +2899,33 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
+         MODEL_TENSOR.FFN_DOWN_EXP,
+         MODEL_TENSOR.FFN_UP_EXP,
+     ],
++
++    MODEL_ARCH.FLINT: [
++        MODEL_TENSOR.TOKEN_EMBD,
++        MODEL_TENSOR.OUTPUT_NORM,
++        MODEL_TENSOR.OUTPUT,
++        MODEL_TENSOR.ATTN_NORM,
++        MODEL_TENSOR.ATTN_QKV,
++        MODEL_TENSOR.ATTN_Q,
++        MODEL_TENSOR.ATTN_Q_NORM,
++        MODEL_TENSOR.ATTN_K,
++        MODEL_TENSOR.ATTN_K_NORM,
++        MODEL_TENSOR.ATTN_V,
++        MODEL_TENSOR.ATTN_OUT,
++        MODEL_TENSOR.FFN_NORM,
++        MODEL_TENSOR.FFN_GATE_INP,
++        MODEL_TENSOR.FFN_GATE_EXP,
++        MODEL_TENSOR.FFN_DOWN_EXP,
++        MODEL_TENSOR.FFN_UP_EXP,
++        MODEL_TENSOR.ATTN_SINKS,
++        MODEL_TENSOR.FFN_GATE,
++        MODEL_TENSOR.FFN_UP,
++        MODEL_TENSOR.FFN_DOWN,
++        MODEL_TENSOR.FFN_GATE_SHEXP,
++        MODEL_TENSOR.FFN_UP_SHEXP,
++        MODEL_TENSOR.FFN_DOWN_SHEXP,
++        MODEL_TENSOR.FFN_EXP_PROBS_B,
++    ],
+     MODEL_ARCH.QWEN3NEXT: [
+         MODEL_TENSOR.TOKEN_EMBD,
+         MODEL_TENSOR.OUTPUT_NORM,
+diff --git a/gguf-py/gguf/tensor_mapping.py b/gguf-py/gguf/tensor_mapping.py
+index 3b9a1d0bc..fffb4d542 100644
+--- a/gguf-py/gguf/tensor_mapping.py
++++ b/gguf-py/gguf/tensor_mapping.py
+@@ -390,6 +390,7 @@ class TensorNameMap:
+         ),
+ 
+         MODEL_TENSOR.ATTN_SINKS: (
++            "model.layers.{bid}.self_attn.softmax_offset", # flint
+             "model.layers.{bid}.self_attn.sinks", # openai-moe
+             "model.layers.{bid}.self_attn.attention_sink_bias", # mimov2
+             "model.layers.{bid}.self_attn.learnable_sink_param", # hy-v4
+diff --git a/src/llama-arch.cpp b/src/llama-arch.cpp
+index b5676383f..2a4b9ab89 100644
+--- a/src/llama-arch.cpp
++++ b/src/llama-arch.cpp
+@@ -34,6 +34,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
+     { LLM_ARCH_QWEN2MOE,         "qwen2moe"         },
+     { LLM_ARCH_QWEN2VL,          "qwen2vl"          },
+     { LLM_ARCH_QWEN3,            "qwen3"            },
++    { LLM_ARCH_FLINT,            "flint"            },
+     { LLM_ARCH_QWEN3MOE,         "qwen3moe"         },
+     { LLM_ARCH_QWEN3NEXT,        "qwen3next"        },
+     { LLM_ARCH_QWEN3VL,          "qwen3vl"          },
+diff --git a/src/llama-arch.h b/src/llama-arch.h
+index e89eb17c2..b33431f88 100644
+--- a/src/llama-arch.h
++++ b/src/llama-arch.h
+@@ -40,6 +40,7 @@ enum llm_arch {
+     LLM_ARCH_QWEN2VL,
+     LLM_ARCH_QWEN3,
+     LLM_ARCH_QWEN3MOE,
++    LLM_ARCH_FLINT,
+     LLM_ARCH_QWEN3NEXT,
+     LLM_ARCH_QWEN3VL,
+     LLM_ARCH_QWEN3VLMOE,
+diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
+index 99e8a4643..082d89961 100644
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -1652,6 +1652,43 @@ ggml_tensor * llm_graph_context::build_lora_mm(
+     return res;
+ }
+ 
++llm_graph_amax_src1 llm_graph_context::build_amax_src1_f16(
++          ggml_tensor * cur) const {
++    llm_graph_amax_src1 result = {
++        /*.res     =*/ cur,
++        /*.scale_s =*/ nullptr,
++    };
++
++    const int64_t n_embd = cur->ne[0];
++
++    // amax = max|cur| along the rows for each [expert, token] -> [1, n_expert, n_tokens]
++    ggml_tensor * ab = ggml_abs(ctx0, cur);
++    ggml_tensor * amax = ggml_pool_1d(ctx0, ab, GGML_OP_POOL_MAX, n_embd, n_embd, 0);
++
++    // ref: https://github.com/ggml-org/llama.cpp/pull/26223
++    constexpr float k_log2_e = 1.4426950408889634f; // 1 / ln(2)
++    constexpr float k_ln_2   = 0.6931471805599453f;
++
++    ggml_tensor * e;
++    // note: this can technically be:
++    // e = ggml_scale(ctx0, amax, 1.0f/32768.0f);
++    // but we leave x32 headroom for the F16 sums of 32 values in Q8 activation blocks
++    e = ggml_scale(ctx0, amax, 1.0f/1024.0f);
++    e = ggml_log  (ctx0, e);
++    e = ggml_scale(ctx0, e, k_log2_e);
++    e = ggml_ceil (ctx0, e);
++    e = ggml_clamp(ctx0, e, 0.0f, 127.0f);
++    e = ggml_scale(ctx0, e, k_ln_2);
++    e = ggml_exp  (ctx0, e);
++
++    result = {
++        /*.res     =*/ ggml_div(ctx0, cur, e),
++        /*.scale_s =*/ e,
++    };
++
++    return result;
++}
++
+ ggml_tensor * llm_graph_context::build_lora_mm_id(
+           ggml_tensor * w,   // ggml_tensor * as
+           ggml_tensor * cur, // ggml_tensor * b
+@@ -2440,10 +2477,17 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+             GGML_ABORT("fatal error");
+     }
+ 
+-    experts = build_lora_mm_id(down_exps, cur, selected_experts, down_exps_s, slots); // [n_embd, n_expert_used, n_tokens]
+-    if (arch == LLM_ARCH_MISTRAL4) {
+-        // src1 can exceed F16 range
+-        ggml_prec_set_src(experts, GGML_PREC_F32, 1);
++    if (arch == LLM_ARCH_FLINT) {
++        // Flint's expert activations exceed F16 range; rescale per expert token (upstream #30861, #30928)
++        llm_graph_amax_src1 amax_src1 = build_amax_src1_f16(cur);
++        experts = build_lora_mm_id(down_exps, amax_src1.res, selected_experts, down_exps_s, slots); // [n_embd, n_expert_used, n_tokens]
++        experts = ggml_mul(ctx0, experts, amax_src1.scale_s);
++    } else {
++        experts = build_lora_mm_id(down_exps, cur, selected_experts, down_exps_s, slots); // [n_embd, n_expert_used, n_tokens]
++        if (arch == LLM_ARCH_MISTRAL4) {
++            // src1 can exceed F16 range
++            ggml_prec_set_src(experts, GGML_PREC_F32, 1);
++        }
+     }
+     cb(experts, "ffn_moe_down", il);
+ 
+diff --git a/src/llama-graph.h b/src/llama-graph.h
+index e853a0269..9d68ceba0 100644
+--- a/src/llama-graph.h
++++ b/src/llama-graph.h
+@@ -1008,6 +1008,11 @@ struct llm_graph_qkv {
+     ggml_tensor * v; // [n_embd_head, n_head_kv, n_tokens]
+ };
+ 
++struct llm_graph_amax_src1 {
++    ggml_tensor * res;     // cur rescaled
++    ggml_tensor * scale_s; // scale to undo on the matmul result, or nullptr
++};
++
+ struct llm_graph_context {
+     const llm_arch arch;
+ 
+@@ -1111,6 +1116,11 @@ struct llm_graph_context {
+               ggml_tensor * w_s   = nullptr,
+               ggml_tensor * slots = nullptr) const;
+ 
++    // rescale `cur` (the src1 of a matmul) by a power of two, computed from its maximum absolute
++    // keep both individual values and Q8 activation block sums within F16 range
++    llm_graph_amax_src1 build_amax_src1_f16(
++              ggml_tensor * cur) const;
++
+     ggml_tensor * build_norm(
+              ggml_tensor * cur,
+              ggml_tensor * mw,
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index 4a91ed223..118171983 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -1072,7 +1072,10 @@ bool llama_kv_cache::update(llama_context * lctx, bool do_shift, const stream_co
+         LLAMA_LOG_DEBUG("%s: applying K-shift\n", __func__);
+ 
+         // apply K-shift if needed
+-        if (hparams.rope_type != LLAMA_ROPE_TYPE_NONE) {
++        if (hparams.rope_type != LLAMA_ROPE_TYPE_NONE &&
++                std::any_of(layers.begin(), layers.end(), [&](const auto & layer) {
++                    return hparams.has_rope(layer.il);
++                })) {
+             ggml_backend_sched_reset(sched);
+ 
+             auto * res = lctx->get_gf_res_reserve();
+diff --git a/src/llama-model.cpp b/src/llama-model.cpp
+index 04c4051d2..93fd54350 100644
+--- a/src/llama-model.cpp
++++ b/src/llama-model.cpp
+@@ -110,6 +110,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
+             return new llama_model_qwen2moe(params);
+         case LLM_ARCH_QWEN3:
+             return new llama_model_qwen3(params);
++        case LLM_ARCH_FLINT:
++            return new llama_model_flint(params);
+         case LLM_ARCH_QWEN3MOE:
+             return new llama_model_qwen3moe(params);
+         case LLM_ARCH_QWEN3VL:
+@@ -3546,6 +3548,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+         case LLM_ARCH_QWEN2MOE:
+         case LLM_ARCH_QWEN3:
+         case LLM_ARCH_VLLM_DECISION2:
++        case LLM_ARCH_FLINT:
+         case LLM_ARCH_QWEN3MOE:
+         case LLM_ARCH_LLADA_MOE:
+         case LLM_ARCH_RND1:
+diff --git a/src/llama-vocab.cpp b/src/llama-vocab.cpp
+index f24975f58..174cc9e6c 100644
+--- a/src/llama-vocab.cpp
++++ b/src/llama-vocab.cpp
+@@ -281,6 +281,13 @@ struct llm_tokenizer_bpe : llm_tokenizer {
+     llm_tokenizer_bpe(const llama_vocab & vocab) {
+         GGML_ASSERT(vocab.get_type() == LLAMA_VOCAB_TYPE_BPE);
+         switch (vocab.get_pre_type()) {
++            case LLAMA_VOCAB_PRE_TYPE_FLINT:
++                regex_exprs = {
++                    "\\p{N}{1,3}",
++                    "[一-龥぀-ゟ゠-ヿ]+",
++                    "[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]*[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]+(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])?|[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]+[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]*(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])?| ?[\\p{P}\\p{S}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
++                };
++                break;
+             case LLAMA_VOCAB_PRE_TYPE_LLAMA3:
+                 regex_exprs = {
+                     // original regex from tokenizer.json
+@@ -2291,6 +2298,9 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
+                 LLAMA_LOG_WARN("%s: ************************************        \n", __func__);
+                 LLAMA_LOG_WARN("%s:                                             \n", __func__);
+                 pre_type = LLAMA_VOCAB_PRE_TYPE_DEFAULT;
++            } else if (tokenizer_pre == "flint") {
++                pre_type = LLAMA_VOCAB_PRE_TYPE_FLINT;
++                clean_spaces = false;
+             } else if (tokenizer_pre == "default") {
+                 pre_type = LLAMA_VOCAB_PRE_TYPE_DEFAULT;
+             } else if (tokenizer_pre == "minicpm5") {
+@@ -3012,7 +3022,6 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
+         // this is currently determined based on the token text, which is obviously not ideal
+         // ref: https://github.com/ggml-org/llama.cpp/issues/9606
+         special_eog_ids.clear();
+-
+         if (special_fim_pad_id != LLAMA_TOKEN_NULL && special_eog_ids.count(special_fim_pad_id) == 0) {
+             special_eog_ids.insert(special_fim_pad_id);
+         }
+@@ -3045,6 +3054,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
+                     || t.first == "[EOT]" // Kimi-K2
+                     || t.first == "[EOS]" // Kimi-K2
+                     || t.first == "<|end_of_text|>"
++                    || (pre_type == LLAMA_VOCAB_PRE_TYPE_FLINT && (t.first == "<|user|>" || t.first == "<|observation|>"))
+                     || t.first == "<end_of_utterance>" // smoldocling
+                     || t.first == "<eos>"            // gemma4
+                     || t.first == "<turn|>"          // gemma4
+diff --git a/src/llama-vocab.h b/src/llama-vocab.h
+index 898a23ae6..5c68715ef 100644
+--- a/src/llama-vocab.h
++++ b/src/llama-vocab.h
+@@ -70,6 +70,7 @@ enum llama_vocab_pre_type {
+     LLAMA_VOCAB_PRE_TYPE_UFAKZEKA          = 59,
+     LLAMA_VOCAB_PRE_TYPE_MMBERT            = 60,
+     LLAMA_VOCAB_PRE_TYPE_K2_HORIZON        = 61,
++    LLAMA_VOCAB_PRE_TYPE_FLINT             = 62,
+ };
+ 
+ struct LLM_KV;
+diff --git a/src/models/flint.cpp b/src/models/flint.cpp
+new file mode 100644
+index 000000000..e7e6f6b79
+--- /dev/null
++++ b/src/models/flint.cpp
+@@ -0,0 +1,194 @@
++#include "models.h"
++
++void llama_model_flint::load_arch_hparams(llama_model_loader & ml) {
++    ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
++    ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,   hparams.n_layer_dense_lead);
++    ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all);
++    ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,         hparams.n_expert_shared);
++    ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,        hparams.expert_weights_scale, false);
++    ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,         hparams.expert_weights_norm);
++    ml.get_key(LLM_KV_EXPERT_GATING_FUNC,          hparams.expert_gating_func);
++
++    ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp);
++    ml.get_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl);
++    ml.get_arr(LLM_KV_ATTENTION_ROPE_PATTERN, hparams.rope_pattern);
++    ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa);
++    hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
++    type = LLM_TYPE_UNKNOWN;
++}
++
++void llama_model_flint::load_arch_tensors(llama_model_loader &) {
++    LLAMA_LOAD_LOCALS;
++
++    const int64_t n_ff_exp        = hparams.n_ff_exp();
++
++    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
++
++    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
++    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, 0);
++
++    for (int i = 0; i < n_layer; ++i) {
++        auto & layer = layers[i];
++
++        layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
++
++        create_tensor_qkv(layer, i, n_embd, n_embd_head_k * n_head, n_embd_k_gqa, n_embd_v_gqa, 0);
++        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, 0);
++
++        layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, 0);
++        layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, 0);
++
++        layer.attn_sinks = create_tensor(tn(LLM_TENSOR_ATTN_SINKS, "weight", i), {n_head}, 0);
++
++        layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
++
++        if (i < (int) hparams.n_layer_dense_lead) {
++            layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
++            layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
++            layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
++        } else {
++            layer.ffn_gate_inp = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert}, 0);
++            layer.ffn_exp_probs_b = create_tensor(tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), {n_expert}, TENSOR_NOT_REQUIRED);
++
++            if (n_expert == 0) {
++                throw std::runtime_error("n_expert must be > 0");
++            }
++            if (n_expert_used == 0) {
++                throw std::runtime_error("n_expert_used must be > 0");
++            }
++
++            // MoE branch
++            layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {  n_embd, n_ff_exp, n_expert}, 0);
++            layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   n_embd, n_expert}, 0);
++            layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert}, 0);
++
++            // Shared expert branch
++            layer.ffn_gate_shexp = create_tensor(tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd, hparams.n_ff_shexp}, 0);
++            layer.ffn_down_shexp = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {        hparams.n_ff_shexp, n_embd}, 0);
++            layer.ffn_up_shexp   = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, hparams.n_ff_shexp}, 0);
++        }
++    }
++}
++
++std::unique_ptr<llm_graph_context> llama_model_flint::build_arch_graph(const llm_graph_params & params) const {
++    return std::make_unique<graph>(*this, params);
++}
++
++llama_model_flint::graph::graph(const llama_model & model, const llm_graph_params & params) :
++    llm_graph_context(params) {
++    const int64_t n_embd_head = hparams.n_embd_head_v();
++
++    GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
++    GGML_ASSERT(n_embd_head == n_rot);
++
++    ggml_tensor * cur;
++    ggml_tensor * inpL;
++
++    inpL = build_inp_embd(model.tok_embd);
++
++    // inp_pos - contains the positions
++    ggml_tensor * inp_pos = build_inp_pos();
++
++    auto * inp_attn = build_attn_inp_kv_iswa();
++
++    ggml_tensor * inp_out_ids = build_inp_out_ids();
++
++    for (int il = 0; il < n_layer; ++il) {
++        res->t_layer_inp[il] = inpL;
++        ggml_tensor * inpSA = inpL;
++
++        // norm
++        cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
++        cb(cur, "attn_norm", il);
++
++        // self_attention
++        {
++            // compute Q and K and RoPE them
++            auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
++                    n_embd_head, n_head, n_head_kv, il);
++
++            Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, nullptr, LLM_NORM_RMS, il);
++            Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, nullptr, LLM_NORM_RMS, il);
++            if (hparams.has_rope(il)) {
++                Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig,
++                        freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
++                Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig,
++                        freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
++            }
++            cb(Qcur, "Qcur", il);
++            cb(Kcur, "Kcur", il);
++            cb(Vcur, "Vcur", il);
++
++            cur = build_attn(inp_attn,
++                    model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
++                    Qcur, Kcur, Vcur, nullptr, model.layers[il].attn_sinks, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
++        }
++        if (il == n_layer - 1 && inp_out_ids) {
++            cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
++            inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
++        }
++        ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
++        cb(ffn_inp, "ffn_inp", il);
++
++        // MoE branch
++        cur = build_norm(ffn_inp, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, il);
++        cb(cur, "ffn_norm", il);
++
++        if ((uint32_t) il < hparams.n_layer_dense_lead) {
++            cur = build_ffn(cur,
++                    model.layers[il].ffn_up, NULL, model.layers[il].ffn_up_s,
++                    model.layers[il].ffn_gate, NULL, model.layers[il].ffn_gate_s,
++                    model.layers[il].ffn_down, NULL, model.layers[il].ffn_down_s,
++                    NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
++            cb(cur, "ffn_out", il);
++        } else {
++            ggml_tensor * moe_out = build_moe_ffn(cur,
++                model.layers[il].ffn_gate_inp,
++                model.layers[il].ffn_up_exps,
++                model.layers[il].ffn_gate_exps,
++                model.layers[il].ffn_down_exps,
++                model.layers[il].ffn_exp_probs_b,
++                n_expert, n_expert_used,
++                LLM_FFN_SILU, hparams.expert_weights_norm,
++                hparams.expert_weights_scale,
++                (llama_expert_gating_func_type) hparams.expert_gating_func,
++                il, nullptr, nullptr,
++                model.layers[il].ffn_up_exps_s,
++                model.layers[il].ffn_gate_exps_s,
++                model.layers[il].ffn_down_exps_s);
++            cb(moe_out, "ffn_moe_out", il);
++
++            {
++                ggml_tensor * ffn_shexp =
++                    build_ffn(cur,
++                        model.layers[il].ffn_up_shexp, NULL, model.layers[il].ffn_up_shexp_s,
++                        model.layers[il].ffn_gate_shexp, NULL, model.layers[il].ffn_gate_shexp_s,
++                        model.layers[il].ffn_down_shexp, NULL, model.layers[il].ffn_down_shexp_s,
++                        NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
++                cb(ffn_shexp, "ffn_shexp", il);
++
++                cur = ggml_add(ctx0, moe_out, ffn_shexp);
++                cb(cur, "ffn_out", il);
++            }
++        }
++        cur = ggml_add(ctx0, cur, ffn_inp);
++
++        cur = build_cvec(cur, il);
++        cb(cur, "l_out", il);
++
++        // input for next layer
++        inpL = cur;
++    }
++    cur = inpL;
++
++    cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
++
++    cb(cur, "result_norm", -1);
++    res->t_embd = cur;
++
++    // lm_head
++    cur = build_lora_mm(model.output, cur, model.output_s);
++
++    cb(cur, "result_output", -1);
++    res->t_logits = cur;
++}
+diff --git a/src/models/models.h b/src/models/models.h
+index 26814af9b..efd79103e 100644
+--- a/src/models/models.h
++++ b/src/models/models.h
+@@ -640,6 +640,19 @@ struct llama_model_qwen3moe : public llama_model_base {
+ };
+ 
+ 
++struct llama_model_flint : public llama_model_base {
++    llama_model_flint(const struct llama_model_params & params) : llama_model_base(params) {}
++    void load_arch_hparams(llama_model_loader & ml) override;
++    void load_arch_tensors(llama_model_loader & ml) override;
++
++    struct graph : public llm_graph_context {
++        graph(const llama_model & model, const llm_graph_params & params);
++    };
++
++    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
++};
++
++
+ struct llama_model_qwen3vl : public llama_model_base {
+     llama_model_qwen3vl(const struct llama_model_params & params) : llama_model_base(params) {}
+     void load_arch_hparams(llama_model_loader & ml) override;
+diff --git a/tests/fusion/MTL.csv b/tests/fusion/MTL.csv
+index e839e20ce..7f756da10 100644
+--- a/tests/fusion/MTL.csv
++++ b/tests/fusion/MTL.csv
+@@ -69,6 +69,9 @@ falcon              ,0   ,any     ,ADD+ADD                     ,      2
+ falcon              ,0   ,any     ,NORM+MUL+ADD                ,      5
+ falcon-h1           ,0   ,any     ,ADD+ADD                     ,      2
+ falcon-h1           ,0   ,any     ,RMS_NORM+MUL                ,      9
++flint               ,0   ,any     ,ADD+ADD                     ,      1
++flint               ,0   ,any     ,MUL+ADD                     ,      2
++flint               ,0   ,any     ,RMS_NORM+MUL                ,      9
+ gemma               ,0   ,any     ,RMS_NORM+MUL                ,      5
+ gemma2              ,0   ,any     ,RMS_NORM+MUL                ,      5
+ gemma2              ,0   ,any     ,RMS_NORM+MUL+ADD            ,      4
+diff --git a/tests/test-jinja.cpp b/tests/test-jinja.cpp
+index 572b30816..d4cf11bdd 100644
+--- a/tests/test-jinja.cpp
++++ b/tests/test-jinja.cpp
+@@ -25,6 +25,7 @@ static void test_expressions(testing & t);
+ static void test_set_statement(testing & t);
+ static void test_filters(testing & t);
+ static void test_literals(testing & t);
++static void test_hexadecimal_escapes(testing & t);
+ static void test_comments(testing & t);
+ static void test_macros(testing & t);
+ static void test_namespace(testing & t);
+@@ -65,6 +66,7 @@ int main(int argc, char *argv[]) {
+     t.test("set statement", test_set_statement);
+     t.test("filters", test_filters);
+     t.test("literals", test_literals);
++    t.test("hexadecimal escapes", test_hexadecimal_escapes);
+     t.test("comments", test_comments);
+     t.test("macros", test_macros);
+     t.test("namespace", test_namespace);
+@@ -1076,6 +1078,54 @@ static void test_literals(testing & t) {
+     );
+ }
+ 
++static void test_hexadecimal_escapes(testing & t) {
++    test_template(t, "remove NUL from message content",
++        R"({{ message.content | replace("\x00", "") }})",
++        {{"message", {{"content", std::string("\0a\0b\0", 5)}}}},
++        "ab"
++    );
++
++    test_template(t, "non-ASCII hex escape produces UTF-8",
++        R"({{ '\xE9' }})",
++        json::object(),
++        "\xc3\xa9"
++    );
++
++    test_template(t, "consume exactly two hex digits",
++        R"({{ '\x414' }})",
++        json::object(),
++        "A4"
++    );
++
++    test_template(t, "escaped backslashes remain literal",
++        R"({{ '\\xE9' }})",
++        json::object(),
++        R"(\xE9)"
++    );
++
++    if (!g_python_mode) {
++        const char * invalid_templates[] = {
++            R"({{ '\x' }})",
++            R"({{ '\x0' }})",
++            R"({{ '\xG1' }})",
++            R"({{ '\x1G' }})",
++            R"({{ '\x)",
++            R"({{ '\x0)",
++        };
++        for (const auto * tmpl : invalid_templates) {
++            t.test("reject " + json(tmpl).dump(), [&](testing & t) {
++                bool rejected = false;
++                try {
++                    jinja::lexer().tokenize(tmpl);
++                } catch (const jinja::lexer_exception &) {
++                    rejected = true;
++                }
++                t.assert_true("malformed hex escape must raise a lexer error", rejected);
++            });
++        }
++    }
++}
++
+ static void test_comments(testing & t) {
+     test_template(t, "inline comment",
+         "before{# comment #}after",
+@@ -1154,6 +1204,18 @@ static void test_namespace(testing & t) {
+         json::object(),
+         "3"
+     );
++
++    test_template(t, "namespace attribute named like a dict method",
++        "{% set ns = namespace(items=[]) %}{{ 'yes' if ns.items else 'no' }}{% set ns.items = ns.items + [1] %}{{ ns.items | length }}{{ 'yes' if ns.items else 'no' }}",
++        json::object(),
++        "no1yes"
++    );
++
++    test_template(t, "dict keeps its methods",
++        "{% set d = dict(items=1) %}{% for k, v in d.items() %}{{ k }}={{ v }}{% endfor %}",
++        json::object(),
++        "items=1"
++    );
+ }
+ 
+ static void test_tests(testing & t) {
+diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
+index 94c3528a9..5383ff8b4 100644
+--- a/tests/test-llama-archs.cpp
++++ b/tests/test-llama-archs.cpp
+@@ -299,13 +299,16 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, uint32_t(5));
+     } else if (arch == LLM_ARCH_COHERE2MOE || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_SPARK2_5 ||
+             arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_GRANITE_SWA || arch == LLM_ARCH_DOTS3NOTE ||
+-            arch == LLM_ARCH_MAPLE) {
++            arch == LLM_ARCH_MAPLE || arch == LLM_ARCH_FLINT) {
+         std::vector<uint32_t> pattern;
+         pattern.reserve(n_layer);
+         for (uint32_t il = 0; il < n_layer; il++) {
+             pattern.push_back(il % 2);
+         }
+         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, pattern);
++        if (arch == LLM_ARCH_FLINT) {
++            ms.add_kv(LLM_KV_ATTENTION_ROPE_PATTERN, pattern);
++        }
+     } else {
+         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, uint32_t(2));
+     }
+@@ -438,6 +441,9 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+                                                      arch == LLM_ARCH_KOLIBRI1  ? uint32_t(5) : uint32_t(2)); // sqrtsoftplus : sigmoid_logit_add : sigmoid
+         ms.add_kv(LLM_KV_EXPERT_GROUP_SCALE,         1.0f);
+         ms.add_kv(LLM_KV_EXPERTS_PER_GROUP,          uint32_t(1));
++        if (arch == LLM_ARCH_FLINT) {
++            ms.add_kv(LLM_KV_EXPERT_WEIGHTS_NORM, true);
++        }
+         if (arch == LLM_ARCH_K2_HORIZON) {
+             ms.add_kv(LLM_KV_ATTENTION_VALUE_EXPERT_COUNT,      uint32_t(2));
+             ms.add_kv(LLM_KV_ATTENTION_VALUE_EXPERT_USED_COUNT, uint32_t(2));
+@@ -654,6 +660,7 @@ static bool check_causal_attn_toggle(
+ 
+ static bool moe_mandatory(const llm_arch arch) {
+     switch (arch) {
++        case LLM_ARCH_FLINT:
+         case LLM_ARCH_LLAMA4:
+         case LLM_ARCH_COHERE2MOE:
+         case LLM_ARCH_GROK:

@@ -581,3 +581,15 @@ missing pipeline is checked before querying its thread limit. The regression
 case is an 8K-token Qwen prompt followed by decode with q8 keys/TurboQuant
 values and the tensor API disabled; it previously SIGSEGVed at the pipeline
 thread-limit query.
+
+### `0009-flint-pr30928.patch` — Recursive Flint (upstream PR #30928) and two template fixes
+
+Backport of upstream `a37cc4610` (`flint` architecture: 49 layers, 35 sliding-window
+and 14 full-attention, 256 routed experts + 1 shared, attention sinks) onto the
+pinned tree, plus `build_amax_src1_f16` from `8baabd53b` (#30861), which Flint's
+MoE down projection needs. Only Flint takes the new per-expert-token rescaling
+path; every other architecture keeps the pinned code, so Mistral 4 still uses
+`GGML_PREC_F32` on that matmul. Also carries `9febe63d5` (#30929, hexadecimal
+string escapes in the Jinja lexer: Flint's chat template uses `"\x00"` and the
+server refused to start without it) and `99fb99718` (#30941, namespace attributes
+shadowed by dict methods). Drop all of it at the next bump past 2026-10-22.

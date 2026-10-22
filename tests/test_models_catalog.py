@@ -84,6 +84,8 @@ _EXPECTED_VISION = {
     "diffusiongemma": False,
     "north-mini-code": False,
     "kolibri": False,
+    "flint": False,
+    "flint-q8": False,
     "openjev": True,
     "saluki": True,
 }
