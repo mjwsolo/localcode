@@ -593,3 +593,16 @@ path; every other architecture keeps the pinned code, so Mistral 4 still uses
 string escapes in the Jinja lexer: Flint's chat template uses `"\x00"` and the
 server refused to start without it) and `99fb99718` (#30941, namespace attributes
 shadowed by dict methods). Drop all of it at the next bump past 2026-10-22.
+
+### `0010-metal-precompiled-library.patch` — load precompiled Metal kernels when they match
+
+The shipped binary embeds its Metal sources, and compiling them took 20-30 s on
+every launch with a cold macOS shader cache (first run after an install or
+update). `ggml_metal_library_init` now first looks next to the executable for
+`ggml-metal-<key>.bundle`, where `<key>` is an FNV-1a hash of every embedded
+kind's source plus the exact runtime macro set and language version. A match
+loads each kind's precompiled library from that one file (the kinds share helper symbols, so they cannot be linked into a single metallib); anything else (other sources,
+other hardware, an override environment variable, a load error) falls back to
+the runtime compile. `scripts/build_metallibs.py` builds the two variants
+(Metal 4 tensor devices, and the rest) on the CI runner and `--check` fails the
+build when the files in `src/localcode/bin` no longer match the sources.

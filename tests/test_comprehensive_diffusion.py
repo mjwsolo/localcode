@@ -28,6 +28,7 @@ tests/test_real_models.py):
 """
 from __future__ import annotations
 
+import re
 import json
 import sys
 from pathlib import Path
@@ -271,8 +272,10 @@ def test_no_diffusion_side_channel_in_gateway(tmp_path):
 
 
 def test_one_shipped_binary():
-    names = sorted(p.name for p in (SRC / "bin").iterdir() if p.is_file() and p.name != "__init__.py" and not p.name.startswith("."))
+    names = sorted(p.name for p in (SRC / "bin").iterdir() if p.is_file() and p.name != "__init__.py" and not p.name.startswith(".")
+                   and not re.fullmatch(r"ggml-metal-[0-9a-f]{16}\.bundle", p.name))
     # llama-server (inference) and localcode-ui (the default interface); no diffusion runner.
+    # The ggml-metal bundles are the server's precompiled GPU kernels, not programs.
     assert names == ["llama-server", "localcode-ui"], f"unexpected shipped binaries: {names}"
     for text in ((ROOT / "MANIFEST.in").read_text(), (ROOT / "pyproject.toml").read_text()):
         assert "llama-diffusion" not in text
