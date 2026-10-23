@@ -3,6 +3,16 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.5.35 — 2026-10-24
+
+### Changed
+
+- The model server starts faster the first time after an install or update.
+  Its GPU kernels now ship precompiled instead of being compiled on your Mac
+  at launch, which took 20-30 seconds on some machines. If the shipped kernels
+  don't match the hardware, the server compiles them as before.
+- The chat box ends in a solid edge instead of a half-height strip.
+
 ## 0.5.34 — 2026-10-22
 
 ### Added
