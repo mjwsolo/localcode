@@ -3,6 +3,15 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.5.36 — 2026-10-24
+
+### Fixed
+
+- `localcode run` no longer exits while LocalCode is still finishing the task.
+  When the model stopped with todos still open, LocalCode resumed it, but the
+  command had already returned: asked for three files, it left one. It now
+  waits until the session stays idle, and finishes all three.
+
 ## 0.5.35 — 2026-10-24
 
 ### Changed

@@ -1,0 +1,112 @@
+diff --git a/packages/cli/src/run/noninteractive.ts b/packages/cli/src/run/noninteractive.ts
+index 814ac5c4bc..106f61c7e9 100644
+--- a/packages/cli/src/run/noninteractive.ts
++++ b/packages/cli/src/run/noninteractive.ts
+@@ -39,6 +39,8 @@ type Input = {
+   /** True when the client is attached to a shared server rather than an exclusive in-process one. */
+   attached: boolean
+   compatibility?: "v1"
++  /** How long the session must stay idle before the run exits (tests pass 0). */
++  settleMs?: number
+   renderTool: (part: SessionMessageAssistantTool) => Promise<void>
+   renderToolError: (part: SessionMessageAssistantTool) => Promise<void>
+ }
+@@ -684,6 +686,23 @@ export async function runNonInteractivePrompt(input: Input) {
+     }
+   }
+ 
++  // A plugin can resume the session from its idle hook (the open-todo backstop, done-time
++  // checks). Those turns start a moment after the session first goes idle, so exit only
++  // once the session has stayed idle for a short quiet period. reconcile() then prints them.
++  const settle = async () => {
++    const quietMs = input.settleMs ?? 2000
++    let quiet = 0
++    while (quiet < quietMs && !interrupted && !emittedError && !permissionRejected && !formCancelled) {
++      await new Promise((resolve) => setTimeout(resolve, 250))
++      quiet += 250
++      const active = await input.client.session.active().catch(() => undefined)
++      if (active && input.sessionID in active) {
++        await input.client.session.wait({ sessionID: input.sessionID }).catch(() => {})
++        quiet = 0
++      }
++    }
++  }
++
+   const interrupt = () => {
+     if (interrupted) process.exit(130)
+     interrupted = true
+@@ -770,6 +789,7 @@ export async function runNonInteractivePrompt(input: Input) {
+ 
+     const waiting = input.client.session.wait({ sessionID: input.sessionID })
+     await Promise.race([waiting, completed.then(() => waiting)])
++    await settle()
+     finalizing = true
+     const projected = await reconcile()
+     if (
+diff --git a/packages/cli/test/run/noninteractive.test.ts b/packages/cli/test/run/noninteractive.test.ts
+index 24d56c4d27..d191e0cae2 100644
+--- a/packages/cli/test/run/noninteractive.test.ts
++++ b/packages/cli/test/run/noninteractive.test.ts
+@@ -218,6 +218,8 @@ async function run(input: {
+   messages?: (inboxID: string) => SessionMessageInfo[]
+   wait?: () => Promise<void>
+   terminalDelay?: number
++  settleMs?: number
++  active?: () => Record<string, { type: "running" }>
+ }) {
+   const sdk = OpenCode.make({ baseUrl: "https://opencode.test" })
+   const values: V2Event[] = [{ id: "evt_connected", type: "server.connected", data: {} }]
+@@ -254,6 +256,7 @@ async function run(input: {
+   spyOn(sdk.session.form, "cancel").mockImplementation((request) => (input.cancel?.(request) ?? ok(undefined)) as never)
+   let promptID = "msg_prompt"
+   spyOn(sdk.session, "wait").mockImplementation(() => input.wait?.() ?? wait.promise)
++  spyOn(sdk.session, "active").mockImplementation(() => ok(input.active?.() ?? {}) as never)
+   spyOn(sdk.message, "list").mockImplementation(() =>
+     ok({
+       data: input.messages?.(promptID) ?? [{ id: promptID, type: "user", text: "hello", time: { created: 1 } }],
+@@ -279,6 +282,7 @@ async function run(input: {
+     auto: false,
+     attached: input.attached ?? false,
+     compatibility: input.compatibility,
++    settleMs: input.settleMs ?? 0,
+     renderTool: input.renderTool ?? (() => Promise.resolve()),
+     renderToolError: input.renderToolError ?? (() => Promise.resolve()),
+   })
+@@ -376,6 +380,37 @@ describe("runNonInteractivePrompt", () => {
+     ).toEqual([expect.objectContaining({ type: "text", part: expect.objectContaining({ text: "projected answer" }) })])
+   })
+ 
++  test("stays until a turn a plugin resumes after idle has finished, then prints it", async () => {
++    let checks = 0
++    let waits = 0
++    const output = await capture({
++      format: "json",
++      settleMs: 500,
++      turn: (messageID) => [prompted(messageID), settled()],
++      // The first idle is followed by a plugin follow-up: the session is busy on the first check.
++      active: (): Record<string, { type: "running" }> => (checks++ === 0 ? { ses_1: { type: "running" } } : {}),
++      wait: () => {
++        waits++
++        return Promise.resolve()
++      },
++      messages: (messageID) => [
++        {
++          id: "msg_followup",
++          type: "assistant",
++          agent: "build",
++          model: { providerID: "test", id: "test-model" },
++          content: [{ type: "text", text: "follow-up answer" }],
++          finish: "stop",
++          time: { created: 4, completed: 5 },
++        },
++        { id: messageID, type: "user", text: "hello", time: { created: 1 } },
++      ],
++    })
++    expect(waits).toBe(2)
++    expect(checks).toBeGreaterThanOrEqual(3)
++    expect(output.stdout).toContain("follow-up answer")
++  })
++
+   test("reports an observed execution failure before prompt promotion", async () => {
+     const output = await capture({
+       format: "json",
