@@ -228,6 +228,45 @@ def _log_disconnect_context(stage: str, error: Any, *, mid_stream: bool = False)
     return diag
 
 
+
+# Beside a vendor drafter, llama.cpp's ngram-mod also drafts from text already in
+# the context, which is most of what a file rewrite or edit emits. Measured on
+# Apple Silicon at temperature 0: file rewrites 3.5-4.2x faster on Qwen 3.6
+# (DFlash), Gemma 4 and Qwen 3.8 (MTP) with byte-identical output, fresh code
+# within a few percent. In 12 agent tasks run twice each, interleaved, the
+# tasks finished faster in 8 of 12 (median 14%) with no loss in score. Alone it
+# drafts poorly on fresh text, so it only rides with a drafter. Every drafted
+# token is verified by the target model.
+COPY_DRAFT = ",ngram-mod"
+
+
+# Context checkpoints the server keeps for sliding-window models (--ctx-checkpoints).
+SWA_CHECKPOINT_COPIES = 4
+
+def _kv_layers(n_layers: int, n_kv_heads: int, head_dim: int, value_head_dim: int, found: dict) -> list[tuple[int, int, int, bool]]:
+    """(kv_heads, key_dim, value_dim, sliding) for every layer that keeps a KV cache.
+
+    A single head count applies to every layer. Gemma 4 gives heads per layer
+    and a repeating sliding-window pattern with its own head sizes; Qwen 3.5+
+    hybrids keep KV only on every `full_attention_interval`-th layer (the rest
+    are recurrent and hold a fixed state). Lists shorter than the layer count
+    repeat, as the model defines them."""
+    heads = found.get("kv_heads_list")
+    pattern = found.get("swa_pattern")
+    interval = found.get("full_attention_interval")
+    out = []
+    for i in range(n_layers):
+        if interval and (i + 1) % interval != 0:
+            continue
+        h = heads[i % len(heads)] if heads else n_kv_heads
+        if h <= 0:
+            continue
+        sliding = bool(pattern[i % len(pattern)]) if pattern and found.get("sliding_window") else False
+        kd = found.get("head_dim_swa", head_dim) if sliding else head_dim
+        vd = found.get("value_head_dim_swa", value_head_dim) if sliding else value_head_dim
+        out.append((h, kd, vd, sliding))
+    return out
+
 class RuntimeErrorWithContext(RuntimeError):
     pass
 
@@ -507,7 +546,7 @@ class LocalCodeRuntimeGateway:
             # `Drafter`: Gemma 4 MTP heads, Qwen 3.6 / Muse DFlash). Downloaded
             # with the model; only used when the file is present and complete.
             drafter, path = self._catalog_drafter_path(model_path)
-            cmd.extend(["--model-draft", str(path), "--spec-type", drafter.spec_type])
+            cmd.extend(["--model-draft", str(path), "--spec-type", drafter.spec_type + COPY_DRAFT])
             if drafter.spec_type == "draft-mtp":
                 # A DFlash drafter emits a whole block per step; its length is
                 # the drafter's own. MTP drafts token by token: 4 measured best.
@@ -523,7 +562,7 @@ class LocalCodeRuntimeGateway:
             # (30 tok/s) because the misses cost more than the hits save.
             # `llama_cpp_spec_type = "none"` or `llama_cpp_mtp_draft = 0`
             # turns it off. Models without the metadata are untouched.
-            cmd.extend(["--spec-type", "draft-mtp",
+            cmd.extend(["--spec-type", "draft-mtp" + COPY_DRAFT,
                         "--spec-draft-n-max", str(self.config.llama_cpp_mtp_draft)])
         # Otherwise NO speculative decoding. An empty `llama_cpp_spec_type`
         # means OFF — NOT a cue to fall back to in-context n-gram decoding.
@@ -818,9 +857,31 @@ class LocalCodeRuntimeGateway:
                             for suf in wanted:
                                 if k.endswith(suf) and isinstance(v, int):
                                     found[suf] = v
+                            # Per-layer layout: Gemma 4 lists KV heads per layer and marks its
+                            # sliding-window layers; Qwen 3.5+ hybrids keep KV only on every
+                            # `full_attention_interval`-th layer.
+                            if k.endswith(".attention.head_count_kv") and isinstance(v, list):
+                                found["kv_heads_list"] = [int(x) for x in v]
+                            elif k.endswith(".attention.sliding_window_pattern") and isinstance(v, list):
+                                found["swa_pattern"] = [bool(x) for x in v]
+                            elif k.endswith(".attention.sliding_window") and isinstance(v, int):
+                                found["sliding_window"] = v
+                            elif k.endswith(".attention.key_length_swa") and isinstance(v, int):
+                                found["head_dim_swa"] = v
+                            elif k.endswith(".attention.value_length_swa") and isinstance(v, int):
+                                found["value_head_dim_swa"] = v
+                            elif k.endswith(".full_attention_interval") and isinstance(v, int):
+                                found["full_attention_interval"] = v
+                            elif k.endswith(".ssm.inner_size") and isinstance(v, int):
+                                found["ssm_inner"] = v
+                            elif k.endswith(".ssm.state_size") and isinstance(v, int):
+                                found["ssm_state"] = v
+                            elif k.endswith(".ssm.conv_kernel") and isinstance(v, int):
+                                found["ssm_conv"] = v
                         n_layers = found.get(".block_count")
                         n_heads = found.get(".attention.head_count")
-                        n_kv_heads = found.get(".attention.head_count_kv", n_heads)
+                        heads_list = found.get("kv_heads_list")
+                        n_kv_heads = found.get(".attention.head_count_kv", max(heads_list) if heads_list else n_heads)
                         head_dim = found.get(".attention.key_length")
                         if head_dim is None and n_heads and found.get(".embedding_length"):
                             head_dim = found[".embedding_length"] // n_heads
@@ -835,6 +896,13 @@ class LocalCodeRuntimeGateway:
                                 # the GGUF (Qwen 3.6+/3.8 `nextn_predict_layers`).
                                 "n_mtp_layers": found.get(".nextn_predict_layers", 0),
                             }
+                            meta["layers"] = _kv_layers(n_layers, n_kv_heads, head_dim, meta["value_head_dim"], found)
+                            if found.get("sliding_window"):
+                                meta["sliding_window"] = found["sliding_window"]
+                            if found.get("full_attention_interval") and found.get("ssm_inner"):
+                                recurrent = n_layers - n_layers // found["full_attention_interval"]
+                                per_layer = found["ssm_inner"] * (found.get("ssm_state", 0) + found.get("ssm_conv", 0))
+                                meta["recurrent_state_bytes"] = recurrent * per_layer * 4  # f32 state
         except Exception:
             meta = None
         cache[path] = meta
@@ -900,6 +968,19 @@ class LocalCodeRuntimeGateway:
             kd = (kd + 127) // 128 * 128
         if vt.startswith("turbo"):
             vd = (vd + 127) // 128 * 128
+        per_layer = meta.get("layers")
+        if per_layer:
+            # Only full-attention layers grow with the context; sliding-window
+            # layers are a fixed block (see _kv_fixed_bytes).
+            full = [(h, k, v) for h, k, v, sliding in per_layer if not sliding]
+            if kt.startswith("turbo") or vt.startswith("turbo"):
+                full = [(h, (k + 127) // 128 * 128 if kt.startswith("turbo") else k,
+                         (v + 127) // 128 * 128 if vt.startswith("turbo") else v) for h, k, v in full]
+            total = sum(h * (k * kb + v * vb) for h, k, v in full)
+            if os.environ.get("TURBO_LAYER_ADAPTIVE") is None and vt == "turbo2" and len(full) >= 8:
+                h0, _, v0 = full[0]
+                total += 4 * h0 * v0 * (self._KV_DTYPE_BYTES["q8_0"] - vb)
+            return float(total)
         k_bytes = layers * kd * kb
         v_bytes = layers * vd * vb
         adaptive = os.environ.get("TURBO_LAYER_ADAPTIVE")
@@ -912,6 +993,25 @@ class LocalCodeRuntimeGateway:
             k_bytes = max(k_bytes, layers * kd * self._KV_DTYPE_BYTES["q8_0"])
             v_bytes = max(v_bytes, layers * vd * self._KV_DTYPE_BYTES["q8_0"])
         return meta["n_kv_heads"] * (k_bytes + v_bytes)
+
+    def _kv_fixed_bytes(self, model_path: str | None = None, *, dtypes: tuple[str, str] | None = None) -> int:
+        """Cache bytes that do not grow with the context: sliding-window layers hold
+        their window plus one batch, hybrid models hold a recurrent state, and each
+        context checkpoint keeps a copy of that state. 0 for plain attention models."""
+        meta = self._gguf_kv_meta(model_path)
+        if not meta:
+            return 0
+        if meta.get("recurrent_state_bytes"):
+            # Hybrid models: the recurrent state, plus a copy per context checkpoint.
+            return int(meta["recurrent_state_bytes"] * (1 + SWA_CHECKPOINT_COPIES))
+        if not meta.get("layers") or not meta.get("sliding_window"):
+            return 0
+        kt, vt = dtypes or self._effective_kv_dtypes(model_path)
+        kb = self._KV_DTYPE_BYTES.get(kt) or self._KV_DTYPE_BYTES["f16"]
+        vb = self._KV_DTYPE_BYTES.get(vt) or self._KV_DTYPE_BYTES["f16"]
+        rows = meta["sliding_window"] + 2048
+        per_row = sum(h * (k * kb + v * vb) for h, k, v, sliding in meta["layers"] if sliding)
+        return int(per_row * rows * (1 + SWA_CHECKPOINT_COPIES))
 
     def _model_file_bytes(self, model_path: str | None = None) -> int:
         from pathlib import Path as _Path
@@ -936,7 +1036,7 @@ class LocalCodeRuntimeGateway:
         weights = self._model_file_bytes(model_path)
         # Reserve the larger of 3 GB or 15% of RAM for OS + app + activations.
         reserve = max(KV_FIT_RESERVE_GB * 1024 ** 3, int(total * KV_FIT_RESERVE_FRACTION))
-        kv_budget = total - weights - reserve
+        kv_budget = total - weights - reserve - self._kv_fixed_bytes(model_path)
         if kv_budget <= 0:
             return KV_FIT_MIN_CTX  # weights barely fit; give the minimum workable ctx
         max_ctx = int(kv_budget / bpt)
