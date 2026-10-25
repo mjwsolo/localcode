@@ -13,7 +13,7 @@ the first-run flow:
 ## The demo task
 
 Every tape runs against a synthetic project made by `make_demo_repo.py`: a
-TypeScript web app with 678 commits over a year by five fictional
+TypeScript web app with 646 commits over a year by five fictional
 contributors. The task is "Git Wrapped": LocalCode builds a Spotify-Wrapped
 style page for that history. It writes `wrapped.py` (reads `git log`, writes
 `wrapped.json`) and a self-contained `wrapped.html` of animated full-screen

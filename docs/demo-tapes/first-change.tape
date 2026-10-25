@@ -11,7 +11,7 @@ Enter
 Sleep 30s  # TUNE: model load + first paint; the longest cold start you expect
 Show
 Sleep 2s
-Type@8ms "Build Git Wrapped for this repo, a Spotify-Wrapped-style page for its git history. First write wrapped.py (standard library only) that reads git log and writes wrapped.json: total commits, top contributor, busiest weekday and hour, longest streak of days with commits, most-edited file, commits per day, and a one-word summary of the year. Then write one self-contained wrapped.html that embeds that JSON and shows full-screen animated cards, one per stat, plus a commit heatmap and a closing 'your year in one word' card. Arrow keys or a click move between cards. No network, no CDN. Run wrapped.py, then open wrapped.html."
+Type@8ms "Build Git Wrapped for this repo: a Spotify-Wrapped-style page for its git history. Write wrapped.py (Python standard library only) that reads git log and computes total commits, top contributor, busiest weekday and hour, longest daily streak, most-edited file, commits per day for the last 365 days, and a one-word vibe for the year. It writes wrapped.html with the data inlined in a script tag (no fetch, no CDN), so it opens straight from disk. Make it look great: full-screen cards on bold gradient backgrounds, one stat per card, huge numbers that count up, a GitHub-style heatmap grid of the 365 days, and a closing 'your year in one word' card. Arrow keys or a click move between cards. Run wrapped.py, extract the page's script and check it with node --check, fix anything that fails, then open wrapped.html."
 Sleep 800ms
 Enter
 Sleep 12s  # TUNE: agent plans and starts writing wrapped.py

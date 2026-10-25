@@ -18,7 +18,6 @@ Type `/` in the prompt to open the command palette. Text that starts with `/` is
 | `/exit` | Exit the app (also `/quit`, `/q`) |
 | `/export` | Export session transcript |
 | `/help` | Help |
-| `/lsp` | Language servers: install or start one |
 | `/mcps` | Toggle MCPs |
 | `/mode` | Choose Chat or Decisions |
 | `/models` | Switch model |
@@ -37,7 +36,7 @@ Type `/` in the prompt to open the command palette. Text that starts with `/` is
 | `/skills` | Skills |
 | `/speak` | Read aloud / stop reading (also `/say`) |
 | `/stats` | Usage statistics |
-| `/status` | View status: the loaded model and whether a language server is running |
+| `/status` | View status: the loaded model and its server |
 | `/terminal` | New terminal |
 | `/themes` | Switch theme |
 | `/thinking` | Expand thinking display (also `/toggle-thinking`) |
@@ -60,7 +59,6 @@ Dictation runs on this Mac and shares the GPU with the coding model, so it gives
 
 ## Notes
 
-- `/lsp` lists language servers. Installing one downloads it only after you confirm.
 - `/vision` shows the projector size first and downloads only after you confirm. It applies to the loaded model only.
 - `/thinking` only changes how thinking is shown. Hidden reasoning is off by default for every model.
 - `/models` opens the picker described in [Models](/localcode/start-here/choose-a-model).

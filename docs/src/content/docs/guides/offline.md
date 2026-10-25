@@ -23,8 +23,6 @@ something you choose.
 - Downloading a model. The picker still opens offline and lists what is on
   disk; the `Available to download` section is empty or fails to load.
 - `/vision`, the first time, to fetch a model's image projector.
-- `/lsp`, to install a language server. Starting one already installed works
-  offline.
 - Voice, the first time, to fetch the recorder runtime and speech model.
 - `websearch` and `webfetch`.
 - Remote MCP servers, and any shell command that downloads something.

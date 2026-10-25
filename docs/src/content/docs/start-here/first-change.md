@@ -67,13 +67,12 @@ before the turn and passes after it.</small>
 | Command | What it does |
 | --- | --- |
 | `/models` | Opens the model picker to download or switch models |
-| `/status` | Shows the loaded model and whether a language server is running |
+| `/status` | Shows the loaded model and its server |
 | `/server` | Shows the local API address and lets you stop or start the model server |
 | `/permissions` | Turns auto-approve on or off for the few actions that ask |
 | `/new` | Starts a new session |
 | `/sessions` | Switches to an earlier session |
 | `/undo` | Undoes the previous message and its edits |
-| `/lsp` | Installs or starts a language server for code diagnostics |
 | `/help` | Lists every command and key |
 | `/exit` | Quits |
 

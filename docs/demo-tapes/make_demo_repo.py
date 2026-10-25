@@ -10,7 +10,7 @@ msgs = ["fix flaky test", "add dark mode toggle", "refactor router", "bump deps"
 def git(*a, env=None): subprocess.run(["git", *a], cwd=root, check=True, env={**os.environ, **(env or {})}, stdout=subprocess.DEVNULL)
 git("init", "-q", "-b", "main")
 for f in files: (root / f).parent.mkdir(parents=True, exist_ok=True); (root / f).write_text(f"// {f}\n")
-start = datetime.datetime(2025, 10, 27, 9, 0); v = 1
+start = datetime.datetime(2025, 10, 27, 0, 0); v = 1
 day = start
 while day < datetime.datetime(2026, 10, 24):
     busy = day.weekday() < 5 and random.random() < 0.82
@@ -18,7 +18,7 @@ while day < datetime.datetime(2026, 10, 24):
     if day.month == 3 and 10 <= day.day <= 24: n += 3  # a launch crunch
     for _ in range(n):
         a = random.choices(authors, [w for *_, w in authors])[0]
-        t = day + datetime.timedelta(hours=random.choice([9, 10, 11, 14, 15, 16, 17, 21, 23]), minutes=random.randint(0, 59))
+        t = day + datetime.timedelta(hours=random.choices([9, 10, 11, 14, 15, 16, 17, 21, 22, 23], [3, 5, 5, 4, 6, 5, 3, 3, 6, 4])[0], minutes=random.randint(0, 59))
         f = random.choices(files, weights)[0]
         with open(root / f, "a") as h: h.write(f"// change {t.isoformat()}\n")
         m = random.choice(msgs).format(v=f"0.{v}"); v += m.startswith("ship")

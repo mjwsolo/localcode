@@ -39,7 +39,7 @@ cd "$REC_DIR"
 mkdir -p out
 TAPES=("${@:-step-2-choose-model step-3-ask first-change step-4-verify}")
 for t in ${TAPES[@]}; do
-  # Fresh 678-commit repo for every take, so earlier output never leaks in.
+  # Fresh 646-commit repo for every take, so earlier output never leaks in.
   python3 "$HERE/make_demo_repo.py" "$PROJ"
   vhs "$t.tape"
   test -s "$REC_DIR/out/$t.png/frame-text-00001.png"
