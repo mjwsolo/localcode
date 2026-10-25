@@ -16,8 +16,8 @@ Every tape runs against a synthetic project made by `make_demo_repo.py`: a
 TypeScript web app with 646 commits over a year by five fictional
 contributors. The task is "Git Wrapped": LocalCode builds a Spotify-Wrapped
 style page for that history. It writes `wrapped.py` (reads `git log`, writes
-`wrapped.json`) and a self-contained `wrapped.html` of animated full-screen
-cards, runs the script, then opens the page. The prompt is the same in all
+`data.js`) and a static `wrapped.html` of animated full-screen cards that
+loads it, runs the script, then opens the page. The prompt is the same in all
 tapes. `record.sh` rebuilds the repo before each take.
 
 ## Tapes
@@ -37,7 +37,7 @@ is at each `Show`, and adjust those sleeps.
 
 `record.sh` captures PNG frames with VHS, builds crisp GIFs with ffmpeg
 (palette per take), shrinks them with gifsicle when installed, checks that
-`wrapped.py`, `wrapped.json` and `wrapped.html` exist after the full-run
+`wrapped.py`, `data.js` and `wrapped.html` exist after the full-run
 takes, and copies the assets into place. The full terminal, including its
 status line, stays in frame at 1280x800.
 

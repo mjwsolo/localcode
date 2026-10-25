@@ -45,7 +45,7 @@ for t in ${TAPES[@]}; do
   test -s "$REC_DIR/out/$t.png/frame-text-00001.png"
   if [[ "$t" == "step-4-verify" || "$t" == "first-change" ]]; then
     # The run must have produced the data and the page.
-    (cd "$PROJ" && test -s wrapped.py && test -s wrapped.json && test -s wrapped.html && python3 -c 'import json; json.load(open("wrapped.json"))')
+    (cd "$PROJ" && test -s wrapped.py && test -s data.js && test -s wrapped.html && grep -q "WRAPPED" data.js)
   fi
   if [[ "$t" == "first-change" ]]; then
     cp "$(ls "$REC_DIR/out/$t.png"/frame-text-*.png | tail -1)" "$REC_DIR/out/first-change-final.png"
