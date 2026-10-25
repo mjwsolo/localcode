@@ -4,12 +4,14 @@ from pathlib import Path
 random.seed(7)
 root = Path(sys.argv[1]); shutil.rmtree(root, ignore_errors=True); root.mkdir(parents=True)
 authors = [("Alex Rivera", "alex@example.dev", 0.38), ("Sam Okafor", "sam@example.dev", 0.27), ("Jordan Lee", "jordan@example.dev", 0.18), ("Priya Nair", "priya@example.dev", 0.12), ("Max Weber", "max@example.dev", 0.05)]
-files = ["src/app.ts", "src/router.ts", "src/api/client.ts", "src/api/auth.ts", "src/ui/Button.tsx", "src/ui/Modal.tsx", "src/ui/theme.css", "src/store.ts", "README.md", "package.json", "tests/router.test.ts", "tests/store.test.ts", "docs/setup.md"]
+files = ["src/app.ts", "src/router.ts", "src/api/client.ts", "src/api/auth.ts", "src/ui/Button.tsx", "src/ui/Modal.tsx", "src/ui/theme.css", "src/store.ts", "src/config.ts", "src/api/cache.ts", "tests/router.test.ts", "tests/store.test.ts", "docs/setup.md"]
 weights = [9, 6, 5, 4, 5, 3, 4, 7, 2, 2, 3, 3, 1]
 msgs = ["fix flaky test", "add dark mode toggle", "refactor router", "bump deps", "handle 401 refresh", "polish modal animation", "typo", "speed up store selectors", "add retry to api client", "wip", "docs: setup steps", "fix mobile layout", "ship v{v}", "revert accidental console.log", "add keyboard shortcuts", "cache user profile", "lint", "rename store slices"]
 def git(*a, env=None): subprocess.run(["git", *a], cwd=root, check=True, env={**os.environ, **(env or {})}, stdout=subprocess.DEVNULL)
 git("init", "-q", "-b", "main")
 for f in files: (root / f).parent.mkdir(parents=True, exist_ok=True); (root / f).write_text(f"// {f}\n")
+(root / "package.json").write_text('{\n  "name": "acme-web",\n  "version": "1.0.0",\n  "private": true\n}\n')
+(root / "README.md").write_text("# acme-web\n\nThe Acme web app.\n")
 start = datetime.datetime(2025, 10, 27, 0, 0); v = 1
 day = start
 while day < datetime.datetime(2026, 10, 24):

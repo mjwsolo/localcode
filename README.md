@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/mjwsolo/localcode/main/docs/assets/demo/first-change.gif" alt="A localcode turn: it reads the stub and test, edits the file, then pytest reports 1 passed" width="900">
+  <img src="https://raw.githubusercontent.com/mjwsolo/localcode/main/docs/assets/demo/first-change.gif" alt="A localcode turn: one prompt builds Git Wrapped, a Spotify-Wrapped-style page for a repo's git history, then checks its own scripts" width="900">
 </p>
 
 ## Install
