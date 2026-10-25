@@ -3,6 +3,15 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.5.37 — 2026-10-25
+
+### Fixed
+
+- Edits no longer fail when the model writes a different number of blank lines
+  between lines than the file has (for example one blank line where the file
+  has two). This was the most common cause of failed edits in the evals; each
+  one cost the model extra turns. The match still has to be unique.
+
 ## 0.5.36 — 2026-10-24
 
 ### Fixed
