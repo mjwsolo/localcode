@@ -36,7 +36,7 @@ Small local models finish a task when the loop makes them. The plugin adds local
 
 - **Orient from a snapshot** - the first message of a session carries a snapshot of the project's layout, and later messages report files that changed outside the session, so the model does not spend steps listing directories.
 - **Plan first** - for work of three or more steps the model lays out the steps in the todo list before editing, and marks each one done as its last edit lands.
-- **Keep going** - a turn does not end while todo items are still open. The headless `localcode-ui run` waits for these follow-up turns before exiting.
+- **Keep going** - a turn does not end while todo items are still open.
 - **Prove it** - after edits, the plugin runs the project's own typecheck and tests and feeds failures back to the model.
 - **Audit stubs** - placeholder code and `TODO` bodies are flagged before the task counts as done.
 - **No foreground servers** - a command that would block the session, such as a dev server, is refused with a hint to run it in the background.

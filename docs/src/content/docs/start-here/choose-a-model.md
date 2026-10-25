@@ -62,7 +62,7 @@ Four things matter, roughly in this order:
 2. **Memory bandwidth.** This varies much more between chip tiers than the number of cores. It directly affects decoding speed.
 3. **KV cache size.** TurboQuant compression (`q8_0`-K + `turbo4`-V) keeps the cache small enough for long contexts to remain practical. See [Unified Memory](/localcode/concepts/unified-memory).
 
-4. **Speculative drafting.** Gemma 4, Qwen 3.6 and Muse Glimmer ship with a vendor-trained drafter that downloads with the model; Qwen 3.8 uses a draft head inside its own file. The drafter proposes tokens and the model verifies every one, so the answer is the model's own and decoding is often about twice as fast. Only drafters trained for the exact model are used.
+4. **Speculative drafting.** Gemma 4, Qwen 3.6 and Muse Glimmer ship with a vendor-trained drafter that downloads with the model; Qwen 3.8 uses a draft head inside its own file. The drafter proposes tokens and the model verifies every one, so the answer is the model's own and decoding is often 1.5 to 2 times as fast. Only drafters trained for the exact model are used.
 
 The model server's GPU kernels ship precompiled, so the first start after an install or update takes seconds rather than 20 to 30. If the shipped kernels do not match your hardware, the server compiles them as before.
 
