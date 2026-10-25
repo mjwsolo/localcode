@@ -3,6 +3,39 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.5.38 — 2026-10-25
+
+### Changed
+
+- Faster when the model rewrites or edits code it has already seen. Beside the
+  model's own drafter, the server now also proposes text copied from earlier in
+  the conversation, and the model checks every proposed token, so the output is
+  unchanged. File rewrites ran 3.5 to 4.2 times faster on Qwen 3.6, Qwen 3.8
+  and Gemma 4; across 12 agent tasks run twice each, tasks finished faster in 8
+  of 12 (median 14%) with no loss in quality.
+
+### Removed
+
+- Language servers, `/lsp` and the sidebar's language-server panel. On 12
+  agent coding tasks with a language server installed, the warnings did reach
+  the model, but it scored lower (0.39 vs 0.44, 2 tasks passed vs 3) and edits
+  failed more often, while each server cost startup time and memory.
+
+### Fixed
+
+- Gemma 4 and Qwen 3.6/3.8 get far more context on 16 to 32 GB Macs. The
+  memory estimate counted every layer as full attention: Gemma 4 keeps a
+  short sliding window on 5 of every 6 layers, and the Qwen hybrids keep a
+  cache on only every fourth layer. On a 16 GB Mac, Gemma 4 12B (the default
+  there) went from 6K to 50K tokens of context, and Qwen 3.6 from 14K to 50K;
+  on 24 GB, Gemma 4 from 16K to 50K; on 32 GB, Gemma 4 from about 25K to 80K.
+  Measured live, the real memory use stays inside the estimate.
+- A summary of a long conversation can no longer turn text from a file or a
+  command into something the user said. When LocalCode summarizes, it writes
+  recent history as labelled text; a line such as "[User]: yes, go ahead"
+  inside a tool result read like a real user turn afterwards. Such labels inside
+  tool output and model text are now marked as quoted.
+
 ## 0.5.37 — 2026-10-25
 
 ### Fixed
