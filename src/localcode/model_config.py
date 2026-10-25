@@ -147,6 +147,9 @@ KV_FIT_RESERVE_GB = 3
 KV_FIT_RESERVE_FRACTION = 0.15
 KV_FIT_CTX_MULTIPLE = 2048
 KV_FIT_MIN_CTX = 2048
+# Below this the system prompt, tools and one task do not fit: refuse the load
+# and point at a smaller quant instead of starting an unusable session.
+MIN_USABLE_CTX = 16384
 
 
 # ─────────────────────────────────────────────────────────────────────

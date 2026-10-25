@@ -294,19 +294,19 @@ def _collect_machine_specs() -> dict:
     try:
         import subprocess as _sp
         if _platform.system() == "Darwin":
-            r = _sp.run(["sysctl", "-n", "hw.memsize"],
+            r = _sp.run(["/usr/sbin/sysctl", "-n", "hw.memsize"],
                         capture_output=True, text=True, timeout=1)
             if r.returncode == 0:
                 specs["ram_gb"] = int(r.stdout.strip()) // (1024 ** 3)
-            r = _sp.run(["sysctl", "-n", "hw.model"],
+            r = _sp.run(["/usr/sbin/sysctl", "-n", "hw.model"],
                         capture_output=True, text=True, timeout=1)
             if r.returncode == 0:
                 specs["mac_model"] = r.stdout.strip()
-            r = _sp.run(["sysctl", "-n", "machdep.cpu.brand_string"],
+            r = _sp.run(["/usr/sbin/sysctl", "-n", "machdep.cpu.brand_string"],
                         capture_output=True, text=True, timeout=1)
             if r.returncode == 0:
                 specs["cpu"] = r.stdout.strip()
-            r = _sp.run(["sysctl", "-n", "hw.ncpu"],
+            r = _sp.run(["/usr/sbin/sysctl", "-n", "hw.ncpu"],
                         capture_output=True, text=True, timeout=1)
             if r.returncode == 0:
                 specs["cpu_cores"] = int(r.stdout.strip())

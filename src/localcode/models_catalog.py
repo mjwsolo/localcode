@@ -656,7 +656,7 @@ def _system_ram_gb() -> int:
         import platform, subprocess
         if platform.system() == "Darwin":
             mem_bytes = int(subprocess.run(
-                ["sysctl", "-n", "hw.memsize"],
+                ["/usr/sbin/sysctl", "-n", "hw.memsize"],
                 capture_output=True, text=True, timeout=2,
             ).stdout.strip())
             return max(1, mem_bytes // (1024 ** 3))
