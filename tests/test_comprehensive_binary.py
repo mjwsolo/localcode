@@ -190,12 +190,12 @@ def test_catalog_drafter_is_launched_only_when_its_file_is_complete(tmp_path, mo
     os.truncate(f, gemma.drafter.size_bytes)  # sparse file of the exact size
     cmd = g.llama_server_command(str(tmp_path / gemma.filename), 8081)
     assert cmd[cmd.index("--model-draft") + 1] == str(f)
-    assert cmd[cmd.index("--spec-type") + 1] == "draft-mtp"
+    assert cmd[cmd.index("--spec-type") + 1] == "draft-mtp,ngram-mod"
     assert cmd[cmd.index("--spec-draft-n-max") + 1] == "4"
     f = tmp_path / qwen.drafter.filename
     f.write_bytes(b"\0"); os.truncate(f, qwen.drafter.size_bytes)
     cmd = g.llama_server_command(str(tmp_path / qwen.filename), 8081)
-    assert cmd[cmd.index("--spec-type") + 1] == "draft-dflash"
+    assert cmd[cmd.index("--spec-type") + 1] == "draft-dflash,ngram-mod"
     assert "--spec-draft-n-max" not in cmd
     # opt-out switches both kinds off
     g0 = LocalCodeRuntimeGateway(RuntimeConfig(llama_cpp_mtp_draft=0))
@@ -215,7 +215,7 @@ def test_mtp_head_in_gguf_enables_draft_mtp_by_default():
     """A GGUF with `nextn_predict_layers` > 0 (Qwen 3.8 27B) drafts from its
     own MTP head: lossless, no second model, ~2x decode on Apple Silicon."""
     cmd = _gateway_with_mtp_layers(1).llama_server_command("/path/model.gguf", 8081)
-    assert cmd[cmd.index("--spec-type") + 1] == "draft-mtp"
+    assert cmd[cmd.index("--spec-type") + 1] == "draft-mtp,ngram-mod"
     assert cmd[cmd.index("--spec-draft-n-max") + 1] == "4"
     assert "--draft-max" not in cmd  # removed upstream; the server rejects it
 
@@ -271,4 +271,4 @@ def test_mtp_layers_read_from_a_real_gguf_header(tmp_path):
     g = LocalCodeRuntimeGateway(RuntimeConfig())
     assert g._gguf_mtp_layers(str(p)) == 1
     cmd = g.llama_server_command(str(p), 8081)
-    assert cmd[cmd.index("--spec-type") + 1] == "draft-mtp"
+    assert cmd[cmd.index("--spec-type") + 1] == "draft-mtp,ngram-mod"

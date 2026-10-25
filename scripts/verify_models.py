@@ -248,7 +248,8 @@ def verify(server, *, runtime=False):
         # The shipping configuration includes the vendor drafter: it must be on
         # disk (exact size) and the launcher must have loaded it.
         assert drafter.local_path.is_file() and drafter.local_path.stat().st_size == drafter.size_bytes, "drafter missing or incomplete"
-        assert "--model-draft" in server.command and drafter.spec_type in server.command, "drafter not launched"
+        spec = server.command[server.command.index("--spec-type") + 1].split(",") if "--spec-type" in server.command else []
+        assert "--model-draft" in server.command and drafter.spec_type in spec, "drafter not launched"
         timings = server.request("/v1/chat/completions", {**body, "messages": [body["messages"][0], {"role": "user", "content": "Write a Python function that reverses a string. No explanation."}], "max_tokens": 120}).get("timings", {})
         assert timings.get("draft_n", 0) > 0 and timings.get("draft_n_accepted", 0) > 0, "drafter produced no accepted drafts"
         checks.append("drafter")
