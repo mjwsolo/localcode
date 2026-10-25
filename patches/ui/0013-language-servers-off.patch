@@ -1,0 +1,37 @@
+diff --git a/packages/tui/src/component/dialog-status.tsx b/packages/tui/src/component/dialog-status.tsx
+index ba8d88c5f7..72caa0e813 100644
+--- a/packages/tui/src/component/dialog-status.tsx
++++ b/packages/tui/src/component/dialog-status.tsx
+@@ -65,10 +65,7 @@ export function DialogStatus() {
+           </For>
+         </box>
+       </Show>
+-      <Show
+-        when={(lsp() ?? []).length > 0}
+-        fallback={<text fg={theme.text.base}>No language servers running · /lsp</text>}
+-      >
++      <Show when={(lsp() ?? []).length > 0}>
+         <box>
+           <text fg={theme.text.base}>{lsp()!.length} LSP Servers</text>
+           <For each={lsp()}>
+diff --git a/packages/tui/src/plugin/builtins.ts b/packages/tui/src/plugin/builtins.ts
+index 199a9176e4..aa025826f7 100644
+--- a/packages/tui/src/plugin/builtins.ts
++++ b/packages/tui/src/plugin/builtins.ts
+@@ -5,7 +5,6 @@ import SidebarContext from "../feature-plugins/sidebar/context"
+ import SidebarFooter from "../feature-plugins/sidebar/footer"
+ import SidebarMcp from "../feature-plugins/sidebar/mcp"
+ import SidebarPlan from "../feature-plugins/sidebar/plan"
+-import SidebarLsp from "../feature-plugins/sidebar/lsp"
+ import DiffViewer from "../feature-plugins/system/diff-viewer"
+ import Notifications from "../feature-plugins/system/notifications"
+ import Plugins from "../feature-plugins/system/plugins"
+@@ -21,7 +20,7 @@ export const builtins = [
+   SidebarContext,
+   SidebarMcp,
+   SidebarPlan,
+-  SidebarLsp,
++  // localcode: language servers are off (measured no gain on coding tasks), so no LSP panel or /lsp.
+   SidebarFooter,
+   Notifications,
+   Plugins,

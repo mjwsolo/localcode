@@ -108,7 +108,7 @@ def test_write_config_points_at_local_server_and_plugin(tmp_path):
     assert plugin.is_absolute() and (plugin / "server.ts").is_file() and (plugin / "tui.ts").is_file()
     assert not (tmp_path / ".localcode-agent").exists()
     # every v1 key the runtime renamed is written under its current name
-    assert cfg["lsp"] is True   # installed language servers start; missing ones only via /lsp
+    assert cfg["lsp"] is False   # language servers are off
     for legacy in ("provider", "enabled_providers", "plugin", "tools", "agent", "autoupdate"):
         assert legacy not in cfg
 

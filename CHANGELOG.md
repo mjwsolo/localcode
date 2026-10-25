@@ -14,6 +14,13 @@ All notable changes to LocalCode will be documented here. The format follows
   and Gemma 4; across 12 agent tasks run twice each, tasks finished faster in 8
   of 12 (median 14%) with no loss in quality.
 
+### Removed
+
+- Language servers, `/lsp` and the sidebar's language-server panel. On 12
+  agent coding tasks with a language server installed, the warnings did reach
+  the model, but it scored lower (0.39 vs 0.44, 2 tasks passed vs 3) and edits
+  failed more often, while each server cost startup time and memory.
+
 ### Fixed
 
 - Gemma 4 and Qwen 3.6/3.8 get far more context on 16 to 32 GB Macs. The
