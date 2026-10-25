@@ -14,7 +14,7 @@ something you choose.
 - `grep`, `glob`, and shell commands that do not reach the network.
 - The project's own typecheck, test and lint commands, which the plugin runs
   after edits.
-- Sessions, `/undo`, `/diff`, `/review`, and the model picker for models
+- Sessions, `/undo`, `/diff`, and the model picker for models
   already on disk.
 - Voice input and vision, once their downloads are on disk.
 

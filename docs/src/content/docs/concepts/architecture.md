@@ -36,7 +36,7 @@ Small local models finish a task when the loop makes them. The plugin adds local
 
 - **Orient from a snapshot** - the first message of a session carries a snapshot of the project's layout, and later messages report files that changed outside the session, so the model does not spend steps listing directories.
 - **Plan first** - for work of three or more steps the model lays out the steps in the todo list before editing, and marks each one done as its last edit lands.
-- **Keep going** - a turn does not end while todo items are still open.
+- **Keep going** - a turn does not end while todo items are still open. The headless `localcode-ui run` waits for these follow-up turns before exiting.
 - **Prove it** - after edits, the plugin runs the project's own typecheck and tests and feeds failures back to the model.
 - **Audit stubs** - placeholder code and `TODO` bodies are flagged before the task counts as done.
 - **No foreground servers** - a command that would block the session, such as a dev server, is refused with a hint to run it in the background.
@@ -48,8 +48,10 @@ localcode is designed to enable agentic coding with local models on consumer har
 
 - **RAM-aware context** - the launcher budgets the selected weights and KV caches against the machine’s RAM. Optional TurboQuant cache formats reduce storage; context still depends on the model and quant. See [Unified Memory](/localcode/concepts/unified-memory).
 - **Fast multi-turn** - the server keeps the prompt prefix between turns, so the next turn does not re-read it.
+- **Speculative drafters and precompiled kernels** - vendor drafters speed up decoding, and the server's Metal kernels ship precompiled so it starts quickly. See [Models](/localcode/start-here/choose-a-model).
 - **Compact tool definitions** - the runtime shortens built-in tool descriptions and large MCP schemas before sending them to the model. This leaves more room for the task and project context, especially on a 16 GB Mac.
-- **Hidden reasoning is off by default** - the server starts with `--reasoning off`. Small models finish faster and follow tool calls better without it.
+- **Hidden reasoning is off by default** - small models finish faster and follow tool calls better without it.
+- **Tolerant edits** - an edit still applies when the model writes a different number of blank lines between lines than the file has, as long as the match is unique.
 - **Vision on demand** - the image projector for a vision-capable model is a separate download through `/vision`. Nothing is fetched until you ask.
 
 ## Everything is loopback

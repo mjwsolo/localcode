@@ -20,8 +20,10 @@
 ## Install
 
 ```bash
-pip install -U localcode      # or: uv pip install -U localcode
+uv tool install localcode    # or: pip install -U localcode
 ```
+
+Upgrade with `uv tool upgrade localcode` (`uv pip install -U` does not upgrade a `uv tool` install; with pip, rerun `pip install -U localcode`).
 
 ## Run
 
@@ -50,7 +52,9 @@ OpenAI compatible endpoint. See the [Local API guide](https://mjwsolo.github.io/
 
 ## Models
 
-Choose from **10 models and 100+ quant options** for coding, image input and typed decisions. Models download from Hugging Face. Downloads run in parallel and can resume if interrupted. Switch with `/models`.
+Choose from **11 models and 100+ quant options** for coding, image input and typed decisions. Models download from Hugging Face. Downloads run in parallel and can resume if interrupted. Switch with `/models`. LocalCode recommends the most capable one that fits your Mac's memory and marks it with a star. Flint, Saluki, OpenJev, DiffusionGemma and Kolibri are never picked automatically. The Flint row shows its two curated quants; the picker lists every Unsloth quant.
+
+Speed: Gemma 4, Qwen 3.6, Muse Glimmer and Qwen 3.8 draft tokens with the vendor's own speculative drafter, which downloads with the model. The model server's GPU kernels ship precompiled, so the first start after an install is quicker.
 
 | Model | Smallest download | Largest download |
 | --- | ---: | ---: |
@@ -63,6 +67,7 @@ Choose from **10 models and 100+ quant options** for coding, image input and typ
 | [Muse Glimmer 30B](https://huggingface.co/unsloth/Muse-Glimmer-30B-GGUF) | 10.7 GB | 32.3 GB |
 | [DiffusionGemma 26B-A4B](https://huggingface.co/unsloth/diffusiongemma-26B-A4B-it-GGUF) | 16.8 GB | 50.5 GB |
 | [OpenJev 27B (decisions)](https://huggingface.co/ggml-org/OpenJev-GGUF) | 19.4 GB | 53.8 GB |
+| [Flint 40B-A2.5B (opt-in)](https://huggingface.co/unsloth/flint-GGUF) | 25.1 GB | 42.3 GB |
 | [Kolibri 1 78B-A3B (experimental)](https://huggingface.co/Hob-forge/Kolibri-1-GGUF) | 28.6 GB | 47.5 GB |
 
 ## Network
