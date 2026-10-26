@@ -1,0 +1,13 @@
+{
+  "name": "localcode-e2e",
+  "private": true,
+  "description": "Terminal screen snapshot tests for the LocalCode UI (real PTY, tui-test)",
+  "scripts": {
+    "test": "tui-test",
+    "update": "tui-test -u"
+  },
+  "devDependencies": {
+    "@microsoft/tui-test": "0.1.1",
+    "@types/node": "22.10.2"
+  }
+}

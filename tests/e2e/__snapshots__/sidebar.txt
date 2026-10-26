@@ -1,0 +1,35 @@
+   hello there                   +
+
+                                                                                hello there
+     hello there
+                                                                                Context
+                                                                                108 tokens
+     Hello from the mock model.                                                 0% used
+     This reply is fixed so screenshots stay stable.
+
+
+     Completed in <time>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+   localcode · e2e-model
+  /private/tmp/lce-ws-sidebar:main

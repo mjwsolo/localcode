@@ -1,0 +1,35 @@
+
+
+
+
+
+
+
+
+
+
+                    Select a model                                                               esc
+
+                    Search models…
+
+                    Models
+                    Alpha 4 12B ★                         Acme        1 on disk
+                    Beta 3 8B                             Globex      Download
+                    Gamma 2 30B                           Initech     Download
+
+                    Settings
+                    Models folder ~/models
+
+                    ★ Recommended for your 32 GB Mac  enter choose quant
+
+                       /private/tmp/lce-ws-models:main
+
+
+
+
+
+
+
+
+
+                                                                                                                <version>

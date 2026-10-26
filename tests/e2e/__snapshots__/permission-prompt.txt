@@ -1,0 +1,34 @@
+ ! please read outside the proje +
+
+
+     please read outside the project
+
+
+     <spin> Read /tmp/lce-outside/notes.txt
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+     Permission required
+       ← Access external directory /tmp/lce-outside
+
+     Patterns
+
+     - /tmp/lce-outside/*
+
+
+      Allow once   Always allow   Reject                                 ctrl+f fullscreen  ⇆ select  enter confirm

@@ -1,0 +1,35 @@
+
+
+
+
+
+
+
+
+
+
+                                 Status                                             esc
+
+                                 Model e2e-model · 32,768 token context
+                                 No MCP servers
+
+                                       ▀  ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀  ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀
+
+                                       Agentic coding. Local models. On your Mac.
+
+
+
+                          Ask anything… "<placeholder>"
+
+                        localcode · e2e-model                                           / commands
+                       /private/tmp/lce-ws-status:main
+
+
+
+
+
+
+
+
+
+                                                                                                                <version>
