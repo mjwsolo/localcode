@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/mjwsolo/localcode/main/docs/assets/demo/localcode-demo.gif" alt="LocalCode on a Mac: the model picker shows which quants fit this Mac, one prompt, the agent plans and writes a 3D maze game, asks before touching files outside the project, and the game runs" width="800">
+  <img src="https://raw.githubusercontent.com/mjwsolo/localcode/main/docs/assets/demo/first-change.gif" alt="A localcode turn: it reads the stub and test, edits the file, then pytest reports 1 passed" width="900">
 </p>
 
 ## Install
