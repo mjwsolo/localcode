@@ -1,0 +1,64 @@
+name: Windows port (branch only)
+
+# Runs only on the feat/windows branch and by hand. Never on pull_request or main.
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [feat/windows]
+  workflow_dispatch:
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: tests (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, windows-11-arm]
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: astral-sh/setup-uv@v5
+      - name: Install package and test tools
+        shell: bash
+        run: |
+          uv venv .venv
+          uv pip install --python .venv/Scripts/python.exe -e . pytest pytest-timeout
+      - name: Pytest
+        id: pytest
+        shell: bash
+        # Baseline mode: failures stay visible but do not stop the summary.
+        continue-on-error: ${{ vars.WINDOWS_STRICT != '1' }}
+        run: |
+          .venv/Scripts/python.exe -m pytest tests -p no:cacheprovider --timeout=120 \
+            --junitxml=junit.xml -rfEs 2>&1 | tee pytest.log
+          exit "${PIPESTATUS[0]}"
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### ${{ matrix.os }} py${{ matrix.python-version }}"
+            tail -n 5 pytest.log || true
+            echo
+            echo '```'
+            grep -E '^(FAILED|ERROR)' pytest.log | sed -E 's/ - .*//' | head -400 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junit-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: |
+            junit.xml
+            pytest.log
