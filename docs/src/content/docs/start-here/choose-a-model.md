@@ -7,7 +7,7 @@ localcode has **no fixed default model**. When it starts, it checks your Mac's u
 
 ## The rule
 
-Model weights must use about **55% of unified memory** or less. The rest is for the KV cache, activations, and macOS. localcode recommends the most capable model that fits. It never recommends experimental or opt-in models automatically, but you can choose them yourself.
+A model fits when its files plus the memory it uses while running (KV cache, context checkpoints, compute buffers, measured per model near a full 64K window) stay inside the memory your Mac's GPU can use: about two thirds of RAM on 16 to 36 GB Macs and three quarters or more above. localcode recommends the most capable model that fits. A few models, such as Flint (it always reasons, so tasks take longer) and the decision model OpenJev, are never the default pick, but you can choose them yourself.
 
 ## Recommendations for each Mac
 
@@ -22,8 +22,8 @@ Other models in the picker are choices you make yourself:
 
 - **Qwen 3.8 27B** - a dense 27B (about 18 GB at Q4, 31.5 GB at Q8) with a built-in drafter. Comfortable on 48 GB and up.
 - **Gemma 4 12B and 26B-A4B, Qwen 3.6 35B-A3B** - the defaults above, in other quants.
-- **Flint 40B-A2.5B** - a coding-agent MoE with about 2.5B active parameters: 25 GB at Q4 (48 GB Macs and up) and 42 GB at Q8 (96 GB and up). Opt-in. It reasons on every step and has no off switch, so its thinking stays hidden and agent tasks run slower than on Qwen 3.6.
-- **North-Mini-Code, Muse Glimmer, Underdog Saluki, DiffusionGemma, Kolibri** - additional or experimental models.
+- **Flint 40B-A2.5B** - a coding-agent MoE with about 2.5B active parameters: 25 GB at Q4 (48 GB Macs and up) and 42 GB at Q8 (96 GB and up), with smaller quants from 11 GB. It reasons on every step and has no off switch, so its thinking stays hidden and agent tasks run slower than on Qwen 3.6.
+- **North-Mini-Code, Muse Glimmer, Underdog Saluki, DiffusionGemma, Kolibri** - more models in the picker, each verified to load, chat and call tools on every release.
 - **OpenJev** - a decision model, not a coding model. See [Chat and Decisions](/localcode/guides/decisions).
 
 ## The model picker

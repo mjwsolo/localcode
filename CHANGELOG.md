@@ -3,6 +3,17 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Fixed
+
+- Kolibri 1 and Flint are no longer labelled "experimental" and "opt-in". Both
+  pass the same load, chat and tool checks as every other model on each
+  release; Flint is still not the default pick because it always reasons.
+- The README and docs listed Flint's smallest download as 25 GB; unsloth
+  ships quants from 11.4 GB, all of which the picker already offers. The docs
+  memory chooser now uses the same fit rule as the app.
+
 ## 0.5.39 — 2026-10-26
 
 ### Changed
