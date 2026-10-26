@@ -1,4 +1,5 @@
 """Explicit model lifecycle: busy guards, failure recovery and HTTP authorization."""
+import sys
 import threading
 from types import SimpleNamespace
 
@@ -131,7 +132,11 @@ def test_lifecycle_routes_require_auth_and_object_payload(monkeypatch):
     assert calls == ['start', 'stop']
 
 
-@pytest.mark.parametrize('code,name', [(-11, 'SIGSEGV'), (-6, 'SIGABRT'), (1, 'exit code 1'), (0, 'exit code 0')])
+@pytest.mark.parametrize('code,name', [
+    (-11, 'SIGSEGV'),
+    pytest.param(-6, 'SIGABRT', marks=pytest.mark.skipif(
+        sys.platform == 'win32', reason='SIGABRT is signal 22 on Windows and child exits are never negative')),
+    (1, 'exit code 1'), (0, 'exit code 0')])
 def test_unexpected_exit_reports_actual_cause_without_probing_dead_port(sup, monkeypatch, code, name):
     import localcode.ui.supervisor as module
     sup.proc = SimpleNamespace(poll=lambda: code, pid=2345)

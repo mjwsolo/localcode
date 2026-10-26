@@ -15,10 +15,10 @@ def test_build_cleanup_only_removes_exact_generated_files(tmp_path, state):
     patches.mkdir()
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
     relative = "packages/tui/src/ui/generated.ts"
-    (patches / "change.patch").write_text(
+    (patches / "change.patch").write_bytes((
         f"diff --git a/{relative} b/{relative}\nnew file mode 100644\n"
         f"--- /dev/null\n+++ b/{relative}\n@@ -0,0 +1 @@\n+export const value = 1\n"
-    )
+    ).encode())
     target = repo / relative
     target.parent.mkdir(parents=True)
     outside = tmp_path / "private.ts"
@@ -26,7 +26,7 @@ def test_build_cleanup_only_removes_exact_generated_files(tmp_path, state):
     if state == "symlink":
         target.symlink_to(outside)
     else:
-        target.write_text("export const value = 1\n" if state == "generated" else "private edits\n")
+        target.write_bytes(b"export const value = 1\n" if state == "generated" else b"private edits\n")
         if state == "staged-modified":
             subprocess.run(["git", "add", "-N", relative], cwd=repo, check=True)
     result = subprocess.run([sys.executable, "-c", cleanup, str(patches), str(repo)], capture_output=True)

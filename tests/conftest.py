@@ -116,6 +116,8 @@ def loopback_listener():
 @pytest.fixture
 def process_inspection():
     """Check the process-inspection capability before starting child processes."""
+    if sys.platform == "win32":
+        pytest.skip("uses POSIX ps and process groups")
     try:
         probe = subprocess.run(["ps", "-o", "pid=", "-p", str(os.getpid())],
                                capture_output=True, text=True, check=False)

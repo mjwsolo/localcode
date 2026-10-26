@@ -77,3 +77,10 @@ Darwin, sysctl, chmod, tmp and symlink assumptions in `tests/test_config.py`, `t
 
 ## 4. Effort
 About 5 to 7 engineer-weeks end to end: phases 1 to 3 roughly 3.5 weeks, phase 4 about 1.5, phase 5 about 1 plus fix time. Ship as alpha pre-releases, CPU and Vulkan first.
+
+## 5. Testing
+
+- Branch-only CI: `.github/workflows/windows.yml` runs on every push to `feat/windows` and by hand (`workflow_dispatch`). It never runs on pull requests or main. Matrix: `windows-latest` (x64) and `windows-11-arm` (ARM64), Python 3.12 and 3.13. Each job installs the package with `uv pip install -e .` (an editable install, so no bundled macOS binaries are needed), runs the full pytest suite with a 60 s per-test timeout, uploads `junit.xml` and `pytest.log`, and writes the failing test names to the job summary. Set the repository variable `WINDOWS_STRICT=1` to make a red suite fail the job; until then failures stay visible without stopping the summary.
+- Coverage today: everything in `tests/` that is pure Python (imports, config, catalog, download and resume logic, supervisor, process guard, UI server). Tests of genuinely POSIX- or macOS-only features are skipped with an explicit reason (`tests/_skips.py`, `posix_only`). It does not cover llama-server, the UI binary, GPUs or a real terminal; those arrive with phases 2 and 3.
+- Local interactive testing: a Windows 11 ARM VM (UTM or Parallels) on an Apple Silicon Mac covers installs, the terminal UI, paths and process handling on ARM64. It has no GPU passthrough, so it exercises CPU-only behaviour.
+- Real GPU testing needs a Windows PC with an NVIDIA GPU, or a cloud GPU VM (hosted CI runners have no GPU). CUDA and Vulkan results, memory fit and speed must be verified there.

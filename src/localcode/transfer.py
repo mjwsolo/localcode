@@ -11,6 +11,8 @@ import threading
 import time
 import urllib.request
 
+from .compat import NOFOLLOW, lock_exclusive_nb
+
 CHUNK_BYTES = 8 * 1024 * 1024
 
 
@@ -20,7 +22,6 @@ class RangeUnsupported(OSError):
 
 def download(url: str, dest: Path, *, workers=16, progress=None, cancel=None):
     from .bootstrap import DownloadCancelled
-    import fcntl
     import certifi
     ctx = ssl.create_default_context(cafile=certifi.where())
     dest = Path(dest)
@@ -32,10 +33,10 @@ def download(url: str, dest: Path, *, workers=16, progress=None, cancel=None):
     for p in (part, state, state.with_suffix('.tmp'), lockpath):
         if p.is_symlink():
             raise OSError('Download sidecar must not be a symlink')
-    lockfd = os.open(lockpath, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    lockfd = os.open(lockpath, os.O_CREAT | os.O_RDWR | NOFOLLOW, 0o600)
     try:
         try:
-            fcntl.flock(lockfd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            lock_exclusive_nb(lockfd)
         except BlockingIOError:
             raise OSError('A download of this file is already in progress') from None
         def cancelled():
@@ -71,7 +72,7 @@ def download(url: str, dest: Path, *, workers=16, progress=None, cancel=None):
                 done = {}
         def checkpoint():
             temp = state.with_suffix('.tmp')
-            fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+            fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | NOFOLLOW, 0o600)
             with os.fdopen(fd, 'w') as f:
                 json.dump({'identity': identity, 'done': done}, f)
                 f.flush()
@@ -84,7 +85,7 @@ def download(url: str, dest: Path, *, workers=16, progress=None, cancel=None):
                 if response.status != 200:
                     raise OSError('Expected a full HTTP response')
                 expected = int(response.headers.get('Content-Length') or 0)
-                fd = os.open(part, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+                fd = os.open(part, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | NOFOLLOW, 0o600)
                 count = 0
                 with os.fdopen(fd, 'wb') as f:
                     while True:
@@ -105,7 +106,7 @@ def download(url: str, dest: Path, *, workers=16, progress=None, cancel=None):
         if not ranged or size <= 0:
             sequential()
             return
-        fd = os.open(part, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        fd = os.open(part, os.O_RDWR | os.O_CREAT | NOFOLLOW, 0o600)
         with os.fdopen(fd, 'r+b') as f:
             if not done:
                 f.truncate(0)
@@ -133,7 +134,7 @@ def download(url: str, dest: Path, *, workers=16, progress=None, cancel=None):
                         raise RangeUnsupported('Remote file changed during download')
                     digest = hashlib.sha256()
                     count = 0
-                    fd = os.open(part, os.O_RDWR | os.O_NOFOLLOW)
+                    fd = os.open(part, os.O_RDWR | NOFOLLOW)
                     with os.fdopen(fd, 'r+b') as f:
                         f.seek(start)
                         while count < end-start+1:

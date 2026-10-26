@@ -21,6 +21,7 @@ from localcode.ui.http import bypass_local_proxies, local_urlopen
 from pathlib import Path
 from urllib.parse import quote
 
+from localcode.compat import STOP_SIGNALS
 from localcode.ui import plugin_path, run_dir, ui_binary_path
 from localcode.ui.auth import KEY_ENV, TOKEN_ENV, control_headers, new_secret, read_auth_file, server_key
 from localcode.ui.ports import choose_ports, find_running
@@ -459,7 +460,7 @@ def main(model: str | None = None, project: str | None = None,
         cleanup()
         raise SystemExit(128 + signum)
 
-    for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+    for s in STOP_SIGNALS:
         signal.signal(s, on_signal)
 
     try:

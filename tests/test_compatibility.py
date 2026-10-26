@@ -126,3 +126,11 @@ def test_reported_qwen_q5_24gib_load_is_refused_before_inference(tmp_path, monke
     monkeypatch.setattr(server_cmd, "catalog_choice", lambda _: None)
     with pytest.raises(ValueError, match="Insufficient RAM"):
         server_cmd.validate_model_memory(str(model), 24)
+
+
+def test_windows_gets_a_clear_unsupported_message(monkeypatch):
+    import platform
+    from localcode import diagnostics, entrypoint
+    monkeypatch.setattr(platform, 'system', lambda: 'Windows')
+    assert 'does not support Windows yet' in diagnostics.platform_problem()
+    assert 'does not support' in entrypoint._unsupported_platform_message()

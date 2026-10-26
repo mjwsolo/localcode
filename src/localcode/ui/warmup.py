@@ -35,6 +35,7 @@ import socket
 import struct
 import time
 import urllib.request
+from localcode.compat import NOFOLLOW
 from localcode.ui.http import local_urlopen
 from pathlib import Path
 
@@ -203,7 +204,7 @@ def store(alias: str, tokens: list[int], model_path: Path | None = None) -> None
             "prefix_revision": "lean-v1", "context": os.environ.get("LOCALCODE_CONTEXT", "minimal")}
     if model_path is not None:
         data["model"] = model_identity(model_path)
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | NOFOLLOW, 0o600)
     with os.fdopen(fd, "w") as f:
         json.dump(data, f)
     os.replace(tmp, path)

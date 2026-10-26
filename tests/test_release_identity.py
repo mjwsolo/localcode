@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from _skips import posix_only
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/release_identity.py"
@@ -68,6 +69,7 @@ def ensure_tag_script():
     return "\n".join(line[10:] for line in body.split("        run: |\n", 1)[1].splitlines())
 
 
+@posix_only
 def test_workflow_creates_missing_tag_on_exact_commit_and_preserves_it(repo, tmp_path):
     remote = tmp_path / "remote.git"
     subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)

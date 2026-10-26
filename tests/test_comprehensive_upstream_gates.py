@@ -2,6 +2,7 @@
 import os
 import subprocess
 from pathlib import Path
+from _skips import posix_only
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -10,6 +11,7 @@ def git(path, *args):
     return subprocess.check_output(["git", "-C", str(path), *args], text=True, stderr=subprocess.DEVNULL).strip()
 
 
+@posix_only
 def test_opencode_refuses_a_fork_behind_upstream_before_changing_the_pin(tmp_path):
     upstream = tmp_path / "upstream"
     upstream.mkdir()

@@ -64,6 +64,10 @@ from typing import Optional
 
 
 from ._subproc_env import clean_env
+from .compat import (
+    SIGKILL, is_group_leader, kill_tree, listening_pids, new_group_popen_kwargs,
+    process_command_line,
+)
 from .paths import (
     server_pid_file,
     stuck_server_marker_path,
@@ -480,7 +484,7 @@ class ServerManager:
                 cmd,
                 stdout=(log_fh or subprocess.DEVNULL),
                 stderr=subprocess.STDOUT if log_fh else subprocess.DEVNULL,
-                start_new_session=True,  # process group leader → killpg works
+                **new_group_popen_kwargs(),  # process group leader → killpg works
                 env=env,
             )
             self._model_path = model_path
@@ -638,8 +642,7 @@ class ServerManager:
             return
         pid = self._process.pid
         try:
-            pgid = os.getpgid(pid)
-            os.killpg(pgid, signal.SIGKILL)
+            kill_tree(pid, force=True)
         except ProcessLookupError:
             pass
         except Exception:
@@ -732,12 +735,11 @@ class ServerManager:
             pid = self._process.pid
             stuck = False
             try:
-                pgid = os.getpgid(pid)
-                os.killpg(pgid, signal.SIGTERM)
+                kill_tree(pid)
                 try:
                     self._process.wait(timeout=3)
                 except subprocess.TimeoutExpired:
-                    os.killpg(pgid, signal.SIGKILL)
+                    kill_tree(pid, force=True)
                     try:
                         self._process.wait(timeout=2)
                     except subprocess.TimeoutExpired:
@@ -796,18 +798,11 @@ class ServerManager:
         are willing to signal it.
         """
         try:
-            if os.getpgid(pid) != pid:
+            if not is_group_leader(pid):
                 return False
         except Exception:
             return False
-        try:
-            out = subprocess.run(
-                ["ps", "-p", str(pid), "-o", "command="],
-                capture_output=True, text=True, timeout=3,
-            ).stdout.strip()
-        except Exception:
-            return False
-        return "llama-server" in out
+        return "llama-server" in process_command_line(pid)
 
     def _kill_pid_file(self) -> None:
         if not PID_FILE.exists():
@@ -829,13 +824,13 @@ class ServerManager:
                 _lifecycle_log("pid_reap_skipped_healthy", pid=pid, port=_check_port)
                 return
             try:
-                os.killpg(os.getpgid(pid), signal.SIGKILL)
+                kill_tree(pid, force=True)
                 _lifecycle_log("pid_reap_killed", pid=pid)
             except ProcessLookupError:
                 pass
             except Exception:
                 try:
-                    os.kill(pid, signal.SIGKILL)
+                    os.kill(pid, SIGKILL)
                 except Exception:
                     pass
         elif pid > 0:
@@ -921,27 +916,16 @@ class ServerManager:
             _lifecycle_log("port_kill_skipped_healthy", port=port)
             return
         try:
-            r = subprocess.run(
-                ["lsof", "-ti", f":{port}"],
-                capture_output=True, text=True, timeout=3,
-            )
-            for pid_str in r.stdout.split():
+            for pid in listening_pids(port):
                 try:
-                    pid = int(pid_str)
-                except ValueError:
-                    continue
-                try:
-                    out = subprocess.run(
-                        ["ps", "-p", str(pid), "-o", "command="],
-                        capture_output=True, text=True, timeout=3,
-                    ).stdout
+                    out = process_command_line(pid)
                     if "llama-server" not in out:
                         _lifecycle_log("port_kill_skipped_not_ours", port=port, pid=pid)
                         continue
                 except Exception:
                     continue
                 try:
-                    os.kill(pid, signal.SIGKILL)
+                    os.kill(pid, SIGKILL)
                 except ProcessLookupError:
                     pass
                 except Exception:

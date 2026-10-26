@@ -19,6 +19,7 @@ import pytest
 
 from localcode.ui import auth
 from localcode.ui import supervisor as sv
+from _skips import posix_only
 
 TOKEN = "t" * 43
 
@@ -131,6 +132,7 @@ def test_empty_expected_token_refuses_everything():
     assert auth.request_allowed({"Host": "127.0.0.1:1", auth.TOKEN_HEADER: ""}, "", 1) is not None
 
 
+@posix_only
 def test_auth_file_is_owner_only(tmp_path):
     path = auth.write_auth_file(tmp_path / "run", "tok", "key")
     assert stat.S_IMODE(os.stat(path).st_mode) == 0o600

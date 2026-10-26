@@ -1,5 +1,6 @@
 """Prompt warm-up: slot-file token parsing, capture merging, settle detection, store."""
 import json
+import sys
 import struct
 
 import pytest
@@ -128,6 +129,7 @@ def test_server_command_carries_slot_save_path(tmp_path, monkeypatch):
     assert "--slot-save-path" not in server_command(str(tmp_path / "x.gguf"), 8123, "x")
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="socket shutdown does not interrupt a blocked recv on Windows yet")
 @pytest.mark.usefixtures("loopback_listener")
 def test_replay_cancel_closes_the_socket_promptly():
     """Closing the client socket is the cancel: llama-server drops a task whose client left."""

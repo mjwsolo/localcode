@@ -1295,12 +1295,12 @@ def main() -> int:
     HERE.mkdir(parents=True, exist_ok=True)
     # A per-user lock, shared across checkouts, closes the concurrent-launch race.
     # The model inherits it so a killed supervisor cannot allow a second model.
-    import fcntl
+    from localcode.compat import lock_exclusive_nb
     lock_path = Path.home() / ".local/share/localcode-agent/supervisor.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     lease = lock_path.open("a+")
     try:
-        fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        lock_exclusive_nb(lease)
     except BlockingIOError:
         log("localcode is already running; refusing a second model supervisor")
         return 1
@@ -1364,7 +1364,8 @@ def main() -> int:
         sys.exit(0)
     signal.signal(signal.SIGTERM, bye)
     signal.signal(signal.SIGINT, bye)
-    signal.signal(signal.SIGHUP, bye)
+    if hasattr(signal, "SIGHUP"):
+        signal.signal(signal.SIGHUP, bye)
     import atexit
     atexit.register(sup.gateway.close)
     atexit.register(sup.shutdown)

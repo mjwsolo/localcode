@@ -19,6 +19,8 @@ def sysctl(name: str) -> str:
 
 
 def platform_problem() -> str | None:
+    if platform.system() == 'Windows':
+        return 'LocalCode does not support Windows yet; the Windows port is in progress.'
     if platform.system() != 'Darwin':
         return 'This release requires an Apple silicon Mac with macOS 13 or newer.'
     if platform.machine().lower() != 'arm64':

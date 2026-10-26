@@ -6,6 +6,7 @@ import pytest
 
 from localcode.ui import ports
 from localcode.ui.supervisor import Supervisor
+from _skips import posix_only
 
 
 @pytest.fixture(autouse=True)
@@ -20,6 +21,7 @@ def test_invalid_port_never_saved(value, tmp_path):
     assert not (tmp_path / "server-port.json").exists()
 
 
+@posix_only
 def test_preference_is_private_and_resettable(tmp_path):
     ports.save_port(9321)
     assert ports.preferred_port() == 9321

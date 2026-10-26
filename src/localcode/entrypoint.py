@@ -30,6 +30,8 @@ def _unsupported_platform_message() -> str:
     import platform
     from .diagnostics import platform_problem
     detail = platform_problem() or ""
+    if platform.system() == "Windows":
+        return f"localcode: {detail}"
     return (
         f"localcode: this release runs on Apple silicon Macs (macOS 13 or newer); "
         f"this machine reports {platform.system()} {platform.machine()}.\n"

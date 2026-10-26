@@ -13,15 +13,30 @@ import subprocess
 import sys
 import threading
 
+# Run as a standalone script, so it cannot import localcode.compat.
+IS_WINDOWS = sys.platform == 'win32'
+STOP_SIGNALS = tuple(
+    s for s in (signal.SIGINT, signal.SIGTERM, getattr(signal, 'SIGHUP', None),
+                getattr(signal, 'SIGBREAK', None)) if s is not None
+)
+
+
+def new_group_popen_kwargs() -> dict:
+    if IS_WINDOWS:
+        return {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {'start_new_session': True}
+
 
 def spawn_owned(command: list[str], *, stdout, lease_fd: int | None = None):
     args = [sys.executable, str(Path(__file__).resolve())]
     if lease_fd is not None:
         args += ['--lease-fd', str(lease_fd)]
+    # Windows cannot hand an fd to a child (no pass_fds), so the lease stays with
+    # the supervisor there; a Job Object will replace it in a later phase.
+    inherit = {} if IS_WINDOWS else {'pass_fds': (lease_fd,) if lease_fd is not None else ()}
     return subprocess.Popen(
         [*args, '--', *command], stdin=subprocess.PIPE, stdout=stdout,
-        stderr=subprocess.STDOUT, start_new_session=True,
-        pass_fds=(lease_fd,) if lease_fd is not None else (),
+        stderr=subprocess.STDOUT, **new_group_popen_kwargs(), **inherit,
     )
 
 
@@ -32,7 +47,7 @@ def main(argv: list[str]) -> int:
     if not command:
         raise ValueError('model command is required')
     stop = threading.Event()
-    for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+    for signum in STOP_SIGNALS:
         signal.signal(signum, lambda *_: stop.set())
 
     def watch_owner():
@@ -45,10 +60,8 @@ def main(argv: list[str]) -> int:
     threading.Thread(target=watch_owner, daemon=True).start()
     if stop.is_set():
         return 0
-    child = subprocess.Popen(
-        command, stdin=subprocess.DEVNULL,
-        pass_fds=(lease_fd,) if lease_fd is not None else (),
-    )
+    inherit = {} if IS_WINDOWS else {'pass_fds': (lease_fd,) if lease_fd is not None else ()}
+    child = subprocess.Popen(command, stdin=subprocess.DEVNULL, **inherit)
     sys.stderr.write(f'process guard: model pid {child.pid}\n')
     sys.stderr.flush()
     try:

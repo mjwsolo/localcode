@@ -9,6 +9,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+from _skips import posix_only
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -44,6 +45,7 @@ def test_gate_accepts_matched_trials_and_detects_regression(tmp_path, passed, co
     assert result.returncode == code
 
 
+@posix_only
 def test_nightly_propagates_failed_runner_without_reusing_old_results(tmp_path):
     harness = tmp_path / "evals"
     harness.mkdir()
