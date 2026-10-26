@@ -37,8 +37,6 @@ jobs:
       - name: Pytest
         id: pytest
         shell: bash
-        # Baseline mode: failures stay visible but do not stop the summary.
-        continue-on-error: ${{ vars.WINDOWS_STRICT != '1' }}
         run: |
           .venv/Scripts/python.exe -m pytest tests -o addopts= -m "not real_models" -p no:cacheprovider -v --timeout=60 \
             --junitxml=junit.xml -rfEs 2>&1 | tee pytest.log
