@@ -12,6 +12,7 @@ Editable dev installs run the source directly — faster to install,
 edits take effect immediately, no hidden shadowing.
 """
 import os
+import sys
 from pathlib import Path
 from setuptools import setup
 
@@ -52,13 +53,17 @@ class CustomBuildPy(build_py):
                 dst_dir.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(str(src), str(dst_dir / name))
 
+# Windows builds (CI, source installs) must not be stamped as macOS wheels;
+# per-platform Windows wheels with real binaries come in a later phase.
+_BDIST_WHEEL = {} if sys.platform == "win32" else {"plat_name": "macosx_13_0_arm64"}
+
 setup(
     ext_modules=ext_modules,
     cmdclass={"build_py": CustomBuildPy},
     options={
         # Both shipped binaries are Mach-O arm64 built for macOS 13+, so the
         # wheel says so instead of claiming to be pure Python for any platform.
-        "bdist_wheel": {"plat_name": "macosx_13_0_arm64"},
+        "bdist_wheel": _BDIST_WHEEL,
     },
     package_data={
         "localcode": ["bin/llama-server", "bin/localcode-ui", "bin/*.dylib",
