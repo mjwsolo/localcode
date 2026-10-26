@@ -1,0 +1,35 @@
+   please read outside the proje +
+
+
+     please read outside the project
+
+
+       Explored: 1 read
+
+     The command finished.
+
+
+     Completed in <time>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+   localcode · e2e-model                                                                          108 (0%)  / commands
+  /private/tmp/lce-ws-permission:main

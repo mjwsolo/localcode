@@ -1,0 +1,4 @@
+node_modules/
+snapshot-diffs/
+png/
+.tui-test/

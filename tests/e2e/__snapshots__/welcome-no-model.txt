@@ -1,0 +1,35 @@
+
+
+
+
+
+
+
+
+
+
+
+
+                                       █                 █               ▄       ✦
+                                       █  █▀▀█ █▀▀▀ ▀▀▀█ █  █▀▀▀ █▀▀█ █▀▀█ █▀▀█
+                                       █  █  █ █    █▀▀█ █  █    █  █ █  █ █▀▀▀
+                                       ▀  ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀  ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀
+
+                                       Agentic coding. Local models. On your Mac.
+
+
+
+                          Ask anything… "<placeholder>"
+
+                        localcode · No model loaded · /models                           / commands
+                       /private/tmp/lce-ws-welcome_nomodel:main
+
+
+
+
+
+
+
+
+
+                                                                                                                <version>

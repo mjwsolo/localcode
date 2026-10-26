@@ -1,0 +1,35 @@
+
+
+
+
+
+
+
+
+
+
+                         /btw                 One-shot answer from the session's context without
+                         /cd                  Change working directory
+                         /clear               Clear session
+                         /close-tab           Close tab
+                         /continue            Switch session
+                         /debug               View debug info
+                         /decide              Open decision mode
+                         /diff                Open diff viewer
+                         /effort              Switch model variant
+                         /exit                Exit the app
+
+                          /
+
+                        localcode · e2e-model                                           / commands
+                       /private/tmp/lce-ws-palette:main
+
+
+
+
+
+
+
+
+
+                                                                                                                <version>
