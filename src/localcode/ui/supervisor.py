@@ -43,6 +43,7 @@ from urllib.parse import parse_qs, urlparse
 
 import localcode
 from localcode import bootstrap
+from localcode.compat import IS_WINDOWS, kill_tree
 from localcode.model_files import model_files, find_model
 from localcode.hf_quants import fetch_quants, fit_badge
 from localcode.models_catalog import (
@@ -393,11 +394,22 @@ class Supervisor:
             self.cancel_warmup()
             if self.proc and self.proc.poll() is None:
                 log(f"supervisor: stopping model service pid {self.proc.pid}")
-                self.proc.terminate()
+                if IS_WINDOWS:
+                    # No SIGTERM here: terminate() would kill the guard and orphan
+                    # the model. Closing the owner pipe makes the guard stop it.
+                    try:
+                        self.proc.stdin.close()
+                    except Exception:
+                        pass
+                else:
+                    self.proc.terminate()
                 try:
                     self.proc.wait(timeout=20)
                 except subprocess.TimeoutExpired:
-                    self.proc.kill()
+                    if IS_WINDOWS:
+                        kill_tree(self.proc.pid, force=True)
+                    else:
+                        self.proc.kill()
                     self.proc.wait(timeout=5)
             owner_pipe = getattr(self.proc, "stdin", None)
             if owner_pipe is not None:

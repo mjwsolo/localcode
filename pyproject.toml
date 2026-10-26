@@ -20,6 +20,7 @@ classifiers = [
   "Intended Audience :: Developers",
   "Operating System :: MacOS",
   "Operating System :: POSIX :: Linux",
+  "Operating System :: Microsoft :: Windows",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
@@ -43,6 +44,7 @@ dependencies = [
   "sounddevice>=0.4.6;  sys_platform=='darwin'",  # mic capture + audio out
   "numpy>=1.26.0;       sys_platform=='darwin'",
   "piper-tts>=1.2.0;    sys_platform=='darwin'",  # natural neural TTS
+  "psutil>=5.9;         sys_platform=='win32'",   # process lookup and kill-tree on Windows
 ]
 
 [project.optional-dependencies]

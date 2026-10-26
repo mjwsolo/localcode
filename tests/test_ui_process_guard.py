@@ -14,6 +14,9 @@ from localcode.ui.supervisor import Supervisor
 
 
 def alive(pid):
+    if sys.platform == 'win32':
+        import psutil
+        return psutil.pid_exists(pid)
     try:
         os.kill(pid, 0)
         return True
@@ -35,7 +38,11 @@ def model_command(pid_file, *, ignore_term=False):
             + 'pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(60)', str(pid_file)]
 
 
-@pytest.mark.parametrize('shutdown', ['pipe', 'signal'])
+@pytest.mark.parametrize('shutdown', [
+    'pipe',
+    pytest.param('signal', marks=pytest.mark.skipif(
+        sys.platform == 'win32', reason='no SIGTERM on Windows; a Job Object replaces it')),
+])
 def test_guard_reaps_model_when_owner_closes_or_terminates(tmp_path, shutdown):
     pid_file = tmp_path / 'model.pid'
     with (tmp_path / 'log').open('wb') as log:

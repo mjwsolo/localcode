@@ -43,6 +43,7 @@ def test_parser_accepts_version_model_and_project():
 
 def test_unsupported_platform_refuses_plainly(monkeypatch, capsys):
     monkeypatch.setattr("localcode.ui.platform_supported", lambda: False)
+    monkeypatch.setattr("platform.system", lambda: "Linux")
     with pytest.raises(SystemExit) as e:
         entrypoint.main([])
     assert e.value.code == 1

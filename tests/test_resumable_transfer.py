@@ -107,10 +107,10 @@ def test_range_ignored_mid_download_falls_back_safely(source,tmp_path):
 
 
 def test_concurrent_writer_is_rejected(source,tmp_path):
-    import fcntl
+    from localcode.compat import lock_exclusive_nb
     url,_,_=source;dest=tmp_path/'m'
     with dest.with_name('m.download.lock').open('w') as lock:
-        fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        lock_exclusive_nb(lock)
         with pytest.raises(OSError,match='already in progress'):download(url,dest)
 
 
