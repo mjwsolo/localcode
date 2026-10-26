@@ -101,7 +101,17 @@ say ""; say "== 2. publish candidate $RC =="
 setver "$RC"
 run g commit -qam "$RC"
 run g tag -a "v$RC" -m "$RC"
-run g push origin "HEAD:refs/heads/main" "refs/tags/v$RC"
+# main is protected (required checks, admins included), so the candidate goes on
+# release/<version> with a PR to main; its checks and the local statuses land on
+# this exact commit, and the PR merges once the final release is out.
+REL_BRANCH="release/$VERSION"
+run g push -f origin "HEAD:refs/heads/$REL_BRANCH" "refs/tags/v$RC"
+if [ "$DRY" = 1 ]; then
+  say "+ gh pr create --base main --head $REL_BRANCH (unless one is open)"
+else
+  gh pr view "$REL_BRANCH" --json number >/dev/null 2>&1 || \
+    gh pr create --base main --head "$REL_BRANCH" --title "$VERSION" --body "Release $VERSION. The candidate $RC on this exact commit is tested by scripts/release.sh; this merges after the final release is published." >/dev/null
+fi
 SHA="$( [ "$DRY" = 1 ] && echo "<candidate commit>" || g rev-parse HEAD )"
 
 # ---- 3. wait for PyPI ----------------------------------------------------------
@@ -187,4 +197,14 @@ wait_run() { # <workflow> <branch> <head sha> <not before>: wait for that exact 
 }
 wait_run release.yml main "$MAIN_SHA" "$STARTED" || { say "FAILED: promotion. $RC stays a pre-release; see: gh run list --workflow release.yml"; exit 1; }
 wait_run publish.yml "v$VERSION" "$SHA" "$STARTED" || { say "FAILED: the final release or its post-publish checks; see: gh run list --workflow publish.yml --branch v$VERSION"; exit 1; }
+# The release PR's head is the tested commit; rerun the promotion check now that
+# the local gate status is posted, then merge it with a merge commit.
+for r in $(gh run list --workflow "Model promotion gate" --branch "$REL_BRANCH" --json databaseId,headSha --jq "[.[] | select(.headSha == \"$SHA\")][0].databaseId" 2>/dev/null); do gh run rerun "$r" >/dev/null 2>&1 || true; done
+sleep 60
+gh pr checks "$REL_BRANCH" --watch --interval 30 >/dev/null 2>&1 || true
+if gh pr merge "$REL_BRANCH" --merge >/dev/null 2>&1; then
+  say "merged the release PR for $VERSION into main"
+else
+  say "NOTE: the release PR for $VERSION did not merge automatically (main moved, or a check failed); merge it by hand: gh pr view $REL_BRANCH"
+fi
 say "released $VERSION; post-publish checks passed"
