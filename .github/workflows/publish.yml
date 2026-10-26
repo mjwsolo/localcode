@@ -227,3 +227,46 @@ jobs:
         run: |
           version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
           python scripts/verify_install.py --target "localcode==$version" --expected "$version" --installer "$INSTALLER" --from-version 0.4.9
+      # The package users get, not the checkout: a fresh venv and a fresh HOME,
+      # the exact version PyPI now serves, then the product's own checks.
+      - name: Install the published version into a fresh venv
+        if: matrix.installer == 'pip'
+        run: |
+          version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          work="$RUNNER_TEMP/published"
+          rm -rf "$work"; mkdir -p "$work/home"
+          python -m venv "$work/venv"
+          for i in 1 2 3 4 5 6; do
+            "$work/venv/bin/python" -m pip install --quiet --no-cache-dir "localcode==$version" && break
+            [ "$i" = 6 ] && { echo "::error::could not install localcode==$version"; exit 1; }
+            sleep 30
+          done
+          echo "PUBLISHED_WORK=$work" >> "$GITHUB_ENV"
+          # A release candidate must not become what a plain `pip install localcode` picks.
+          if [[ "$version" =~ [a-zA-Z] ]]; then
+            first=$(python -m pip index versions localcode 2>/dev/null | head -1)
+            echo "default install resolves: $first"
+            [ "$first" != "localcode ($version)" ] || { echo "::error::pre-release $version is the default install"; exit 1; }
+          fi
+      - name: Installed package, localcode doctor
+        if: matrix.installer == 'pip'
+        run: |
+          mkdir -p "$PUBLISHED_WORK/home"
+          env -i PATH="$PATH" HOME="$PUBLISHED_WORK/home" XDG_CONFIG_HOME="$PUBLISHED_WORK/home/.config" XDG_DATA_HOME="$PUBLISHED_WORK/home/.local/share" \
+            LOCALCODE_HOME="$PUBLISHED_WORK/home/state" "$PUBLISHED_WORK/venv/bin/localcode" doctor
+      - uses: actions/setup-node@v4
+        if: matrix.installer == 'pip'
+        with:
+          node-version: "22"
+      - name: Installed package, terminal snapshot suite
+        if: matrix.installer == 'pip'
+        # The journeys run the installed localcode-ui and the installed Python modules
+        # (never this checkout's src/) in their own throwaway HOME per session.
+        run: scripts/ui_e2e.sh --installed "$PUBLISHED_WORK/venv/bin/python"
+      - name: Upload snapshot diffs
+        if: always() && matrix.installer == 'pip'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: published-ui-e2e-${{ github.run_id }}
+          path: tests/e2e/snapshot-diffs
+          if-no-files-found: ignore

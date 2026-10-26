@@ -5,13 +5,27 @@ import { TuiTest } from "@microsoft/tui-test"
 import { spawn, spawnSync } from "node:child_process"
 import { existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { createServer } from "node:net"
+import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const REPO = resolve(HERE, "../..")
-const UI_BIN = process.env.LOCALCODE_UI_BIN ?? join(REPO, "src/localcode/bin/localcode-ui")
-const PYTHON = process.env.LOCALCODE_PY ?? "python3"
+// Two modes. Default: the repo checkout (its src/ and bundled binary). Installed:
+// E2E_INSTALLED_PY names the interpreter of a venv with `localcode` installed
+// from a wheel or PyPI; its localcode-ui binary and Python modules are used and
+// the checkout's src/ is never put on the path.
+const INSTALLED_PY = process.env.E2E_INSTALLED_PY || ""
+const PYTHON = INSTALLED_PY || process.env.LOCALCODE_PY || "python3"
+function installedPackageDir() {
+  const r = spawnSync(INSTALLED_PY, ["-I", "-c", "import localcode, pathlib; print(pathlib.Path(localcode.__file__).resolve().parent)"], { cwd: tmpdir(), encoding: "utf8" })
+  if (r.status !== 0) throw new Error(`E2E_INSTALLED_PY cannot import localcode: ${r.stderr}`)
+  const dir = r.stdout.trim()
+  if (dir.startsWith(REPO + "/src")) throw new Error(`E2E_INSTALLED_PY imports localcode from the checkout (${dir}), not an installed package`)
+  return dir
+}
+export const PACKAGE_DIR = INSTALLED_PY ? installedPackageDir() : join(REPO, "src/localcode")
+const UI_BIN = process.env.LOCALCODE_UI_BIN ?? join(PACKAGE_DIR, "bin/localcode-ui")
 export const COLS = 120
 export const ROWS = 36
 export const UPDATE = process.argv.includes("--update-snapshots") || process.env.E2E_UPDATE === "1"
@@ -111,7 +125,8 @@ export async function open(name, { model = true, files } = {}) {
   const gen = spawnSync(
     PYTHON,
     ["-c", "import sys; from pathlib import Path; from localcode.ui.launch import write_config; write_config(Path(sys.argv[1]), port=int(sys.argv[2]), ctx=32768, alias=(sys.argv[3] or None))", cfg, String(mockPort), model ? "e2e-model" : ""],
-    { env: { ...process.env, PYTHONPATH: join(REPO, "src") }, encoding: "utf8" },
+    // Installed mode: no checkout on the path and a neutral cwd, so only the installed package can be imported.
+    { env: { ...process.env, PYTHONPATH: INSTALLED_PY ? "" : join(REPO, "src") }, cwd: INSTALLED_PY ? tmpdir() : undefined, encoding: "utf8" },
   )
   if (gen.status !== 0) throw new Error(`write_config failed: ${gen.stderr}`)
 

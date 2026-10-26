@@ -17,7 +17,7 @@ flag assertion was corrected against the current shipped server flag.
 - Built-wheel installations on both macOS images: pip and uv tool, fresh and
   upgrades from 0.4.9 and 0.5.2. Tests run outside the checkout, verify the resolved
   executable and package version, and execute both installed binaries.
-- After publishing: pip and uv install the exact PyPI version, upgrading 0.4.9.
+- After publishing: pip and uv install the exact PyPI version, upgrading 0.4.9, and the installed package runs `localcode doctor` and the terminal snapshot suite (see Release process).
 - A version change merged into main starts package publication automatically;
   ordinary main commits skip publication. Every publish path creates or
   updates the matching GitHub release and checks its package files are attached.

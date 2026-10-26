@@ -1,0 +1,209 @@
+name: Release candidate to release
+
+# A release candidate tag (v0.5.41rc1, pushed by scripts/release.sh on the owner's Mac)
+# publishes a PyPI pre-release through publish.yml; this workflow then tests the
+# package as users install it on a hosted Mac. The real-model checks cannot run on
+# hosted runners (about 7 GB RAM, no models), so scripts/release.sh runs them locally
+# and posts the commit statuses "local model gate" and "release eval" on the
+# candidate's commit, the same pattern the Model promotion gate uses.
+#
+# When both statuses are green, scripts/release.sh dispatches this workflow with the
+# candidate; a green installed-checks job in that run lets "promote" release the final
+# version. Any failure leaves the candidate published as a pre-release and nothing
+# is promoted.
+#
+# No pull_request trigger, no secrets beyond the workflow token, owner-only jobs.
+on:
+  push:
+    tags: ["v*rc*"]
+  workflow_dispatch:
+    inputs:
+      candidate:
+        description: Candidate to promote, for example 0.5.41rc1 (its tag must exist and both local statuses must be green)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# One release at a time; never cancel one halfway.
+concurrency:
+  group: localcode-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Candidate version
+    if: github.repository_owner == github.actor && !github.event.repository.fork
+    runs-on: ubuntu-latest
+    outputs:
+      rc: ${{ steps.rc.outputs.rc }}
+      final: ${{ steps.rc.outputs.final }}
+      sha: ${{ steps.rc.outputs.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Resolve the candidate tag
+        id: rc
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_CANDIDATE: ${{ inputs.candidate }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = push ]; then tag="$REF_NAME"; else tag="v$INPUT_CANDIDATE"; fi
+          [[ "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)rc[0-9]+$ ]] || { echo "::error::$tag is not a release candidate tag"; exit 1; }
+          final="${BASH_REMATCH[1]}"
+          sha="$(git rev-parse "refs/tags/$tag^{commit}")"
+          git merge-base --is-ancestor "$sha" origin/main || { echo "::error::$tag is not on main"; exit 1; }
+          { echo "rc=${tag#v}"; echo "final=$final"; echo "sha=$sha"; } >> "$GITHUB_OUTPUT"
+
+  publish-rc:
+    name: Wait for the candidate on PyPI (publish.yml publishes it)
+    needs: [prepare]
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - name: Wait until PyPI serves the candidate
+        env:
+          RC: ${{ needs.prepare.outputs.rc }}
+        run: |
+          for i in $(seq 1 140); do
+            if curl -fsS "https://pypi.org/pypi/localcode/${RC}/json" >/dev/null 2>&1 \
+               && curl -fsS "https://pypi.org/simple/localcode/" | grep -q "localcode-${RC}-"; then
+              echo "localcode ${RC} is on PyPI"; exit 0
+            fi
+            sleep 30
+          done
+          echo "::error::localcode ${RC} did not appear on PyPI; check the Build & Publish workflow"; exit 1
+
+  installed-checks:
+    name: Installed package on a hosted Mac
+    needs: [prepare, publish-rc]
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install the candidate from PyPI into a fresh venv
+        env:
+          RC: ${{ needs.prepare.outputs.rc }}
+        run: |
+          work="$RUNNER_TEMP/rc"; rm -rf "$work"; mkdir -p "$work/home" "$work/logs"
+          python -m venv "$work/venv"
+          for i in 1 2 3 4 5 6; do
+            "$work/venv/bin/python" -m pip install --quiet --no-cache-dir "localcode==$RC" && break
+            [ "$i" = 6 ] && { echo "::error::could not install localcode==$RC"; exit 1; }
+            sleep 30
+          done
+          echo "RC_WORK=$work" >> "$GITHUB_ENV"
+      - name: localcode doctor (fresh HOME)
+        run: |
+          env -i PATH="$PATH" HOME="$RC_WORK/home" XDG_CONFIG_HOME="$RC_WORK/home/.config" XDG_DATA_HOME="$RC_WORK/home/.local/share" \
+            LOCALCODE_HOME="$RC_WORK/home/state" "$RC_WORK/venv/bin/localcode" doctor 2>&1 | tee "$RC_WORK/logs/doctor.log"
+          exit "${PIPESTATUS[0]}"
+      - name: Terminal snapshot suite against the installed package
+        run: |
+          scripts/ui_e2e.sh --installed "$RC_WORK/venv/bin/python" 2>&1 | tee "$RC_WORK/logs/ui-snapshots.log"
+          exit "${PIPESTATUS[0]}"
+      - name: Upload logs and snapshot diffs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rc-installed-checks-${{ github.run_id }}
+          path: |
+            ${{ env.RC_WORK }}/logs
+            tests/e2e/snapshot-diffs
+          if-no-files-found: ignore
+
+  promote:
+    name: Promote to the final release
+    # Only the manual dispatch that scripts/release.sh sends after the local checks pass.
+    needs: [prepare, installed-checks]
+    if: github.event_name == 'workflow_dispatch' && github.repository_owner == github.actor && !github.event.repository.fork
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+      statuses: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.sha }}
+      - name: Both local checks must be green on the candidate commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ needs.prepare.outputs.sha }}
+        run: |
+          set -euo pipefail
+          for context in "local model gate" "release eval"; do
+            state="$(gh api "repos/$REPO/commits/$SHA/status" --jq "[.statuses[] | select(.context == \"$context\")][0].state // \"missing\"")"
+            echo "$context: $state"
+            [ "$state" = success ] || { echo "::error::'$context' is $state on $SHA; not promoting"; exit 1; }
+          done
+      - name: Bump to the final version, tag and push
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FINAL: ${{ needs.prepare.outputs.final }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          python3 scripts/release_promote.py "$FINAL"
+          python3 scripts/release_notes.py "$FINAL" --check > /dev/null
+          git commit -qam "$FINAL"
+          # The tested commit must still be the tip of main, so the release is exactly what was tested.
+          git fetch -q origin main
+          [ "$(git rev-parse origin/main)" = "$(git rev-parse HEAD~1)" ] || { echo "::error::main moved since the candidate was tested; start a new candidate"; exit 1; }
+          if git push origin HEAD:refs/heads/main; then
+            git tag -a "v$FINAL" -m "$FINAL"
+            git push origin "refs/tags/v$FINAL"
+          else
+            echo "main refused a direct push (branch protection): opening a release PR with auto-merge"
+            branch="release/$FINAL"
+            git push -f origin "HEAD:refs/heads/$branch"
+            gh pr create --repo "$REPO" --base main --head "$branch" --title "$FINAL" --body "Release $FINAL, promoted from a candidate that passed every check."
+            gh pr merge "$branch" --repo "$REPO" --auto --squash
+            for i in $(seq 1 240); do
+              state="$(gh pr view "$branch" --repo "$REPO" --json state --jq .state)"
+              [ "$state" = MERGED ] && break
+              [ "$state" = CLOSED ] && { echo "::error::release PR was closed"; exit 1; }
+              sleep 30
+            done
+            [ "$state" = MERGED ] || { echo "::error::release PR did not merge in time; merge it, then tag v$FINAL on the merge commit"; exit 1; }
+            merge="$(gh pr view "$branch" --repo "$REPO" --json mergeCommit --jq .mergeCommit.oid)"
+            git tag -a "v$FINAL" -m "$FINAL" "$merge"
+            git push origin "refs/tags/v$FINAL"
+          fi
+          # Refs pushed with the workflow token do not start other workflows; start the release explicitly.
+          gh workflow run publish.yml --repo "$REPO" --ref main
+      - name: Wait for the final release and its post-publish checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FINAL: ${{ needs.prepare.outputs.final }}
+          REPO: ${{ github.repository }}
+        run: |
+          sleep 60
+          for i in $(seq 1 180); do
+            line="$(gh run list --repo "$REPO" --workflow publish.yml --branch main --limit 1 --json status,conclusion --jq '.[0] | "\(.status) \(.conclusion)"')"
+            case "$line" in
+              "completed success") echo "released $FINAL; post-publish checks passed"; exit 0 ;;
+              "completed "*) echo "::error::publish.yml ended with: $line"; exit 1 ;;
+            esac
+            sleep 30
+          done
+          echo "::error::publish.yml did not finish in time"; exit 1
