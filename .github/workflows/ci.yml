@@ -123,6 +123,33 @@ jobs:
           python -m pytest tests/test_eval_suite.py -q -p no:cacheprovider
           inspect list tasks evals/localcode_evals
 
+  # ── Terminal UI screen snapshots: the real UI in a pseudo-terminal against a
+  # mock model server (no model). Separate job so it never gates the others. ──
+  ui-e2e:
+    name: ui screen snapshots (macos arm64)
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: python -m pip install -e .
+      - name: Journeys (text snapshots; PNGs are for humans only)
+        run: scripts/ui_e2e.sh --png
+      - name: Upload snapshot diffs and screen PNGs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ui-e2e-${{ github.run_id }}
+          path: |
+            tests/e2e/snapshot-diffs
+            tests/e2e/png
+          if-no-files-found: ignore
+
   # ── Packaging must always build ──
   packaging:
     name: build

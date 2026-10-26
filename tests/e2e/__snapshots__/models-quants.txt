@@ -1,0 +1,35 @@
+
+
+
+
+
+
+
+
+
+
+                    Alpha 4 12B                                                                  esc
+
+                    Search versions…
+
+                    Downloaded
+                  ● Q4_K_M ★                6.9 GB    ✓ fits      Ready
+
+                    Available to download
+                    Q3_K_M                  5.1 GB    ~ tight     Download
+                    Q6_K                    9.8 GB    ✓ fits      Download
+                    Q8_0                    12.7 GB   ~ tight     Download
+
+                    ★ Recommended · acme/alpha-gguf
+
+                    Size      Memory      State    enter load / download / cancel ⇣   esc back
+
+
+
+
+
+
+
+
+
+                                                                                                                <version>
