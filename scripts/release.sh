@@ -70,6 +70,8 @@ else
   refuse "cannot reach origin to check the branch is up to date"
 fi
 pgrep -x llama-server >/dev/null 2>&1 && refuse "a llama-server process is running (it would distort the gate and the eval timings)"
+# The release eval runs Inspect; check it now, before anything is published.
+command -v inspect >/dev/null 2>&1 || refuse "the inspect command (Inspect AI) is not on PATH; the release eval needs it"
 grep -Eq "^## ($VERSION( |rc[0-9]|\$)|Unreleased)" "$ROOT/CHANGELOG.md" || refuse "CHANGELOG.md has no '## $VERSION', '## ${VERSION}rcN' or '## Unreleased' section (the release needs its notes)"
 if [ -n "$(g tag -l "v$VERSION")" ] || g ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null 2>&1; then
   refuse "v$VERSION already exists"
@@ -128,6 +130,9 @@ else
   g fetch -q origin main
   g tag -a "v$RC" -m "$RC" "$SHA"
   g push origin "refs/tags/v$RC"
+  # The gate records its status on this checkout's HEAD, so test from the
+  # tagged merge commit itself.
+  g checkout -q --detach "$SHA"
 fi
 
 # ---- 3. wait for PyPI ----------------------------------------------------------
