@@ -51,14 +51,21 @@ def _model_alias(model: str | None, directory: Path) -> str | None:
     if not filename.endswith('.gguf'):
         filename += '.gguf'
     explicit = Path(raw).expanduser()
+    from localcode.split_gguf import display_alias, is_shard, link_split, resolve_model_path
     existing = explicit if explicit.is_file() else find_model(filename, directory)
+    if existing is None:
+        # A split quant is named by its alias (flint-BF16); load its first shard.
+        split = resolve_model_path(directory, filename.removesuffix('.gguf'))
+        existing = split if split.is_file() else None
     if existing is None:
         return None
     target = directory / existing.name
     directory.mkdir(parents=True, exist_ok=True)
-    if not target.is_file():
+    if is_shard(existing.name):
+        link_split(existing, directory)
+    elif not target.is_file():
         target.symlink_to(existing.resolve())
-    return existing.stem
+    return display_alias(existing.name)
 
 
 def _models_dir() -> Path:

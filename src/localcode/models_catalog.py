@@ -169,6 +169,10 @@ class ModelChoice:
     supports_systemone: bool = False
     # Vendor-trained speculative drafter shipped with the model (see Drafter).
     drafter: Drafter | None = None
+    # Split (sharded) GGUF: ((repo_path, bytes), ...) in shard order. Empty for
+    # a single file. `filename` is then the first shard; all shards are stored
+    # flat beside it and size_gb is their sum.
+    shards: tuple[tuple[str, int], ...] = ()
 
     @property
     def hf_url(self) -> str:
@@ -520,7 +524,7 @@ CHOICES: list[ModelChoice] = [
         revision="b08405e141706457126fa75b9f2f9e0729b30d0a",
         sha256="c2ac1301424441ef210b6de50ce25e8ccf69f86494df53d6ba52ed558456062e",
         size_bytes=47454113472,
-        name="Kolibri 1 78B-A3B (Q4, experimental)",
+        name="Kolibri 1 78B-A3B (Q4)",
         hf_repo="Hob-forge/Kolibri-1-GGUF",
         filename="Kolibri-1-Q4_K_M.gguf",
         size_gb=47.5,
@@ -532,9 +536,9 @@ CHOICES: list[ModelChoice] = [
             "Aleph Alpha's open-weight English/German MoE — 78B total, ~3.5B "
             "active per token (top-6 of 384 experts plus one shared expert), "
             "sliding-window / full attention interleave, 256K native context. "
-            "EXPERIMENTAL: the kolibri1 architecture is a community patch carried "
-            "by the bundled server (not yet in upstream llama.cpp) and this GGUF "
-            "is a community quant, not an Aleph Alpha release. Verified here: "
+            "The kolibri1 architecture runs on a patch carried by the bundled "
+            "server (not yet in upstream llama.cpp) and this GGUF is a community "
+            "quant, not an Aleph Alpha release. Verified on every release: "
             "load, generation, tool calling, reasoning on/off, and exact recall "
             "at 60K tokens. Not benchmarked for coding quality. ~47.5 GB weights: "
             "needs 64 GB unified memory at minimum, comfortable on 96-128 GB. "
@@ -595,7 +599,7 @@ CHOICES: list[ModelChoice] = [
             "UD-Q4_K_XL keeps sensitive layers above 4-bit. ~25 GB weights: "
             "needs 48 GB unified memory, comfortable on 64 GB. Text-only. "
             "It reasons on every step and cannot be told not to, so agent "
-            "tasks run slower than on Qwen 3.6. Opt-in, never auto-recommended."
+            "tasks run slower than on Qwen 3.6, so it is not the default pick."
         ),
         # Flint reasons on every turn and has no off switch: with the server's
         # reasoning flags it still opens <think>, and the thought leaked into the
@@ -773,6 +777,7 @@ def _minted_for_filename(filename: str) -> ModelChoice | None:
     # tick, so NO network here). With a real size, completeness checks
     # treat partial downloads correctly.
     size_gb = 0.0
+    shards: tuple = ()
     try:
         from .hf_quants import _read_cache
         cached = _read_cache(g.hf_repo)
@@ -780,10 +785,11 @@ def _minted_for_filename(filename: str) -> ModelChoice | None:
             for q in cached[0]:
                 if q.filename == filename and not q.is_mmproj:
                     size_gb = q.size_gb
+                    shards = q.shards
                     break
     except Exception:
         size_gb = 0.0
-    return choice_for_quant(g, filename, size_gb)
+    return choice_for_quant(g, filename, size_gb, shards)
 
 
 def group_for_filename(filename: str) -> ModelGroup | None:
@@ -1005,7 +1011,7 @@ MODEL_GROUPS: list[ModelGroup] = [
         license="Apache 2.0",
         notes=(
             "Aleph Alpha's open-weight English/German sparse MoE — 78B total, "
-            "~3.5B active. Experimental: community-patched architecture and a "
+            "~3.5B active. Runs on a patch carried by the bundled server, from a "
             "community quant. Qwen-style reasoning tags and Hermes tool calls. "
             "Text-only."
         ),
@@ -1057,7 +1063,8 @@ def _quant_label(filename: str) -> str:
     Falls back to the bare stem if no quant token is recognizable.
     """
     import re
-    stem = filename[:-5] if filename.lower().endswith(".gguf") else filename
+    from .split_gguf import display_alias
+    stem = display_alias(filename) if filename.lower().endswith(".gguf") else filename
     # Match a trailing quant descriptor: optional UD-/IQ/Q tier with K/_ parts,
     # or a plain precision tag like BF16 / F16 / F32.
     m = re.search(
@@ -1071,7 +1078,8 @@ def _quant_label(filename: str) -> str:
     return tail or stem
 
 
-def choice_for_quant(group: ModelGroup, filename: str, size_gb: float) -> ModelChoice:
+def choice_for_quant(group: ModelGroup, filename: str, size_gb: float,
+                     shards: tuple[tuple[str, int], ...] | list = ()) -> ModelChoice:
     """Mint a ModelChoice for a specific quant of `group` so the EXISTING
     download/runtime path (download_model / get_model_path / launch) just
     works. Copies repo / arch / license / mmproj from the group; the quant's
@@ -1104,6 +1112,7 @@ def choice_for_quant(group: ModelGroup, filename: str, size_gb: float) -> ModelC
         reasoning_control=canonical.reasoning_control if canonical else "chat_template",
         reasoning_budget_tokens=canonical.reasoning_budget_tokens if canonical else 8192,
         preserves_reasoning=canonical.preserves_reasoning if canonical else True,
+        shards=tuple(shards),
     )
 
 
