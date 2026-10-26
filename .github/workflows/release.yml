@@ -56,9 +56,9 @@ jobs:
           [[ "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)rc[0-9]+$ ]] || { echo "::error::$tag is not a release candidate tag"; exit 1; }
           final="${BASH_REMATCH[1]}"
           sha="$(git rev-parse "refs/tags/$tag^{commit}")"
-          # main is protected (required checks, admins included), so the candidate
-          # commit lives on release/<version> on top of main and merges by PR.
-          git merge-base --is-ancestor origin/main "$sha" || { echo "::error::$tag is not built on the current main"; exit 1; }
+          # scripts/release.sh merges the candidate's version bump into main by PR
+          # and tags that merge commit, so the candidate is always on main.
+          git merge-base --is-ancestor "$sha" origin/main || { echo "::error::$tag is not on main"; exit 1; }
           { echo "rc=${tag#v}"; echo "final=$final"; echo "sha=$sha"; } >> "$GITHUB_OUTPUT"
 
   publish-rc:
