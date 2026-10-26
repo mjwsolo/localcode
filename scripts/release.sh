@@ -112,12 +112,18 @@ if [ "$DRY" = 1 ]; then
   say "+ tag the merge commit on main as v$RC and push the tag"
   SHA="<merge commit on main>"
 else
-  gh pr view "$REL_BRANCH" --json number >/dev/null 2>&1 || \
+  # Only an OPEN pull request counts: a branch reset closes an earlier one.
+  open_pr() { gh pr list --head "$REL_BRANCH" --base main --state open --json number --jq '.[0].number // empty'; }
+  PRN="$(open_pr)"
+  if [ -z "$PRN" ]; then
     gh pr create --base main --head "$REL_BRANCH" --title "$RC" --body "Release candidate $RC. scripts/release.sh merges this, tags the merge commit v$RC and tests that commit before promoting it." >/dev/null
+    PRN="$(open_pr)"
+  fi
+  [ -n "$PRN" ] || { say "FAILED: could not open the $RC pull request"; exit 1; }
   sleep 30
-  gh pr checks "$REL_BRANCH" --watch --interval 30 >/dev/null 2>&1 || { say "FAILED: checks on the $RC pull request; see: gh pr checks $REL_BRANCH"; exit 1; }
-  gh pr merge "$REL_BRANCH" --merge >/dev/null || { say "FAILED: could not merge the $RC pull request (main moved?); see: gh pr view $REL_BRANCH"; exit 1; }
-  SHA="$(gh pr view "$REL_BRANCH" --json mergeCommit --jq .mergeCommit.oid)"
+  gh pr checks "$PRN" --watch --interval 30 >/dev/null 2>&1 || { say "FAILED: checks on the $RC pull request #$PRN; see: gh pr checks $PRN"; exit 1; }
+  gh pr merge "$PRN" --merge >/dev/null || { say "FAILED: could not merge the $RC pull request #$PRN (main moved?)"; exit 1; }
+  SHA="$(gh pr view "$PRN" --json mergeCommit --jq .mergeCommit.oid)"
   [ -n "$SHA" ] || { say "FAILED: no merge commit for the $RC pull request"; exit 1; }
   g fetch -q origin main
   g tag -a "v$RC" -m "$RC" "$SHA"
