@@ -128,20 +128,17 @@ jobs:
   promote:
     name: Promote to the final release
     # Only the manual dispatch that scripts/release.sh sends after the local checks pass.
+    # Promotion creates no commit: the final tag points at the tested candidate commit and
+    # publish.yml rewrites the version to the final one inside its build job.
     needs: [prepare, installed-checks]
     if: github.event_name == 'workflow_dispatch' && github.repository_owner == github.actor && !github.event.repository.fork
     runs-on: ubuntu-latest
     timeout-minutes: 150
     permissions:
       contents: write
-      pull-requests: write
       actions: write
       statuses: read
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          fetch-depth: 0
-          ref: ${{ needs.prepare.outputs.sha }}
       - name: Both local checks must be green on the candidate commit
         env:
           GH_TOKEN: ${{ github.token }}
@@ -154,52 +151,29 @@ jobs:
             echo "$context: $state"
             [ "$state" = success ] || { echo "::error::'$context' is $state on $SHA; not promoting"; exit 1; }
           done
-      - name: Bump to the final version, tag and push
+      - name: Tag the tested commit as the final version and start the release
         env:
           GH_TOKEN: ${{ github.token }}
           FINAL: ${{ needs.prepare.outputs.final }}
           REPO: ${{ github.repository }}
+          SHA: ${{ needs.prepare.outputs.sha }}
         run: |
           set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          python3 scripts/release_promote.py "$FINAL"
-          python3 scripts/release_notes.py "$FINAL" --check > /dev/null
-          git commit -qam "$FINAL"
-          # The tested commit must still be the tip of main, so the release is exactly what was tested.
-          git fetch -q origin main
-          [ "$(git rev-parse origin/main)" = "$(git rev-parse HEAD~1)" ] || { echo "::error::main moved since the candidate was tested; start a new candidate"; exit 1; }
-          if git push origin HEAD:refs/heads/main; then
-            git tag -a "v$FINAL" -m "$FINAL"
-            git push origin "refs/tags/v$FINAL"
-          else
-            echo "main refused a direct push (branch protection): opening a release PR with auto-merge"
-            branch="release/$FINAL"
-            git push -f origin "HEAD:refs/heads/$branch"
-            gh pr create --repo "$REPO" --base main --head "$branch" --title "$FINAL" --body "Release $FINAL, promoted from a candidate that passed every check."
-            gh pr merge "$branch" --repo "$REPO" --auto --squash
-            for i in $(seq 1 240); do
-              state="$(gh pr view "$branch" --repo "$REPO" --json state --jq .state)"
-              [ "$state" = MERGED ] && break
-              [ "$state" = CLOSED ] && { echo "::error::release PR was closed"; exit 1; }
-              sleep 30
-            done
-            [ "$state" = MERGED ] || { echo "::error::release PR did not merge in time; merge it, then tag v$FINAL on the merge commit"; exit 1; }
-            merge="$(gh pr view "$branch" --repo "$REPO" --json mergeCommit --jq .mergeCommit.oid)"
-            git tag -a "v$FINAL" -m "$FINAL" "$merge"
-            git push origin "refs/tags/v$FINAL"
-          fi
-          # Refs pushed with the workflow token do not start other workflows; start the release explicitly.
-          gh workflow run publish.yml --repo "$REPO" --ref main
+          # No new commit: the tag v$FINAL names the same commit as the candidate's tag.
+          gh api "repos/$REPO/git/refs" -f "ref=refs/tags/v$FINAL" -f "sha=$SHA" > /dev/null
+          # Refs created with the workflow token do not start other workflows; start the release on the tag.
+          gh workflow run publish.yml --repo "$REPO" --ref "v$FINAL"
       - name: Wait for the final release and its post-publish checks
         env:
           GH_TOKEN: ${{ github.token }}
           FINAL: ${{ needs.prepare.outputs.final }}
           REPO: ${{ github.repository }}
+          SHA: ${{ needs.prepare.outputs.sha }}
         run: |
-          sleep 60
-          for i in $(seq 1 180); do
-            line="$(gh run list --repo "$REPO" --workflow publish.yml --branch main --limit 1 --json status,conclusion --jq '.[0] | "\(.status) \(.conclusion)"')"
+          sleep 30
+          for i in $(seq 1 240); do
+            line="$(gh run list --repo "$REPO" --workflow publish.yml --branch "v$FINAL" --json headSha,status,conclusion \
+              --jq "[.[] | select(.headSha == \"$SHA\")][0] | \"\(.status) \(.conclusion)\"" 2>/dev/null || true)"
             case "$line" in
               "completed success") echo "released $FINAL; post-publish checks passed"; exit 0 ;;
               "completed "*) echo "::error::publish.yml ended with: $line"; exit 1 ;;

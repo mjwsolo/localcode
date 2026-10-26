@@ -45,14 +45,19 @@ changelog has no notes, or `v0.5.41` exists. Then:
    - the release eval, `scripts/release_eval.sh`, posts **release eval**
 4. **Promote.** When both statuses are green, the script dispatches
    `.github/workflows/release.yml` with the candidate. That run re-reads both
-   statuses, runs the installed-package checks on a hosted macOS 15 runner (fresh
-   venv and `HOME`, `localcode doctor`, the snapshot suite in installed mode;
-   logs and diffs are uploaded), then bumps `pyproject.toml` and `__init__.py` to
-   `0.5.41`, renames the changelog heading to `## 0.5.41 - <date>`, commits as
-   `github-actions[bot]`, tags `v0.5.41` and starts `publish.yml`. If branch
-   protection refuses the direct push, it opens a release PR, enables auto-merge and
-   tags the merge commit (checks that run on pull requests must be able to start
-   for the PR to merge).
+   statuses on the candidate commit, runs the installed-package checks on a hosted
+   macOS 15 runner (fresh venv and `HOME`, `localcode doctor`, the snapshot suite in
+   installed mode; logs and diffs are uploaded), and then pushes the tag `v0.5.41`
+   pointing at **the same commit** as `v0.5.41rcN`, through the git refs API, and
+   starts `publish.yml` on that tag. Promotion creates no commit and no pull
+   request, so branch protection on `main` is not involved and the "local model
+   gate" status stays valid for exactly what is released.
+   When `publish.yml` sees a final tag on a commit whose version is `0.5.41rcN`
+   (and that commit carries the tag `v0.5.41rcN`), it sets `0.5.41` in
+   `pyproject.toml` and `src/localcode/__init__.py` inside its build job only,
+   builds and publishes. The changelog may use a `## 0.5.41`, `## 0.5.41rcN` or
+   `## Unreleased` heading for the release notes. A final tag on any other commit is
+   refused. Ordinary version-bump releases work as before.
 5. **Post-publish checks** run automatically in `publish.yml` on macOS 15: the
    exact version is installed with pip and uv (including an upgrade from 0.4.9), and
    with pip into a fresh venv, where `localcode doctor` and the snapshot suite run
@@ -61,6 +66,11 @@ changelog has no notes, or `v0.5.41` exists. Then:
 If any check fails, the script stops before promotion, prints which check failed
 and where its log is, and nothing is promoted. The candidate stays published as a
 pre-release; fix the cause and run the script again, which uses the next `rcN`.
+
+`main` keeps the `0.5.41rcN` version string until the next release bumps it. The
+bundled `localcode-ui` binary is committed, not rebuilt by `publish.yml`, so its
+footer shows the version it was last built with (as for every release); rebuild it
+with `scripts/build_ui_binary.sh` in a normal change if the footer must match.
 
 Pushing a `v*rc*` tag by hand also starts `release.yml`, which publishes the
 candidate and runs the hosted checks, but never promotes: only the dispatch that
@@ -103,5 +113,7 @@ of the workflows can use one.
 `release.yml` has no `pull_request` trigger. Its jobs run only when
 `github.repository_owner == github.actor` and the repository is not a fork. It uses
 the workflow token only: tags and the release commit are pushed by
-`github-actions[bot]`, and because refs pushed with that token do not start other
-workflows, the promote job starts `publish.yml` explicitly with `workflow_dispatch`.
+the workflow token only (it creates one tag ref), and because refs created with
+that token do not start other workflows, the promote job starts `publish.yml`
+explicitly with `workflow_dispatch` on the new tag. `release.sh` waits for the
+`publish.yml` run whose ref is `v0.5.41` and whose head is the candidate commit.

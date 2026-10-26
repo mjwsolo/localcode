@@ -14,7 +14,9 @@ All notable changes to LocalCode will be documented here. The format follows
   it from PyPI into a fresh venv, runs `localcode doctor`, the terminal snapshot
   suite, the local model gate and a release eval against the previous release
   (all with a fresh HOME), and promotes to the final version only if every check
-  passed. `.github/workflows/release.yml` runs the hosted checks and the promotion.
+  passed. `.github/workflows/release.yml` runs the hosted checks and promotes by
+  tagging the tested commit as the final version (no new commit; `publish.yml`
+  sets the final version in its build only).
 - The post-publish job now also installs the published version into a fresh venv
   and runs `localcode doctor` and the terminal snapshot suite against it.
   `scripts/ui_e2e.sh --installed <python>` tests an installed package instead of

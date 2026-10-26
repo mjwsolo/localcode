@@ -14,8 +14,9 @@
 #      which posts the commit status "local model gate"), and the release eval against the
 #      previous PyPI release (scripts/release_eval.sh, posts the status "release eval")
 # 5. when both statuses are green it dispatches .github/workflows/release.yml, which re-checks
-#    them, runs the installed-package checks on a hosted Mac, bumps to <version>, updates the
-#    CHANGELOG, tags v<version> and starts publish.yml; this script waits for all of it
+#    them, runs the installed-package checks on a hosted Mac, and tags the tested commit as
+#    v<version> (no new commit; publish.yml rewrites the version in its build only);
+#    this script waits for that exact run and its post-publish checks
 # 6. if a check fails it stops before promotion, says which one and where its log is,
 #    and leaves the candidate published as a pre-release
 #
@@ -69,7 +70,7 @@ else
   refuse "cannot reach origin to check the branch is up to date"
 fi
 pgrep -x llama-server >/dev/null 2>&1 && refuse "a llama-server process is running (it would distort the gate and the eval timings)"
-grep -Eq "^## $VERSION( |\$)" "$ROOT/CHANGELOG.md" || refuse "CHANGELOG.md has no '## $VERSION' section (the final release needs its notes)"
+grep -Eq "^## ($VERSION( |rc[0-9]|\$)|Unreleased)" "$ROOT/CHANGELOG.md" || refuse "CHANGELOG.md has no '## $VERSION', '## ${VERSION}rcN' or '## Unreleased' section (the release needs its notes)"
 if [ -n "$(g tag -l "v$VERSION")" ] || g ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null 2>&1; then
   refuse "v$VERSION already exists"
 fi
@@ -160,27 +161,30 @@ post_status "release eval" success "Candidate matches the previous release on th
 
 # ---- 5. promote (the workflow does it) -------------------------------------------
 say ""; say "== 5. all checks passed: ask the release workflow to promote $RC to $VERSION =="
+STARTED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+MAIN_SHA="$( [ "$DRY" = 1 ] && echo "<tip of main>" || { g fetch -q origin main; g rev-parse origin/main; } )"
 run gh workflow run release.yml --ref main -f "candidate=$RC"
 if [ "$DRY" = 1 ]; then
-  say "+ wait up to $WAIT_MIN min for that release.yml run (it re-checks both statuses and the hosted installed-package checks, then bumps to $VERSION, updates the CHANGELOG, tags v$VERSION and starts publish.yml)"
-  say "+ wait for the publish.yml run on main (release gate, PyPI, GitHub release, post-publish install, doctor and snapshot checks on macos-15)"
+  say "+ wait up to $WAIT_MIN min for that release.yml run (it re-checks both statuses and the hosted installed-package checks, then tags the tested commit as v$VERSION, with no new commit, and starts publish.yml on that tag)"
+  say "+ wait for the publish.yml run on ref v$VERSION whose head is the candidate commit (release gate, PyPI, GitHub release, post-publish install, doctor and snapshot checks on macos-15)"
   say ""; say "dry run: nothing was tagged, pushed, installed or run ($problems check problem(s) a real run would stop on)"
   exit 0
 fi
-wait_run() { # <workflow> <extra gh run list args...>: wait for the newest run to finish, succeed only on success
-  local wf="$1"; shift
+wait_run() { # <workflow> <branch> <head sha> <not before>: wait for that exact run, succeed only on success
+  local wf="$1" branch="$2" head="$3" since="$4" deadline line
+  deadline=$(( $(date +%s) + WAIT_MIN * 60 ))
   sleep 20
-  local deadline=$(( $(date +%s) + WAIT_MIN * 60 )) line
   while :; do
-    line="$(gh run list --workflow "$wf" "$@" --limit 1 --json status,conclusion --jq '.[0] | "\(.status) \(.conclusion)"' 2>/dev/null || true)"
+    line="$(gh run list --workflow "$wf" --branch "$branch" --limit 30 --json headSha,createdAt,status,conclusion \
+      --jq "[.[] | select(.headSha == \"$head\" and .createdAt >= \"$since\")] | sort_by(.createdAt) | last | \"\(.status) \(.conclusion)\"" 2>/dev/null || true)"
     case "$line" in
       "completed success") return 0 ;;
-      "completed "*) echo "$wf ended with: $line" >&2; return 1 ;;
+      "completed "*) echo "$wf ($branch, $head) ended with: $line" >&2; return 1 ;;
     esac
-    [ "$(date +%s)" -lt "$deadline" ] || { echo "$wf did not finish in $WAIT_MIN minutes" >&2; return 1; }
+    [ "$(date +%s)" -lt "$deadline" ] || { echo "$wf ($branch, $head) did not finish in $WAIT_MIN minutes" >&2; return 1; }
     sleep 30
   done
 }
-wait_run release.yml --event workflow_dispatch || { say "FAILED: promotion. $RC stays a pre-release; see: gh run list --workflow release.yml"; exit 1; }
-wait_run publish.yml --branch main || { say "FAILED: the final release or its post-publish checks; see: gh run list --workflow publish.yml"; exit 1; }
+wait_run release.yml main "$MAIN_SHA" "$STARTED" || { say "FAILED: promotion. $RC stays a pre-release; see: gh run list --workflow release.yml"; exit 1; }
+wait_run publish.yml "v$VERSION" "$SHA" "$STARTED" || { say "FAILED: the final release or its post-publish checks; see: gh run list --workflow publish.yml --branch v$VERSION"; exit 1; }
 say "released $VERSION; post-publish checks passed"

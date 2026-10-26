@@ -4,6 +4,9 @@
     scripts/release_notes.py 0.4.8            -> the "## 0.4.8 — ..." section body
     scripts/release_notes.py 0.4.8 --check    -> exit 1 when the section is missing or empty
 
+--promoted (a final tag built from its candidate's commit) also accepts the
+"## <version>rcN" or "## Unreleased" heading for the final version.
+
 A pre-release such as 0.5.41rc1 needs no heading of its own: it uses the
 "## 0.5.41rc1" section if there is one, else "## 0.5.41", else "## Unreleased",
 else a one-line candidate notice, and --check always passes for it.
@@ -44,11 +47,20 @@ def prerelease_base(version: str) -> str | None:
     return (m.group(1) or m.group(2)) if m else None
 
 
-def notes_for(text: str, version: str) -> str | None:
-    """The section for this version; a pre-release falls back as described above."""
+def notes_for(text: str, version: str, promoted: bool = False) -> str | None:
+    """The section for this version; a pre-release falls back as described above.
+    promoted: a final release built from its own candidate's commit, which may
+    still carry the candidate's "## <version>rcN" or the "## Unreleased" heading."""
     body = section(text, version)
     if body is not None and body.strip():
         return body
+    if promoted:
+        for n in sorted({int(m) for m in re.findall(rf"^## {re.escape(version)}rc(\d+)", text, re.M)}, reverse=True):
+            body = section(text, f"{version}rc{n}")
+            if body is not None and body.strip():
+                return body
+        body = section(text, "Unreleased")
+        return body if body is not None and body.strip() else None
     base = prerelease_base(version)
     if base is None:
         return None
@@ -65,8 +77,9 @@ def main(argv: list[str]) -> int:
         return 2
     version = argv[0].lstrip("v")
     check = "--check" in argv[1:]
+    promoted = "--promoted" in argv[1:]
     text = Path(__file__).resolve().parents[1].joinpath("CHANGELOG.md").read_text()
-    body = notes_for(text, version)
+    body = notes_for(text, version, promoted)
     if body is None or not body.strip():
         if check:
             print(f"CHANGELOG.md has no notes for {version}", file=sys.stderr)
