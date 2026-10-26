@@ -70,6 +70,8 @@ else
   refuse "cannot reach origin to check the branch is up to date"
 fi
 pgrep -x llama-server >/dev/null 2>&1 && refuse "a llama-server process is running (it would distort the gate and the eval timings)"
+# The release eval runs Inspect; check it now, before anything is published.
+command -v inspect >/dev/null 2>&1 || refuse "the inspect command (Inspect AI) is not on PATH; the release eval needs it"
 grep -Eq "^## ($VERSION( |rc[0-9]|\$)|Unreleased)" "$ROOT/CHANGELOG.md" || refuse "CHANGELOG.md has no '## $VERSION', '## ${VERSION}rcN' or '## Unreleased' section (the release needs its notes)"
 if [ -n "$(g tag -l "v$VERSION")" ] || g ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null 2>&1; then
   refuse "v$VERSION already exists"
@@ -112,16 +114,25 @@ if [ "$DRY" = 1 ]; then
   say "+ tag the merge commit on main as v$RC and push the tag"
   SHA="<merge commit on main>"
 else
-  gh pr view "$REL_BRANCH" --json number >/dev/null 2>&1 || \
+  # Only an OPEN pull request counts: a branch reset closes an earlier one.
+  open_pr() { gh pr list --head "$REL_BRANCH" --base main --state open --json number --jq '.[0].number // empty'; }
+  PRN="$(open_pr)"
+  if [ -z "$PRN" ]; then
     gh pr create --base main --head "$REL_BRANCH" --title "$RC" --body "Release candidate $RC. scripts/release.sh merges this, tags the merge commit v$RC and tests that commit before promoting it." >/dev/null
+    PRN="$(open_pr)"
+  fi
+  [ -n "$PRN" ] || { say "FAILED: could not open the $RC pull request"; exit 1; }
   sleep 30
-  gh pr checks "$REL_BRANCH" --watch --interval 30 >/dev/null 2>&1 || { say "FAILED: checks on the $RC pull request; see: gh pr checks $REL_BRANCH"; exit 1; }
-  gh pr merge "$REL_BRANCH" --merge >/dev/null || { say "FAILED: could not merge the $RC pull request (main moved?); see: gh pr view $REL_BRANCH"; exit 1; }
-  SHA="$(gh pr view "$REL_BRANCH" --json mergeCommit --jq .mergeCommit.oid)"
+  gh pr checks "$PRN" --watch --interval 30 >/dev/null 2>&1 || { say "FAILED: checks on the $RC pull request #$PRN; see: gh pr checks $PRN"; exit 1; }
+  gh pr merge "$PRN" --merge >/dev/null || { say "FAILED: could not merge the $RC pull request #$PRN (main moved?)"; exit 1; }
+  SHA="$(gh pr view "$PRN" --json mergeCommit --jq .mergeCommit.oid)"
   [ -n "$SHA" ] || { say "FAILED: no merge commit for the $RC pull request"; exit 1; }
   g fetch -q origin main
   g tag -a "v$RC" -m "$RC" "$SHA"
   g push origin "refs/tags/v$RC"
+  # The gate records its status on this checkout's HEAD, so test from the
+  # tagged merge commit itself.
+  g checkout -q --detach "$SHA"
 fi
 
 # ---- 3. wait for PyPI ----------------------------------------------------------

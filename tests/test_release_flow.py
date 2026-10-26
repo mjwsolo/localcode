@@ -41,11 +41,14 @@ def repo(tmp_path):
     return work
 
 
-def release(repo, tmp_path, *args, pgrep_exit=1):
+def release(repo, tmp_path, *args, pgrep_exit=1, inspect=True):
     stubs = tmp_path / "bin"
     stubs.mkdir(exist_ok=True)
     (stubs / "pgrep").write_text(f"#!/bin/sh\nexit {pgrep_exit}\n")
     (stubs / "pgrep").chmod(0o755)
+    if inspect:
+        (stubs / "inspect").write_text("#!/bin/sh\nexit 0\n")
+        (stubs / "inspect").chmod(0o755)
     env = {**os.environ, "RELEASE_ROOT": str(repo), "PATH": f"{stubs}{os.pathsep}{os.environ['PATH']}"}
     return subprocess.run(["bash", str(SCRIPTS / "release.sh"), *args], env=env, capture_output=True, text=True)
 
@@ -192,3 +195,13 @@ def test_release_workflow_is_owner_only_and_never_runs_on_pull_requests():
     for other in path.parent.glob("*.yml"):
         if other.name != "release.yml":
             assert all("self-hosted" not in str(j.get("runs-on")) for j in yaml.safe_load(other.read_text())["jobs"].values()), other.name
+
+
+def test_refuses_without_inspect_before_publishing(repo, tmp_path, monkeypatch):
+    # The release eval needs Inspect; a missing one must stop the run before
+    # anything is tagged or pushed, not after a candidate is published.
+    monkeypatch.setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin:" + str(Path(sys.executable).parent))
+    r = release(repo, tmp_path, "0.5.41", "--model", "m", inspect=False)
+    assert r.returncode != 0
+    assert "inspect" in (r.stdout + r.stderr)
+    assert git(repo, "tag", "-l") == ""
