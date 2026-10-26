@@ -30,10 +30,22 @@ if not __debug__:
     raise RuntimeError("Model verification requires assertions; do not run with python -O")
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
+# Default: the checkout. With --installed the interpreter's own installed
+# package is gated instead (its Python modules and bundled binaries), which is
+# what a release candidate pulled from PyPI is tested as.
+INSTALLED = "--installed" in sys.argv
+if not INSTALLED:
+    sys.path.insert(0, str(ROOT / "src"))
 from localcode import models_catalog as catalog
 from localcode.ui import auth
 from localcode.ui.server_cmd import server_command
+import localcode as _package
+
+BIN = Path(_package.__file__).resolve().parent / "bin"
+if INSTALLED:
+    assert ROOT not in BIN.parents, "--installed needs a package installed outside the checkout (run with the venv's python)"
+else:
+    assert BIN == (ROOT / "src/localcode/bin").resolve(), "the checkout's package was not the one imported"
 
 REQUIRED_KEYS = {"gemma-12b", "qwen", "qwen38", "diffusiongemma", "north-mini-code", "muse-glimmer", "kolibri", "openjev", "saluki", "flint"}
 TOOL = {"type": "function", "function": {"name": "get_weather", "description": "Get weather in a city.", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}}
@@ -65,6 +77,35 @@ def environment(values):
                 os.environ[k] = v
 
 
+@contextlib.contextmanager
+def fresh_home(models_dir: Path):
+    """Run with a temporary HOME, XDG dirs and LOCALCODE state.
+
+    A release gate must not read the developer's configuration, UI preferences
+    or sessions. The downloaded models are found through an explicit absolute
+    models directory, so nothing else from the real home is visible. Every
+    LOCALCODE_* and OPENCODE_* variable of the caller is dropped too: they are
+    settings in another form.
+    """
+    models_dir = Path(models_dir).resolve()
+    with tempfile.TemporaryDirectory(prefix="localcode-gate-home-") as tmp:
+        home = Path(tmp).resolve()
+        for sub in (".config", ".local/share", ".cache", ".local/state", "state"):
+            (home / sub).mkdir(parents=True, exist_ok=True)
+        saved = dict(os.environ)
+        try:
+            for k in list(os.environ):
+                if k.startswith(("LOCALCODE_", "OPENCODE_")):
+                    del os.environ[k]
+            os.environ.update(HOME=str(home), XDG_CONFIG_HOME=str(home / ".config"), XDG_DATA_HOME=str(home / ".local/share"),
+                              XDG_CACHE_HOME=str(home / ".cache"), XDG_STATE_HOME=str(home / ".local/state"),
+                              LOCALCODE_HOME=str(home / "state"), LOCALCODE_MODEL_DIR=str(models_dir))
+            yield home
+        finally:
+            os.environ.clear()
+            os.environ.update(saved)
+
+
 class Server:
     def __init__(self, choice, work: Path, *, turbo=False, cache_v=None, legacy_metal=False):
         self.choice, self.work, self.turbo = choice, work, turbo
@@ -87,7 +128,7 @@ class Server:
         with environment(env):
             self.command = server_command(str(self.choice.local_path), self.port, self.choice.key)
         # A user's custom binary must not redirect a test of the shipped binary.
-        self.command[0] = str(ROOT / "src/localcode/bin/llama-server")
+        self.command[0] = str(BIN / "llama-server")
         self.log = (self.work / "server.log").open("wb")
         try:
             child_env = {k: v for k, v in {**os.environ, **env}.items() if k not in {"GH_TOKEN", "GITHUB_TOKEN"}}
@@ -158,7 +199,7 @@ def runtime_turn(server, prompt="Reply with exactly OK."):
         ctx = int(server.command[server.command.index("--ctx-size") + 1])
         write_config(config, port=server.port, ctx=ctx, alias=server.choice.key)
     env = {**{k: v for k, v in runtime_env(config, 1).items() if k not in {"GH_TOKEN", "GITHUB_TOKEN"}}, "OPENCODE_CONFIG": str(config), "XDG_DATA_HOME": str(server.work / "data"), "XDG_CONFIG_HOME": str(server.work / "config"), "XDG_CACHE_HOME": str(server.work / "cache"), "LOCALCODE_CONTROL_PORT": "1", "LOCALCODE_AUTO_CHECK": "0"}
-    result = subprocess.run([str(ROOT / "src/localcode/bin/localcode-ui"), "run", "--format", "json", prompt], cwd=server.work, env=env, capture_output=True, text=True, timeout=240)
+    result = subprocess.run([str(BIN / "localcode-ui"), "run", "--format", "json", prompt], cwd=server.work, env=env, capture_output=True, text=True, timeout=240)
     events = [json.loads(line) for line in result.stdout.splitlines() if line.startswith("{")]
     assert result.returncode == 0, "bundled runtime failed"
     assert not any(e.get("type") == "error" for e in events), "bundled runtime returned an error"
@@ -301,6 +342,7 @@ def validate_receipt(receipt, commit, hashes, keys):
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--models", nargs="+", help="catalog keys (default: every downloaded catalog model)")
+    p.add_argument("--installed", action="store_true", help="gate the package installed in this interpreter's environment, not the checkout")
     p.add_argument("--strict", action="store_true", help="fail when required shipping configurations are absent")
     p.add_argument("--receipt", type=Path, default=ROOT / ".localcode-gate/receipt.json")
     p.add_argument("--publish-status", action="store_true", help="record strict gate status for the exact clean commit")
@@ -316,7 +358,7 @@ def main(argv=None):
     if args.publish_receipt and (dirty or args.models or args.publish_status):
         p.error("receipt publication requires a clean full checkout, without --models or --publish-status")
     if args.publish_receipt:
-        hashes = {name: sha256(ROOT / "src/localcode/bin" / name) for name in ["llama-server", "localcode-ui"]}
+        hashes = {name: sha256(BIN / name) for name in ["llama-server", "localcode-ui"]}
         validate_receipt(json.loads(args.receipt.read_text()), commit, hashes, {c.key for c in choices})
         status(commit, "success", "Strict local shipping launcher and runtime gate passed")
         return 0
@@ -324,7 +366,10 @@ def main(argv=None):
         p.error("publishing requires --strict, the full model set, and a clean tracked checkout")
     if args.publish_status:
         status(commit, "pending", "Local shipping launcher, inference and runtime verification running")
-    receipt = {"commit": commit, "dirty": dirty, "strict": args.strict, "binaries": {name: sha256(ROOT / "src/localcode/bin" / name) for name in ["llama-server", "localcode-ui"]}, "models": [], "success": False}
+    receipt = {"commit": commit, "dirty": dirty, "strict": args.strict, "binaries": {name: sha256(BIN / name) for name in ["llama-server", "localcode-ui"]}, "models": [], "success": False}
+    # Models were located with the real configuration above; the run itself sees none of it.
+    isolation = contextlib.ExitStack()
+    isolation.enter_context(fresh_home(catalog.model_dir()))
     try:
         runs = [(c, None, False) for c in choices]
         qwen_choice = next((c for c in choices if c.key == "qwen"), None)
@@ -349,6 +394,7 @@ def main(argv=None):
     except Exception as exc:
         print("FAIL " + type(exc).__name__ + ": " + str(exc), file=sys.stderr)
     finally:
+        isolation.close()
         args.receipt.parent.mkdir(parents=True, exist_ok=True)
         args.receipt.write_text(json.dumps(receipt, indent=2) + "\n")
         if args.publish_status:

@@ -43,7 +43,18 @@ EVALS = Path(__file__).resolve().parent.parent
 REPO = Path(os.environ.get("LOCALCODE_EVALS_REPO") or EVALS.parent).resolve()
 UI = REPO / "src/localcode/bin/localcode-ui"
 SERVER = REPO / "src/localcode/bin/llama-server"
-MODELS_DIR = Path.home() / ".local/share/localcode/models"
+# Where the downloaded models are, resolved once against the caller's real home.
+# The run itself gets a throwaway home with symlinks to these files.
+MODELS_DIR = Path(os.environ.get("LOCALCODE_MODEL_DIR") or Path.home() / ".local/share/localcode/models")
+# Inherited settings that must not steer a run: the caller's own LocalCode and UI
+# knobs. The suite's own variables and the interpreter choice pass through.
+_KEEP_ENV = {"LOCALCODE_PY", "LOCALCODE_EVALS_REPO", "LOCALCODE_EVALS_KEEP_HOME", "LOCALCODE_EVALS_WORKROOT", "LOCALCODE_EVALS_DATA"}
+
+
+def clean_environ(environ=None) -> dict[str, str]:
+    """The caller's environment without its LocalCode/OpenCode settings."""
+    env = os.environ if environ is None else environ
+    return {k: v for k, v in env.items() if k in _KEEP_ENV or not k.startswith(("LOCALCODE_", "OPENCODE_"))}
 
 # A tool call written out as prose instead of emitted: JSON with a tool name and
 # arguments, or the XML-ish wrappers some chat templates use.
@@ -110,11 +121,12 @@ class Runtime:
             (self.home / "Library/Caches/ms-playwright").symlink_to(browsers)
         self.token, self.key = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
         self.base_env = {
-            **os.environ, **self.overrides,
+            **clean_environ(), **self.overrides,
             "HOME": str(self.home), "XDG_CONFIG_HOME": str(self.home / ".config"), "XDG_DATA_HOME": str(self.home / ".local/share"),
             "XDG_CACHE_HOME": str(self.home / ".cache"), "XDG_STATE_HOME": str(self.home / ".local/state"),
             "LOCALCODE_CONTROL_TOKEN": self.token, "LOCALCODE_SERVER_KEY": self.key,
             "LOCALCODE_AGENT_RUN_DIR": str(self.run_dir), "LOCALCODE_PARALLEL": "1",
+            "LOCALCODE_MODEL_DIR": str(self.links),
         }
         if ram_gb: self.base_env["LOCALCODE_RAM_GB"] = str(ram_gb)
         else: self.base_env.pop("LOCALCODE_RAM_GB", None)

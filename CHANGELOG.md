@@ -3,6 +3,33 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Added
+
+- Release candidates. A version like `0.5.41rc1` is published as a PyPI
+  pre-release (never the default install) and a pre-release on the releases
+  page; install it with `uv tool install --prerelease allow "localcode==0.5.41rc1"`.
+- `scripts/release.sh <version>`: one command that publishes a candidate, installs
+  it from PyPI into a fresh venv, runs `localcode doctor`, the terminal snapshot
+  suite, the local model gate and a release eval against the previous release
+  (all with a fresh HOME), and promotes to the final version only if every check
+  passed. `.github/workflows/release.yml` runs the hosted checks and promotes by
+  tagging the tested commit as the final version (no new commit; `publish.yml`
+  sets the final version in its build only).
+- The post-publish job now also installs the published version into a fresh venv
+  and runs `localcode doctor` and the terminal snapshot suite against it.
+  `scripts/ui_e2e.sh --installed <python>` tests an installed package instead of
+  the checkout.
+
+### Changed
+
+- The local model gate and the eval agent run in a temporary HOME and ignore
+  `LOCALCODE_*` settings of the caller; the models directory is passed explicitly.
+  `verify_models.py --installed` gates an installed package.
+- Release notes for a pre-release fall back to the final version's or the
+  Unreleased section instead of failing on a missing heading.
+
 ## 0.5.40 — 2026-10-26
 
 ### Added

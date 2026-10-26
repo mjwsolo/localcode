@@ -44,6 +44,8 @@ jobs:
     outputs:
       version: ${{ steps.identity.outputs.version }}
       tag: ${{ steps.identity.outputs.tag }}
+      # A final tag on the commit that was tested as <final>rcN: the build rewrites the version.
+      promoted: ${{ steps.identity.outputs.promoted }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -66,7 +68,8 @@ jobs:
       - name: Require changelog notes before publishing
         env:
           VERSION: ${{ steps.identity.outputs.version }}
-        run: python3 scripts/release_notes.py "$VERSION" --check > /dev/null
+          PROMOTED: ${{ steps.identity.outputs.promoted }}
+        run: python3 scripts/release_notes.py "$VERSION" --check ${PROMOTED:+--promoted} > /dev/null
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -100,10 +103,23 @@ jobs:
         # CI checkout is normally clean, so this is belt-and-braces, but it is the
         # exact failure that shipped stale binaries in a local build once.
         run: rm -rf build dist src/*.egg-info
+      - name: Promoted candidate - set the final version in this build tree only
+        # A final tag (v0.5.41) on the commit tested as 0.5.41rc1 publishes that exact
+        # commit. Nothing is committed: main keeps the rc string until the next release.
+        # The bundled localcode-ui binary is committed, not rebuilt here, so its footer
+        # shows the version it was last built with, as for every release.
+        if: needs.test.outputs.promoted == 'true'
+        env:
+          VERSION: ${{ needs.test.outputs.version }}
+        run: python3 scripts/release_promote.py "$VERSION"
       - name: Build (pure-Python wheel + sdist)
         run: python -m build
       - name: Show artifacts
-        run: ls -l dist/
+        env:
+          VERSION: ${{ needs.test.outputs.version }}
+        run: |
+          ls -l dist/
+          ls dist/ | grep -q "^localcode-${VERSION}[-.]" || { echo "::error::built files do not carry version ${VERSION}"; exit 1; }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dist
@@ -158,8 +174,9 @@ jobs:
       - name: Release notes from CHANGELOG.md
         env:
           VERSION: ${{ needs.test.outputs.version }}
+          PROMOTED: ${{ needs.test.outputs.promoted }}
         run: |
-          python3 scripts/release_notes.py "$VERSION" --check > notes.md
+          python3 scripts/release_notes.py "$VERSION" --check ${PROMOTED:+--promoted} > notes.md
           cat notes.md
       - name: Create or update the release
         env:
@@ -195,7 +212,10 @@ jobs:
 
   verify-published:
     name: Verify published PyPI install
-    needs: [publish]
+    needs: [test, publish]
+    env:
+      # From the release identity: a promoted candidate's checkout still says <final>rcN.
+      PUBLISHED_VERSION: ${{ needs.test.outputs.version }}
     runs-on: macos-15
     timeout-minutes: 20
     strategy:
@@ -212,7 +232,7 @@ jobs:
         # Upload returns before the index and CDN serve the new version; a
         # fresh pip/uv resolve a few seconds later still sees the old one.
         run: |
-          version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          version="$PUBLISHED_VERSION"
           for i in $(seq 1 40); do
             if curl -fsS "https://pypi.org/simple/localcode/" | grep -q "localcode-${version}-" \
                && curl -fsS "https://pypi.org/pypi/localcode/${version}/json" >/dev/null; then
@@ -225,5 +245,48 @@ jobs:
         env:
           INSTALLER: ${{ matrix.installer }}
         run: |
-          version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          version="$PUBLISHED_VERSION"
           python scripts/verify_install.py --target "localcode==$version" --expected "$version" --installer "$INSTALLER" --from-version 0.4.9
+      # The package users get, not the checkout: a fresh venv and a fresh HOME,
+      # the exact version PyPI now serves, then the product's own checks.
+      - name: Install the published version into a fresh venv
+        if: matrix.installer == 'pip'
+        run: |
+          version="$PUBLISHED_VERSION"
+          work="$RUNNER_TEMP/published"
+          rm -rf "$work"; mkdir -p "$work/home"
+          python -m venv "$work/venv"
+          for i in 1 2 3 4 5 6; do
+            "$work/venv/bin/python" -m pip install --quiet --no-cache-dir "localcode==$version" && break
+            [ "$i" = 6 ] && { echo "::error::could not install localcode==$version"; exit 1; }
+            sleep 30
+          done
+          echo "PUBLISHED_WORK=$work" >> "$GITHUB_ENV"
+          # A release candidate must not become what a plain `pip install localcode` picks.
+          if [[ "$version" =~ [a-zA-Z] ]]; then
+            first=$(python -m pip index versions localcode 2>/dev/null | head -1)
+            echo "default install resolves: $first"
+            [ "$first" != "localcode ($version)" ] || { echo "::error::pre-release $version is the default install"; exit 1; }
+          fi
+      - name: Installed package, localcode doctor
+        if: matrix.installer == 'pip'
+        run: |
+          mkdir -p "$PUBLISHED_WORK/home"
+          env -i PATH="$PATH" HOME="$PUBLISHED_WORK/home" XDG_CONFIG_HOME="$PUBLISHED_WORK/home/.config" XDG_DATA_HOME="$PUBLISHED_WORK/home/.local/share" \
+            LOCALCODE_HOME="$PUBLISHED_WORK/home/state" "$PUBLISHED_WORK/venv/bin/localcode" doctor
+      - uses: actions/setup-node@v4
+        if: matrix.installer == 'pip'
+        with:
+          node-version: "22"
+      - name: Installed package, terminal snapshot suite
+        if: matrix.installer == 'pip'
+        # The journeys run the installed localcode-ui and the installed Python modules
+        # (never this checkout's src/) in their own throwaway HOME per session.
+        run: scripts/ui_e2e.sh --installed "$PUBLISHED_WORK/venv/bin/python"
+      - name: Upload snapshot diffs
+        if: always() && matrix.installer == 'pip'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: published-ui-e2e-${{ github.run_id }}
+          path: tests/e2e/snapshot-diffs
+          if-no-files-found: ignore
