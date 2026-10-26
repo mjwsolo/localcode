@@ -7,35 +7,43 @@ Type `/` in the prompt to open the command palette. Text that starts with `/` is
 
 | Command | What it does |
 | --- | --- |
+| `/btw` | Ask a side question without adding it to the conversation |
+| `/cd` | Change working directory |
+| `/clear` | Clear session |
 | `/compact` | Compact session |
 | `/copy` | Copy session transcript |
 | `/debug` | View debug info |
 | `/decide` | Open typed System One decisions |
 | `/diff` | Open diff viewer |
-| `/editor` | Open the external editor for the prompt (falls back to `nano`) |
-| `/exit` | Exit the app |
+| `/exit` | Exit the app (also `/quit`, `/q`) |
 | `/export` | Export session transcript |
 | `/help` | Help |
-| `/lsp` | Language servers: install or start one |
 | `/mcps` | Toggle MCPs |
-| `/models` | Switch model |
 | `/mode` | Choose Chat or Decisions |
-| `/move` | Move to another project dir |
+| `/models` | Switch model |
 | `/new` | New session |
-| `/permissions` | Permissions |
+| `/open` | Open a session or project (also `/projects`, `/project`) |
+| `/permissions` | Permission preferences |
+| `/plugins` | List plugins |
 | `/project-context` | Edit project context |
+| `/redo` | Redo an undone message |
+| `/reload` | Reload configuration |
 | `/rename` | Rename session |
-| `/review` | Review changes `[commit\|branch\|pr]`, defaults to uncommitted |
-| `/sessions` | Switch session |
+| `/restart` | Restart the service |
+| `/server` | Model server connection and port: copy the API key, change the port, stop or start the server |
+| `/sessions` | Switch session (also `/resume`, `/continue`) |
 | `/settings` | Settings |
 | `/skills` | Skills |
-| `/speak` | Read aloud / stop reading |
-| `/status` | View status |
+| `/speak` | Read aloud / stop reading (also `/say`) |
+| `/stats` | Usage statistics |
+| `/status` | View status: the loaded model and its server |
+| `/terminal` | New terminal |
 | `/themes` | Switch theme |
-| `/thinking` | Expand thinking display |
-| `/timestamps` | Hide timestamps |
+| `/thinking` | Expand thinking display (also `/toggle-thinking`) |
 | `/undo` | Undo previous message |
+| `/variants` | Switch model variant (also `/effort`) |
 | `/vision` | Vision: download this model's image projector |
+| `/worktrees` | Manage workspaces |
 
 ## Shell commands
 
@@ -51,7 +59,6 @@ Dictation runs on this Mac and shares the GPU with the coding model, so it gives
 
 ## Notes
 
-- `/lsp` lists language servers. Installing one downloads it only after you confirm.
 - `/vision` shows the projector size first and downloads only after you confirm. It applies to the loaded model only.
 - `/thinking` only changes how thinking is shown. Hidden reasoning is off by default for every model.
 - `/models` opens the picker described in [Models](/localcode/start-here/choose-a-model).

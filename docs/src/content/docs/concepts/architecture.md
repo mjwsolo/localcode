@@ -26,7 +26,7 @@ description: The pieces localcode is made of, from the launcher down to the infe
 1. **Launcher** - `localcode` picks free ports, starts the supervisor, writes a per-session config in the run directory, and runs the interface binary in your project. It writes nothing into the project. See [Configuration](/localcode/reference/configuration).
 2. **Supervisor** - a Python process that owns `llama-server`. The model server listens on `127.0.0.1:8123` or the next free port. The supervisor serves the model picker and status API on a control port from `8323`. It downloads a quant when you pick one, reloads the server on the same port when you switch models, and shuts the server down when you exit.
 3. **Runtime + plugin** - the interface, `localcode-ui`, is a fork of opencode branded localcode. Every cloud feature is removed. It talks only to `http://127.0.0.1:PORT/v1`. The config loads localcode's discipline plugin from the package.
-4. **Tools** - file reading and editing, glob and grep, shell commands, todo list, web search and fetch, language servers you install through `/lsp`, and any MCP servers you configure.
+4. **Tools** - file reading and editing, glob and grep, shell commands, todo list, web search and fetch, and any MCP servers you configure.
 
 One model server runs per user. Opening `localcode` in another terminal starts a separate interface session attached to that server. Close either window without ending the other session; use `/models` to switch the shared model.
 
@@ -48,10 +48,12 @@ localcode is designed to enable agentic coding with local models on consumer har
 
 - **RAM-aware context** - the launcher budgets the selected weights and KV caches against the machine’s RAM. Optional TurboQuant cache formats reduce storage; context still depends on the model and quant. See [Unified Memory](/localcode/concepts/unified-memory).
 - **Fast multi-turn** - the server keeps the prompt prefix between turns, so the next turn does not re-read it.
+- **Speculative drafters and precompiled kernels** - vendor drafters speed up decoding, and the server's Metal kernels ship precompiled so it starts quickly. See [Models](/localcode/start-here/choose-a-model).
 - **Compact tool definitions** - the runtime shortens built-in tool descriptions and large MCP schemas before sending them to the model. This leaves more room for the task and project context, especially on a 16 GB Mac.
-- **Hidden reasoning is off by default** - the server starts with `--reasoning off`. Small models finish faster and follow tool calls better without it.
+- **Hidden reasoning is off by default** - small models finish faster and follow tool calls better without it.
+- **Tolerant edits** - an edit still applies when the model writes a different number of blank lines between lines than the file has, as long as the match is unique.
 - **Vision on demand** - the image projector for a vision-capable model is a separate download through `/vision`. Nothing is fetched until you ask.
 
 ## Everything is loopback
 
-The launcher, supervisor, model server, and interface all bind to `127.0.0.1`. There is no telemetry, no update check, and no account. The network is used only for downloads you request in the picker, `/vision`, `/lsp`, or voice, and for the web tools and MCP servers when the model calls them. See [Network Boundary](/localcode/concepts/network-boundary).
+The launcher, supervisor, model server, and interface all bind to `127.0.0.1`. There is no telemetry, no update check, and no account. The network is used only for downloads you request in the picker, `/vision`, or voice, and for the web tools and MCP servers when the model calls them. See [Network Boundary](/localcode/concepts/network-boundary).

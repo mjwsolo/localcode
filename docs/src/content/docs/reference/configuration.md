@@ -16,10 +16,8 @@ are abbreviated in requests; the complete conversation stays saved on disk.
 Use `localcode --context full` to include project instructions, skill and MCP
 instructions, automatic workspace listings and unabridged tool history in requests.
 Normal context-window limits and compaction still apply. Combine
-it with `--trust-project` when using repository configuration. `LOCALCODE_CONTEXT=full`
-sets the same default. `LOCALCODE_WORKSPACE_CONTEXT=1` enables just the automatic
-workspace listing and change reports. Saved warmup captures are not replayed
-in minimal mode unless you explicitly set `LOCALCODE_PROMPT_WARMUP=1`.
+it with `--trust-project` when using repository configuration. Saved warmup
+captures are not replayed in minimal mode.
 
 MCP servers without an explicit `enabled: true` setting stay disconnected at
 minimal startup. Enable the server you need with `/mcps`, or set `enabled: true`
@@ -109,9 +107,9 @@ LM Studio folders. Selecting one links to the existing file rather than copying
 or downloading its weights. Models stored elsewhere can be loaded by full path
 with `localcode --model /path/to/model.gguf`.
 
-Selecting existing weights does not download a missing optional drafter. The
-model runs without it. Set `LOCALCODE_DOWNLOAD_DRAFTER=1` to request that download;
-new model downloads still include their advertised drafter.
+Selecting existing weights does not download a missing speculative drafter. The
+model runs without it, only slower. New model downloads from the picker include the
+drafter the model ships with, and its size is counted in the size the picker shows.
 
 Available quant listings refresh in the background. Local and cached models
 remain selectable while the remote listing is slow or unavailable. A failed

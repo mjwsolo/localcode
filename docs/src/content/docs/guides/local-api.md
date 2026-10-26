@@ -28,7 +28,7 @@ new requests while stopping. Downloads and model switches must finish first.
 
 Choose **Start model server** to reload the previously selected model. No new
 model download is triggered. If no previous model exists, or its file was
-removed, use `/model` to select one. Reloading the weights and processing the
+removed, use `/models` to select one. Reloading the weights and processing the
 conversation can take time; this is not instant resume of the inference cache.
 
 The menu shows stopped, stopping, loading, ready or error status. Use **Refresh**

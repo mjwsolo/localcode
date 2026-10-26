@@ -4,8 +4,10 @@ description: Install localcode, open a repo, pick a model, make one change.
 ---
 
 ```sh
-pip install -U localcode
+uv tool install localcode
 ```
+
+Upgrade later with `uv tool upgrade localcode`. (`uv pip install -U localcode` does not upgrade a `uv tool` install. If you installed with pip, use `pip install -U localcode`.) After an upgrade, close any open LocalCode windows before launching again.
 
 | | |
 | --- | --- |
@@ -15,7 +17,7 @@ pip install -U localcode
 | Python | 3.10 or newer |
 | Disk | Space for one model - the smallest recommended GGUF is about 7.4 GB |
 
-The wheel is built for `macosx_13_0_arm64` and ships two binaries: `llama-server` for inference and `localcode-ui` for the interface. Nothing else needs to be installed.
+The wheel is built for `macosx_13_0_arm64` and ships two binaries, with the model server's GPU kernels precompiled so the first start is quick: `llama-server` for inference and `localcode-ui` for the interface. Nothing else needs to be installed.
 
 Older Macs are not supported. If launch fails with a `dyld` "Library not loaded" error, the Mac is below the minimum macOS. See [Error Codes](/localcode/reference/error-codes).
 
@@ -28,13 +30,13 @@ localcode
 
 Choose a project with a runnable test suite. localcode uses your repo's own checks as proof.
 
-`localcode` opens the prompt.
+`localcode` opens the prompt. The first time, no model is loaded yet.
 
 ## Choose a model
 
 With no model loaded, the model picker opens when you send your first message, or when you type `/models`. The first level lists every model in the catalog with its maker, how many of its quants are already on disk, and a star on the model recommended for your Mac's unified memory. Press Enter on a model to see every quant its Hugging Face repo ships, with the size in GB and whether it fits in memory. Enter on a row marked **Download** starts the download and shows a live percentage. Nothing downloads until you choose it and see its size.
 
-![The localcode model picker: seven models and the quant options for one model](/localcode/demo/step-2-choose-model.gif?v=3f833e97)
+![The localcode model picker: the model list and the quant options for one model](/localcode/demo/step-2-choose-model.gif?v=3f833e97)
 
 When the download finishes, the included `llama-server` loads the model on a localhost port and the interface connects to it. Type `/models` at any time to open the picker again. Esc goes back one level.
 
@@ -65,7 +67,8 @@ before the turn and passes after it.</small>
 | Command | What it does |
 | --- | --- |
 | `/models` | Opens the model picker to download or switch models |
-| `/status` | Shows the server, the current model, and the session |
+| `/status` | Shows the loaded model and its server |
+| `/server` | Shows the local API address and lets you stop or start the model server |
 | `/permissions` | Turns auto-approve on or off for the few actions that ask |
 | `/new` | Starts a new session |
 | `/sessions` | Switches to an earlier session |

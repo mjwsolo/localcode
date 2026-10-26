@@ -31,12 +31,11 @@ Loopback alone is not a boundary, since a web page can send requests to a local 
 | 1 | **Model download** | `huggingface.co` | Only when you press Enter on a `Download` row in the picker. The size is shown first |
 | 2 | **Quant listing** | Hugging Face repo API | When you open a model in the picker, to list the quants its repo ships |
 | 3 | **Image projector** | `huggingface.co` | Only when you run `/vision` and confirm the size |
-| 4 | **Language server** | The server's own release source | Only when you install one through `/lsp` and confirm. Nothing is fetched otherwise |
-| 5 | **Voice** | The recorder runtime (about 60 MB) and speech model (about 514 MB) | The first time you use voice input, after a consent screen that lists both |
-| 6 | **`websearch` tool** | DuckDuckGo, with no account or key | Whenever the model calls it |
-| 7 | **`webfetch` tool** | The URL named in the call | Whenever the model calls it. Page text is capped at 20,000 characters |
-| 8 | **MCP servers** | Wherever you pointed them | Whenever the model calls one of their tools |
-| 9 | **Shell commands** | Wherever the command goes | Whenever a `bash` call runs; commands inside the project do not prompt |
+| 4 | **Voice** | The recorder runtime (about 60 MB) and speech model (about 514 MB) | The first time you use voice input, after a consent screen that lists both |
+| 5 | **`websearch` tool** | DuckDuckGo, with no account or key | Whenever the model calls it |
+| 6 | **`webfetch` tool** | The URL named in the call | Whenever the model calls it. Page text is capped at 20,000 characters |
+| 7 | **MCP servers** | Wherever you pointed them | Whenever the model calls one of their tools |
+| 8 | **Shell commands** | Wherever the command goes | Whenever a `bash` call runs; commands inside the project do not prompt |
 
 Web search works out of the box with a keyless DuckDuckGo backend.
 
