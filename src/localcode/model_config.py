@@ -117,10 +117,15 @@ def cohere_generation_cap(target_num_ctx: int) -> int:
 # unknown/compressed KV dtype). Large enough that min() never picks it.
 CTX_NO_CLAMP_SENTINEL = 1_000_000
 
-# Lift the balanced/default path to the RAM ceiling only on >=32 GB machines
-# (lots of headroom regardless of KV type). Below that, keep the chars-based
-# value to avoid an OOM on an unvalidated small-RAM × KV-type combination.
-BALANCED_RAM_LIFT_MIN_GB = 32
+# Lift the balanced/default path to the RAM ceiling on every supported Mac. On
+# 16-24 GB the ceiling (64K / 72K) was checked against measured footprints: the
+# models that fit there use 9.2-14.5 GB at 64K, inside their GPU budget.
+BALANCED_RAM_LIFT_MIN_GB = 16
+# On Macs up to this size keep at most SMALL_MAC_MAX_CHECKPOINTS context
+# checkpoints: on sliding-window and hybrid models each one is a copy of that
+# state, and 16 of them cost Gemma 4 12B 0.7 GB more than 4 at 16 GB.
+SMALL_MAC_MAX_RAM_GB = 36
+SMALL_MAC_MAX_CHECKPOINTS = 4
 
 
 # ─────────────────────────────────────────────────────────────────────

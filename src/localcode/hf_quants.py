@@ -172,24 +172,21 @@ def fetch_quants(hf_repo: str) -> list[Quant]:
     return quants
 
 
-def fit_badge(size_gb: float, ram_gb: int) -> str:
-    """Fit badge for a quant on a machine with ``ram_gb`` unified memory.
+def fit_badge(size_gb: float, ram_gb: int, filename: str | None = None) -> str:
+    """Fit badge for a quant whose files total ``size_gb`` on a Mac with ``ram_gb``.
 
-    Same rule as models_catalog.recommend(): weights should sit inside ~55% of
-    unified RAM. Returns "fits" | "tight" | "too_big".
+    Same rule as models_catalog.recommend() and the launch check (localcode.fit):
+    files plus the model's measured run-time memory must sit inside the GPU's
+    working set. Returns "fits" | "tight" | "too_big".
     """
-    if size_gb <= 0.55 * ram_gb:
-        return "fits"
-    if size_gb <= 0.65 * ram_gb:
-        return "tight"
-    return "too_big"
+    from .fit import fit
+    return fit(size_gb, ram_gb, filename)
 
 
 if __name__ == "__main__":  # pragma: no cover - tiny self-test
-    # Badge logic on a 16 GB Mac: 0.55*16=8.8, 0.65*16=10.4.
-    assert fit_badge(7.0, 16) == "fits"      # 7.0 <= 8.8
-    assert fit_badge(9.5, 16) == "tight"     # 8.8 < 9.5 <= 10.4
-    assert fit_badge(11.0, 16) == "too_big"  # 11.0 > 10.4
+    # Badge logic on a 16 GB Mac (GPU budget 10.67 GB, 0.5 GB margin).
+    assert fit_badge(7.0, 16, "gemma-4-12b-it-UD-Q4_K_XL.gguf") == "fits"     # 7.0 + 2.2 <= 10.17
+    assert fit_badge(8.7, 16, "Qwen3.8-27B-UD-IQ2_S.gguf") == "too_big"      # 8.7 * 1.47 > 10.67
     assert fit_badge(28.0, 16) == "too_big"
     # Label parsing.
     assert _parse_label("gemma-4-12b-it-UD-Q4_K_XL.gguf") == "UD-Q4_K_XL"

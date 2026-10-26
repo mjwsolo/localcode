@@ -62,9 +62,10 @@ def test_large_ram_gets_a_large_model():
 
 @pytest.mark.parametrize("ram", RAM_LADDER)
 def test_recommended_model_fits_budget_or_is_smallest(ram):
+    from localcode.fit import fit
     choice = catalog.recommend(ram)
     smallest = min(catalog.CHOICES, key=lambda c: c.size_gb)
-    assert choice.size_gb <= ram * 0.55 or choice is smallest
+    assert fit(choice.size_gb, ram, choice.filename) == "fits" or choice is smallest
 
 
 # ── GPU-offload decision per RAM ────────────────────────────────────

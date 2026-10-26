@@ -721,17 +721,17 @@ def recommend(ram_gb: int | None = None) -> ModelChoice:
     """Pick the best model for THIS machine's RAM — capability-ranked, never the
     research diffusion architecture, and never a hardcoded default.
 
-    Weights must fit in ~55% of unified memory (leaves room for KV cache,
-    activations, OS). Among the production-ready models that fit, return the
+    The files plus the model's measured run-time memory must fit the GPU's
+    working set (localcode.fit). Among the production-ready models that fit, return the
     most capable (see ``_RECOMMEND_ORDER``) so the recommendation scales with
     the user's hardware instead of defaulting to any one model.
     """
     if ram_gb is None:
         ram_gb = _system_ram_gb()
-    budget = ram_gb * 0.55
+    from .fit import fit
     candidates = [
         c for c in CHOICES
-        if _auto_recommendable(c) and c.size_gb <= budget
+        if _auto_recommendable(c) and fit(c.size_gb, ram_gb, c.filename) == "fits"
     ]
     if candidates:
         # Most capable that fits; tie-break toward the larger (better-quant) file.

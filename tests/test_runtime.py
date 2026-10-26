@@ -307,10 +307,10 @@ class TestTargetNumCtx:
         defaults.update(overrides)
         cfg = RuntimeConfig(**defaults)
         gw = LocalCodeRuntimeGateway(cfg)
-        # Pin RAM low so these chars→ctx assertions are host-independent (the
-        # balanced path now lifts ctx on ≥32 GB machines; without this they'd
-        # fail on the dev box / CI runner depending on its RAM).
-        gw._system_ram_gb = lambda: 16  # type: ignore[assignment]
+        # Pin RAM below the supported 16 GB floor so these chars→ctx assertions
+        # are host-independent (the balanced path lifts ctx to the RAM ceiling
+        # on every supported Mac; without this they'd depend on the host's RAM).
+        gw._system_ram_gb = lambda: 8  # type: ignore[assignment]
         return gw
 
     def test_balanced_lift_on_big_ram(self) -> None:
@@ -322,6 +322,14 @@ class TestTargetNumCtx:
         gw = self._make_gw(max_context_chars=200000, quant_preset="balanced")
         gw._system_ram_gb = lambda: 128  # type: ignore[assignment]
         assert gw._target_num_ctx() == 131072
+
+    def test_balanced_lift_on_small_macs(self) -> None:
+        # 16 and 24 GB Macs get the RAM ceiling too (64K / 72K), not a flat
+        # max_context_chars//4; measured footprints fit at 64K (localcode.fit).
+        for ram, want in ((16, 65536), (24, 73728)):
+            gw = self._make_gw(max_context_chars=200000, quant_preset="balanced")
+            gw._system_ram_gb = lambda ram=ram: ram  # type: ignore[assignment]
+            assert gw._target_num_ctx() == want
 
     def test_balanced_preset(self) -> None:
         gw = self._make_gw(max_context_chars=40000, quant_preset="balanced")

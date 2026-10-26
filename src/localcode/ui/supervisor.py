@@ -691,12 +691,14 @@ class Supervisor:
         # A vendor-trained drafter ships with the model (downloaded with it,
         # loaded with it), so the size the user sees and the RAM fit include it.
         draft_gb = float(getattr(getattr(g, "drafter", None), "size_gb", 0.0) or 0.0)
+        # The vision projector loads beside the weights too, so the fit counts it.
+        vision_gb = float(getattr(g, "mmproj_size_gb", 0.0) or 0.0) if getattr(g, "mmproj_filename", None) else 0.0
         for i, q in enumerate(rows):
             spd = estimate_decode_tok_s(q.size_gb, g.display_name, self.bandwidth)
             total_gb = q.size_gb + draft_gb
             out.append({
                 "filename": q.filename, "alias": _alias(q.filename), "label": q.label,
-                "size_gb": round(total_gb, 1), "fit": fit_badge(total_gb, self.ram_gb),
+                "size_gb": round(total_gb, 1), "fit": fit_badge(total_gb + vision_gb, self.ram_gb, q.filename),
                 "tok_s": spd, "recommended": i == rec_idx,
                 "downloaded": q.filename in installed,
                 "current": _alias(q.filename) == self.current,
@@ -713,7 +715,7 @@ class Supervisor:
     def _recommended_quant_idx(self, rows, name: str) -> int | None:
         if not rows:
             return None
-        fitting = [i for i, q in enumerate(rows) if q.size_gb <= 0.55 * self.ram_gb]
+        fitting = [i for i, q in enumerate(rows) if fit_badge(q.size_gb, self.ram_gb, q.filename) == "fits"]
         if not fitting:
             return 0
         speeds = {i: (estimate_decode_tok_s(rows[i].size_gb, name, self.bandwidth) or 0)

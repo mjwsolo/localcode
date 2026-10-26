@@ -660,6 +660,10 @@ class LocalCodeRuntimeGateway:
             _ckpts = "16"
         else:
             _ckpts = "32"
+        from .model_config import SMALL_MAC_MAX_CHECKPOINTS, SMALL_MAC_MAX_RAM_GB
+        if (_ckpt_override is None and _ckpts != "0" and self._system_ram_gb() <= SMALL_MAC_MAX_RAM_GB
+                and int(_ckpts) > SMALL_MAC_MAX_CHECKPOINTS):
+            _ckpts = str(SMALL_MAC_MAX_CHECKPOINTS)
         if _ckpts == "0":
             # Explicitly request zero rolling snapshots; omit the cadence flag
             # (moot with checkpoints off) so nothing triggers a serialization.
