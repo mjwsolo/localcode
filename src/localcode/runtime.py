@@ -1020,7 +1020,8 @@ class LocalCodeRuntimeGateway:
     def _model_file_bytes(self, model_path: str | None = None) -> int:
         from pathlib import Path as _Path
         try:
-            return _Path(str(model_path or self.config.model or "")).stat().st_size
+            from .split_gguf import total_bytes
+            return total_bytes(_Path(str(model_path or self.config.model or ""))) or _Path(str(model_path or self.config.model or "")).stat().st_size
         except Exception:
             return 0
 

@@ -266,6 +266,11 @@ def _is_complete_download(p: Path, catalog_entry) -> bool:
     GGUF), trust the file as long as it's at least 1 MiB — better than
     rejecting legitimate user files.
     """
+    shards = getattr(catalog_entry, "shards", ())
+    if shards:
+        # Split quant: p is the first shard; every shard must be beside it at its exact size.
+        from .split_gguf import split_complete
+        return split_complete(p, {s_path.rsplit("/", 1)[-1]: n for s_path, n in shards})
     try:
         size = p.stat().st_size
     except OSError:
@@ -451,6 +456,9 @@ def download_model(
     if existing:
         return True, str(existing)
 
+    if getattr(choice, "shards", ()):
+        return _download_split(choice, on_progress, cancel_event)
+
     # Direct HuggingFace download (parallel, resumable via our own implementation).
     # We don't attempt Ollama pull here because Ollama's named tags don't map
     # 1:1 to unsloth's GGUF filenames — the catalog is the single source of truth.
@@ -536,6 +544,102 @@ def download_model(
         last_err_category,
         last_err or RuntimeError("unknown download error"),
     )
+
+
+def _download_split(
+    choice,
+    on_progress: Callable[[str], None] | None = None,
+    cancel_event: "threading.Event | None" = None,
+) -> tuple[bool, str]:
+    """Download every shard of a split GGUF into the models dir (flat, original
+    shard names). Shards already complete on disk are skipped; partial shards
+    resume like single files. Progress is combined across shards. Returns the
+    FIRST shard's path, which is what llama-server loads."""
+    shards = [(path, int(n)) for path, n in choice.shards]
+    model_dir = choice.local_path.parent
+    model_dir.mkdir(parents=True, exist_ok=True)
+    total = sum(n for _, n in shards)
+    pending = []
+    done_bytes = 0
+    for repo_path, n in shards:
+        dest = model_dir / repo_path.rsplit("/", 1)[-1]
+        if dest.is_file() and n and dest.stat().st_size == n:
+            done_bytes += n
+        else:
+            pending.append((repo_path, n, dest))
+
+    if pending:
+        try:
+            import shutil as _shutil
+            need = 0
+            for _, n, dest in pending:
+                partial = dest.with_name(dest.name + ".part")
+                have = 0
+                if partial.is_file() and not partial.is_symlink():
+                    have = partial.stat().st_blocks * 512
+                need += max(0, n - have)
+            free = _shutil.disk_usage(model_dir).free
+            if free < need + 2 * 1024 ** 3:
+                return False, (
+                    f"Not enough disk space: {choice.name} needs ~{need / 1000 ** 3:.1f} GB "
+                    f"but only {free / 1000 ** 3:.1f} GB is free in {model_dir}. Free up space "
+                    f"or pick a smaller quant in /model."
+                )
+        except Exception:
+            pass
+
+    rev = getattr(choice, "revision", None) or "main"
+    if on_progress:
+        on_progress(f"Downloading {choice.filename} and {len(shards) - 1} more parts (~{choice.size_gb:.1f} GB)...")
+    for repo_path, n, dest in pending:
+        base = done_bytes
+
+        def shard_progress(msg: str, _base=base) -> None:
+            if on_progress is None:
+                return
+            mb_done, _mb_total, _pct = _parse_progress(msg)
+            if mb_done is None or not total:
+                on_progress(msg)
+                return
+            got = _base + mb_done * 1048576
+            tail = msg.split("%)", 1)[1] if "%)" in msg else ""
+            on_progress(f"Downloading: {got // 1048576}/{total // 1048576} MB ({min(100, got * 100 // total)}%){tail}")
+
+        url = f"https://huggingface.co/{choice.hf_repo}/resolve/{rev}/{repo_path}"
+        last_err: Exception | None = None
+        last_cat = "unknown"
+        ok = False
+        for attempt, delay in enumerate([0, 2, 5], start=1):
+            if cancel_event is not None and cancel_event.is_set():
+                return False, "cancelled"
+            if delay:
+                if on_progress:
+                    on_progress(f"Retry {attempt}/3 in {delay}s...")
+                time.sleep(delay)
+            try:
+                _download_parallel(url, dest, num_threads=16, on_progress=shard_progress, cancel_event=cancel_event)
+                ok = True
+                break
+            except DownloadCancelled:
+                return False, "cancelled"
+            except Exception as e:
+                last_err, last_cat = e, _classify_download_error(e)
+                if last_cat in ("disk_full", "auth", "not_found"):
+                    return False, _format_download_error(last_cat, e)
+        if not ok:
+            return False, _format_download_error(last_cat, last_err or RuntimeError("unknown download error"))
+        if n and dest.stat().st_size != n:
+            try:
+                dest.unlink()
+            except OSError:
+                pass
+            return False, f"Download of {dest.name} was incomplete; retry the selection."
+        done_bytes += n
+    first = model_dir / shards[0][0].rsplit("/", 1)[-1]
+    ok, reason = _verify_download_integrity(choice, first)
+    if not ok:
+        return False, reason
+    return True, str(first)
 
 
 def _classify_download_error(e: Exception) -> str:

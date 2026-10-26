@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 """Generate docs/src/data/models.json from localcode's own catalog.
 
-Everything in the memory chooser comes from localcode.models_catalog:
-the fit rule is the one recommend() implements (weights <= 55% of unified
-memory), the recommended pick is recommend(ram), and every size/active-param
-string is the catalog's own.
+Everything in the memory chooser comes from localcode itself: the fit rule
+is localcode.fit (files plus measured run-time memory inside the GPU working
+set, the rule the picker and recommend() use), the recommended pick is
+recommend(ram), and every size/active-param string is the catalog's own.
 
 Run with the interpreter that has localcode installed:
   ~/.local/share/uv/tools/localcode/bin/python docs/scripts/gen-models.py
 """
-import json, pathlib, re
+import json, os, pathlib, re
+# Size every tier by the documented GPU working-set fractions, not by the Mac
+# that happens to run this script.
+os.environ["LOCALCODE_RAM_GB"] = "128"
 from localcode import models_catalog as m
+from localcode import fit as F
 
 NO_AUTO = m._NO_AUTO_RECOMMEND_ARCHS
 TIERS = [16, 24, 32, 36, 48, 64, 96, 128]  # real Apple Silicon unified-memory options (>=16 GB floor)
@@ -109,9 +113,9 @@ REFERENCE_MODELS = [
 
 out = []
 for ram in TIERS:
-    budget = round(ram * 0.55, 1)
+    budget = round(F.gpu_budget_gb(ram), 1)
     rec = m.recommend(ram)
-    fits = sorted((c for c in m.CHOICES if c.size_gb <= budget), key=lambda c: c.size_gb)
+    fits = sorted((c for c in m.CHOICES if F.fit(c.size_gb, ram, c.filename) == "fits"), key=lambda c: c.size_gb)
     models = [{
         "name": c.name,
         **facets(c),
@@ -123,7 +127,7 @@ for ram in TIERS:
         "experimental": c.architecture in NO_AUTO,
     } for c in fits]
     # Fold in any reference-only model that fits this tier's budget.
-    models += [dict(r) for r in REFERENCE_MODELS if r["size"] <= budget]
+    models += [dict(r) for r in REFERENCE_MODELS if F.fit(r["size"], ram, r["file"]) == "fits"]
     models.sort(key=lambda mm: mm["size"])
     out.append({
         "ram": ram,
