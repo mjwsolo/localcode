@@ -115,8 +115,11 @@ def test_pep440_keeps_an_rc_out_of_the_default_install():
     rc, final = packaging.Version("0.5.41rc1"), packaging.Version("0.5.40")
     assert rc.is_prerelease and rc > final and packaging.Version("0.5.41") > rc
     from packaging.specifiers import SpecifierSet
-    assert not SpecifierSet(">=0.5.0").contains(rc), "default resolution skips pre-releases"
-    assert SpecifierSet("==0.5.41rc1").contains(rc), "an exact pin selects it"
+    # What an installer does: with a final release available, an unpinned
+    # requirement resolves to the final, never to the candidate. (Asserting on
+    # contains() alone breaks across packaging versions.)
+    assert list(SpecifierSet(">=0.5.0").filter([final, rc])) == [final], "default resolution skips pre-releases"
+    assert SpecifierSet("==0.5.41rc1").contains(rc, prereleases=True), "an exact pin selects it"
 
 
 def test_publish_workflow_marks_rc_releases_as_prereleases_and_tests_the_installed_package():
