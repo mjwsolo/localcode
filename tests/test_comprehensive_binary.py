@@ -187,13 +187,14 @@ def test_catalog_drafter_is_launched_only_when_its_file_is_complete(tmp_path, mo
     assert "--model-draft" not in cmd
     # complete (size matches; the launcher does not hash at every launch)
     f = tmp_path / gemma.drafter.filename
-    os.truncate(f, gemma.drafter.size_bytes)  # sparse file of the exact size
+    from _sparse import make_sparse
+    make_sparse(f, gemma.drafter.size_bytes)  # sparse file of the exact size
     cmd = g.llama_server_command(str(tmp_path / gemma.filename), 8081)
     assert cmd[cmd.index("--model-draft") + 1] == str(f)
     assert cmd[cmd.index("--spec-type") + 1] == "draft-mtp,ngram-mod"
     assert cmd[cmd.index("--spec-draft-n-max") + 1] == "4"
     f = tmp_path / qwen.drafter.filename
-    f.write_bytes(b"\0"); os.truncate(f, qwen.drafter.size_bytes)
+    f.write_bytes(b"\0"); make_sparse(f, qwen.drafter.size_bytes)
     cmd = g.llama_server_command(str(tmp_path / qwen.filename), 8081)
     assert cmd[cmd.index("--spec-type") + 1] == "draft-dflash,ngram-mod"
     assert "--spec-draft-n-max" not in cmd

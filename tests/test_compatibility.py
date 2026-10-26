@@ -79,8 +79,8 @@ def test_shipping_command_model_ram_matrix(monkeypatch, tmp_path, ram, choice):
 
 def test_oversize_model_rejected_before_spawn(tmp_path, monkeypatch):
     model = tmp_path / 'large.gguf'
-    with model.open('wb') as f:
-        f.truncate(7 * 1024 ** 3)  # sparse file, no 7 GB allocation
+    from _sparse import make_sparse
+    make_sparse(model, 7 * 1024 ** 3)  # sparse file, no 7 GB allocation
     monkeypatch.setattr(server_cmd, 'mmproj_for', lambda _: None)
     monkeypatch.setattr(server_cmd, 'catalog_choice', lambda _: None)
     with pytest.raises(ValueError, match='Insufficient RAM'):
@@ -92,8 +92,8 @@ def test_memory_guard_counts_sidecars(monkeypatch, tmp_path):
     from types import SimpleNamespace
     paths = [tmp_path / name for name in ('model.gguf', 'mmproj.gguf', 'draft.gguf')]
     for path in paths:
-        with path.open('wb') as f:
-            f.truncate(2 * 1024**3)
+        from _sparse import make_sparse
+        make_sparse(path, 2 * 1024**3)
     monkeypatch.setattr(server_cmd, 'mmproj_for', lambda _: paths[1])
     monkeypatch.setattr(server_cmd, 'catalog_choice', lambda _: SimpleNamespace(drafter=SimpleNamespace(local_path=paths[2])))
     with pytest.raises(ValueError, match='Insufficient RAM'):
@@ -120,8 +120,8 @@ def test_reported_qwen_q5_24gib_load_is_refused_before_inference(tmp_path, monke
     from localcode.ui import server_cmd
     # Exact Hugging Face size of the reported Q5_K_S file. Sparse fixture only.
     model = tmp_path / "Qwen3.6-35B-A3B-UD-Q5_K_S.gguf"
-    with model.open("wb") as stream:
-        stream.truncate(24_942_050_272)
+    from _sparse import make_sparse
+    make_sparse(model, 24_942_050_272)
     monkeypatch.setattr(server_cmd, "mmproj_for", lambda _: None)
     monkeypatch.setattr(server_cmd, "catalog_choice", lambda _: None)
     with pytest.raises(ValueError, match="Insufficient RAM"):

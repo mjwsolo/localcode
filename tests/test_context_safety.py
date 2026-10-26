@@ -52,8 +52,8 @@ def test_final_memory_budget_includes_explicit_drafter(weights_gib, expect_rejec
     model = tmp_path / "example-Q4_K_M.gguf"
     draft = tmp_path / "example-draft.gguf"
     for path, size in ((model, weights_gib), (draft, 1)):
-        with path.open("wb") as f:
-            f.truncate(size * 1024**3)
+        from _sparse import make_sparse
+        make_sparse(path, size * 1024**3)
     cfg = AppConfig(runtime=RuntimeConfig(llama_cpp_draft_model=str(draft)), ui=UIConfig())
     monkeypatch.setattr(server_cmd, 'load_config', lambda: cfg)
     monkeypatch.setattr(LocalCodeRuntimeGateway, '_system_ram_gb', lambda _: 16)
