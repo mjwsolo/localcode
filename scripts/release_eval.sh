@@ -60,7 +60,8 @@ if [ ! -d "$MODELS_DIR" ]; then
   else echo "models directory $MODELS_DIR does not exist; this script never downloads models" >&2; exit 2; fi
 fi
 
-CAND_VERSION="$("$PY" -c 'import tomllib,sys; print(tomllib.load(open(sys.argv[1],"rb"))["project"]["version"])' "$ROOT/pyproject.toml")"
+# Plain text read: tomllib is Python 3.11+, and LocalCode supports 3.10.
+CAND_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/pyproject.toml" | head -1)"
 if [ -n "$CAND_VENV" ]; then
   CAND_VERSION="$("$CAND_VENV/bin/python" -c 'from importlib.metadata import version; print(version("localcode"))' 2>/dev/null || echo "$CAND_VERSION")"
 fi
