@@ -336,7 +336,7 @@ def detect_vision_capability() -> tuple[bool, str]:
         return False, "Vision mode is currently Apple-Silicon-only (Metal mmproj)."
     try:
         out = subprocess.run(
-            ["sysctl", "-n", "hw.memsize"],
+            ["/usr/sbin/sysctl", "-n", "hw.memsize"],
             capture_output=True, text=True, timeout=2,
         ).stdout.strip()
         ram_gb = int(out) // (1024 ** 3)

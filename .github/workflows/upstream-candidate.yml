@@ -76,6 +76,18 @@ jobs:
         run: |
           set -euo pipefail
           case "$KIND" in llama|opencode) ;; *) exit 1;; esac
+          # 10: already current. 20 (opencode): the fork has not absorbed upstream
+          # dev yet, which is true most nights because upstream moves daily. Both
+          # are status, not breakage: keep one open tracking issue and pass.
+          if [ "$RESULT" = 10 ]; then echo "Already current; nothing to propose."; exit 0; fi
+          if [ "$RESULT" = 20 ] && [ "$KIND" = opencode ]; then
+            title="upstream-opencode: fork is behind upstream dev"
+            body="$RUNNER_TEMP/behind.md"
+            printf 'The LocalCode opencode fork has not merged the latest upstream dev yet, so no candidate was built. Merge upstream into the fork, verify it, then this job builds a candidate. Last checked: %s\n' "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > "$body"
+            existing=$(gh issue list --state open --search "$title in:title" --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -1)
+            if [ -n "$existing" ]; then gh issue edit "$existing" --body-file "$body"; else gh issue create --title "$title" --body-file "$body"; fi
+            exit 0
+          fi
           if [ "$RESULT" != 0 ]; then
             title="upstream-$KIND: candidate needs attention"
             body="$RUNNER_TEMP/failure.md"

@@ -3,6 +3,29 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.5.39 — 2026-10-26
+
+### Changed
+
+- The model picker, the recommended model and the load check now use the
+  memory your Mac's GPU can actually use (about two thirds of RAM on 16 to
+  36 GB Macs, three quarters or more above), plus each model's run-time memory
+  measured near a full 64K window. The old rule (weights under 55% of RAM)
+  marked Qwen 3.8 IQ2_S as fitting a 16 GB Mac, where it needs about 13 GB
+  against a 10.7 GB limit. Larger Macs now get better quants: a 48 GB Mac is
+  recommended Gemma 4 26B Q8 and a 64 GB Mac Qwen 3.6 Q8.
+- 16 and 24 GB Macs get 64K and 72K tokens of context (was 50K). Macs up to
+  36 GB keep 4 context checkpoints instead of up to 32, so Gemma 4 12B at 64K
+  uses about 9.2 GB, less than 0.5.38 used at 50K.
+
+### Fixed
+
+- A model that would leave under 16K tokens of context is refused with a
+  pointer to a smaller quant, instead of starting a session that cannot fit
+  the system prompt (an 18 GB Mac with a 14 GB quant started at 2,048 tokens).
+- RAM detection no longer depends on `/usr/sbin` being on PATH; without it a
+  128 GB Mac was treated as 16 GB.
+
 ## 0.5.38 — 2026-10-25
 
 ### Changed

@@ -28,7 +28,7 @@ def metal_gpu_available(memory_gb: int | None = None) -> bool:
     if memory_gb is None:
         try:
             mem_bytes = int(subprocess.run(
-                ["sysctl", "-n", "hw.memsize"],
+                ["/usr/sbin/sysctl", "-n", "hw.memsize"],
                 capture_output=True, text=True, timeout=2,
             ).stdout.strip())
             memory_gb = mem_bytes // (1024 ** 3)
@@ -41,7 +41,7 @@ def metal_gpu_available(memory_gb: int | None = None) -> bool:
     # 16GB: must check sysctl
     try:
         r = subprocess.run(
-            ["sysctl", "-n", "iogpu.wired_limit_mb"],
+            ["/usr/sbin/sysctl", "-n", "iogpu.wired_limit_mb"],
             capture_output=True, text=True, timeout=2,
         )
         return int(r.stdout.strip()) >= 12000
@@ -113,7 +113,7 @@ def ensure_gpu_unlock() -> bool:
     # Check RAM — only 16GB Macs need this
     try:
         mem_bytes = int(subprocess.run(
-            ["sysctl", "-n", "hw.memsize"],
+            ["/usr/sbin/sysctl", "-n", "hw.memsize"],
             capture_output=True, text=True, timeout=2,
         ).stdout.strip())
         ram_gb = mem_bytes // (1024 ** 3)
@@ -137,7 +137,7 @@ def ensure_gpu_unlock() -> bool:
         # Try non-interactive first (sudo cache might be warm)
         try:
             subprocess.run(
-                ["sudo", "-n", "sysctl", "iogpu.wired_limit_mb=14336"],
+                ["sudo", "-n", "/usr/sbin/sysctl", "iogpu.wired_limit_mb=14336"],
                 capture_output=True, timeout=5,
             )
             if metal_gpu_available(ram_gb):
@@ -316,7 +316,7 @@ def apple_silicon_bandwidth_gbps() -> float:
         return _FALLBACK
     try:
         brand = subprocess.run(
-            ["sysctl", "-n", "machdep.cpu.brand_string"],
+            ["/usr/sbin/sysctl", "-n", "machdep.cpu.brand_string"],
             capture_output=True, text=True, timeout=2,
         ).stdout.strip().lower()
     except Exception:
@@ -394,7 +394,7 @@ def detect_machine_profile() -> MachineProfile:
 
 def _detect_memory_gb(system: str) -> int:
     if system == "darwin":
-        raw = _run_capture(["sysctl", "-n", "hw.memsize"])
+        raw = _run_capture(["/usr/sbin/sysctl", "-n", "hw.memsize"])
         if raw.isdigit():
             return max(1, int(raw) // (1024 ** 3))
     if system == "linux":

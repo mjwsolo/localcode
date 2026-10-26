@@ -58,7 +58,7 @@ def hardware_identity() -> dict[str, str]:
     for name in ("hw.memsize", "machdep.cpu.brand_string"):
         try:
             identity[name] = subprocess.check_output(
-                ["sysctl", "-n", name], text=True, stderr=subprocess.DEVNULL, timeout=2,
+                ["/usr/sbin/sysctl", "-n", name], text=True, stderr=subprocess.DEVNULL, timeout=2,
             ).strip()
         except (OSError, subprocess.SubprocessError):
             return {}  # do not treat two unknown machines as a match

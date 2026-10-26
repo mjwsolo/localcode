@@ -51,7 +51,7 @@ def _read_pressure_level() -> int:
     """Return current VM pressure level (1, 2, or 4). 0 on error / non-Darwin."""
     try:
         r = subprocess.run(
-            ["sysctl", "-n", "kern.memorystatus_vm_pressure_level"],
+            ["/usr/sbin/sysctl", "-n", "kern.memorystatus_vm_pressure_level"],
             capture_output=True, text=True, timeout=1,
         )
         return int(r.stdout.strip())
@@ -195,7 +195,7 @@ def set_jetsam_highwater(pid: int, limit_mb: int) -> bool:
 
 def _total_ram_mb() -> int:
     try:
-        r = subprocess.run(["sysctl", "-n", "hw.memsize"],
+        r = subprocess.run(["/usr/sbin/sysctl", "-n", "hw.memsize"],
                            capture_output=True, text=True, timeout=2)
         return int(r.stdout.strip()) // (1024 * 1024)
     except Exception:
@@ -255,7 +255,7 @@ def should_disable_metal_residency(model_path: str, ctx_size: int) -> bool:
     cap. No user action, no sudo — we control the spawn env.
     """
     try:
-        r = subprocess.run(["sysctl", "-n", "hw.memsize"],
+        r = subprocess.run(["/usr/sbin/sysctl", "-n", "hw.memsize"],
                            capture_output=True, text=True, timeout=2)
         total_mb = int(r.stdout.strip()) // (1024 * 1024)
     except Exception:
