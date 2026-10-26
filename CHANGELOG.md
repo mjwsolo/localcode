@@ -3,7 +3,16 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## Unreleased
+## 0.5.40 — 2026-10-26
+
+### Added
+
+- Split (sharded) GGUF quants. Large quants that Hugging Face stores as several
+  files (`-00001-of-00003.gguf`, at the top level or in a subfolder) now show up
+  in the model picker as one row with the combined size. Picking one downloads
+  every part with a single progress figure, resumes after an interruption and
+  cancels like any download. It counts as downloaded only when every part is
+  present at its full size, and loads from the first part.
 
 ### Fixed
 

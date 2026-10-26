@@ -169,6 +169,10 @@ class ModelChoice:
     supports_systemone: bool = False
     # Vendor-trained speculative drafter shipped with the model (see Drafter).
     drafter: Drafter | None = None
+    # Split (sharded) GGUF: ((repo_path, bytes), ...) in shard order. Empty for
+    # a single file. `filename` is then the first shard; all shards are stored
+    # flat beside it and size_gb is their sum.
+    shards: tuple[tuple[str, int], ...] = ()
 
     @property
     def hf_url(self) -> str:
@@ -773,6 +777,7 @@ def _minted_for_filename(filename: str) -> ModelChoice | None:
     # tick, so NO network here). With a real size, completeness checks
     # treat partial downloads correctly.
     size_gb = 0.0
+    shards: tuple = ()
     try:
         from .hf_quants import _read_cache
         cached = _read_cache(g.hf_repo)
@@ -780,10 +785,11 @@ def _minted_for_filename(filename: str) -> ModelChoice | None:
             for q in cached[0]:
                 if q.filename == filename and not q.is_mmproj:
                     size_gb = q.size_gb
+                    shards = q.shards
                     break
     except Exception:
         size_gb = 0.0
-    return choice_for_quant(g, filename, size_gb)
+    return choice_for_quant(g, filename, size_gb, shards)
 
 
 def group_for_filename(filename: str) -> ModelGroup | None:
@@ -1057,7 +1063,8 @@ def _quant_label(filename: str) -> str:
     Falls back to the bare stem if no quant token is recognizable.
     """
     import re
-    stem = filename[:-5] if filename.lower().endswith(".gguf") else filename
+    from .split_gguf import display_alias
+    stem = display_alias(filename) if filename.lower().endswith(".gguf") else filename
     # Match a trailing quant descriptor: optional UD-/IQ/Q tier with K/_ parts,
     # or a plain precision tag like BF16 / F16 / F32.
     m = re.search(
@@ -1071,7 +1078,8 @@ def _quant_label(filename: str) -> str:
     return tail or stem
 
 
-def choice_for_quant(group: ModelGroup, filename: str, size_gb: float) -> ModelChoice:
+def choice_for_quant(group: ModelGroup, filename: str, size_gb: float,
+                     shards: tuple[tuple[str, int], ...] | list = ()) -> ModelChoice:
     """Mint a ModelChoice for a specific quant of `group` so the EXISTING
     download/runtime path (download_model / get_model_path / launch) just
     works. Copies repo / arch / license / mmproj from the group; the quant's
@@ -1104,6 +1112,7 @@ def choice_for_quant(group: ModelGroup, filename: str, size_gb: float) -> ModelC
         reasoning_control=canonical.reasoning_control if canonical else "chat_template",
         reasoning_budget_tokens=canonical.reasoning_budget_tokens if canonical else 8192,
         preserves_reasoning=canonical.preserves_reasoning if canonical else True,
+        shards=tuple(shards),
     )
 
 

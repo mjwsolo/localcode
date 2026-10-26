@@ -4,6 +4,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from .split_gguf import is_extra_shard, is_first_shard, split_complete
+
 _SKIP = {'.git', 'node_modules', '.venv', 'venv', '__pycache__', 'dist', 'build', 'voice'}
 
 
@@ -46,8 +48,12 @@ def model_files(models_dir: Path) -> dict[str, Path]:
             for name in sorted(files):
                 if not name.lower().endswith('.gguf') or name.lower().startswith(('mmproj', 'mtp-', 'mtp_', 'dflash')):
                     continue
+                # Later shards are not models; a split is listed by its first shard
+                # and only when every shard sits beside it.
+                if is_extra_shard(name):
+                    continue
                 path = Path(directory) / name
-                if path.is_file():
+                if path.is_file() and (not is_first_shard(name) or split_complete(path)):
                     found.setdefault(name, path)
     return found
 

@@ -196,7 +196,8 @@ def validate_model_memory(gguf: str, ram_gb: float) -> None:
     drafter = getattr(choice, "drafter", None)
     if drafter:
         paths.add(Path(drafter.local_path))
-    weights = sum(p.stat().st_size for p in paths if p.is_file())
+    from localcode.split_gguf import shard_paths
+    weights = sum(q.stat().st_size for p in paths for q in shard_paths(p) if q.is_file())
     total = int(ram_gb * 1024 ** 3)
     if total <= 0:
         raise ValueError("Could not determine RAM; run `localcode doctor` before loading a model.")
