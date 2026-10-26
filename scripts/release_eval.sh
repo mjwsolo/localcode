@@ -44,6 +44,9 @@ done
 [ -n "$MODEL" ] || { echo "--model is required" >&2; exit 2; }
 [ -n "$TASKS" ] || TASKS="$("$PY" "$HELPER" tasks)"
 [ -n "$MODELS_DIR" ] || MODELS_DIR="${LOCALCODE_MODEL_DIR:-$HOME/.local/share/localcode/models}"
+# The Harness-Bench checkout is not in git (evals/data is ignored); point at it
+# with LOCALCODE_EVALS_DATA when this checkout does not have it.
+EVALS_DATA="${LOCALCODE_EVALS_DATA:-$ROOT/evals/data}"
 
 say() { printf '%s\n' "$*"; }
 run() { printf '+ %s\n' "$*"; if [ "$DRY" = 0 ]; then "$@"; fi; }
@@ -55,6 +58,10 @@ if pgrep -x llama-server >/dev/null 2>&1; then
 fi
 
 # Models are only ever read from an existing directory.
+if [ ! -d "$EVALS_DATA/harness-bench" ]; then
+  if [ "$DRY" = 1 ]; then say "WARNING: Harness-Bench data not found at $EVALS_DATA/harness-bench"
+  else echo "Harness-Bench data not found at $EVALS_DATA/harness-bench; set LOCALCODE_EVALS_DATA to the folder that holds it (nothing is downloaded)" >&2; exit 2; fi
+fi
 if [ ! -d "$MODELS_DIR" ]; then
   if [ "$DRY" = 1 ]; then say "WARNING: models directory $MODELS_DIR does not exist"
   else echo "models directory $MODELS_DIR does not exist; this script never downloads models" >&2; exit 2; fi
@@ -96,6 +103,7 @@ one() {
   run env HOME="$home" XDG_CONFIG_HOME="$home/.config" XDG_DATA_HOME="$home/.local/share" XDG_CACHE_HOME="$home/.cache" \
       XDG_STATE_HOME="$home/.local/state" LOCALCODE_HOME="$home/state" LOCALCODE_MODEL_DIR="$MODELS_DIR" \
       LOCALCODE_EVALS_REPO="$repo" LOCALCODE_PY="$py" LOCALCODE_EVALS_WORKROOT="$WORK/workspaces-$name" \
+      LOCALCODE_EVALS_DATA="$EVALS_DATA" PYTHONPATH="$ROOT/evals" \
       inspect eval localcode_evals/harnessbench -T "ids=$TASKS" --model "localcode/$MODEL" --log-dir "$WORK/logs-$name"
   run "$PY" "$HELPER" summarize "$WORK/logs-$name" --out "$WORK/$name.json"
 }

@@ -72,6 +72,7 @@ fi
 pgrep -x llama-server >/dev/null 2>&1 && refuse "a llama-server process is running (it would distort the gate and the eval timings)"
 # The release eval runs Inspect; check it now, before anything is published.
 command -v inspect >/dev/null 2>&1 || refuse "the inspect command (Inspect AI) is not on PATH; the release eval needs it"
+[ -d "${LOCALCODE_EVALS_DATA:-$ROOT/evals/data}/harness-bench" ] || refuse "Harness-Bench data not found; set LOCALCODE_EVALS_DATA to the folder that holds harness-bench"
 grep -Eq "^## ($VERSION( |rc[0-9]|\$)|Unreleased)" "$ROOT/CHANGELOG.md" || refuse "CHANGELOG.md has no '## $VERSION', '## ${VERSION}rcN' or '## Unreleased' section (the release needs its notes)"
 if [ -n "$(g tag -l "v$VERSION")" ] || g ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null 2>&1; then
   refuse "v$VERSION already exists"

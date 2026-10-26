@@ -18,6 +18,14 @@ import release_notes  # noqa: E402
 GIT = ["git", "-c", "user.name=Release tests", "-c", "user.email=tests@example.invalid"]
 
 
+
+@pytest.fixture(autouse=True)
+def _evals_data(tmp_path_factory, monkeypatch):
+    # release.sh and release_eval.sh need the (git-ignored) Harness-Bench data.
+    data = tmp_path_factory.mktemp("evals-data")
+    (data / "harness-bench").mkdir()
+    monkeypatch.setenv("LOCALCODE_EVALS_DATA", str(data))
+
 def git(cwd, *args):
     return subprocess.run([*GIT, *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
 
