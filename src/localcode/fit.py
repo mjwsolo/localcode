@@ -26,13 +26,14 @@ FIT_MARGIN_GB = 0.5
 
 # Run-time memory beyond the files: (flat GB, fraction of the files' size), at a
 # 64K window with 4 context checkpoints. Measured 2026-10-25 on the bundled
-# llama-server (dev/evals/runs/research-wins/footprint.jsonl). Keyed by filename
+# llama-server with macOS `footprint` near a full window. Keyed by filename
 # prefix; the first match wins.
 RUNTIME_OVERHEAD: tuple[tuple[str, float, float], ...] = (
     ("gemma-4-12b", 2.2, 0.0),
     ("gemma-4-26B-A4B", 2.9, 0.0),
     ("Qwen3.6-35B-A3B", 2.35, 0.0),
     ("Qwen3.8-27B", 0.0, 0.47),
+    ("North-Mini-Code", 2.8, 0.0),
 )
 RUNTIME_OVERHEAD_DEFAULT = (3.0, 0.3)
 
