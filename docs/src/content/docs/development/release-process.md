@@ -25,7 +25,7 @@ or is not up to date with `origin`, another `llama-server` is running, the
 changelog has no notes, or `v0.5.41` exists. Then:
 
 1. **Candidate.** Picks the next free `0.5.41rcN` from the tags
-   (`scripts/release_candidate.sh`), commits the bump, and pushes it to `release/<version>` (main is protected, admins included) with a PR to `main`, together with the tag `v0.5.41rcN`. This is the only push before promotion. `publish.yml`
+   (`scripts/release_candidate.sh`), commits the bump on `release/<version>`, opens a PR to `main` (main is protected, admins included, and `publish.yml` only releases commits on main), waits for its checks, merges it with a merge commit, and tags that merge commit `v0.5.41rcN`. This is the only push before promotion. `publish.yml`
    publishes it to PyPI as a pre-release and creates a GitHub release marked
    `--prerelease`. A candidate is never the default install: PEP 440 pre-releases
    are skipped by `pip install localcode` and `uv tool install localcode`. The
@@ -66,7 +66,7 @@ If any check fails, the script stops before promotion, prints which check failed
 and where its log is, and nothing is promoted. The candidate stays published as a
 pre-release; fix the cause and run the script again, which uses the next `rcN`.
 
-The release PR merges into `main` after the final release is published, so `main` then carries the `0.5.41rcN` version string until the next release bumps it. The
+`main` carries the `0.5.41rcN` version string until the next release bumps it. The
 bundled `localcode-ui` binary is committed, not rebuilt by `publish.yml`, so its
 footer shows the version it was last built with (as for every release); rebuild it
 with `scripts/build_ui_binary.sh` in a normal change if the footer must match.

@@ -100,19 +100,29 @@ publish_runs_failed() { # <sha>
 say ""; say "== 2. publish candidate $RC =="
 setver "$RC"
 run g commit -qam "$RC"
-run g tag -a "v$RC" -m "$RC"
-# main is protected (required checks, admins included), so the candidate goes on
-# release/<version> with a PR to main; its checks and the local statuses land on
-# this exact commit, and the PR merges once the final release is out.
+# main is protected (required checks, admins included) and publish.yml only
+# releases commits that are on main, so the version bump lands on main first:
+# push it to release/<version>, open a PR, let CI pass, merge it with a merge
+# commit, and tag THAT commit. Everything after this is tested on that commit,
+# and promotion later tags the same commit with the final version.
 REL_BRANCH="release/$VERSION"
-run g push -f origin "HEAD:refs/heads/$REL_BRANCH" "refs/tags/v$RC"
+run g push -f origin "HEAD:refs/heads/$REL_BRANCH"
 if [ "$DRY" = 1 ]; then
-  say "+ gh pr create --base main --head $REL_BRANCH (unless one is open)"
+  say "+ gh pr create --base main --head $REL_BRANCH, wait for its checks, gh pr merge --merge"
+  say "+ tag the merge commit on main as v$RC and push the tag"
+  SHA="<merge commit on main>"
 else
   gh pr view "$REL_BRANCH" --json number >/dev/null 2>&1 || \
-    gh pr create --base main --head "$REL_BRANCH" --title "$VERSION" --body "Release $VERSION. The candidate $RC on this exact commit is tested by scripts/release.sh; this merges after the final release is published." >/dev/null
+    gh pr create --base main --head "$REL_BRANCH" --title "$RC" --body "Release candidate $RC. scripts/release.sh merges this, tags the merge commit v$RC and tests that commit before promoting it." >/dev/null
+  sleep 30
+  gh pr checks "$REL_BRANCH" --watch --interval 30 >/dev/null 2>&1 || { say "FAILED: checks on the $RC pull request; see: gh pr checks $REL_BRANCH"; exit 1; }
+  gh pr merge "$REL_BRANCH" --merge >/dev/null || { say "FAILED: could not merge the $RC pull request (main moved?); see: gh pr view $REL_BRANCH"; exit 1; }
+  SHA="$(gh pr view "$REL_BRANCH" --json mergeCommit --jq .mergeCommit.oid)"
+  [ -n "$SHA" ] || { say "FAILED: no merge commit for the $RC pull request"; exit 1; }
+  g fetch -q origin main
+  g tag -a "v$RC" -m "$RC" "$SHA"
+  g push origin "refs/tags/v$RC"
 fi
-SHA="$( [ "$DRY" = 1 ] && echo "<candidate commit>" || g rev-parse HEAD )"
 
 # ---- 3. wait for PyPI ----------------------------------------------------------
 say ""; say "== 3. wait for PyPI to serve $RC =="
@@ -197,14 +207,4 @@ wait_run() { # <workflow> <branch> <head sha> <not before>: wait for that exact 
 }
 wait_run release.yml main "$MAIN_SHA" "$STARTED" || { say "FAILED: promotion. $RC stays a pre-release; see: gh run list --workflow release.yml"; exit 1; }
 wait_run publish.yml "v$VERSION" "$SHA" "$STARTED" || { say "FAILED: the final release or its post-publish checks; see: gh run list --workflow publish.yml --branch v$VERSION"; exit 1; }
-# The release PR's head is the tested commit; rerun the promotion check now that
-# the local gate status is posted, then merge it with a merge commit.
-for r in $(gh run list --workflow "Model promotion gate" --branch "$REL_BRANCH" --json databaseId,headSha --jq "[.[] | select(.headSha == \"$SHA\")][0].databaseId" 2>/dev/null); do gh run rerun "$r" >/dev/null 2>&1 || true; done
-sleep 60
-gh pr checks "$REL_BRANCH" --watch --interval 30 >/dev/null 2>&1 || true
-if gh pr merge "$REL_BRANCH" --merge >/dev/null 2>&1; then
-  say "merged the release PR for $VERSION into main"
-else
-  say "NOTE: the release PR for $VERSION did not merge automatically (main moved, or a check failed); merge it by hand: gh pr view $REL_BRANCH"
-fi
 say "released $VERSION; post-publish checks passed"

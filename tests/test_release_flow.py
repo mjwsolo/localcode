@@ -55,7 +55,7 @@ def test_dry_run_prints_every_step_in_order_and_changes_nothing(repo, tmp_path):
     r = release(repo, tmp_path, "0.5.41", "--model", "m", "--dry-run")
     assert r.returncode == 0, r.stdout + r.stderr
     out = r.stdout
-    steps = ["checks done (0 problem(s))", "tag -a v0.5.41rc1", "refs/tags/v0.5.41rc1", "== 3.", "pypi.org/pypi/localcode/0.5.41rc1/json",
+    steps = ["checks done (0 problem(s))", "gh pr merge --merge", "as v0.5.41rc1 and push the tag", "== 3.", "pypi.org/pypi/localcode/0.5.41rc1/json",
              "localcode==0.5.41rc1", "localcode doctor", "ui_e2e.sh --installed", "verify_models.py --installed --strict --publish-status",
              "release_eval.sh --model m --candidate-venv", "gh workflow run release.yml --ref main -f candidate=0.5.41rc1",
              "no new commit", "post-publish"]
