@@ -22,6 +22,8 @@ from pathlib import Path
 
 import httpx
 
+from .split_gguf import display_alias, parse_shard
+
 # HF tree API: lists every file in the repo (recursive). LFS files (the .gguf
 # weights) carry their real size under entry["lfs"]["size"]; small files use
 # entry["size"]. We read both defensively.
@@ -61,6 +63,8 @@ def _parse_label(filename: str) -> str | None:
     `…-it.gguf`, etc.) instead of inventing junk labels like 'it' or 'MTP'.
     """
     base = filename.rsplit("/", 1)[-1]  # drop any directory prefix
+    if parse_shard(base) is not None:  # split quant: label comes from the stem
+        base = display_alias(base) + ".gguf"
     m = _QUANT_RE.search(base)
     if m:
         return (m.group(1) or "") + m.group(2)
@@ -73,6 +77,10 @@ class Quant:
     size_gb: float      # decimal GB (bytes / 1e9)
     label: str          # parsed quant tag, e.g. "UD-Q4_K_XL", "Q8_0", "BF16", "IQ2_M"
     is_mmproj: bool     # True for vision projector sidecars (mmproj-*.gguf)
+    # Split (sharded) quant: ((repo_path, bytes), ...) in shard order. Then
+    # ``filename`` is the FIRST shard's basename (what llama-server loads, stored
+    # flat in the models dir) and ``size_gb`` is the sum of all shards.
+    shards: tuple[tuple[str, int], ...] = ()
 
 
 def _quant_from_entry(entry: dict) -> Quant | None:
@@ -98,6 +106,9 @@ def _quant_from_entry(entry: dict) -> Quant | None:
     # selectable weights.
     if "/" in path:
         return None
+    # Shards are grouped into one split quant by _split_quants.
+    if parse_shard(base) is not None:
+        return None
     # Vision projectors and speculative drafters (MTP heads, DFlash) are
     # sidecars, not pickable models.
     if lowered.startswith(("mmproj", "mtp-", "mtp_", "dflash")):
@@ -120,12 +131,58 @@ def _quant_from_entry(entry: dict) -> Quant | None:
     )
 
 
+_SIDECAR_PREFIXES = ("mmproj", "mtp-", "mtp_", "dflash")
+
+
+def _entry_bytes(entry: dict) -> int:
+    lfs = entry.get("lfs") or {}
+    return int(lfs.get("size") or entry.get("size") or 0)
+
+
+def _split_quants(entries: list[dict]) -> list[Quant]:
+    """Group shard files (``<stem>-00001-of-00003.gguf``, top level or in a
+    subfolder) into one Quant per split. A split is listed only when every shard
+    is present. Sidecars (mmproj, mtp, dflash) are skipped by file or folder name."""
+    groups: dict[tuple[str, str, int], dict[int, dict]] = {}
+    for entry in entries:
+        path = entry.get("path", "")
+        if not path.lower().endswith(".gguf"):
+            continue
+        parts = path.split("/")
+        if parts[-1].lower().startswith(_SIDECAR_PREFIXES) or any(
+            folder.lower().startswith(("mmproj", "mtp", "dflash")) for folder in parts[:-1]
+        ):
+            continue
+        parsed = parse_shard(parts[-1])
+        if parsed is None:
+            continue
+        stem, idx, total = parsed
+        groups.setdefault(("/".join(parts[:-1]), stem, total), {})[idx] = entry
+    out: list[Quant] = []
+    for (_, stem, total), found in groups.items():
+        if sorted(found) != list(range(1, total + 1)):
+            continue
+        label = _parse_label(stem + ".gguf")
+        if label is None:
+            continue
+        shards = tuple((found[i]["path"], _entry_bytes(found[i])) for i in range(1, total + 1))
+        out.append(Quant(
+            filename=found[1]["path"].rsplit("/", 1)[-1],
+            size_gb=round(sum(b for _, b in shards) / 1e9, 3),
+            label=label,
+            is_mmproj=False,
+            shards=shards,
+        ))
+    return out
+
+
 def _read_cache(hf_repo: str) -> tuple[list[Quant], float] | None:
     """Return (quants, fetched_at) from disk, or None if no/invalid cache."""
     p = _cache_path(hf_repo)
     try:
         raw = json.loads(p.read_text())
-        quants = [Quant(**q) for q in raw["quants"]]
+        quants = [Quant(**{**q, "shards": tuple((str(a), int(b)) for a, b in q.get("shards") or ())})
+                  for q in raw["quants"]]
         return quants, float(raw.get("fetched_at", 0.0))
     except (OSError, ValueError, KeyError, TypeError):
         return None
@@ -167,6 +224,7 @@ def fetch_quants(hf_repo: str) -> list[Quant]:
         return cached[0] if cached else []
 
     quants = [q for e in entries if (q := _quant_from_entry(e)) is not None]
+    quants += _split_quants(entries)
     quants.sort(key=lambda q: q.size_gb)
     _write_cache(hf_repo, quants)
     return quants

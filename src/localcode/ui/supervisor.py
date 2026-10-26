@@ -44,6 +44,7 @@ from urllib.parse import parse_qs, urlparse
 import localcode
 from localcode import bootstrap
 from localcode.model_files import model_files, find_model
+from localcode.split_gguf import display_alias, is_shard, link_split, resolve_model_path, split_complete, total_bytes
 from localcode.hf_quants import fetch_quants, fit_badge
 from localcode.models_catalog import (
     MODEL_GROUPS,
@@ -79,7 +80,7 @@ def _bandwidth() -> float:
 
 
 def _alias(filename: str) -> str:
-    return filename.removesuffix(".gguf")
+    return display_alias(filename)
 
 
 class Supervisor:
@@ -185,9 +186,9 @@ class Supervisor:
         if not self.current:
             return {"vision": False, "vision_available": False, "vision_size_gb": 0.0}
         from localcode.ui.server_cmd import catalog_choice, mmproj_for
-        choice = catalog_choice(str(self.models_dir / f"{self.current}.gguf"))
+        choice = catalog_choice(str(self._model_path(self.current)))
         available = bool(choice is not None and getattr(choice, "supports_vision", False))
-        return {"vision": mmproj_for(str(self.models_dir / f"{self.current}.gguf")) is not None,
+        return {"vision": mmproj_for(str(self._model_path(self.current))) is not None,
                 "vision_available": available,
                 "vision_size_gb": round(float(getattr(choice, "mmproj_size_gb", 0.0) or 0.0), 2) if available else 0.0}
 
@@ -219,7 +220,7 @@ class Supervisor:
         explicit user request (vision_install); failure only means text-only."""
         try:
             from localcode.ui.server_cmd import catalog_choice
-            choice = catalog_choice(str(self.models_dir / f"{alias}.gguf"))
+            choice = catalog_choice(str(self._model_path(alias)))
             if choice is None or not getattr(choice, "supports_vision", False):
                 return
             dest = choice.mmproj_path
@@ -255,10 +256,25 @@ class Supervisor:
         validate_response(result, data)
         return {**result, "model": model}
 
+    def _model_path(self, alias: str) -> Path:
+        """File to load for an alias: ``<alias>.gguf``, or a split quant's first shard."""
+        return resolve_model_path(self.models_dir, alias)
+
+    def _quant_for(self, g, filename: str):
+        return next((q for q in self._quant_rows(g) if q.filename == filename), None)
+
+    def _model_ready(self, filename: str, quant=None, found: Path | None = None) -> bool:
+        """The file (every shard, at its listed size, for a split) is in the models dir."""
+        target = found or self.models_dir / filename
+        if not is_shard(filename):
+            return target.is_file()
+        sizes = {p.rsplit("/", 1)[-1]: n for p, n in (getattr(quant, "shards", None) or ())}
+        return split_complete(target, sizes)
+
     def start(self, alias: str, wait_s: int = 240) -> bool:
         if self._closing.is_set():
             return False
-        gguf = self.models_dir / f"{alias}.gguf"
+        gguf = self._model_path(alias)
         # localcode's own per-machine server command (RAM-tier context, KV
         # compression, flash-attn, checkpoints) — nothing hardcoded here.
         from localcode.ui.server_cmd import server_command
@@ -309,7 +325,7 @@ class Supervisor:
         from localcode.ui import warmup
         port = self.port
         baseline: int | None = None
-        model_path = self.models_dir / f"{alias}.gguf"
+        model_path = self._model_path(alias)
         try:
             toks = warmup.load(alias, model_path)
             if stop.is_set():
@@ -540,7 +556,7 @@ class Supervisor:
                     return {"error": "Model server is already running. Stop it first to restart."}
                 if not self.current:
                     return {"error": "No previous model. Select a model using /model first."}
-                if not _safe_filename(self.current + ".gguf") or not (self.models_dir / (self.current + ".gguf")).is_file():
+                if not _safe_filename(self.current + ".gguf") or not self._model_path(self.current).is_file():
                     return {"error": "The previous model file is missing. Select an installed model using /model."}
                 self.state = {"state": "loading", "model": self.current, "detail": "Reloading model…", "pct": None}
             threading.Thread(target=self._server_action_worker, args=(action, force), daemon=True).start()
@@ -680,7 +696,7 @@ class Supervisor:
             label = _parse_label(filename)
             if label and filename not in listed and group_for_filename(filename) == g:
                 try:
-                    rows.append(Quant(filename, path.stat().st_size / 1e9, label, False))
+                    rows.append(Quant(filename, total_bytes(path) / 1e9, label, False))
                 except OSError:
                     continue
         rows.sort(key=lambda q: q.size_gb)
@@ -700,7 +716,7 @@ class Supervisor:
                 "filename": q.filename, "alias": _alias(q.filename), "label": q.label,
                 "size_gb": round(total_gb, 1), "fit": fit_badge(total_gb + vision_gb, self.ram_gb, q.filename),
                 "tok_s": spd, "recommended": i == rec_idx,
-                "downloaded": q.filename in installed,
+                "downloaded": q.filename in installed and (not is_shard(q.filename) or self._model_ready(q.filename, q, installed.get(q.filename))),
                 "current": _alias(q.filename) == self.current,
                 "loaded": loaded and _alias(q.filename) == self.current,
                 "downloading": self.state["state"] == "downloading" and self.active.get("filename") == q.filename,
@@ -752,17 +768,22 @@ class Supervisor:
                 return {"error": "A request is active or server activity cannot be verified. Cancel it or wait before switching models."}
             existing = find_model(filename, self.models_dir)
             target = self.models_dir / filename
+            quant = self._quant_for(g, filename) if is_shard(filename) else None
             if existing is not None and not target.is_file():
                 self.models_dir.mkdir(parents=True, exist_ok=True)
-                target.symlink_to(existing.resolve())
-            if not target.is_file():
+                if is_shard(filename):
+                    link_split(existing, self.models_dir)
+                else:
+                    target.symlink_to(existing.resolve())
+            have = self._model_ready(filename, quant)
+            if not have:
                 listed = {q.filename for q in self._quant_rows(g)}
                 if filename not in listed:
                     return {"error": f"{filename} is not a file of {g.hf_repo}"}
             previous = (dict(self.state), dict(self.active), self.cancel.is_set())
             self.cancel.clear()
             self.active = {"group": key, "filename": filename}
-            self.state = {"state": "loading" if target.is_file() else "downloading",
+            self.state = {"state": "loading" if have else "downloading",
                           "model": alias, "detail": "", "pct": None}
             threading.Thread(target=self._select_worker, args=(g, filename, alias), daemon=True).start()
             queued = True
@@ -782,10 +803,13 @@ class Supervisor:
         previous_process = getattr(self, "proc", None)
         load_started = False
         try:
-            download_requested = not (self.models_dir / filename).exists()
+            quant = self._quant_for(g, filename) if is_shard(filename) else None
+            download_requested = not self._model_ready(filename, quant)
             if download_requested:
-                size = next((q.size_gb for q in self._quant_rows(g) if q.filename == filename), 0.0)
-                choice = choice_for_quant(g, filename, size)
+                if quant is None:
+                    quant = self._quant_for(g, filename)
+                size = quant.size_gb if quant else 0.0
+                choice = choice_for_quant(g, filename, size, getattr(quant, "shards", ()))
 
                 def on_progress(msg: str) -> None:
                     pct = None
@@ -806,7 +830,10 @@ class Supervisor:
                 got = Path(res)
                 if got.parent != self.models_dir and not (self.models_dir / filename).exists():
                     # download_model saved under localcode's model_dir(); link it here.
-                    os.symlink(got, self.models_dir / filename)
+                    if is_shard(filename):
+                        link_split(got, self.models_dir)
+                    else:
+                        os.symlink(got, self.models_dir / filename)
             # The drafter that ships with this model (its size was part of the
             # figure the user picked). Missing it is not fatal: the model runs
             # without speculation and the next select retries.
@@ -862,7 +889,7 @@ class Supervisor:
         if not self.current:
             return False
         from localcode.ui.server_cmd import mmproj_for
-        return mmproj_for(str(self.models_dir / f"{self.current}.gguf")) is not None
+        return mmproj_for(str(self._model_path(self.current))) is not None
 
     # ---- voice: push-to-talk STT + read-aloud, all local ---------------------
     voice_proc: subprocess.Popen | None = None
