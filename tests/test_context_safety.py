@@ -45,7 +45,7 @@ def test_tuned_launcher_context_cannot_bypass_machine_ceiling(source, monkeypatc
     assert command[command.index('--ctx-size') + 1] == '73728'
 
 
-@pytest.mark.parametrize("weights_gib,expect_rejection", [(12, True), (10, False)])
+@pytest.mark.parametrize("weights_gib,expect_rejection", [(12, True), (9, True), (7, False)])
 def test_final_memory_budget_includes_explicit_drafter(weights_gib, expect_rejection, monkeypatch, tmp_path):
     from localcode.ui import server_cmd
     from localcode.config import AppConfig, UIConfig

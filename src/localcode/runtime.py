@@ -660,6 +660,10 @@ class LocalCodeRuntimeGateway:
             _ckpts = "16"
         else:
             _ckpts = "32"
+        from .model_config import SMALL_MAC_MAX_CHECKPOINTS, SMALL_MAC_MAX_RAM_GB
+        if (_ckpt_override is None and _ckpts != "0" and self._system_ram_gb() <= SMALL_MAC_MAX_RAM_GB
+                and int(_ckpts) > SMALL_MAC_MAX_CHECKPOINTS):
+            _ckpts = str(SMALL_MAC_MAX_CHECKPOINTS)
         if _ckpts == "0":
             # Explicitly request zero rolling snapshots; omit the cadence flag
             # (moot with checkpoints off) so nothing triggers a serialization.
@@ -1057,7 +1061,7 @@ class LocalCodeRuntimeGateway:
         try:
             import subprocess
             mem_bytes = int(subprocess.run(
-                ["sysctl", "-n", "hw.memsize"],
+                ["/usr/sbin/sysctl", "-n", "hw.memsize"],
                 capture_output=True, text=True, timeout=2
             ).stdout.strip())
             ram_gb = max(1, mem_bytes // (1024 ** 3))

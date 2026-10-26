@@ -12,7 +12,7 @@ from importlib.metadata import version
 
 def sysctl(name: str) -> str:
     try:
-        return subprocess.check_output(['sysctl', '-n', name], stderr=subprocess.DEVNULL,
+        return subprocess.check_output(['/usr/sbin/sysctl', '-n', name], stderr=subprocess.DEVNULL,
                                        text=True, timeout=3).strip()
     except (OSError, subprocess.SubprocessError):
         return ''

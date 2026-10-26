@@ -28,6 +28,19 @@ def run(args, cwd, env):
     return result.stdout.strip() or result.stderr.strip()
 
 
+def run_retrying(args, cwd, env, attempts=6, wait=30):
+    """An install right after an upload can still see PyPI's previous index on
+    the CDN; retry for a few minutes before calling it a failure."""
+    import time
+    for attempt in range(attempts):
+        try:
+            return run(args, cwd, env)
+        except RuntimeError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(wait)
+
+
 def verify(target: str, expected: str, installer: str, previous: str | None):
     if Path(target).exists():
         target = str(Path(target).resolve())
@@ -45,7 +58,7 @@ def verify(target: str, expected: str, installer: str, previous: str | None):
             py = work / 'venv/bin/python'
             bindir = py.parent
             def install(spec):
-                run([py, '-m', 'pip', 'install', '--upgrade', spec], work, env)
+                run_retrying([py, '-m', 'pip', 'install', '--upgrade', '--no-cache-dir', spec], work, env)
             run([py, '-m', 'pip', 'install', '--upgrade', 'pip'], work, env)
         else:
             uv = shutil.which('uv')
@@ -54,7 +67,7 @@ def verify(target: str, expected: str, installer: str, previous: str | None):
             bindir = work / 'bin'
             py = work / 'tools/localcode/bin/python'
             def install(spec):
-                run([uv, 'tool', 'install', '--upgrade', '--python', sys.executable, spec], work, env)
+                run_retrying([uv, 'tool', 'install', '--upgrade', '--refresh', '--python', sys.executable, spec], work, env)
         env['PATH'] = str(bindir) + os.pathsep + env.get('PATH', '')
         if previous:
             install('localcode==' + previous)

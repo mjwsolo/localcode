@@ -114,7 +114,11 @@ def server_command(gguf: str, port: int, alias: str | None = None) -> list[str]:
         total = ram_gb * 1024**3
         reserve = max(3 * 1024**3, int(total * 0.15))
         fit = int((total - loaded_weights - reserve - g._kv_fixed_bytes(gguf)) / bpt) // 2048 * 2048
-        if fit < 2048:
+        from localcode.model_config import MIN_USABLE_CTX
+        # Below MIN_USABLE_CTX the system prompt, tools and one task do not fit,
+        # so refuse and point at a smaller quant rather than start a session that
+        # cannot work (an 18 GB Mac with a 14 GB quant got 2048 tokens).
+        if fit < MIN_USABLE_CTX:
             raise ValueError("Insufficient RAM for model weights and minimum context; choose a smaller quantization in /models.")
         ctx_index = cmd.index("--ctx-size") + 1
         cmd[ctx_index] = str(min(int(cmd[ctx_index]), fit))
