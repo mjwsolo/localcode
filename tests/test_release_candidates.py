@@ -293,3 +293,15 @@ def test_release_eval_end_to_end_with_stubbed_inspect(tmp_path):
     assert worse.returncode == 1 and "BLOCKED" in worse.stdout
     slow = go(run([1, 1, 1], 200), "w3")
     assert slow.returncode == 1 and "slower" in slow.stdout
+
+
+def test_speed_is_compared_only_on_like_for_like_tasks():
+    import release_eval as E
+    run = lambda **t: {"tasks": {k: {"score": v[0], "passed": v[1], "wall_s": v[2], "error": False} for k, v in t.items()}}
+    # A task the candidate solves and the previous release gave up on takes
+    # longer for a good reason: not a slowdown.
+    fixed = E.compare(run(a=(0.2, False, 100.0)), run(a=(0.8, True, 190.0)))
+    assert fixed["ok"] and fixed["slowdown"] is None
+    # Same outcome, much slower: blocked.
+    slow = E.compare(run(a=(1.0, True, 100.0), b=(0.2, False, 50.0)), run(a=(1.0, True, 200.0), b=(0.8, True, 60.0)))
+    assert not slow["ok"] and slow["speed_tasks"] == 1 and any("slower" in r for r in slow["reasons"])

@@ -89,14 +89,21 @@ def compare(previous: dict, candidate: dict, score_margin: float = 0.05, max_slo
     drop = pt["mean_score"] - ct["mean_score"]
     if drop > score_margin + 1e-12:
         reasons.append(f"mean score fell {drop:.3f} (limit {score_margin:.3f})")
+    # Speed is compared like for like: only on tasks both runs passed, or both
+    # failed. A version that solves a task the other gave up on takes longer for
+    # a good reason, and must not be blocked as "slower" for it.
+    same = sorted(t for t in a if previous["tasks"][t]["passed"] == candidate["tasks"][t]["passed"])
     slowdown = None
-    if pt["timed"] and ct["timed"] and pt["wall_s"] > 0:
-        slowdown = ct["wall_s"] / pt["wall_s"] - 1
-        if slowdown > max_slowdown + 1e-12:
-            reasons.append(f"{slowdown * 100:.0f}% slower (limit {max_slowdown * 100:.0f}%)")
-    elif not (pt["timed"] and ct["timed"]):
-        reasons.append("wall time missing for some tasks, cannot judge speed")
-    return {"previous": pt, "candidate": ct, "score_drop": drop, "slowdown": slowdown, "ok": not reasons, "reasons": reasons,
+    if same:
+        pw = [previous["tasks"][t]["wall_s"] for t in same]
+        cw = [candidate["tasks"][t]["wall_s"] for t in same]
+        if any(w is None for w in pw + cw):
+            reasons.append("wall time missing for some tasks, cannot judge speed")
+        elif sum(pw) > 0:
+            slowdown = sum(cw) / sum(pw) - 1
+            if slowdown > max_slowdown + 1e-12:
+                reasons.append(f"{slowdown * 100:.0f}% slower on {len(same)} like-for-like task(s) (limit {max_slowdown * 100:.0f}%)")
+    return {"previous": pt, "candidate": ct, "score_drop": drop, "slowdown": slowdown, "speed_tasks": len(same), "ok": not reasons, "reasons": reasons,
             "regressed": sorted(t for t in a if previous["tasks"][t]["passed"] and not candidate["tasks"][t]["passed"]),
             "fixed": sorted(t for t in a if candidate["tasks"][t]["passed"] and not previous["tasks"][t]["passed"])}
 
@@ -106,7 +113,7 @@ def render(result: dict, previous_label: str = "previous", candidate_label: str 
         return f"{label:<11} score {t['mean_score']:.3f}   passed {t['passed']}/{t['tasks']}   wall {t['wall_s']:.0f}s   errors {t['errors']}"
     change = f"score change {-result['score_drop']:+.3f}"
     if result["slowdown"] is not None:
-        change += f"   time change {result['slowdown'] * 100:+.0f}%"
+        change += f"   time change {result['slowdown'] * 100:+.0f}% (on {result.get('speed_tasks', 0)} like-for-like task(s))"
     lines = [row(previous_label, result["previous"]), row(candidate_label, result["candidate"]), change]
     if result["regressed"]:
         lines.append("passed before, fails now: " + ", ".join(result["regressed"]))
