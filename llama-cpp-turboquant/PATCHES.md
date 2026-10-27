@@ -567,6 +567,23 @@ values only (every other key and tensor name matches):
 **Delete this patch** when the catalog points at a GGUF converted by upstream's
 `conversion/kolibri1.py` (or when Kolibri leaves the catalog).
 
+### `0012-decision-models-keep-chat.patch` - OpenJev keeps answering on the chat endpoint
+
+Upstream's MiniCPM-OCR-Jev support (#30980, 2026-10-27) made the server refuse
+every completion request (HTTP 501, "decision model without text generation")
+for each decision type whose output modalities are only `decisions`, which
+includes OpenJev. The stated reason is specific to MiniCPM-OCR-Jev: its
+checkpoint is a pooled value head with no LM head. OpenJev is a Qwen 3.5 causal
+LM that generated text fine before #30980, and LocalCode serves it on
+`/v1/chat/completions` too (the catalog says so, and the model gate checks
+chat and an OpenCode runtime turn on it). Found by the gate at this bump.
+
+`server_decision_context::can_generate()` now refuses only
+`COMMON_DECISION_TYPE_MINICPM_OCR_JEV`; every other decision type generates
+as it did before #30980. `/v1/models` still reports upstream's output
+modalities. **Delete this patch** if upstream narrows the check to head-less
+checkpoints, or if OpenJev chat is dropped from the product.
+
 ## Retired at the 2026-10-27 bump
 
 **Do not resurrect these.**
