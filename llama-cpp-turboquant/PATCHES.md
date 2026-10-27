@@ -12,11 +12,12 @@ The machine-readable form of this inventory lives at the repo root:
 | `patches/PINNED_UPSTREAM` | the upstream commit the series applies to |
 | `patches/000N-*.patch` | numbered patches, applied in order with `git apply` |
 
-**Pinned upstream:** `62df1815bc053066761f4eac58e288f23778e164` (2026-10-14,
-master, `cuda, hip: GDN chunked kernel (#29353)`, 75 commits after
-`5c8854fd8`, the previous pin).
+**Pinned upstream:** `338fce6511c744893cc0d3d958b275f40552c7a4` (2026-10-27,
+master, `HIP/CUDA: remove pragma unroll from loops in conv2d ... (#31255)`,
+310 commits after `62df1815b`, the previous pin).
 
-**Previous pins:** `5c8854fd88319125125dc4b836c98b1b215b0f23` (2026-10-11),
+**Previous pins:** `62df1815bc053066761f4eac58e288f23778e164` (2026-10-14),
+`5c8854fd88319125125dc4b836c98b1b215b0f23` (2026-10-11),
 `62a6f74bab748b1755f4cd8dfc0871caf865c6c8` (2026-10-11), `836d57176dc699a726c55418e4f96b8ca628e1bf` (2026-10-03),
 `3f545beccee69d9975f466ec7e45fd9aacd8ba90` (2026-08-22), and before it `c08d28d08871715fd68accffaeeb76ddcaede658` (2026-04-05). That
 commit was never recorded anywhere; it was recovered for this bump by
@@ -173,8 +174,9 @@ Host-side decisions that differ from the pre-bump fork:
   queries per threadgroup; the old check assumed one).
 - **`use_kv_f16`** (upstream's dequantize-KV-to-F16 prefill path, #27390) is
   disabled for mixed K/V pairs; it assumes one type for both.
-- **`FC_TURBO_WHT`** moved 1700 → 2300 → 2400; upstream took 1700 (`FC_NORM`)
-  and then 2300 (`FC_MUL_MV_MMA`, the few-row MMA mat-mul added in v0.6.0).
+- **`FC_TURBO_WHT`** moved 1700 → 2300 → 2400 → 2500; upstream took 1700 (`FC_NORM`),
+  then 2300 (`FC_MUL_MV_MMA`, the few-row MMA mat-mul added in v0.6.0), then
+  2400 (`FC_TOP_K_MASK`, at the 2026-10-27 bump).
   The TQ3_1S / TQ4_1S dispatch condition in `ggml_metal_op_mul_mat_mv` is the
   only other v0.6.0 touch point: upstream moved that body into a helper.
 - **Compile-time knobs** (`TURBO_USE_4MAG`, `TURBO_SPARSE_V`,
@@ -226,6 +228,22 @@ The same run shows every type below turbo4 costs real quality on this model,
 turbo2 and turbo3 values included. The shipped default (q8_0 / q8_0) and
 turbo4 are the only pairs within noise of f16. One passage of 96 tokens is a
 small sample; treat the ranking as solid and the exact numbers as rough.
+
+#### Rebased at the 2026-10-27 bump
+
+Every conflict was an append-at-the-same-spot collision with new upstream code;
+no TurboQuant behaviour changed.
+
+- Upstream added the `GGML_OP_TOP_K_MASK` op (CPU, Metal) and the BF16
+  tensor flash-attention kernel `kernels/fa_tensor.metal`. `GGML_OP_TURBO_WHT`
+  now follows `TOP_K_MASK` in the op enum, name and symbol tables
+  (`GGML_OP_COUNT` 102 → 103), and `fa_turbo` follows `fa_tensor` in both
+  Metal registration lists. `FC_TURBO_WHT` moved to 2500 (see above).
+- Upstream moved KV buffer allocation into `llama_memory_bufs::emplace()`
+  (#31141, #31200), which allocates and clears the buffer itself, and moved
+  `no_alloc` out of `llama_hparams`. The turbo rotation matrices and the InnerQ
+  identity scale are now written right after `emplace()` (so still after the
+  clear), gated on `ctxs_bufs.no_alloc` instead of `model.hparams.no_alloc`.
 
 #### Known gaps deliberately accepted at the 2026-10-03 bump
 
@@ -286,20 +304,6 @@ the model's training context. localcode configures rope scaling
 replaced with a warning. No upstream equivalent. Since the 2026-10-03 bump the
 clamp lives in `n_ctx_slot()` (the `std::min` against `n_ctx_train`), and
 `load_model()` only reports it; the patch edits both.
-
-### `0003-hunyuan-ocr-mtmd.patch` — HunyuanOCR vision model
-
-`tools/mtmd/models/hunyuanocr.cpp`. Fork-local; **partially superseded** — the
-*chat template* half of this support was absorbed by upstream, which
-generalised it to `LLM_CHAT_TEMPLATE_HUNYUAN_VL` ("tencent/HunyuanOCR &
-tencent/HunyuanVL"). Only the mtmd vision model file remains fork-local.
-Re-check on the next bump whether upstream has taken this too.
-
-**2026-10-11:** `tools/mtmd/models/hunyuanocr.cpp` is referenced nowhere (not
-in `tools/mtmd/CMakeLists.txt`, no `clip_graph_hunyuanocr` anywhere); upstream
-compiles `hunyuanvl.cpp` (`PROJECTOR_TYPE_HUNYUANVL`) instead. The patch is a
-dead file and can be dropped at the next bump; kept this time to leave the
-series numbering alone.
 
 ### `0004-fork-local-bench-scripts.patch` — bench artifacts
 
@@ -438,58 +442,6 @@ and `tools/diffusion-gemma-server/diffusion-gemma-visual-server.cpp` take
 dimension (#30416); the DiffusionGemma masks are built at the exact K/V
 length, so no padding is added for them.
 
-### `0006-kolibri1.patch` — Aleph Alpha Kolibri-1 (`kolibri1` architecture)
-
-**Status: not upstream.** Tracking issue
-[ggml-org/llama.cpp#29922](https://github.com/ggml-org/llama.cpp/issues/29922),
-no upstream PR at the time of the bump. **When upstream ships `kolibri1`,
-delete this patch** and re-verify the catalog GGUF against upstream's loader
-(metadata keys may differ; a re-converted GGUF may be needed).
-
-Source: the four-commit series published with the community quant at
-`Hob-forge/Kolibri-1-GGUF` (`kolibri1-llama.cpp.patch`, revision `b08405e1`),
-written against exactly the upstream commit this tree is pinned to. Carried
-here as one plain diff. It was read in full before adoption: it is a standard
-model addition with no build-system, network or filesystem side effects.
-
-What it adds:
-
-- `LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID_LOGIT_ADD = 5` in `build_moe_ffn`:
-  experts are selected on `logits + expert_bias` and weighted by the unbiased
-  `sigmoid(logits)`. The DeepSeek-V3 path selects on `sigmoid(logits) + bias`,
-  which picks different experts whenever the bias is non-zero.
-- `src/models/kolibri1.cpp`: Qwen3-MoE style GQA with q/k RMSNorm, sandwich
-  norms around attention and MoE, one ungated shared expert per layer, and
-  interleaved attention through iSWA (sliding-window layers use RoPE,
-  full-attention layers use no positional encoding).
-- `kolibri1` pre-tokenizer name (same split regex as `qwen2`), the GGUF
-  constants / tensor mapping, and `conversion/kolibri.py`.
-
-#### Verified (2026-10-04, shipped binary, `Kolibri-1-Q4_K_M.gguf`, sha256 `c2ac1301…`)
-
-- Loads in about 2 s; `Reply`-style generation correct; German output fluent.
-- Tool calling through the OpenAI `tools` key (Hermes `<tool_call>` JSON,
-  parsed by the stock chat parser): single call, tool selection between two
-  tools, and a two-step loop that reads a tool result and answers from it.
-- Reasoning: with `--reasoning off --reasoning-budget 0` the answer costs 2
-  completion tokens and the reasoning channel is empty; with reasoning on, the
-  `<think>` text arrives in `reasoning_content` and `content` stays clean.
-- Long context on Metal, which the quant's author had not tested beyond 8,192
-  tokens: exact recall of a planted string at 6K, 24K and 61,785 prompt tokens.
-  The last one ran under localcode's own generated command (`--ctx-size 131072`,
-  q8_0 KV, `--cache-reuse`, `--ctx-checkpoints 4`, `--context-shift`); the
-  follow-up turn re-read 25 tokens, so the prefix cache and checkpoints work
-  with the sliding-window / full-attention interleave.
-- Resident memory about 46 GB at that context.
-
-- turbo4 K + turbo4 V also passes the tool loop and the 6K / 24K recall checks
-  (the turbo Q pre-rotation runs through the iSWA attention path).
-
-Not verified: coding benchmarks, turbo2 / turbo3 KV with this architecture,
-the Q8_0 split files, CUDA.
-
----
-
 ### `0007-dflash-mtmd-zero-fill.patch` — images with a DFlash drafter
 
 **Status: open upstream.** Still needed at the 2026-10-11 pin: upstream's #30257
@@ -582,18 +534,6 @@ case is an 8K-token Qwen prompt followed by decode with q8 keys/TurboQuant
 values and the tensor API disabled; it previously SIGSEGVed at the pipeline
 thread-limit query.
 
-### `0009-flint-pr30928.patch` — Recursive Flint (upstream PR #30928) and two template fixes
-
-Backport of upstream `a37cc4610` (`flint` architecture: 49 layers, 35 sliding-window
-and 14 full-attention, 256 routed experts + 1 shared, attention sinks) onto the
-pinned tree, plus `build_amax_src1_f16` from `8baabd53b` (#30861), which Flint's
-MoE down projection needs. Only Flint takes the new per-expert-token rescaling
-path; every other architecture keeps the pinned code, so Mistral 4 still uses
-`GGML_PREC_F32` on that matmul. Also carries `9febe63d5` (#30929, hexadecimal
-string escapes in the Jinja lexer: Flint's chat template uses `"\x00"` and the
-server refused to start without it) and `99fb99718` (#30941, namespace attributes
-shadowed by dict methods). Drop all of it at the next bump past 2026-10-22.
-
 ### `0010-metal-precompiled-library.patch` — load precompiled Metal kernels when they match
 
 The shipped binary embeds its Metal sources, and compiling them took 20-30 s on
@@ -606,3 +546,54 @@ other hardware, an override environment variable, a load error) falls back to
 the runtime compile. `scripts/build_metallibs.py` builds the two variants
 (Metal 4 tensor devices, and the rest) on the CI runner and `--check` fails the
 build when the files in `src/localcode/bin` no longer match the sources.
+
+### `0011-kolibri1-community-gguf-compat.patch` - load the catalog Kolibri-1 GGUF on upstream's loader
+
+Upstream added the `kolibri1` architecture (#30673, refined in #30865), which
+retired `0006-kolibri1.patch`. The catalog GGUF (`Hob-forge/Kolibri-1-GGUF`,
+`Kolibri-1-Q4_K_M.gguf`, sha256 `c2ac1301...`) was converted with the community
+patch that 0006 carried, and differs from upstream's converter in two metadata
+values only (every other key and tensor name matches):
+
+- `tokenizer.ggml.pre = "kolibri1"`; upstream writes `qwen2` and rejects the
+  unknown name. `src/llama-vocab.cpp` maps `kolibri1` to the qwen2 split, which
+  is what the community patch did too.
+- `kolibri1.expert_gating_func = 5` (the community `SIGMOID_LOGIT_ADD`:
+  select top-k on `logits + bias`, weight by the unbiased `sigmoid(logits)`).
+  Upstream's `kolibri1` graph builds exactly that biased selection itself and
+  passes `SIGMOID` for the weights; it has no type 5. `src/models/kolibri1.cpp`
+  reads 5 as `SIGMOID`.
+
+**Delete this patch** when the catalog points at a GGUF converted by upstream's
+`conversion/kolibri1.py` (or when Kolibri leaves the catalog).
+
+### `0012-decision-models-keep-chat.patch` - OpenJev keeps answering on the chat endpoint
+
+Upstream's MiniCPM-OCR-Jev support (#30980, 2026-10-27) made the server refuse
+every completion request (HTTP 501, "decision model without text generation")
+for each decision type whose output modalities are only `decisions`, which
+includes OpenJev. The stated reason is specific to MiniCPM-OCR-Jev: its
+checkpoint is a pooled value head with no LM head. OpenJev is a Qwen 3.5 causal
+LM that generated text fine before #30980, and LocalCode serves it on
+`/v1/chat/completions` too (the catalog says so, and the model gate checks
+chat and an OpenCode runtime turn on it). Found by the gate at this bump.
+
+`server_decision_context::can_generate()` now refuses only
+`COMMON_DECISION_TYPE_MINICPM_OCR_JEV`; every other decision type generates
+as it did before #30980. `/v1/models` still reports upstream's output
+modalities. **Delete this patch** if upstream narrows the check to head-less
+checkpoints, or if OpenJev chat is dropped from the product.
+
+## Retired at the 2026-10-27 bump
+
+**Do not resurrect these.**
+
+- **`0003-hunyuan-ocr-mtmd.patch`**: a dead file. `tools/mtmd/models/hunyuanocr.cpp`
+  was referenced by nothing; upstream builds HunyuanOCR through `hunyuanvl.cpp`
+  (`PROJECTOR_TYPE_HUNYUANVL`).
+- **`0006-kolibri1.patch`**: upstream ships `kolibri1` (#30673, #30865). The
+  community GGUF needs two metadata aliases, carried as `0011` above.
+- **`0009-flint-pr30928.patch`**: upstream merged Flint (#30928, `a37cc4610`)
+  together with `build_amax_src1_f16` (#30861), the Jinja hex escapes (#30929)
+  and the namespace attribute fix (#30941). Upstream now also applies the amax
+  rescale to Mistral 4, Mellum and Laguna, replacing the `GGML_PREC_F32` hint.

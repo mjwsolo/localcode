@@ -1,0 +1,23 @@
+diff --git a/tools/server/server-decision.h b/tools/server/server-decision.h
+index 45933ffa1..6ebf1a79e 100644
+--- a/tools/server/server-decision.h
++++ b/tools/server/server-decision.h
+@@ -78,8 +78,16 @@ struct server_decision_context {
+ 
+     // false for a decision-only model, it serves no text generation
+     bool can_generate() const {
+-        const auto out = server_model_output_modalities(type, true, false);
+-        return std::find(out.begin(), out.end(), "text") != out.end();
++        // fork: upstream (#30980) rejects generation for every type whose output
++        // modalities are only "decisions", but the reason given there is a
++        // checkpoint without an LM head (MiniCPM-OCR-Jev, a pooled value head).
++        // The other decision types are causal LMs that answered on the chat
++        // endpoint before #30980, and LocalCode serves OpenJev chat, so only
++        // the head-less type is refused.
++        if (type == COMMON_DECISION_TYPE_MINICPM_OCR_JEV) {
++            return false;
++        }
++        return true;
+     }
+ 
+     // throw std::invalid_argument on bad input

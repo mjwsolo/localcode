@@ -1,18 +1,8 @@
-From: llama.cpp PR #30220 (Chazyl:dflash-mtmd-zero-fill), minimal port
-Subject: [PATCH] spec: zero-fill draft-cache holes left by mtmd chunks
-
-mtmd image chunks advance the target context but never reach the DFlash
-draft KV cache, so the next draft injection fails the consecutive-position
-check and llama-server answers HTTP 500 on any image request when a
---spec-type draft-dflash drafter is loaded (upstream issue #27408). Seed the
-hole with zero features; drafted tokens are still verified by the target,
-so only post-image draft acceptance degrades, never output.
-
 diff --git a/common/speculative.cpp b/common/speculative.cpp
-index 50647dbb2..de0b24183 100644
+index 4305ac6ac..d653128a2 100644
 --- a/common/speculative.cpp
 +++ b/common/speculative.cpp
-@@ -1190,6 +1190,44 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
+@@ -1217,6 +1217,44 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
  
          const int32_t n_ubatch = (int32_t) llama_n_ubatch(ctx_dft);
  

@@ -1,8 +1,8 @@
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
-index d1dc0985..352621d4 100644
+index 0ea7c4300..8d104ae49 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.m
 +++ b/ggml/src/ggml-metal/ggml-metal-device.m
-@@ -513,6 +513,90 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
+@@ -514,6 +514,90 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
  #undef X
      };
  
