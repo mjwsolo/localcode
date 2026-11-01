@@ -721,6 +721,15 @@ def _capability_rank(choice) -> int:
     return order.get(choice.key, len(_RECOMMEND_ORDER) + 1)
 
 
+def footprint_gb(weights_gb: float, spec) -> float:
+    """Files loaded for one quant: weights plus the model's vendor drafter and
+    vision projector. ``spec`` is a ModelChoice or ModelGroup. The picker's fit
+    badge and every recommendation use this one number so they always agree."""
+    draft = float(getattr(getattr(spec, "drafter", None), "size_gb", 0.0) or 0.0)
+    vision = float(getattr(spec, "mmproj_size_gb", 0.0) or 0.0) if getattr(spec, "mmproj_filename", None) else 0.0
+    return weights_gb + draft + vision
+
+
 def recommend(ram_gb: int | None = None) -> ModelChoice:
     """Pick the best model for THIS machine's RAM — capability-ranked, never the
     research diffusion architecture, and never a hardcoded default.
@@ -735,7 +744,7 @@ def recommend(ram_gb: int | None = None) -> ModelChoice:
     from .fit import fit
     candidates = [
         c for c in CHOICES
-        if _auto_recommendable(c) and fit(c.size_gb, ram_gb, c.filename) == "fits"
+        if _auto_recommendable(c) and fit(footprint_gb(c.size_gb, c), ram_gb, c.filename) == "fits"
     ]
     if candidates:
         # Most capable that fits; tie-break toward the larger (better-quant) file.

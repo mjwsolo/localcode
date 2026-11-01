@@ -13,7 +13,7 @@ def test_quant_picker_returns_before_slow_network_metadata(tmp_path, monkeypatch
     monkeypatch.setattr(hf_quants, '_read_cache', lambda _: None)
     release, done = threading.Event(), threading.Event()
     def slow(_):
-        release.wait(timeout=1)
+        release.wait(timeout=4)
         done.set()
         return []
     monkeypatch.setattr(supervisor, 'fetch_quants', slow)
@@ -21,15 +21,16 @@ def test_quant_picker_returns_before_slow_network_metadata(tmp_path, monkeypatch
     sup.models_dir = tmp_path; sup.current = None
     sup.ram_gb = 64; sup.bandwidth = 150
     sup.state = {'state': 'idle', 'pct': None}; sup.active = {}
+    monkeypatch.setattr(supervisor, 'QUANT_COLD_WAIT_SEC', 0.2)
     try:
         start = time.monotonic()
         result = sup.quants(supervisor.MODEL_GROUPS[0].key)
-        assert time.monotonic() - start < 0.5, 'picker must not wait for Hugging Face'
+        assert time.monotonic() - start < supervisor.QUANT_COLD_WAIT_SEC + 1, 'picker wait is bounded'
         assert result['quants'], 'trusted fallback choices must remain available offline'
         assert result['listing'] is True
     finally:
         release.set()
-        assert done.wait(timeout=2)
+        assert done.wait(timeout=5)
 
 
 def test_failed_selection_reaps_only_the_failed_new_model(tmp_path):
@@ -65,3 +66,37 @@ def test_validation_error_keeps_the_previous_model_process(tmp_path):
     sup.stop = lambda: (_ for _ in ()).throw(AssertionError('previous model must survive'))
     sup._select_worker(SimpleNamespace(drafter=None), 'custom.gguf', 'custom')
     assert sup.proc is previous and not sup.lock.locked()
+
+
+def _cold_sup(tmp_path, monkeypatch, fetch):
+    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+    monkeypatch.setenv('LOCALCODE_HOME', str(tmp_path))
+    monkeypatch.setattr(hf_quants, '_read_cache', lambda _: None)
+    monkeypatch.setattr(supervisor, 'fetch_quants', fetch)
+    sup = supervisor.Supervisor.__new__(supervisor.Supervisor)
+    sup.models_dir = tmp_path; sup.current = None
+    sup.ram_gb = 64; sup.bandwidth = 150
+    sup.state = {'state': 'idle', 'pct': None}; sup.active = {}
+    return sup
+
+
+def test_cold_quant_listing_waits_for_the_fast_fetch(tmp_path, monkeypatch):
+    g = supervisor.MODEL_GROUPS[0]
+    extra = hf_quants.Quant('zz-Fake-Q9_K_M.gguf', 9.9, 'Q9_K_M', False)
+    sup = _cold_sup(tmp_path, monkeypatch, lambda _: [extra])
+    result = sup.quants(g.key)
+    assert any(q['filename'] == extra.filename for q in result['quants'])
+    assert result['listing'] is False
+
+
+def test_recommended_quant_fit_matches_badge_with_drafter_and_vision(tmp_path, monkeypatch):
+    from localcode.fit import fit
+    from localcode.models_catalog import footprint_gb
+    for g in supervisor.MODEL_GROUPS:
+        for ram in (16, 24, 32, 48, 64, 96, 128):
+            sup = _cold_sup(tmp_path, monkeypatch, lambda _: [])
+            sup.ram_gb = ram
+            out = sup.quants(g.key)['quants']
+            rec = [q for q in out if q['recommended']]
+            if any(q['fit'] == 'fits' for q in out):
+                assert rec and rec[0]['fit'] == 'fits', (g.key, ram)
