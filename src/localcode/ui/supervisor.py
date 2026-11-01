@@ -51,9 +51,11 @@ from localcode.models_catalog import (
     _system_ram_gb,
     choice_for_quant,
     estimate_decode_tok_s,
+    footprint_gb,
     recommend,
 )
 
+QUANT_COLD_WAIT_SEC = 2.5  # max wait for the first-ever quant listing
 MIN_SPEED_FRACTION = 0.5  # same rule as tui/screens/model_picker.py
 from localcode.ui import run_dir
 from localcode.ui.auth import KEY_ENV, control_token, new_secret, request_allowed, server_headers, server_key, write_auth_file
@@ -661,6 +663,8 @@ class Supervisor:
                 if g.hf_repo not in pending and time.monotonic() - attempts.get(g.hf_repo, -60) >= 60:
                     pending.add(g.hf_repo)
                     attempts[g.hf_repo] = time.monotonic()
+                    done = threading.Event()
+                    self.__dict__.setdefault("_quant_done", {})[g.hf_repo] = done
                     def fetch():
                         try:
                             memory[g.hf_repo] = (fetch_quants(g.hf_repo), time.time())
@@ -669,6 +673,7 @@ class Supervisor:
                         finally:
                             with lock:
                                 pending.discard(g.hf_repo)
+                            done.set()
                     try:
                         threading.Thread(target=fetch, daemon=True).start()
                     except RuntimeError:
@@ -685,7 +690,15 @@ class Supervisor:
         g = next((g for g in MODEL_GROUPS if g.key == key), None)
         if g is None:
             return {"error": f"unknown group {key}"}
+        from localcode.hf_quants import _read_cache
+        cold = not _read_cache(g.hf_repo) and g.hf_repo not in self.__dict__.get("_quant_memory", {})
         rows = self._quant_rows(g, refresh=True)
+        done = self.__dict__.get("_quant_done", {}).get(g.hf_repo)
+        if cold and done is not None and g.hf_repo in self.__dict__.get("_quant_pending", set()):
+            # First launch: the list is still being fetched and the picker does
+            # not re-poll, so wait briefly for it instead of showing a partial one.
+            if done.wait(QUANT_COLD_WAIT_SEC):
+                rows = self._quant_rows(g)
         # Local weights remain selectable even when HF is offline, or its
         # current listing no longer contains a previously downloaded quant.
         from localcode.hf_quants import Quant, _parse_label
@@ -700,21 +713,21 @@ class Supervisor:
                 except OSError:
                     continue
         rows.sort(key=lambda q: q.size_gb)
-        rec_idx = self._recommended_quant_idx(rows, g.display_name)
+        rec_idx = self._recommended_quant_idx(rows, g.display_name, g)
         process = getattr(self, "proc", None)
         loaded = process is not None and process.poll() is None and self.state["state"] == "ready"
         out = []
         # A vendor-trained drafter ships with the model (downloaded with it,
         # loaded with it), so the size the user sees and the RAM fit include it.
         draft_gb = float(getattr(getattr(g, "drafter", None), "size_gb", 0.0) or 0.0)
-        # The vision projector loads beside the weights too, so the fit counts it.
-        vision_gb = float(getattr(g, "mmproj_size_gb", 0.0) or 0.0) if getattr(g, "mmproj_filename", None) else 0.0
+        # The fit badge counts weights + drafter + vision projector (footprint_gb).
         for i, q in enumerate(rows):
             spd = estimate_decode_tok_s(q.size_gb, g.display_name, self.bandwidth)
             total_gb = q.size_gb + draft_gb
+            footprint = footprint_gb(q.size_gb, g)
             out.append({
                 "filename": q.filename, "alias": _alias(q.filename), "label": q.label,
-                "size_gb": round(total_gb, 1), "fit": fit_badge(total_gb + vision_gb, self.ram_gb, q.filename),
+                "size_gb": round(total_gb, 1), "fit": fit_badge(footprint, self.ram_gb, q.filename),
                 "tok_s": spd, "recommended": i == rec_idx,
                 "downloaded": q.filename in installed and (not is_shard(q.filename) or self._model_ready(q.filename, q, installed.get(q.filename))),
                 "current": _alias(q.filename) == self.current,
@@ -728,10 +741,11 @@ class Supervisor:
                 "drafter_size_gb": round(draft_gb, 2),
                 "vision_size_gb": round(float(getattr(g, "mmproj_size_gb", 0.0) or 0.0), 2) if getattr(g, "mmproj_filename", None) else 0.0}
 
-    def _recommended_quant_idx(self, rows, name: str) -> int | None:
+    def _recommended_quant_idx(self, rows, name: str, group=None) -> int | None:
         if not rows:
             return None
-        fitting = [i for i, q in enumerate(rows) if fit_badge(q.size_gb, self.ram_gb, q.filename) == "fits"]
+        fitting = [i for i, q in enumerate(rows)
+                   if fit_badge(footprint_gb(q.size_gb, group), self.ram_gb, q.filename) == "fits"]
         if not fitting:
             return 0
         speeds = {i: (estimate_decode_tok_s(rows[i].size_gb, name, self.bandwidth) or 0)
