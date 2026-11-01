@@ -83,6 +83,11 @@ class Quant:
     shards: tuple[tuple[str, int], ...] = ()
 
 
+# Vision projectors and speculative drafters (MTP heads, DFlash and DeepSeek's
+# DSpark block drafters) sit beside the weights; they are never pickable quants.
+_SIDECAR_PREFIXES = ("mmproj", "mtp-", "mtp_", "dflash", "dspark")
+
+
 def _quant_from_entry(entry: dict) -> Quant | None:
     """Build a Quant from one HF tree entry, or None if it's not a selectable
     model-weight quant.
@@ -111,7 +116,7 @@ def _quant_from_entry(entry: dict) -> Quant | None:
         return None
     # Vision projectors and speculative drafters (MTP heads, DFlash) are
     # sidecars, not pickable models.
-    if lowered.startswith(("mmproj", "mtp-", "mtp_", "dflash")):
+    if lowered.startswith(_SIDECAR_PREFIXES):
         return None
     label = _parse_label(path)
     # Real weight quants carry a quant code (Q4_K_M, IQ3_S, BF16, …). Anything
@@ -131,9 +136,6 @@ def _quant_from_entry(entry: dict) -> Quant | None:
     )
 
 
-_SIDECAR_PREFIXES = ("mmproj", "mtp-", "mtp_", "dflash")
-
-
 def _entry_bytes(entry: dict) -> int:
     lfs = entry.get("lfs") or {}
     return int(lfs.get("size") or entry.get("size") or 0)
@@ -142,7 +144,7 @@ def _entry_bytes(entry: dict) -> int:
 def _split_quants(entries: list[dict]) -> list[Quant]:
     """Group shard files (``<stem>-00001-of-00003.gguf``, top level or in a
     subfolder) into one Quant per split. A split is listed only when every shard
-    is present. Sidecars (mmproj, mtp, dflash) are skipped by file or folder name."""
+    is present. Sidecars (mmproj, mtp, dflash, dspark) are skipped by file or folder name."""
     groups: dict[tuple[str, str, int], dict[int, dict]] = {}
     for entry in entries:
         path = entry.get("path", "")
@@ -150,7 +152,7 @@ def _split_quants(entries: list[dict]) -> list[Quant]:
             continue
         parts = path.split("/")
         if parts[-1].lower().startswith(_SIDECAR_PREFIXES) or any(
-            folder.lower().startswith(("mmproj", "mtp", "dflash")) for folder in parts[:-1]
+            folder.lower().startswith(("mmproj", "mtp", "dflash", "dspark")) for folder in parts[:-1]
         ):
             continue
         parsed = parse_shard(parts[-1])

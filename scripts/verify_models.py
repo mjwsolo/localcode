@@ -47,7 +47,7 @@ if INSTALLED:
 else:
     assert BIN == (ROOT / "src/localcode/bin").resolve(), "the checkout's package was not the one imported"
 
-REQUIRED_KEYS = {"gemma-12b", "qwen", "qwen38", "diffusiongemma", "north-mini-code", "muse-glimmer", "kolibri", "openjev", "saluki", "flint"}
+REQUIRED_KEYS = {"gemma-12b", "qwen", "qwen38", "diffusiongemma", "north-mini-code", "muse-glimmer", "kolibri", "openjev", "saluki", "flint", "deepseek-v4-flash"}
 TOOL = {"type": "function", "function": {"name": "get_weather", "description": "Get weather in a city.", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}}
 
 

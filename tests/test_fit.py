@@ -30,3 +30,9 @@ def test_measured_models(name, files, ram, want):
 
 def test_unmeasured_models_use_a_conservative_default():
     assert F.runtime_overhead_gb("Some-Future-Model-Q4.gguf", 10.0) == pytest.approx(6.0)
+
+
+def test_emulated_128_gb_mac_uses_metal_measured_working_set(monkeypatch):
+    monkeypatch.setenv("LOCALCODE_RAM_GB", "128")
+    assert F.gpu_budget_gb(128) == pytest.approx(107.52)
+    assert F.gpu_budget_gb(96) == pytest.approx(72.0)

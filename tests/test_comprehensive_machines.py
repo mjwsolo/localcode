@@ -55,8 +55,9 @@ def test_16gb_mac_gets_the_new_12b():
 
 
 def test_large_ram_gets_a_large_model():
-    """A 128 GB workstation should be offered (close to) the biggest model."""
-    biggest = max(catalog.CHOICES, key=lambda c: c.size_gb)
+    """A 128 GB workstation should be offered (close to) the biggest model it
+    may be offered (opt-in models such as DeepSeek V4 Flash are never picked)."""
+    biggest = max((c for c in catalog.CHOICES if catalog._auto_recommendable(c)), key=lambda c: c.size_gb)
     assert catalog.recommend(128).size_gb >= biggest.size_gb * 0.6
 
 

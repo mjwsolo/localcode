@@ -244,3 +244,37 @@ def test_short_shard_after_download_fails(tmp_path, monkeypatch):
     monkeypatch.setattr(bootstrap, "_download_parallel", lambda url, dest, **kw: dest.write_bytes(b"s"))
     ok, res = bootstrap.download_model(choice_for(g, q))
     assert not ok and "incomplete" in res
+
+
+def test_dspark_drafters_are_sidecars_not_quants():
+    # DeepSeek V4 repos ship a DSpark drafter at the top level and a second copy
+    # in a dspark/ folder; neither is a pickable quant.
+    entries = [
+        entry("dspark-DeepSeek-V4-Flash-0731-Q8_0.gguf", 10 * GB),
+        entry("dspark/dspark-DeepSeek-V4-Flash-0731-BF16.gguf", 11 * GB),
+        entry("UD-Q2_K_XL/DeepSeek-V4-Flash-0731-UD-Q2_K_XL-00001-of-00002.gguf", GB),
+        entry("UD-Q2_K_XL/DeepSeek-V4-Flash-0731-UD-Q2_K_XL-00002-of-00002.gguf", GB),
+    ]
+    quants = [q for e in entries if (q := hf_quants._quant_from_entry(e))] + hf_quants._split_quants(entries)
+    assert [q.label for q in quants] == ["UD-Q2_K_XL"]
+
+
+def test_projector_of_a_split_model_downloads_one_file(tmp_path, monkeypatch):
+    # The projector proxy must not inherit the model's shard list, or the
+    # "projector" download fetches the model's shards instead.
+    monkeypatch.setenv("LOCALCODE_MODEL_DIR", str(tmp_path / "models"))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    g = models_catalog.by_group("deepseek-v4-flash")
+    q = split_quant("DeepSeek-V4-Flash-Vision-Exp", sizes=(1048576, 1048576))
+    choice = choice_for(g, q)
+    calls = []
+
+    def download(url, dest, num_threads=16, on_progress=None, cancel_event=None):
+        calls.append(url.rsplit("/resolve/", 1)[1])
+        dest.write_bytes(b"p" * (1024 ** 3 + 1))
+
+    monkeypatch.setattr(bootstrap, "_download_parallel", download)
+    ok, res = bootstrap.download_mmproj(choice)
+    assert ok, res
+    assert calls == ["main/mmproj-F16.gguf"]
+    assert Path(res).name == g.mmproj_filename

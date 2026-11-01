@@ -678,7 +678,7 @@ class Supervisor:
         for choice in CHOICES:
             label = _parse_label(choice.filename)
             if choice.hf_repo == g.hf_repo and label:
-                known.setdefault(choice.filename, Quant(choice.filename, choice.size_gb, label, False))
+                known.setdefault(choice.filename, Quant(choice.filename, choice.size_gb, label, False, choice.shards))
         return list(known.values())
 
     def quants(self, key: str) -> dict:
