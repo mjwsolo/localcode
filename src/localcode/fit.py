@@ -37,7 +37,8 @@ RUNTIME_OVERHEAD: tuple[tuple[str, float, float], ...] = (
     ("Qwen3.6-35B-A3B", 2.35, 0.0),
     ("Qwen3.8-27B", 0.0, 0.47),
     ("North-Mini-Code", 2.8, 0.0),
-    ("DeepSeek-V4-Flash", 3.0, 0.0),  # PLACEHOLDER, measured below
+    # 2.0 GB at an 80K prompt in a 128K window (compressed attention keeps KV small).
+    ("DeepSeek-V4-Flash", 2.1, 0.0),
 )
 RUNTIME_OVERHEAD_DEFAULT = (3.0, 0.3)
 

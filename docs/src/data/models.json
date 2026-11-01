@@ -856,7 +856,7 @@
   {
     "ram": 128,
     "label": "128 GB+",
-    "budget": 96.0,
+    "budget": 107.5,
     "recommended": "Qwen3.6-35B-A3B-UD-Q8_K_XL.gguf",
     "models": [
       {
@@ -1095,6 +1095,20 @@
         "size": 54.7,
         "maker": "Alibaba",
         "logo": "qwen",
+        "experimental": false
+      },
+      {
+        "name": "DeepSeek V4 Flash 284B-A13B (Q2)",
+        "base": "DeepSeek V4 Flash 284B-A13B",
+        "quant": "Q2",
+        "total": "284B",
+        "active": "13B active (284B total MoE, top-6 of 256 experts + 1 shared)",
+        "kind": "MoE",
+        "detail": "284B total MoE, top-6 of 256 experts + 1 shared",
+        "file": "DeepSeek-V4-Flash-Vision-Exp-UD-Q2_K_XL-00001-of-00003.gguf",
+        "size": 96.8,
+        "maker": "DeepSeek",
+        "logo": null,
         "experimental": false
       }
     ]
