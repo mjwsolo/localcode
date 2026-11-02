@@ -5,6 +5,35 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
+## 0.5.42 - 2026-11-02
+
+### Added
+
+- DeepSeek V4 Flash 284B-A13B (Unsloth's Vision-Exp quants), for 128 GB Macs.
+  The curated UD-Q2_K_XL is 96.8 GB in three parts, plus a 0.93 GB image
+  projector. Measured on the bundled server: about 30 tokens/s generation,
+  231 tokens/s prompt processing over an 80K-token prompt, and 2.0 GB of
+  runtime memory beyond the files. It is never recommended automatically.
+
+### Changed
+
+- The bundled llama.cpp is rebased onto upstream 338fce6, with the patch series
+  replayed and fresh Metal kernel bundles.
+- The picker's star and every recommendation now count the same memory as the
+  fit badge (weights, drafter and image projector), so the starred quant always
+  shows "fits" when any quant does.
+- On first launch the quant list waits briefly for Hugging Face instead of
+  showing a partial list until the picker is reopened.
+
+### Fixed
+
+- Downloading the image projector or drafter of a multi-part model fetched the
+  model's parts instead of the one file.
+- Drafter files were listed in the picker as quants.
+- The picker's offline fallback lost the part list of a curated multi-part model.
+
+## 0.5.41 - 2026-10-26
+
 ### Added
 
 - Release candidates. A version like `0.5.41rc1` is published as a PyPI
