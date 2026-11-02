@@ -52,7 +52,7 @@ OpenAI compatible endpoint. See the [Local API guide](https://mjwsolo.github.io/
 
 ## Models
 
-Choose from **11 models and 140+ quant options** for coding, image input and typed decisions. Models download from Hugging Face. Downloads run in parallel and can resume if interrupted. Switch with `/models`. LocalCode recommends the most capable one that fits your Mac's memory and marks it with a star. Flint, Saluki, OpenJev, DiffusionGemma and Kolibri are never picked automatically. The Flint row shows its two curated quants; the picker lists every Unsloth quant.
+Choose from **12 models and 150+ quant options** for coding, image input and typed decisions. Models download from Hugging Face. Downloads run in parallel and can resume if interrupted. Switch with `/models`. LocalCode recommends the most capable one that fits your Mac's memory and marks it with a star. Flint, Saluki, OpenJev, DiffusionGemma, Kolibri and DeepSeek V4 Flash are never picked automatically. DeepSeek V4 Flash runs on 128 GB Macs only. The Flint row shows its two curated quants; the picker lists every Unsloth quant.
 
 Speed: Gemma 4, Qwen 3.6, Muse Glimmer and Qwen 3.8 draft tokens with the vendor's own speculative drafter, which downloads with the model. The model server's GPU kernels ship precompiled, so the first start after an install is quicker.
 
@@ -69,6 +69,7 @@ Speed: Gemma 4, Qwen 3.6, Muse Glimmer and Qwen 3.8 draft tokens with the vendor
 | [DiffusionGemma 26B-A4B](https://huggingface.co/unsloth/diffusiongemma-26B-A4B-it-GGUF) | 16.8 GB | 50.5 GB |
 | [OpenJev 27B (decisions)](https://huggingface.co/ggml-org/OpenJev-GGUF) | 19.4 GB | 53.8 GB |
 | [Kolibri 1 78B-A3B](https://huggingface.co/Hob-forge/Kolibri-1-GGUF) | 28.6 GB | 47.5 GB |
+| [DeepSeek V4 Flash 284B-A13B](https://huggingface.co/unsloth/DeepSeek-V4-Flash-Vision-Exp-GGUF) | 82.4 GB | 161.9 GB |
 
 ## Network
 

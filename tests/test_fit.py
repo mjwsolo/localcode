@@ -23,6 +23,8 @@ def test_gpu_budget_fractions():
     ("Qwen3.6-35B-A3B-UD-IQ2_M.gguf", 11.6, 24, "fits"),      # 13.9 GB measured
     ("Qwen3.6-35B-A3B-UD-Q8_K_XL.gguf", 39.7, 48, "too_big"),
     ("Qwen3.6-35B-A3B-UD-Q8_K_XL.gguf", 39.7, 64, "fits"),
+    # DeepSeek V4 Flash Q2_K_XL + projector: 2.0 GB measured beyond the files.
+    ("DeepSeek-V4-Flash-Vision-Exp-UD-Q2_K_XL-00001-of-00003.gguf", 97.8, 96, "too_big"),
 ])
 def test_measured_models(name, files, ram, want):
     assert F.fit(files, ram, name) == want
@@ -30,3 +32,16 @@ def test_measured_models(name, files, ram, want):
 
 def test_unmeasured_models_use_a_conservative_default():
     assert F.runtime_overhead_gb("Some-Future-Model-Q4.gguf", 10.0) == pytest.approx(6.0)
+
+
+def test_emulated_128_gb_mac_uses_metal_measured_working_set(monkeypatch):
+    monkeypatch.setenv("LOCALCODE_RAM_GB", "128")
+    assert F.gpu_budget_gb(128) == pytest.approx(107.52)
+    assert F.gpu_budget_gb(96) == pytest.approx(72.0)
+
+
+def test_deepseek_v4_flash_fits_a_128_gb_mac(monkeypatch):
+    monkeypatch.setenv("LOCALCODE_RAM_GB", "128")
+    name = "DeepSeek-V4-Flash-Vision-Exp-UD-Q2_K_XL-00001-of-00003.gguf"
+    assert F.fit(96.83 + 0.93, 128, name) == "fits"
+    assert F.fit(114.39 + 0.93, 128, name) == "too_big"   # UD-IQ3_S

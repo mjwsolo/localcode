@@ -951,6 +951,9 @@ def download_mmproj(
         # projector download fail its integrity check. The projector has no
         # recorded digest, so download_model falls back to the size check.
         sha256=None,
+        size_bytes=None,
+        # A split model's shard list must not ride along: the projector is one file.
+        shards=(),
     )
     ok, result = download_model(proxy, on_progress=on_progress)
     if not ok:
@@ -999,6 +1002,7 @@ def download_drafter(
         sha256=drafter.sha256,
         mmproj_filename=None, mmproj_size_gb=0.0, mmproj_hf_filename=None,
         drafter=None,
+        shards=(),  # the drafter is one file even when the model is split
     )
     ok, result = download_model(proxy, on_progress=on_progress, cancel_event=cancel_event)
     if not ok:

@@ -21,6 +21,9 @@ from functools import lru_cache
 GPU_WORKING_SET_SMALL_MAX_GB = 36
 GPU_WORKING_SET_SMALL_FRACTION = 2 / 3
 GPU_WORKING_SET_LARGE_FRACTION = 0.75
+# Metal's own recommendedMaxWorkingSetSize, read on real Macs of these sizes
+# (stock settings). Used instead of the fraction when such a Mac is emulated.
+GPU_WORKING_SET_MEASURED_GB = {128: 107.52}
 # Kept free inside the working set.
 FIT_MARGIN_GB = 0.5
 
@@ -34,6 +37,8 @@ RUNTIME_OVERHEAD: tuple[tuple[str, float, float], ...] = (
     ("Qwen3.6-35B-A3B", 2.35, 0.0),
     ("Qwen3.8-27B", 0.0, 0.47),
     ("North-Mini-Code", 2.8, 0.0),
+    # 2.0 GB at an 80K prompt in a 128K window (compressed attention keeps KV small).
+    ("DeepSeek-V4-Flash", 2.1, 0.0),
 )
 RUNTIME_OVERHEAD_DEFAULT = (3.0, 0.3)
 
@@ -73,6 +78,9 @@ def gpu_budget_gb(ram_gb: float) -> float:
         real = _metal_working_set_bytes()
         if real:
             return real / (1024 ** 3)
+    measured = GPU_WORKING_SET_MEASURED_GB.get(int(ram_gb)) if ram_gb == int(ram_gb) else None
+    if measured:
+        return measured
     fraction = GPU_WORKING_SET_SMALL_FRACTION if ram_gb <= GPU_WORKING_SET_SMALL_MAX_GB else GPU_WORKING_SET_LARGE_FRACTION
     return ram_gb * fraction
 

@@ -86,6 +86,7 @@ _EXPECTED_VISION = {
     "kolibri": False,
     "flint": False,
     "flint-q8": False,
+    "deepseek-v4-flash": True,
     "openjev": True,
     "saluki": True,
 }

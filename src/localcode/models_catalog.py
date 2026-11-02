@@ -270,6 +270,20 @@ class ModelChoice:
         return frozenset(caps)
 
 
+# DeepSeek V4 Flash ships only as split quants of 82 GB and more, so it is a
+# 128 GB Mac model. Vision-Exp is DeepSeek's V4 Flash with image input; it
+# scores above the text-only 0731 release on DeepSeek's agent benchmarks.
+DEEPSEEK_V4_FLASH_REVISION = "87ce15810931a270f165e5e50439cd446f6b4ba5"
+DEEPSEEK_V4_FLASH_NOTES = (
+    "DeepSeek V4 Flash: 284B total, about 13B active per token (6 of 256 "
+    "experts plus one shared), compressed sparse attention, 1M-token trained "
+    "context. This is DeepSeek's Vision-Exp release (Sept 2026): V4 Flash "
+    "0731 with image input added, scoring higher than 0731 on DeepSeek's "
+    "agent benchmarks. Every quant is a multi-part download of 82 GB or "
+    "more: 128 GB Macs only. Pair with the F16 projector for image input."
+)
+
+
 CHOICES: list[ModelChoice] = [
     ModelChoice(
         key="gemma",
@@ -629,6 +643,33 @@ CHOICES: list[ModelChoice] = [
         reasoning_control="always",
         reasoning_budget_tokens=0,
     ),
+    ModelChoice(
+        key="deepseek-v4-flash",
+        # Pinned: the Vision-Exp quants are re-exported now and then; a new
+        # upload must be a visible change here. sha256 is the first shard
+        # (the header llama-server reads); every shard is size-checked, and
+        # size_bytes is the sum of the shards.
+        revision=DEEPSEEK_V4_FLASH_REVISION,
+        sha256="9b6a9671fc7edfca95cdf54b121f82c878c6bb75825c9f283beaa0ba1eacb6b6",
+        size_bytes=96832555936,
+        name="DeepSeek V4 Flash 284B-A13B (Q2)",
+        hf_repo="unsloth/DeepSeek-V4-Flash-Vision-Exp-GGUF",
+        filename="DeepSeek-V4-Flash-Vision-Exp-UD-Q2_K_XL-00001-of-00003.gguf",
+        size_gb=96.8,
+        active_params="13B active (284B total MoE, top-6 of 256 experts + 1 shared)",
+        architecture="deepseek4",
+        license="MIT",
+        humaneval_pass_at_1=None,
+        notes=DEEPSEEK_V4_FLASH_NOTES,
+        mmproj_filename="mmproj-DeepSeek-V4-Flash-Vision-Exp-F16.gguf",
+        mmproj_size_gb=0.93,
+        mmproj_hf_filename="mmproj-F16.gguf",
+        shards=(
+            ("UD-Q2_K_XL/DeepSeek-V4-Flash-Vision-Exp-UD-Q2_K_XL-00001-of-00003.gguf", 5305248),
+            ("UD-Q2_K_XL/DeepSeek-V4-Flash-Vision-Exp-UD-Q2_K_XL-00002-of-00003.gguf", 49437013568),
+            ("UD-Q2_K_XL/DeepSeek-V4-Flash-Vision-Exp-UD-Q2_K_XL-00003-of-00003.gguf", 47390237120),
+        ),
+    ),
 ]
 
 
@@ -692,7 +733,9 @@ _NO_AUTO_RECOMMEND_ARCHS = {"diffusion_gemma", "kolibri1"}
 # model and must never be a first-run coding default. Saluki remains opt-in
 # until coding quality has been measured on this stack. Flint reasons on every
 # step (no off switch) and timed out where Qwen 3.6 finished on the 48 GB tier.
-_NO_AUTO_RECOMMEND_KEYS = {"openjev", "saluki", "flint", "flint-q8"}
+# DeepSeek V4 Flash is a 97 GB first download that leaves a 128 GB Mac about
+# 30 GB for everything else, so it is a choice the user makes, never a default.
+_NO_AUTO_RECOMMEND_KEYS = {"openjev", "saluki", "flint", "flint-q8", "deepseek-v4-flash"}
 
 
 def _auto_recommendable(c: "ModelChoice") -> bool:
@@ -721,6 +764,15 @@ def _capability_rank(choice) -> int:
     return order.get(choice.key, len(_RECOMMEND_ORDER) + 1)
 
 
+def footprint_gb(weights_gb: float, spec) -> float:
+    """Files loaded for one quant: weights plus the model's vendor drafter and
+    vision projector. ``spec`` is a ModelChoice or ModelGroup. The picker's fit
+    badge and every recommendation use this one number so they always agree."""
+    draft = float(getattr(getattr(spec, "drafter", None), "size_gb", 0.0) or 0.0)
+    vision = float(getattr(spec, "mmproj_size_gb", 0.0) or 0.0) if getattr(spec, "mmproj_filename", None) else 0.0
+    return weights_gb + draft + vision
+
+
 def recommend(ram_gb: int | None = None) -> ModelChoice:
     """Pick the best model for THIS machine's RAM — capability-ranked, never the
     research diffusion architecture, and never a hardcoded default.
@@ -735,7 +787,7 @@ def recommend(ram_gb: int | None = None) -> ModelChoice:
     from .fit import fit
     candidates = [
         c for c in CHOICES
-        if _auto_recommendable(c) and fit(c.size_gb, ram_gb, c.filename) == "fits"
+        if _auto_recommendable(c) and fit(footprint_gb(c.size_gb, c), ram_gb, c.filename) == "fits"
     ]
     if candidates:
         # Most capable that fits; tie-break toward the larger (better-quant) file.
@@ -1030,6 +1082,19 @@ MODEL_GROUPS: list[ModelGroup] = [
             "reasoning and multi-turn tool use. Unsloth Dynamic quants. "
             "Text-only."
         ),
+    ),
+    ModelGroup(
+        key="deepseek-v4-flash",
+        display_name="DeepSeek V4 Flash 284B-A13B",
+        maker="DeepSeek",
+        hf_repo="unsloth/DeepSeek-V4-Flash-Vision-Exp-GGUF",
+        family="deepseek",
+        architecture="deepseek4",
+        license="MIT",
+        notes=DEEPSEEK_V4_FLASH_NOTES,
+        mmproj_filename="mmproj-DeepSeek-V4-Flash-Vision-Exp-F16.gguf",
+        mmproj_size_gb=0.93,
+        mmproj_hf_filename="mmproj-F16.gguf",
     ),
     ModelGroup(
         key="openjev",
