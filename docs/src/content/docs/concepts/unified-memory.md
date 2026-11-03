@@ -7,13 +7,15 @@ On Apple Silicon, the CPU and GPU use the same memory pool. There is no separate
 
 ## The memory budget
 
-localcode uses about **55% of unified memory** for model weights. The remaining memory must cover:
+macOS lets the GPU use part of unified memory: about two thirds on Macs up to 36 GB, and about three quarters on larger Macs (107.5 GB on a 128 GB Mac). localcode sizes every model against that limit. Inside it the model needs room for:
 
-- **KV cache** - It grows as the context gets longer and can use a lot of laptop memory.
+- **Weights** - plus any image projector or drafter that loads beside them.
+- **KV cache** - It grows as the context gets longer.
 - **Activations** - These are temporary, but they still use memory.
-- **macOS and everything else you have open.**
 
-localcode recommends the most capable production-ready model whose weights fit within this budget. See [Choose a Model](/localcode/start-here/choose-a-model) for the recommended models.
+The rest of memory stays free for macOS and everything else you have open.
+
+localcode recommends the most capable production-ready model that fits within this budget, and the picker marks every quant as fits, tight or too big. See [Choose a Model](/localcode/start-here/choose-a-model) for the recommended models.
 
 ## Keeping the KV cache small
 

@@ -4,9 +4,9 @@
  *
  * Nothing here is hand-written: src/data/models.json is generated from
  * localcode's own catalogue by scripts/gen-models.py. For each memory tier it
- * lists EVERY model in the catalogue whose weights fit the budget that
- * `localcode.models_catalog.recommend()` uses (55% of unified memory), and
- * marks the one that function actually returns.
+ * lists EVERY model in the catalogue that fits the budget that
+ * `localcode.models_catalog.recommend()` uses (the GPU memory macOS allows).
+ * It marks no recommendation: the site cannot know the reader's Mac.
  *
  * Regenerate after a catalogue change:
  *   ~/.local/share/uv/tools/localcode/bin/python docs/scripts/gen-models.py
@@ -50,7 +50,7 @@ const logoSrc = (logo: string | null) => (logo ? `${base}/logos/${logo}.svg` : n
       <p class="lc-mem__count">
         <strong>{t.models.length}</strong>
         {t.models.length === 1 ? ' model fits' : ' models fit'} in {t.budget} GB
-        <span class="lc-mem__count-sub">— 55% of {t.ram} GB, the rest left for KV cache, activations and macOS</span>
+        <span class="lc-mem__count-sub">: the GPU memory macOS allows on a {t.ram} GB Mac ({Math.round((t.budget / t.ram) * 100)}%), which also holds the context</span>
       </p>
 
       <div class="lc-mem__head" aria-hidden="true">
@@ -66,9 +66,8 @@ const logoSrc = (logo: string | null) => (logo ? `${base}/logos/${logo}.svg` : n
       <ul class="lc-mem__list">
         {t.models.map((mdl) => {
           const src = logoSrc(mdl.logo);
-          const isRec = mdl.file === t.recommended;
           return (
-            <li class={`lc-mdl${isRec ? ' is-rec' : ''}`}>
+            <li class="lc-mdl">
               <span class="lc-mdl__mark" aria-hidden="true">
                 {src ? <img src={src} alt="" width="16" height="16" loading="lazy" /> : <span>{mdl.maker.slice(0, 1)}</span>}
               </span>
@@ -76,7 +75,6 @@ const logoSrc = (logo: string | null) => (logo ? `${base}/logos/${logo}.svg` : n
               <span class="lc-mdl__id">
                 <span class="lc-mdl__name">
                   {mdl.base}
-                  {isRec && <span class="lc-mdl__rec">recommended</span>}
                 </span>
                 {mdl.detail && <span class="lc-mdl__detail">{mdl.detail}</span>}
               </span>
@@ -95,10 +93,9 @@ const logoSrc = (logo: string | null) => (logo ? `${base}/logos/${logo}.svg` : n
   ))}
 
   <p class="lc-mem__rule">
-    localcode has no fixed default model. On launch it reads your Mac's unified
-    memory and picks the most capable production model whose weights fit in
-    about 55% of it. Everything else listed above still fits and can be chosen
-    from the model picker, or with <code>/models</code>.
+    These are the models that fit each memory size. You choose: the model
+    picker in localcode reads your Mac's actual memory and marks what fits,
+    and <code>/models</code> switches at any time.
   </p>
 </div>
 
