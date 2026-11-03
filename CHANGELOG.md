@@ -31,6 +31,14 @@ All notable changes to LocalCode will be documented here. The format follows
   model's parts instead of the one file.
 - Drafter files were listed in the picker as quants.
 - The picker's offline fallback lost the part list of a curated multi-part model.
+- Switching models mid-chat opened a confirmation step that had no border and a
+  search box; typing into it hid both choices and the switch never started. The
+  step now names the target model and has no search box.
+- Tool output that arrives as one very long line (for example a JSON page from
+  web fetch) reached the model as nothing; it now keeps the start of the line
+  up to the output limit.
+- Docs: the memory table no longer marks a recommended model, and the memory
+  budget is described as the GPU memory macOS allows instead of 55%.
 
 ## 0.5.41 - 2026-10-26
 
