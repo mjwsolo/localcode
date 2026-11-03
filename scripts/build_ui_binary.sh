@@ -73,9 +73,10 @@ done
 ( cd "$WORK/opencode" && bun install --frozen-lockfile --ignore-scripts >/dev/null )
 # Validate the native render-buffer contracts before bundling the UI.
 ( cd "$WORK/opencode/packages/tui" && bun test test/ui/solid-quote.test.ts test/ui/message-panel.test.ts test/ui/first-response-note.test.ts )
-# The runtime shows this in its footer; keep it equal to the wheel version (semver form).
+# The runtime shows this in its footer. A release candidate is promoted to the final version
+# without a rebuild, so bake the release's base version (0.5.42 for 0.5.42rc3).
 PYVER="$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/pyproject.toml" | head -1)"
-export OPENCODE_VERSION="$(echo "$PYVER" | sed -E 's/([0-9])(a|b|rc)([0-9]+)$/\1-\2\3/')"
+export OPENCODE_VERSION="$(echo "$PYVER" | sed -E 's/(a|b|rc)[0-9]+$//')"
 # opencode v2: the CLI (and the UI it embeds) builds from packages/cli; the browser app is not bundled.
 ( cd "$WORK/opencode/packages/cli" && bun run script/build.ts --single --skip-install --skip-web-ui >/dev/null )
 OUT="$(ls "$WORK"/opencode/packages/cli/dist/*/bin/localcode | head -1)"
