@@ -35,6 +35,13 @@ def isolated_model_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(catalog, "model_dir", lambda: d)
     from localcode import model_files
     monkeypatch.setattr(model_files, "search_roots", lambda _: [d])
+    # The disk-space preflight reads the real free space. A hosted runner can have
+    # less than a real model needs, which would stop these tests before the faked
+    # download, so report plenty of room.
+    import shutil
+    real_usage = shutil.disk_usage
+    monkeypatch.setattr(shutil, "disk_usage",
+                        lambda p: real_usage(p)._replace(free=1000 * 1000 ** 4))
     return d
 
 
