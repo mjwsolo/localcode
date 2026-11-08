@@ -18,9 +18,12 @@ master, `mtmd: refactoring: remove clip.h, consolidate code into mtmd (#31865)`,
 below: 0001 needed upstream's new `GGML_TYPE_F8_E4M3` (43), `FC_GROUP_NORM`
 (TurboQuant's Metal constant moved to 2600), the `kv_rows` argument to
 `build_attn_mha` and per-layer `self_v_rot[il]`; 0005 needed the new
-`llm_attn_mask` struct (`self_attn_mask.raw`) and now uses upstream's own
-memoryless-decoder output handling in `encode()`. 0004 no longer ships raw
-benchmark logs.
+`llm_attn_mask` struct (`self_attn_mask.raw`), keeps its own `encode()` output
+handling, and its diffusion reply cleanup gained a third case: with this upstream's
+flash attention the model can answer a tool result as ONE closed thought block with
+nothing after it (`<|channel>thought. answer<channel|>`), which the parser filed
+entirely as reasoning (the model gate's tool-loop check caught the empty reply).
+0004 no longer ships raw benchmark logs.
 
 **Previous pins:** `338fce6511c744893cc0d3d958b275f40552c7a4` (2026-10-27), `62df1815bc053066761f4eac58e288f23778e164` (2026-10-14),
 `5c8854fd88319125125dc4b836c98b1b215b0f23` (2026-10-11),

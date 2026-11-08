@@ -730,6 +730,65 @@ index 3b8f45d26..fd6b7bb99 100644
      LLM_TENSOR_POST_ATTN_NORM,
      LLM_TENSOR_POST_MLP_NORM,
      LLM_TENSOR_PER_LAYER_TOKEN_EMBD, // gemma3n
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index fc4ebccb8..e2c84a8d9 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -1772,9 +1772,14 @@ int llama_context::encode(const llama_batch_ext & batch_inp) {
+     // eagle3/DFlash: features as encoder input, and non-draft paths fall back to model's input dim
+     const int64_t n_vocab = model.vocab.n_tokens();
+ 
+-    // note: during encode, we skip position continuity checks and output all tokens
+-    //       a decoder without memory (see decode()) outputs the marked tokens, unless it extracts embeddings
+-    if (!balloc->init(batch_inp, model.vocab, memory || cparams.embeddings)) {
++    // Memoryless models (e.g. canvas diffusion) route decode() here but often need logits for only a few rows
++    // (the canvas). When the caller caps n_outputs_max below the batch size, honor the per-token output flags
++    // instead of forcing every row, avoiding an [n_tokens, n_vocab] reserve (huge at a 262k vocab). The default
++    // n_outputs_max == n_batch >= n_tokens, so this is a no-op for encoder/embedding models.
++    const bool output_all = cparams.embeddings || cparams.n_outputs_max >= (uint32_t) batch_inp.tokens.size();
++
++    // note: during encode, we skip position continuity checks; all tokens are output unless capped above
++    if (!balloc->init(batch_inp, model.vocab, output_all)) {
+         LLAMA_LOG_ERROR("%s: failed to initialize batch\n", __func__);
+         return -1;
+     }
+@@ -1803,20 +1808,27 @@ int llama_context::encode(const llama_batch_ext & batch_inp) {
+ 
+     n_queued_tokens += n_tokens;
+ 
+-    const uint32_t n_outputs_all = balloc->get_n_outputs();
+-
+-    // reserve output buffer
+-    if (output_reserve(n_outputs_all) < n_outputs_all) {
+-        LLAMA_LOG_ERROR("%s: could not reserve space for batch with %u outputs\n", __func__, n_outputs_all);
++    // reserve output buffer (capped: only the flagged rows when output_all is false)
++    const uint32_t n_outputs_enc = output_all ? n_tokens : balloc->get_n_outputs();
++    if (output_reserve(n_outputs_enc) < n_outputs_enc) {
++        LLAMA_LOG_ERROR("%s: could not reserve space for batch with %u outputs\n", __func__, n_outputs_enc);
+         return -2;
+     };
+ 
+-    const auto & out_ids = balloc->get_out_ids();
+-    for (uint32_t i = 0; i < n_outputs_all; ++i) {
+-        output_ids[out_ids[i]] = i;
++    std::fill(output_ids.begin(), output_ids.end(), -1);
++    if (output_all) {
++        for (uint32_t i = 0; i < n_tokens; ++i) {
++            output_ids[i] = i;
++        }
++    } else {
++        // map each flagged token index -> its output-buffer row (out_ids is sorted for canvas models)
++        const auto & out_ids = balloc->get_out_ids();
++        for (uint32_t i = 0; i < n_outputs_enc; ++i) {
++            output_ids[out_ids[i]] = i;
++        }
+     }
+ 
+-    n_outputs = n_outputs_all;
++    n_outputs = n_outputs_enc;
+ 
+     const auto causal_attn_org = cparams.causal_attn;
+ 
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
 index 7e845bc30..73508aa8d 100644
 --- a/src/llama-model.cpp
@@ -4011,7 +4070,7 @@ index 01bf12e61..9fa1c6d6d 100644
  
  // used by /completions endpoint
 diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
-index a5d5b6c07..6ab4e314f 100644
+index a5d5b6c07..42537d3f6 100644
 --- a/tools/server/server-context.cpp
 +++ b/tools/server/server-context.cpp
 @@ -22,6 +22,7 @@
@@ -4077,7 +4136,7 @@ index a5d5b6c07..6ab4e314f 100644
              };
  
              {
-@@ -3556,6 +3582,340 @@ private:
+@@ -3556,6 +3582,359 @@ private:
          return false;
      }
  
@@ -4371,6 +4430,25 @@ index a5d5b6c07..6ab4e314f 100644
 +                        // The whole reply fits one block and the thought is never closed:
 +                        // the model wrote its answer inside the block. It is the answer.
 +                        block_text.erase(0, i);
++                    } else if (ended_on_eog || block_complete) {
++                        // The whole reply is one CLOSED thought with nothing after it
++                        // ("<|channel>thought. answer<channel|>"): the answer went inside the
++                        // block, and the parser would file all of it as reasoning. Use it.
++                        const size_t close = block_text.find(close_tag, i);
++                        size_t tail = close + close_tag.size();
++                        while (tail < block_text.size() && isspace((unsigned char) block_text[tail])) tail++;
++                        if (close != std::string::npos && tail == block_text.size()) {
++                            std::string inner = block_text.substr(i, close - i);
++                            // the model separates the channel name with ". " or ": " here
++                            if (inner.size() > 1 && (inner[0] == '.' || inner[0] == ':') && isspace((unsigned char) inner[1])) {
++                                inner.erase(0, 1);
++                            }
++                            size_t s = 0;
++                            while (s < inner.size() && isspace((unsigned char) inner[s])) s++;
++                            if (s < inner.size()) {
++                                block_text = inner.substr(s);
++                            }
++                        }
 +                    }
 +                }
 +            }
@@ -4418,7 +4496,7 @@ index a5d5b6c07..6ab4e314f 100644
      void update_slots() {
  #ifdef DEBUG_TIMINGS
          static int64_t t_prev = 0;
-@@ -3598,6 +3958,12 @@ private:
+@@ -3598,6 +3977,12 @@ private:
              }
          }
  

@@ -3872,6 +3872,25 @@ private:
                         // The whole reply fits one block and the thought is never closed:
                         // the model wrote its answer inside the block. It is the answer.
                         block_text.erase(0, i);
+                    } else if (ended_on_eog || block_complete) {
+                        // The whole reply is one CLOSED thought with nothing after it
+                        // ("<|channel>thought. answer<channel|>"): the answer went inside the
+                        // block, and the parser would file all of it as reasoning. Use it.
+                        const size_t close = block_text.find(close_tag, i);
+                        size_t tail = close + close_tag.size();
+                        while (tail < block_text.size() && isspace((unsigned char) block_text[tail])) tail++;
+                        if (close != std::string::npos && tail == block_text.size()) {
+                            std::string inner = block_text.substr(i, close - i);
+                            // the model separates the channel name with ". " or ": " here
+                            if (inner.size() > 1 && (inner[0] == '.' || inner[0] == ':') && isspace((unsigned char) inner[1])) {
+                                inner.erase(0, 1);
+                            }
+                            size_t s = 0;
+                            while (s < inner.size() && isspace((unsigned char) inner[s])) s++;
+                            if (s < inner.size()) {
+                                block_text = inner.substr(s);
+                            }
+                        }
                     }
                 }
             }
