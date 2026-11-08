@@ -1,5 +1,5 @@
 #!/bin/bash
-# SMEM Pre-Dequant Benchmark — M5 Max
+# SMEM Pre-Dequant Benchmark (614 GB/s Apple Silicon)
 # Tests SMEM vs baseline at multiple context depths
 #
 # BEFORE RUNNING:

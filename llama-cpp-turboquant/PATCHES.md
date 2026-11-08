@@ -12,11 +12,17 @@ The machine-readable form of this inventory lives at the repo root:
 | `patches/PINNED_UPSTREAM` | the upstream commit the series applies to |
 | `patches/000N-*.patch` | numbered patches, applied in order with `git apply` |
 
-**Pinned upstream:** `338fce6511c744893cc0d3d958b275f40552c7a4` (2026-10-27,
-master, `HIP/CUDA: remove pragma unroll from loops in conv2d ... (#31255)`,
-310 commits after `62df1815b`, the previous pin).
+**Pinned upstream:** `7d7f0287530bc8981690f361d8c1627dbae1c99a` (2026-11-08,
+master, `mtmd: refactoring: remove clip.h, consolidate code into mtmd (#31865)`,
+269 commits after `338fce651`, the previous pin). Rebased with the 3-way recipe
+below: 0001 needed upstream's new `GGML_TYPE_F8_E4M3` (43), `FC_GROUP_NORM`
+(TurboQuant's Metal constant moved to 2600), the `kv_rows` argument to
+`build_attn_mha` and per-layer `self_v_rot[il]`; 0005 needed the new
+`llm_attn_mask` struct (`self_attn_mask.raw`) and now uses upstream's own
+memoryless-decoder output handling in `encode()`. 0004 no longer ships raw
+benchmark logs.
 
-**Previous pins:** `62df1815bc053066761f4eac58e288f23778e164` (2026-10-14),
+**Previous pins:** `338fce6511c744893cc0d3d958b275f40552c7a4` (2026-10-27), `62df1815bc053066761f4eac58e288f23778e164` (2026-10-14),
 `5c8854fd88319125125dc4b836c98b1b215b0f23` (2026-10-11),
 `62a6f74bab748b1755f4cd8dfc0871caf865c6c8` (2026-10-11), `836d57176dc699a726c55418e4f96b8ca628e1bf` (2026-10-03),
 `3f545beccee69d9975f466ec7e45fd9aacd8ba90` (2026-08-22), and before it `c08d28d08871715fd68accffaeeb76ddcaede658` (2026-04-05). That

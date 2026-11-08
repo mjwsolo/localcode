@@ -1,8 +1,8 @@
 diff --git a/tools/server/server-decision.h b/tools/server/server-decision.h
-index 45933ffa1..6ebf1a79e 100644
+index 82af98ca1..0abc470fe 100644
 --- a/tools/server/server-decision.h
 +++ b/tools/server/server-decision.h
-@@ -78,8 +78,16 @@ struct server_decision_context {
+@@ -84,8 +84,16 @@ struct server_decision_context {
  
      // false for a decision-only model, it serves no text generation
      bool can_generate() const {
