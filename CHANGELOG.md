@@ -5,6 +5,15 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
+### Changed
+
+- The interface runs on OpenCode upstream from 2026-11-08 (was 2026-10-17),
+  1,848 upstream commits newer. Everything localcode changed is kept: no cloud
+  features, no package downloads, the model picker, project trust, and the
+  approvals for paths outside the project. Upstream's new OpenCode Console,
+  OpenCode Go, usage-limit and /goal features are left out.
+- The UI patches 0009-0013 now live in the fork itself; `patches/ui` is empty.
+
 ## 0.5.42 - 2026-11-02
 
 ### Added
