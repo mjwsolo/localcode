@@ -212,7 +212,7 @@ class TestEstimateDecodeTokS:
         # show 150+ tok/s even on the fastest chip (M5 Max at 614 GB/s).
         result = estimate_decode_tok_s(10.7, "Qwen 3.6 35B-A3B", M5_MAX_BW)
         assert result is not None
-        assert result <= 100, f"Qwen IQ2 on M5 Max predicted {result} tok/s — unrealistically high"
+        assert result <= 100, f"Qwen IQ2 at 614 GB/s predicted {result} tok/s — unrealistically high"
 
     def test_moe_quants_monotonic_with_size(self) -> None:
         # Larger quants (same model) must be slower, not faster.
@@ -235,7 +235,7 @@ class TestEstimateDecodeTokS:
         low = estimate_decode_tok_s(11.2, "Gemma 4 26B-A4B", 200.0)
         high = estimate_decode_tok_s(11.2, "Gemma 4 26B-A4B", M5_MAX_BW)
         assert low is not None and high is not None
-        assert high > low, f"M5 Max ({high}) should beat 200 GB/s machine ({low})"
+        assert high > low, f"614 GB/s ({high}) should beat 200 GB/s machine ({low})"
 
     def test_moe_spread_is_sane(self) -> None:
         # For MoE the quant-to-quant ratio should be modest — NOT 5x.
@@ -250,12 +250,12 @@ class TestEstimateDecodeTokS:
         )
 
     def test_gemma_iq3_ballpark_m5_max(self) -> None:
-        # Anchor: measured ~83 tok/s on M5 Max stack (IQ3_S + TurboQuant KV).
+        # Anchor: measured ~83 tok/s at 614 GB/s (IQ3_S + TurboQuant KV).
         # We allow ±20 tok/s since this is a rough estimate.
         result = estimate_decode_tok_s(11.2, "Gemma 4 26B-A4B", M5_MAX_BW)
         assert result is not None
         assert 60 <= result <= 105, (
-            f"Gemma IQ3 estimated {result} tok/s on M5 Max — expected 60-105 range"
+            f"Gemma IQ3 estimated {result} tok/s at 614 GB/s — expected 60-105 range"
         )
 
 

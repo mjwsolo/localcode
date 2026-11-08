@@ -456,7 +456,7 @@ CHOICES: list[ModelChoice] = [
         architecture="gemma4-iswa",
         license="Gemma (Google) — research + commercial w/ attribution",
         humaneval_pass_at_1=None,
-        notes="High-RAM workstation pick — same MoE architecture as the small Gemma entry, just near-lossless Q8 quant instead of IQ3_S. 3.8B active params = same decode speed class as the IQ3 version (~95 tok/s on M5 Max) at ~99% of BF16 quality vs ~80% on IQ3. Native multimodal — pair with the F16 mmproj for image input. Requires ≥48 GB unified memory; sweet spot on 128 GB Apple Silicon. Upstream silently refreshed these weights 2026-07-16 (tool-calling + vision fixes, same filenames) — copies downloaded before then are stale; delete and re-download.",
+        notes="High-RAM workstation pick — same MoE architecture as the small Gemma entry, just near-lossless Q8 quant instead of IQ3_S. 3.8B active params = same decode speed class as the IQ3 version (~95 tok/s on a 614 GB/s Mac) at ~99% of BF16 quality vs ~80% on IQ3. Native multimodal — pair with the F16 mmproj for image input. Requires ≥48 GB unified memory; sweet spot on 128 GB Apple Silicon. Upstream silently refreshed these weights 2026-07-16 (tool-calling + vision fixes, same filenames) — copies downloaded before then are stale; delete and re-download.",
         mmproj_filename="mmproj-gemma-4-26B-A4B-F16.gguf",
         mmproj_size_gb=1.2,
         mmproj_hf_filename="mmproj-F16.gguf",
@@ -1226,7 +1226,7 @@ def estimate_decode_tok_s(size_gb: float, name: str, bandwidth_gbps: float) -> i
                        quant size; dense models are lower (~2 ms/token) so
                        the model remains more bandwidth-bound there.
 
-    Calibration (M5 Max, 614 GB/s):
+    Calibration (614 GB/s Apple Silicon):
       Gemma-4-26B-A4B IQ3_S (~1.7 GB effective) → ~83 tok/s  [measured]
       Gemma-4-26B-A4B Q8    (~4.3 GB effective) → ~55 tok/s  [estimate]
       Dense Gemma-4-12B Q4  (~7.4 GB effective) → ~35 tok/s  [estimate]
