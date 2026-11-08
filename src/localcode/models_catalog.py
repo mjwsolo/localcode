@@ -284,6 +284,16 @@ DEEPSEEK_V4_FLASH_NOTES = (
 )
 
 
+# Laguna XS 2.1 (Poolside, July 2026): an agentic-coding MoE. bartowski's repo
+# carries the full quant ladder (9-36 GB), so the picker covers small Macs too.
+LAGUNA_XS_REVISION = "8f7579d6ab7d3122716100116cf1a62f490ab6f3"
+LAGUNA_XS_NOTES = (
+    "Poolside Laguna XS 2.1: agentic-coding MoE, 33B total, about 3B active "
+    "per token (256 experts plus one shared), mixed sliding-window and global "
+    "attention, 256K trained context. Text-only. OpenMDW-1.1 license."
+)
+
+
 CHOICES: list[ModelChoice] = [
     ModelChoice(
         key="gemma",
@@ -413,6 +423,38 @@ CHOICES: list[ModelChoice] = [
             "Apache 2.0. ~17.9 GiB; recommend 32 GB+ unified memory."
         ),
         reasoning_budget_tokens=0,
+    ),
+    ModelChoice(
+        key="laguna-xs",
+        # Pinned: bartowski re-uploads quants now and then; a new upload must
+        # be a visible change here.
+        revision=LAGUNA_XS_REVISION,
+        sha256="239b1417ab36565241b2cb5dd366b89919033b1cf16d6f51b8d870db3491dae6",
+        size_bytes=20548085120,
+        name="Laguna XS 2.1 33B-A3B (Q4)",
+        hf_repo="bartowski/Laguna-XS-2.1-GGUF",
+        filename="Laguna-XS-2.1-Q4_K_M.gguf",
+        size_gb=20.5,
+        active_params="3B active (33B total MoE, 256 experts + 1 shared)",
+        architecture="laguna",
+        license="OpenMDW-1.1",
+        humaneval_pass_at_1=None,
+        notes=LAGUNA_XS_NOTES,
+    ),
+    ModelChoice(
+        key="laguna-xs-q8",
+        revision=LAGUNA_XS_REVISION,
+        sha256="f8e63721a5ef5473fca6b93b4a9d24449bdf4f2d8a4626a60410f027ee8920b5",
+        size_bytes=35597116800,
+        name="Laguna XS 2.1 33B-A3B (Q8)",
+        hf_repo="bartowski/Laguna-XS-2.1-GGUF",
+        filename="Laguna-XS-2.1-Q8_0.gguf",
+        size_gb=35.6,
+        active_params="3B active (33B total MoE, 256 experts + 1 shared)",
+        architecture="laguna",
+        license="OpenMDW-1.1",
+        humaneval_pass_at_1=None,
+        notes=LAGUNA_XS_NOTES + " Q8: near-lossless, for 64 GB Macs and up.",
     ),
     ModelChoice(
         key="muse-glimmer",
@@ -735,7 +777,8 @@ _NO_AUTO_RECOMMEND_ARCHS = {"diffusion_gemma", "kolibri1"}
 # step (no off switch) and timed out where Qwen 3.6 finished on the 48 GB tier.
 # DeepSeek V4 Flash is a 97 GB first download that leaves a 128 GB Mac about
 # 30 GB for everything else, so it is a choice the user makes, never a default.
-_NO_AUTO_RECOMMEND_KEYS = {"openjev", "saluki", "flint", "flint-q8", "deepseek-v4-flash"}
+# Laguna XS 2.1 stays opt-in until its coding quality is measured on this stack.
+_NO_AUTO_RECOMMEND_KEYS = {"openjev", "saluki", "flint", "flint-q8", "deepseek-v4-flash", "laguna-xs", "laguna-xs-q8"}
 
 
 def _auto_recommendable(c: "ModelChoice") -> bool:
@@ -997,6 +1040,16 @@ MODEL_GROUPS: list[ModelGroup] = [
             "builds a dedicated llama-server from llama.cpp PR #24260 on first "
             "use and serves it with stock flags. 256K context. Text-only."
         ),
+    ),
+    ModelGroup(
+        key="laguna-xs-2.1",
+        display_name="Laguna XS 2.1 33B-A3B",
+        maker="Poolside",
+        hf_repo="bartowski/Laguna-XS-2.1-GGUF",
+        family="laguna",
+        architecture="laguna",
+        license="OpenMDW-1.1",
+        notes=LAGUNA_XS_NOTES,
     ),
     ModelGroup(
         key="muse-glimmer-30b",

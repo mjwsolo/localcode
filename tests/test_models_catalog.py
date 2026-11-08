@@ -87,6 +87,8 @@ _EXPECTED_VISION = {
     "flint": False,
     "flint-q8": False,
     "deepseek-v4-flash": True,
+    "laguna-xs": False,
+    "laguna-xs-q8": False,
     "openjev": True,
     "saluki": True,
 }
