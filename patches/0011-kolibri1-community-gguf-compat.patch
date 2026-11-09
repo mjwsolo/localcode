@@ -1,8 +1,8 @@
 diff --git a/src/llama-vocab.cpp b/src/llama-vocab.cpp
-index 65b569762..de98d5f69 100644
+index 229a051e0..c5f38f033 100644
 --- a/src/llama-vocab.cpp
 +++ b/src/llama-vocab.cpp
-@@ -2569,7 +2569,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
+@@ -2576,7 +2576,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                      tokenizer_pre == "qwen2" ||
                      tokenizer_pre == "deepseek-r1-qwen" ||
                      tokenizer_pre == "kormo" ||
@@ -15,7 +15,7 @@ index 65b569762..de98d5f69 100644
                  clean_spaces = false;
              } else if (
 diff --git a/src/models/kolibri1.cpp b/src/models/kolibri1.cpp
-index 2301ef272..a39963d12 100644
+index c4d8eca1b..ef47baa4c 100644
 --- a/src/models/kolibri1.cpp
 +++ b/src/models/kolibri1.cpp
 @@ -7,6 +7,13 @@ void llama_model_kolibri1::load_arch_hparams(llama_model_loader & ml) {

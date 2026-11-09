@@ -962,7 +962,7 @@ void dequantize_turbo3_0_t4(device const block_turbo3_0 * xb, short il, thread t
         s3 ? v3 : -v3
     ));
 #else
-    // 8-entry full LUT: best on M5 Max (0.905x q8_0, 77.4 tok/s)
+    // 8-entry full LUT: best on a 614 GB/s Apple Silicon Mac (0.905x q8_0, 77.4 tok/s)
     reg = type4(float4(
         float(turbo_centroids_3bit_h[q0 | (s0 << 2)]),
         float(turbo_centroids_3bit_h[q1 | (s1 << 2)]),
@@ -1004,7 +1004,7 @@ void dequantize_turbo4_0(device const block_turbo4_0 * xb, short il, thread type
 
 template <typename type4>
 void dequantize_turbo4_0_t4(device const block_turbo4_0 * xb, short il, thread type4 & reg) {
-    // Direct 16-entry half LUT — fastest on M5 Max (constant cache not the bottleneck)
+    // Direct 16-entry half LUT — fastest on a 614 GB/s Apple Silicon Mac (constant cache not the bottleneck)
     // 8-mag LUT tested: -3% on M5 due to ternary branch overhead. Keep for M1/M2 if needed.
     const float norm = float(xb->norm);
     const device uint8_t * qs = xb->qs + il * 2;
