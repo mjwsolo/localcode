@@ -515,7 +515,7 @@ def recommend_preset(
     kv_cache_type_v = "q8_0"
 
     # q8_0 for both K and V on every tier. Measured on code text against an f16
-    # reference (Qwen 3.6 35B, M5 Max): q8_0/q8_0 has 4x lower mean KLD and 4x
+    # reference (Qwen 3.6 35B, Apple Silicon): q8_0/q8_0 has 4x lower mean KLD and 4x
     # lower 99.9%-tail KLD than q8_0/turbo4, at 5% less generation speed. The
     # tail is the token that breaks a JSON key or drops a closing brace, which
     # is the failure a coding agent cannot afford. Memory is not the constraint

@@ -4,7 +4,7 @@ Both halves are local-first / open-source / free:
 
 - **STT** uses whisper.cpp via the `pywhispercpp` pip wheel, which ships
   prebuilt Metal binaries on Apple Silicon. Default model is
-  `distil-medium.en` (~370 MB, ~15x realtime on M5 Max, English).
+  `distil-medium.en` (~370 MB, ~15x realtime on a 614 GB/s Mac, English).
 
 - **TTS** defaults to macOS `say` (ships with macOS, zero deps). Piper
   TTS is a documented opt-in upgrade via `runtime.tts_engine = "piper"`.
@@ -32,7 +32,7 @@ from typing import Callable
 DEFAULT_STT_MODEL_DIR = Path.home() / ".local" / "share" / "localcode" / "voice"
 # ggerganov/whisper.cpp hosts canonical ggml-format whisper weights. The
 # `medium.en-q5_0` variant is the sweet spot for English coding/dictation:
-# ~514 MB, ~15× realtime on M5 Max, accurate enough for tool/function names.
+# ~514 MB, ~15× realtime on a 614 GB/s Mac, accurate enough for tool/function names.
 # An earlier version of this file referenced a `distil-whisper/distil-*`
 # filename that 404'd — those weights only ship in safetensors/pytorch
 # format, not GGUF. Fixed 2026-05-22.

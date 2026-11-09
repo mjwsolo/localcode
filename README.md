@@ -52,7 +52,7 @@ OpenAI compatible endpoint. See the [Local API guide](https://mjwsolo.github.io/
 
 ## Models
 
-Choose from **12 models and 150+ quant options** for coding, image input and typed decisions. Models download from Hugging Face. Downloads run in parallel and can resume if interrupted. Switch with `/models`. LocalCode recommends the most capable one that fits your Mac's memory and marks it with a star. Flint, Saluki, OpenJev, DiffusionGemma, Kolibri and DeepSeek V4 Flash are never picked automatically. DeepSeek V4 Flash runs on 128 GB Macs only. The Flint row shows its two curated quants; the picker lists every Unsloth quant.
+Choose from **13 models and 150+ quant options** for coding, image input and typed decisions. Models download from Hugging Face. Downloads run in parallel and can resume if interrupted. Switch with `/models`. LocalCode recommends the most capable one that fits your Mac's memory and marks it with a star. Flint, Saluki, OpenJev, DiffusionGemma, Kolibri, DeepSeek V4 Flash and Laguna XS 2.1 are never picked automatically. DeepSeek V4 Flash runs on 128 GB Macs only. The Flint row shows its two curated quants; the picker lists every Unsloth quant.
 
 Speed: Gemma 4, Qwen 3.6, Muse Glimmer and Qwen 3.8 draft tokens with the vendor's own speculative drafter, which downloads with the model. The model server's GPU kernels ship precompiled, so the first start after an install is quicker.
 
@@ -62,6 +62,7 @@ Speed: Gemma 4, Qwen 3.6, Muse Glimmer and Qwen 3.8 draft tokens with the vendor
 | [Qwen 3.8 27B](https://huggingface.co/unsloth/Qwen3.8-27B-GGUF) | 6.2 GB | 31.5 GB |
 | [Underdog Saluki 27B 1.0](https://huggingface.co/ConwayResearch/Underdog-Saluki-27B-1.0) | 7.9 GB | 7.9 GB |
 | [North-Mini-Code 30B-A3B](https://huggingface.co/unsloth/North-Mini-Code-1.0-GGUF) | 9.4 GB | 33.2 GB |
+| [Laguna XS 2.1 33B-A3B](https://huggingface.co/bartowski/Laguna-XS-2.1-GGUF) | 9.4 GB | 35.6 GB |
 | [Gemma 4 26B-A4B](https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF) | 9.9 GB | 27.6 GB |
 | [Qwen 3.6 35B-A3B](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF) | 10.0 GB | 38.5 GB |
 | [Muse Glimmer 30B](https://huggingface.co/unsloth/Muse-Glimmer-30B-GGUF) | 10.7 GB | 32.3 GB |

@@ -25,6 +25,7 @@ Other models in the picker are choices you make yourself:
 - **Flint 40B-A2.5B** - a coding-agent MoE with about 2.5B active parameters: 25 GB at Q4 (48 GB Macs and up) and 42 GB at Q8 (96 GB and up), with smaller quants from 11 GB. It reasons on every step and has no off switch, so its thinking stays hidden and agent tasks run slower than on Qwen 3.6.
 - **DeepSeek V4 Flash 284B-A13B** - DeepSeek's large MoE with about 13B active parameters and image input (the Vision-Exp release). Every quant is a multi-part download of 82 GB or more, so it runs on 128 GB Macs only: UD-Q2_K_XL (96.8 GB) is the curated pick; the IQ1, IQ2 and UD-IQ3_XXS (103 GB) quants also fit. It leaves little memory for other apps, so it is never the default pick.
 - **North-Mini-Code, Muse Glimmer, Underdog Saluki, DiffusionGemma, Kolibri** - more models in the picker, each verified to load, chat and call tools on every release.
+- **Laguna XS 2.1 33B-A3B** - Poolside's agentic-coding MoE with about 3B active parameters. Text-only. Q4 (20.5 GB) and Q8 (35.6 GB) are the curated picks; the picker lists every quant from 9.4 GB up. It is new on this stack, so it is never the default pick yet.
 - **OpenJev** - a decision model, not a coding model. See [Chat and Decisions](/localcode/guides/decisions).
 
 ## The model picker
