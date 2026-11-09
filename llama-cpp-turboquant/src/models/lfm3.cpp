@@ -19,6 +19,11 @@ void llama_model_lfm3::load_arch_hparams(llama_model_loader & ml) {
 
     ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa);
 
+    // d1: full attention layers read the prompt both ways, sliding window layers stay causal
+    if (!hparams.causal_attn) {
+        hparams.non_causal_type = LLAMA_NON_CAUSAL_TYPE_DENSE_ONLY;
+    }
+
     switch (hparams.n_ff()) {
         case 7680: type = LLM_TYPE_1_7B; break;
         default:   type = LLM_TYPE_UNKNOWN;
@@ -84,24 +89,22 @@ void llama_model_lfm3::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_lfm3::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    if (!hparams.causal_attn) {
+        return std::make_unique<graph<true>>(params);
+    }
+    return std::make_unique<graph<false>>(params);
 }
 
-llama_model_lfm3::graph::graph(const llama_model & model, const llm_graph_params & params) :
+template <bool decision>
+llama_model_lfm3::graph<decision>::graph(const llm_graph_params & params) :
     llm_build_lfm_base(params) {
-    auto build_attn_block = [&model, this](ggml_tensor *                  cur_in,
-                                           ggml_tensor *                  inp_pos,
-                                           llm_graph_input_attn_kv_iswa * inp_attn,
-                                           int                            il) -> ggml_tensor * {
+    auto build_attn_block = [this](ggml_tensor * cur_in,
+                                   ggml_tensor * inp_pos,
+                                   auto *        inp_attn,
+                                   int           il) -> ggml_tensor * {
         const int64_t n_embd_head = hparams.n_embd_head_k(il);
         const int64_t n_head_il   = hparams.n_head(il);
         const int64_t n_head_kv   = hparams.n_head_kv(il);
-
-        const int     n_rot_l      = hparams.n_rot(il);
-        const float   freq_base_l  = model.get_rope_freq_base (cparams, il);
-        const float   freq_scale_l = model.get_rope_freq_scale(cparams, il);
-
-        ggml_tensor * rope_factors = hparams.is_swa(il) ? nullptr : model.layers[il].rope_freqs;
 
         auto [q, k, v] = build_qkv(model.layers[il], cur_in, n_embd_head, n_head_il, n_head_kv, il);
 
@@ -110,17 +113,15 @@ llama_model_lfm3::graph::graph(const llama_model & model, const llm_graph_params
         k = build_norm(k, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, il);
         cb(k, "model.layers.{}.self_attn.k_layernorm", il);
 
-        q = ggml_rope_ext(ctx0, q, inp_pos, rope_factors, n_rot_l, rope_type, n_ctx_orig,
-                          freq_base_l, freq_scale_l, ext_factor, attn_factor, beta_fast, beta_slow);
-        k = ggml_rope_ext(ctx0, k, inp_pos, rope_factors, n_rot_l, rope_type, n_ctx_orig,
-                          freq_base_l, freq_scale_l, ext_factor, attn_factor, beta_fast, beta_slow);
+        q = build_rope(q, inp_pos, il);
+        k = build_rope(k, inp_pos, il);
 
         ggml_tensor * attn_out = build_attn(inp_attn,
                 NULL, NULL, NULL,
                 q, k, v, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
         cb(attn_out, "attn_out", il);
 
-        ggml_tensor * gate = build_lora_mm(model.layers[il].wqkv_gate, cur_in);
+        ggml_tensor * gate = build_lora_mm(model.layers[il].wqkv_gate, cur_in, model.layers[il].wqkv_gate_s);
         gate = ggml_sigmoid(ctx0, gate);
         cb(gate, "model.layers.{}.self_attn.gate", il);
 
@@ -140,20 +141,30 @@ llama_model_lfm3::graph::graph(const llama_model & model, const llm_graph_params
 
     ggml_build_forward_expand(gf, cur);
 
-    auto * inp_hybrid = build_inp_mem_hybrid_iswa();
+    // decision: no memory, the whole prompt is read in one batch
+    auto * inp_hybrid = decision ? nullptr : build_inp_mem_hybrid_iswa();
+    auto * inp_attn   = decision ? build_attn_inp_no_cache() : nullptr;
 
     ggml_tensor * inp_pos     = build_inp_pos();
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     for (int il = 0; il < n_layer; ++il) {
+        res->t_layer_inp[il] = cur;
+
         auto * prev_cur = cur;
 
         cur = build_norm(cur, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "model.layers.{}.operator_norm", il);
 
         if (hparams.is_recr(il)) {
-            const auto * mctx_recr = static_cast<const llama_memory_hybrid_iswa_context *>(mctx)->get_recr();
-            cur = build_lfm_shortconv(model, mctx_recr, inp_hybrid->get_recr(), cur, il);
+            if constexpr (decision) {
+                cur = build_lfm_shortconv(cur, il);
+            } else {
+                const auto * mctx_recr = static_cast<const llama_memory_hybrid_iswa_context *>(mctx)->get_recr();
+                cur = build_lfm_shortconv(mctx_recr, inp_hybrid->get_recr(), cur, il);
+            }
+        } else if constexpr (decision) {
+            cur = build_attn_block(cur, inp_pos, inp_attn, il);
         } else {
             cur = build_attn_block(cur, inp_pos, inp_hybrid->get_attn(), il);
         }
@@ -173,7 +184,7 @@ llama_model_lfm3::graph::graph(const llama_model & model, const llm_graph_params
         auto * ffn_norm_out = build_norm(cur, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, il);
         cb(ffn_norm_out, "model.layers.{}.ffn_norm", il);
 
-        ggml_tensor * ffn_out = build_lfm_dense_ffn(model, ffn_norm_out, il);
+        ggml_tensor * ffn_out = build_lfm_dense_ffn(ffn_norm_out, il);
 
         if (model.layers[il].ffn_post_norm) {
             ffn_out = build_norm(ffn_out, model.layers[il].ffn_post_norm, NULL, LLM_NORM_RMS, il);
@@ -195,3 +206,6 @@ llama_model_lfm3::graph::graph(const llama_model & model, const llm_graph_params
 
     res->t_logits = cur;
 }
+
+template struct llama_model_lfm3::graph<false>;
+template struct llama_model_lfm3::graph<true>;
