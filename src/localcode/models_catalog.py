@@ -284,6 +284,16 @@ DEEPSEEK_V4_FLASH_NOTES = (
 )
 
 
+# Laguna XS 2.1 (Poolside, July 2026): an agentic-coding MoE. bartowski's repo
+# carries the full quant ladder (9-36 GB), so the picker covers small Macs too.
+LAGUNA_XS_REVISION = "8f7579d6ab7d3122716100116cf1a62f490ab6f3"
+LAGUNA_XS_NOTES = (
+    "Poolside Laguna XS 2.1: agentic-coding MoE, 33B total, about 3B active "
+    "per token (256 experts plus one shared), mixed sliding-window and global "
+    "attention, 256K trained context. Text-only. OpenMDW-1.1 license."
+)
+
+
 CHOICES: list[ModelChoice] = [
     ModelChoice(
         key="gemma",
@@ -415,6 +425,38 @@ CHOICES: list[ModelChoice] = [
         reasoning_budget_tokens=0,
     ),
     ModelChoice(
+        key="laguna-xs",
+        # Pinned: bartowski re-uploads quants now and then; a new upload must
+        # be a visible change here.
+        revision=LAGUNA_XS_REVISION,
+        sha256="239b1417ab36565241b2cb5dd366b89919033b1cf16d6f51b8d870db3491dae6",
+        size_bytes=20548085120,
+        name="Laguna XS 2.1 33B-A3B (Q4)",
+        hf_repo="bartowski/Laguna-XS-2.1-GGUF",
+        filename="Laguna-XS-2.1-Q4_K_M.gguf",
+        size_gb=20.5,
+        active_params="3B active (33B total MoE, 256 experts + 1 shared)",
+        architecture="laguna",
+        license="OpenMDW-1.1",
+        humaneval_pass_at_1=None,
+        notes=LAGUNA_XS_NOTES,
+    ),
+    ModelChoice(
+        key="laguna-xs-q8",
+        revision=LAGUNA_XS_REVISION,
+        sha256="f8e63721a5ef5473fca6b93b4a9d24449bdf4f2d8a4626a60410f027ee8920b5",
+        size_bytes=35597116800,
+        name="Laguna XS 2.1 33B-A3B (Q8)",
+        hf_repo="bartowski/Laguna-XS-2.1-GGUF",
+        filename="Laguna-XS-2.1-Q8_0.gguf",
+        size_gb=35.6,
+        active_params="3B active (33B total MoE, 256 experts + 1 shared)",
+        architecture="laguna",
+        license="OpenMDW-1.1",
+        humaneval_pass_at_1=None,
+        notes=LAGUNA_XS_NOTES + " Q8: near-lossless, for 64 GB Macs and up.",
+    ),
+    ModelChoice(
         key="muse-glimmer",
         sha256="82bece304887a313ece08400bc030f6066c7bff5b906b0cd40308ec8a409fd38",
         size_bytes=15878222368,
@@ -456,7 +498,7 @@ CHOICES: list[ModelChoice] = [
         architecture="gemma4-iswa",
         license="Gemma (Google) — research + commercial w/ attribution",
         humaneval_pass_at_1=None,
-        notes="High-RAM workstation pick — same MoE architecture as the small Gemma entry, just near-lossless Q8 quant instead of IQ3_S. 3.8B active params = same decode speed class as the IQ3 version (~95 tok/s on M5 Max) at ~99% of BF16 quality vs ~80% on IQ3. Native multimodal — pair with the F16 mmproj for image input. Requires ≥48 GB unified memory; sweet spot on 128 GB Apple Silicon. Upstream silently refreshed these weights 2026-07-16 (tool-calling + vision fixes, same filenames) — copies downloaded before then are stale; delete and re-download.",
+        notes="High-RAM workstation pick — same MoE architecture as the small Gemma entry, just near-lossless Q8 quant instead of IQ3_S. 3.8B active params = same decode speed class as the IQ3 version (~95 tok/s on a 614 GB/s Mac) at ~99% of BF16 quality vs ~80% on IQ3. Native multimodal — pair with the F16 mmproj for image input. Requires ≥48 GB unified memory; sweet spot on 128 GB Apple Silicon. Upstream silently refreshed these weights 2026-07-16 (tool-calling + vision fixes, same filenames) — copies downloaded before then are stale; delete and re-download.",
         mmproj_filename="mmproj-gemma-4-26B-A4B-F16.gguf",
         mmproj_size_gb=1.2,
         mmproj_hf_filename="mmproj-F16.gguf",
@@ -735,7 +777,8 @@ _NO_AUTO_RECOMMEND_ARCHS = {"diffusion_gemma", "kolibri1"}
 # step (no off switch) and timed out where Qwen 3.6 finished on the 48 GB tier.
 # DeepSeek V4 Flash is a 97 GB first download that leaves a 128 GB Mac about
 # 30 GB for everything else, so it is a choice the user makes, never a default.
-_NO_AUTO_RECOMMEND_KEYS = {"openjev", "saluki", "flint", "flint-q8", "deepseek-v4-flash"}
+# Laguna XS 2.1 stays opt-in until its coding quality is measured on this stack.
+_NO_AUTO_RECOMMEND_KEYS = {"openjev", "saluki", "flint", "flint-q8", "deepseek-v4-flash", "laguna-xs", "laguna-xs-q8"}
 
 
 def _auto_recommendable(c: "ModelChoice") -> bool:
@@ -999,6 +1042,16 @@ MODEL_GROUPS: list[ModelGroup] = [
         ),
     ),
     ModelGroup(
+        key="laguna-xs-2.1",
+        display_name="Laguna XS 2.1 33B-A3B",
+        maker="Poolside",
+        hf_repo="bartowski/Laguna-XS-2.1-GGUF",
+        family="laguna",
+        architecture="laguna",
+        license="OpenMDW-1.1",
+        notes=LAGUNA_XS_NOTES,
+    ),
+    ModelGroup(
         key="muse-glimmer-30b",
         display_name="Muse Glimmer 30B",
         maker="Meta",
@@ -1226,7 +1279,7 @@ def estimate_decode_tok_s(size_gb: float, name: str, bandwidth_gbps: float) -> i
                        quant size; dense models are lower (~2 ms/token) so
                        the model remains more bandwidth-bound there.
 
-    Calibration (M5 Max, 614 GB/s):
+    Calibration (614 GB/s Apple Silicon):
       Gemma-4-26B-A4B IQ3_S (~1.7 GB effective) → ~83 tok/s  [measured]
       Gemma-4-26B-A4B Q8    (~4.3 GB effective) → ~55 tok/s  [estimate]
       Dense Gemma-4-12B Q4  (~7.4 GB effective) → ~35 tok/s  [estimate]

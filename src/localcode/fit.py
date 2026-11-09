@@ -39,6 +39,8 @@ RUNTIME_OVERHEAD: tuple[tuple[str, float, float], ...] = (
     ("North-Mini-Code", 2.8, 0.0),
     # 2.0 GB at an 80K prompt in a 128K window (compressed attention keeps KV small).
     ("DeepSeek-V4-Flash", 2.1, 0.0),
+    # 1.9 GB at a 62K prompt in a 64K window (3:1 sliding-window attention keeps KV small).
+    ("Laguna-XS-2.1", 2.0, 0.0),
 )
 RUNTIME_OVERHEAD_DEFAULT = (3.0, 0.3)
 
