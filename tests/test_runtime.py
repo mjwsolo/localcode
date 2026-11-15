@@ -106,14 +106,12 @@ class TestLlamaServerCommand:
         assert "--cache-type-k" not in cmd
         assert "--cache-type-v" not in cmd
 
-    def test_defrag_thold_flag_present(self) -> None:
-        """KV-cache defrag must be enabled at 0.1 for long agentic sessions
-        (context-shift churns the cache and fragments it)."""
+    def test_no_defrag_thold_flag(self) -> None:
+        """llama.cpp v1.0 removed --defrag-thold; passing it stops the server
+        from starting."""
         gw = self._make_gw()
         cmd = gw.llama_server_command("/path/model.gguf")
-        assert "--defrag-thold" in cmd
-        idx = cmd.index("--defrag-thold")
-        assert cmd[idx + 1] == "0.1"
+        assert "--defrag-thold" not in cmd
 
     def test_ctx_checkpoints_disabled_at_256k(self) -> None:
         """-9 crash mitigation: at 262144 ctx, checkpoint creation serializes a

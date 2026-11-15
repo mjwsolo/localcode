@@ -26,6 +26,8 @@ Other models in the picker are choices you make yourself:
 - **DeepSeek V4 Flash 284B-A13B** - DeepSeek's large MoE with about 13B active parameters and image input (the Vision-Exp release). Every quant is a multi-part download of 82 GB or more, so it runs on 128 GB Macs only: UD-Q2_K_XL (96.8 GB) is the curated pick; the IQ1, IQ2 and UD-IQ3_XXS (103 GB) quants also fit. It leaves little memory for other apps, so it is never the default pick.
 - **North-Mini-Code, Muse Glimmer, Underdog Saluki, DiffusionGemma, Kolibri** - more models in the picker, each verified to load, chat and call tools on every release.
 - **Laguna XS 2.1 33B-A3B** - Poolside's agentic-coding MoE with about 3B active parameters. Text-only. Q4 (20.5 GB) and Q8 (35.6 GB) are the curated picks; the picker lists every quant from 9.4 GB up. It is new on this stack, so it is never the default pick yet.
+- **Mellum2.1 12B-A2.5B Thinking** - JetBrains' small agentic-coding MoE with about 2.5B active parameters. Text-only. Q4 (8.1 GB) fits 16 GB Macs and Q8 (12.9 GB) suits 24 GB and up. It is fast but weaker on long agent tasks than the 27-35B models, and new on this stack, so it is never the default pick.
+- **Ripple-65B Preview** - Ricursive's dense 65B agentic-coding model. Text-only. Q4 (40.4 GB, 64 GB Macs and up) and IQ3 (28.0 GB, 48 GB Macs) are the curated picks. Dense means every token reads all 65B weights, so it writes slower than the MoE models. It is a preview release, so it is never the default pick.
 - **OpenJev** - a decision model, not a coding model. See [Chat and Decisions](/localcode/guides/decisions).
 
 ## The model picker

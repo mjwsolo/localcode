@@ -5,7 +5,23 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ## Unreleased
 
+### Added
+
+- Mellum2.1 12B-A2.5B Thinking (JetBrains' own GGUFs): Q4 8.1 GB and Q8
+  12.9 GB, a fast small agentic model that fits 16 GB Macs. Opt-in, never
+  recommended automatically.
+- Ripple-65B Preview (Ricursive, dense 65B, community GGUFs pinned by
+  checksum): Q4 40.4 GB for 64 GB Macs and up, IQ3 28.0 GB for 48 GB Macs.
+  Opt-in, never recommended automatically.
+
 ### Changed
+
+- The bundled llama.cpp is rebased onto upstream v1.0.0 (b1b770d), 148
+  commits newer, with the patch series replayed. Upstream changes it brings:
+  Metal out-of-bounds fixes in flash attention and the triangular solver,
+  MTP drafting reads its states from GPU memory, Gemma 4 tool calls held to the tool's
+  schema, less memory for vision models, and llama-server security fixes.
+  The model server no longer gets `--defrag-thold`, which v1.0 removed.
 
 - The interface runs on OpenCode upstream from 2026-11-08 (was 2026-10-17),
   1,848 upstream commits newer. Everything localcode changed is kept: no cloud

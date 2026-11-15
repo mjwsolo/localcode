@@ -294,6 +294,31 @@ LAGUNA_XS_NOTES = (
 )
 
 
+# Mellum2.1 12B-A2.5B Thinking (JetBrains, Oct 2026): a small agentic MoE that
+# fits 16 GB Macs. JetBrains publishes the GGUFs itself. Its MTP head is not
+# shipped as a drafter: the reported gain was about 1.05x, not worth 1.8 GB.
+MELLUM_REVISION = "4159d684ffdb09ba89dc2a58feb3e75c54eef036"
+MELLUM_NOTES = (
+    "JetBrains Mellum2.1 12B-A2.5B Thinking: agentic-coding MoE, 12B total, "
+    "about 2.5B active per token, 128K context. Small and fast, weaker on long "
+    "agent tasks than the 27-35B models (JetBrains reports SWE-bench Verified "
+    "47). Text-only. Apache 2.0."
+)
+
+
+# Ripple-65B Preview (Ricursive, Nov 2026): a dense 65B agentic-coding model.
+# Ricursive publishes no GGUF; AtomicChat's conversion is the most used and is
+# pinned here. Dense, so every token reads all 65B weights: expect slower
+# decoding than the MoE models. Needs llama.cpp v1.0 (arch `ricursive`).
+RIPPLE_REVISION = "df550a7178a87bbfb6ee2bdbd37603c553d536ee"
+RIPPLE_NOTES = (
+    "Ricursive Ripple-65B Preview: dense 65B agentic-coding model, 1M trained "
+    "context. Ricursive reports Terminal-Bench 2.1 80.5 and SWE-bench Verified "
+    "76.5 (vendor numbers). Dense, so it decodes slower than the MoE models. "
+    "A preview release with light post-training. Text-only. Apache 2.0."
+)
+
+
 CHOICES: list[ModelChoice] = [
     ModelChoice(
         key="gemma",
@@ -455,6 +480,67 @@ CHOICES: list[ModelChoice] = [
         license="OpenMDW-1.1",
         humaneval_pass_at_1=None,
         notes=LAGUNA_XS_NOTES + " Q8: near-lossless, for 64 GB Macs and up.",
+    ),
+    ModelChoice(
+        key="mellum",
+        revision=MELLUM_REVISION,
+        sha256="ecc4d5b8107fc219e23c494b2d107552137637b6c6002ee713e0ba8af7fa2755",
+        size_bytes=8071295264,
+        name="Mellum2.1 12B-A2.5B Thinking (Q4)",
+        hf_repo="JetBrains/Mellum2.1-12B-A2.5B-Thinking-GGUF",
+        filename="Mellum2.1-12B-A2.5B-Thinking-Q4_K_M.gguf",
+        size_gb=8.1,
+        active_params="2.5B active (12B total MoE, 64 experts, 8 active)",
+        architecture="mellum",
+        license="Apache 2.0",
+        humaneval_pass_at_1=None,
+        notes=MELLUM_NOTES,
+    ),
+    ModelChoice(
+        key="mellum-q8",
+        revision=MELLUM_REVISION,
+        sha256="69e0ac02a16586c2c9e991f1e3b8a1eb403882e7ab9e69ea01eb23dbbbc6841f",
+        size_bytes=12925417760,
+        name="Mellum2.1 12B-A2.5B Thinking (Q8)",
+        hf_repo="JetBrains/Mellum2.1-12B-A2.5B-Thinking-GGUF",
+        filename="Mellum2.1-12B-A2.5B-Thinking-Q8_0.gguf",
+        size_gb=12.9,
+        active_params="2.5B active (12B total MoE, 64 experts, 8 active)",
+        architecture="mellum",
+        license="Apache 2.0",
+        humaneval_pass_at_1=None,
+        notes=MELLUM_NOTES + " Q8: near-lossless, for 24 GB Macs and up.",
+    ),
+    ModelChoice(
+        key="ripple",
+        # Pinned: a community conversion; a re-upload must be a visible change here.
+        revision=RIPPLE_REVISION,
+        sha256="9016e260f93992f0acc7cb590b012fe21fffddf767b53774387fac1b30ca7bfc",
+        size_bytes=40426079712,
+        name="Ripple-65B Preview (Q4)",
+        hf_repo="AtomicChat/Ripple-65B-Preview-GGUF",
+        filename="Ripple-65B-Preview-AD-Q4_K_M.gguf",
+        size_gb=40.4,
+        active_params="65B dense",
+        architecture="ricursive",
+        license="Apache 2.0",
+        humaneval_pass_at_1=None,
+        notes=RIPPLE_NOTES + " Q4: for 64 GB Macs and up.",
+    ),
+    ModelChoice(
+        key="ripple-iq3",
+        revision=RIPPLE_REVISION,
+        sha256="0aca90d6d3062dcadbc5f7988504c2b53588d99f648b4e0b09107a72e427401a",
+        size_bytes=27964982752,
+        name="Ripple-65B Preview (IQ3)",
+        hf_repo="AtomicChat/Ripple-65B-Preview-GGUF",
+        filename="Ripple-65B-Preview-AD-IQ3_XXS.gguf",
+        size_gb=28.0,
+        active_params="65B dense",
+        architecture="ricursive",
+        license="Apache 2.0",
+        humaneval_pass_at_1=None,
+        notes=RIPPLE_NOTES + " IQ3: for 48 GB Macs.",
     ),
     ModelChoice(
         key="muse-glimmer",
@@ -778,7 +864,10 @@ _NO_AUTO_RECOMMEND_ARCHS = {"diffusion_gemma", "kolibri1"}
 # DeepSeek V4 Flash is a 97 GB first download that leaves a 128 GB Mac about
 # 30 GB for everything else, so it is a choice the user makes, never a default.
 # Laguna XS 2.1 stays opt-in until its coding quality is measured on this stack.
-_NO_AUTO_RECOMMEND_KEYS = {"openjev", "saluki", "flint", "flint-q8", "deepseek-v4-flash", "laguna-xs", "laguna-xs-q8"}
+# Mellum2.1 and Ripple-65B stay opt-in until their coding quality is measured
+# on this stack (Ripple is also a preview release).
+_NO_AUTO_RECOMMEND_KEYS = {"openjev", "saluki", "flint", "flint-q8", "deepseek-v4-flash", "laguna-xs", "laguna-xs-q8",
+                           "mellum", "mellum-q8", "ripple", "ripple-iq3"}
 
 
 def _auto_recommendable(c: "ModelChoice") -> bool:
@@ -1050,6 +1139,26 @@ MODEL_GROUPS: list[ModelGroup] = [
         architecture="laguna",
         license="OpenMDW-1.1",
         notes=LAGUNA_XS_NOTES,
+    ),
+    ModelGroup(
+        key="mellum2.1-12b-a2.5b",
+        display_name="Mellum2.1 12B-A2.5B Thinking",
+        maker="JetBrains",
+        hf_repo="JetBrains/Mellum2.1-12B-A2.5B-Thinking-GGUF",
+        family="mellum",
+        architecture="mellum",
+        license="Apache 2.0",
+        notes=MELLUM_NOTES,
+    ),
+    ModelGroup(
+        key="ripple-65b-preview",
+        display_name="Ripple-65B Preview",
+        maker="Ricursive",
+        hf_repo="AtomicChat/Ripple-65B-Preview-GGUF",
+        family="ripple",
+        architecture="ricursive",
+        license="Apache 2.0",
+        notes=RIPPLE_NOTES,
     ),
     ModelGroup(
         key="muse-glimmer-30b",

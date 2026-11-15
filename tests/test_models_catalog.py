@@ -89,6 +89,10 @@ _EXPECTED_VISION = {
     "deepseek-v4-flash": True,
     "laguna-xs": False,
     "laguna-xs-q8": False,
+    "mellum": False,
+    "mellum-q8": False,
+    "ripple": False,
+    "ripple-iq3": False,
     "openjev": True,
     "saluki": True,
 }

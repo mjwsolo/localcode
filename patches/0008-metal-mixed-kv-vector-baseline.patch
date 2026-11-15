@@ -1,5 +1,5 @@
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
-index ae72b197b..cd54c448c 100644
+index 37ba7f51f..6ca9fe032 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.m
 +++ b/ggml/src/ggml-metal/ggml-metal-device.m
 @@ -97,6 +97,7 @@ void ggml_metal_pipeline_free(ggml_metal_pipeline_t pipeline) {

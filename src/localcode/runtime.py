@@ -599,15 +599,8 @@ class LocalCodeRuntimeGateway:
         # a turn's own payload blows past the budget mid-decode, shifting is
         # the safety net. Cost is effectively zero (only fires on overflow).
         cmd.extend(["--context-shift"])
-        # KV-cache defragmentation. Long agentic sessions with context-shift on
-        # churn the KV cache (oldest tokens evicted, new ones appended, cache-reuse
-        # salvaging chunks after compaction gaps), which fragments the cache into
-        # unusable holes and slowly wastes cells until decode stalls or the slot
-        # can't fit a new prompt. `--defrag-thold 0.1` triggers a compaction pass
-        # whenever fragmentation exceeds 10%, reclaiming those holes automatically.
-        # Cheap (only fires when fragmented) and directly helps the long multi-turn
-        # coding sessions this agent runs. Default is off (-1.0).
-        cmd.extend(["--defrag-thold", "0.1"])
+        # No --defrag-thold: llama.cpp v1.0 removed the flag (the server rejects
+        # it at startup). The KV cache no longer needs a defragmentation pass.
         # SSM context checkpoints — critical for hybrid-memory models like
         # Qwen 3.6 where the Mamba-2 state is recurrent and llama-server
         # cannot naturally reuse KV cache across requests. Checkpointing

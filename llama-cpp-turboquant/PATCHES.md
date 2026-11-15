@@ -12,7 +12,17 @@ The machine-readable form of this inventory lives at the repo root:
 | `patches/PINNED_UPSTREAM` | the upstream commit the series applies to |
 | `patches/000N-*.patch` | numbered patches, applied in order with `git apply` |
 
-**Pinned upstream:** `7d7f0287530bc8981690f361d8c1627dbae1c99a` (2026-11-08,
+**Pinned upstream:** `b1b770d90d94cad9e9ea5b993bdbc383a522fb28` (2026-11-13,
+tag `v1.0.0`, 148 commits after `7d7f02875`). Rebased with the 3-way recipe below:
+0001 kept upstream's new `GGML_TYPE_F8_E4M3` CUDA paths beside the TurboQuant
+ones (convert, fattn vec/common/mma, mul_mat and mul_mat_id dispatch),
+`GGML_OP_COUNT` is 100 (upstream removed three ops), and the KV cache layer
+keeps upstream's per-layer `k_cache_s`/`v_cache_s` scales beside the
+TurboQuant rotation tensors; 0005 adds `no_forced_thinking` after upstream's
+new `media_allow_private_urls` server parameter. The other patches replayed
+unchanged.
+
+**Pin before that:** `7d7f0287530bc8981690f361d8c1627dbae1c99a` (2026-11-08,
 master, `mtmd: refactoring: remove clip.h, consolidate code into mtmd (#31865)`,
 269 commits after `338fce651`, the previous pin). Rebased with the 3-way recipe
 below: 0001 needed upstream's new `GGML_TYPE_F8_E4M3` (43), `FC_GROUP_NORM`
