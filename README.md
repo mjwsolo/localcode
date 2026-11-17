@@ -52,7 +52,7 @@ OpenAI compatible endpoint. See the [Local API guide](https://mjwsolo.github.io/
 
 ## Models
 
-Choose from **15 models and 170+ quant options** for coding, image input and typed decisions. Models download from Hugging Face. Downloads run in parallel and can resume if interrupted. Switch with `/models`. LocalCode recommends the most capable one that fits your Mac's memory and marks it with a star. Flint, Saluki, OpenJev, DiffusionGemma, Kolibri, DeepSeek V4 Flash, Laguna XS 2.1, Mellum2.1 and Ripple-65B are never picked automatically. DeepSeek V4 Flash runs on 128 GB Macs only. The Flint row shows its two curated quants; the picker lists every Unsloth quant.
+Choose from **15 models and 170+ quant options** for coding, image input and typed decisions. Models download from Hugging Face. Downloads run in parallel and can resume if interrupted. Switch with `/models`. LocalCode recommends the most capable one that fits your Mac's memory and marks it with a star.
 
 Speed: Gemma 4, Qwen 3.6, Muse Glimmer and Qwen 3.8 draft tokens with the vendor's own speculative drafter, which downloads with the model. The model server's GPU kernels ship precompiled, so the first start after an install is quicker.
 
