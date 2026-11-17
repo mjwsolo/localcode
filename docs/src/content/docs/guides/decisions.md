@@ -5,9 +5,9 @@ description: Choose normal chat or typed System One inference with OpenJev.
 
 OpenJev supports two ways to answer. **Chat** generates text in the usual conversation. **Decisions** returns a choice, a yes/no probability, or an ordered score about content you supply.
 
-## Choose a mode
+## Open Decisions
 
-Load **OpenJev** from `/models`, then type `/mode` and choose **Decisions**. You can also use `/decide` or start with:
+Type `/decide`. OpenJev, the decision model, is not in `/models`. The first time, the **Download OpenJev** row shows its size (about 19 GB) and downloads it after you confirm. After that it loads on its own when you run a decision. It replaces your chat model while you use Decisions, and **Back to chat** loads your model again. You can also start with:
 
 ```bash
 localcode --mode decisions
@@ -18,18 +18,18 @@ In the decision screen, enter a question and optional content. Choose an answer 
 | Type | Input | Result |
 | --- | --- | --- |
 | Yes / no | A question such as “Was the customer charged twice?” | Probabilities for yes and no |
-| Choice | Between 2 and 52 different labels, one per line | A selected label and probabilities for every label |
-| Score | Between 2 and 10 levels, lowest to highest | Probabilities for each level and a weighted score from zero to the last level's index |
+| Choice | Between 2 and 52 different labels, separated by commas | A selected label and probabilities for every label |
+| Score | Between 2 and 10 levels separated by commas, lowest to highest | Probabilities for each level and a weighted score from zero to the last level's index |
 
 Optionally enter a PNG, JPEG or WebP image path, up to 5 MB. Image decisions require OpenJev's vision projector. Select **Run decision** to evaluate; **Back to chat** returns to the conversation you left. Chat is the default on each launch.
 
 Decisions call `/v1/systemone` directly through the authenticated local supervisor. They do not send a chat prompt, execute coding tools, or take actions. The form and result stay in the current interface's memory; switching back preserves your chat session. A model switch during evaluation invalidates its result.
 
-The windows share the loaded model. Decisions currently require OpenJev; other models produce an explicit error. There is no automatic fallback to a text answer.
+The windows share the loaded model. Decisions always use OpenJev, never another model, and there is no fallback to a text answer. Nothing is downloaded without your confirmation.
 
 ## Use the CLI
 
-Keep LocalCode open with OpenJev loaded, then run:
+Keep LocalCode open, then run (LocalCode loads OpenJev if it is downloaded but not loaded):
 
 ```bash
 localcode decide --question "Which team should handle this?" \

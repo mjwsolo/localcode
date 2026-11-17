@@ -35,5 +35,5 @@ A second `localcode` opens another interface session attached to the running mod
 
 `localcode mcp add|list|auth|debug` manages MCP servers; see [MCP](/localcode/guides/mcp).
 
-`localcode decide` evaluates a typed question using the running OpenJev model and prints JSON. Supply `--state TEXT` or `--state-file PATH`, and optionally `--image PATH`. Repeat `--option` for choice labels or ordered score levels. See [Chat and Decisions](/localcode/guides/decisions).
+`localcode decide` evaluates a typed question with OpenJev and prints JSON. LocalCode must be open; it loads OpenJev if it is downloaded but not loaded, and otherwise tells you to download it from `/decide`. Supply `--state TEXT` or `--state-file PATH`, and optionally `--image PATH`. Repeat `--option` for choice labels or ordered score levels. See [Chat and Decisions](/localcode/guides/decisions).
 

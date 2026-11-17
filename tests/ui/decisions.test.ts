@@ -15,6 +15,12 @@ test("duplicate and missing choices cannot run", () => {
   expect(() => requestFor({...form, options: "billing\nbilling"})).toThrow();
   expect(() => requestFor({...form, options: "billing"})).toThrow();
   expect(() => requestFor({...form, question: ""})).toThrow();
+  expect(() => requestFor({...form, options: "billing, billing"})).toThrow();
+});
+
+test("choices typed on one line are split on commas and semicolons", () => {
+  expect(requestFor({...form, options: "red, yellow"}).questions.answer.criteria).toEqual({red: null, yellow: null});
+  expect(requestFor({...form, options: "red;yellow ; blue"}).questions.answer.criteria).toEqual({red: null, yellow: null, blue: null});
 });
 
 test("probability rows have unique identities so the native list keeps every answer", () => {
@@ -124,20 +130,9 @@ function fakeTui() {
   };
 }
 
-test("selecting Chat closes the chooser without opening anything else", async () => {
-  await withTui(async (host) => {
-    await host.command("localcode.mode");
-    expect(host.dialog()?.title).toBe("LocalCode mode");
-    await host.choose("chat");
-    expect(host.dialog()).toBeUndefined();
-    expect(host.dispatched).toEqual([]);
-  });
-});
-
 test("Decisions opens over the chat, keeps the form across visits and Back closes it", async () => {
   await withTui(async (host) => {
-    await host.command("localcode.mode");
-    await host.choose("decisions");
+    await host.command("localcode.decide");
     expect(host.dialog()?.title).toBe("Decisions · System One");
     expect(host.sizes.at(-1)).toBe("large");
     await host.choose("question");
@@ -151,24 +146,17 @@ test("Decisions opens over the chat, keeps the form across visits and Back close
     expect(question).toBeDefined();
     await host.cancelDialog();
     expect(host.dialog()).toBeUndefined();
-
-    // Opening the mode chooser over the form closes the form; Chat then leaves nothing open.
-    await host.command("localcode.decide");
-    await host.command("localcode.mode");
-    await host.choose("chat");
-    expect(host.dialog()).toBeUndefined();
   });
 });
 
-test("the answer type controls which rows the form shows and the Model row opens the model picker", async () => {
+test("the answer type controls which rows the form shows", async () => {
   await withTui(async (host) => {
     await host.command("localcode.decide");
     expect(host.rows()).not.toContain("options");
     await host.choose("kind");
     await host.choose("choice");
     expect(host.rows()).toContain("options");
-    await host.choose("model");
-    expect(host.dispatched).toEqual(["model.list"]);
+    expect(host.dispatched).toEqual([]);
   });
 });
 
@@ -222,17 +210,57 @@ test("a decision result is shown as rows on the redrawn form", async () => {
   } finally { network.mockRestore(); }
 });
 
-test("Run without a decision model explains how to pick one", async () => {
-  const network = spyOn(globalThis, "fetch").mockImplementation(async () => Response.json({ state: "ready", current: "Qwen", supports_systemone: false }));
+test("the decision model is downloaded from /decide only after the user confirms its size", async () => {
+  const calls: string[] = [];
+  const network = spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    calls.push(new URL(String(input)).pathname);
+    if (String(input).endsWith("/decision/setup")) return Response.json({ ok: true, state: "downloading" });
+    return Response.json({ state: "ready", current: "Qwen", supports_systemone: false, decision_model: { name: "OpenJev 27B", size_gb: 19.0, downloaded: false } });
+  });
   try {
     await withTui(async (host) => {
       await host.command("localcode.decide");
-      await tick();
+      for (let i = 0; i < 50 && !(host.dialog() as any)?.options?.[0]?.title?.startsWith("Download"); i++) await Bun.sleep(10);
+      expect((host.dialog() as any).options[0].title).toBe("Download OpenJev 27B");
+      expect((host.dialog() as any).options[0].description).toContain("19.0 GB");
       await host.choose("question"); await host.confirm("Is it relevant?");
       await host.choose("run");
-      expect(host.toasts.some((t) => t.variant === "error" && t.message.includes("OpenJev"))).toBe(true);
-      expect(network.mock.calls.some(([url]) => String(url).endsWith("/decision"))).toBe(false);
+      expect(host.confirmation().message).toContain("19.0 GB");
+      await host.cancelDialog();
+      expect(calls).not.toContain("/decision/setup");
+      expect(calls).not.toContain("/decision");
+      await host.choose("model");
+      await host.confirmDialog();
+      for (let i = 0; i < 50 && !calls.includes("/decision/setup"); i++) await Bun.sleep(10);
+      expect(calls).toContain("/decision/setup");
+      expect(calls).not.toContain("/decision");
+      await host.choose("chat");
+      for (let i = 0; i < 50 && !calls.includes("/decision/restore"); i++) await Bun.sleep(10);
+      expect(calls).toContain("/decision/restore");
     }, "http://127.0.0.1:8126");
+  } finally { network.mockRestore(); }
+});
+
+test("Run with the decision model on disk but not loaded asks LocalCode to swap it in", async () => {
+  const calls: string[] = [];
+  const network = spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    calls.push(new URL(String(input)).pathname);
+    if (String(input).endsWith("/decision")) return Response.json({ model: "OpenJev-Q4_K_M", answers: { answer: { noul: 0.6 } } });
+    return Response.json({ state: "ready", current: "Qwen", supports_systemone: false, decision_model: { name: "OpenJev 27B", size_gb: 19.0, downloaded: true } });
+  });
+  try {
+    await withTui(async (host) => {
+      await host.command("localcode.decide");
+      for (let i = 0; i < 50 && !(host.dialog() as any)?.options?.[0]?.description?.includes("Loads when"); i++) await Bun.sleep(10);
+      await host.choose("question"); await host.confirm("Is it relevant?");
+      await host.choose("run");
+      for (let i = 0; i < 50 && !host.rows().includes("result:yes"); i++) await Bun.sleep(10);
+      expect(calls).toContain("/decision");
+      expect(host.dialog()?.kind).toBe("select");
+      await host.choose("chat");
+      for (let i = 0; i < 50 && !calls.includes("/decision/restore"); i++) await Bun.sleep(10);
+      expect(calls).toContain("/decision/restore");
+    }, "http://127.0.0.1:8127");
   } finally { network.mockRestore(); }
 });
 
@@ -333,7 +361,7 @@ test("/server stops and starts and reports rejected operations", async () => {
 
 test("native keymap discovers server, mode and decide slash commands", async () => {
   await withTui((host) => {
-    expect(Object.fromEntries(host.slashes)).toEqual({server: "localcode.server", mode: "localcode.mode", decide: "localcode.decide"});
+    expect(Object.fromEntries(host.slashes)).toEqual({server: "localcode.server", decide: "localcode.decide"});
   });
 });
 
@@ -379,7 +407,7 @@ test("the terminal entry shows server notifications as toasts and adds the modes
   const dispose = await tui.setup(context as any);
   handler!({ data: { message: "Model server stopped", variant: "warning", title: "LocalCode", duration: 5000 } });
   expect(host.toasts).toEqual([{ message: "Model server stopped", variant: "warning", title: "LocalCode", duration: 5000 }]);
-  expect(host.slashes.size).toBe(3);
+  expect(host.slashes.size).toBe(2);
   dispose();
   expect(stopped).toBe(true);
 });

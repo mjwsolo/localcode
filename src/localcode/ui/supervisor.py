@@ -57,7 +57,9 @@ from localcode.models_catalog import (
 
 QUANT_COLD_WAIT_SEC = 2.5  # max wait for the first-ever quant listing
 MIN_SPEED_FRACTION = 0.5  # same rule as tui/screens/model_picker.py
+DECISION_LOAD_TIMEOUT_SEC = 600  # a decision waits this long for the decision model to load
 from localcode.ui import run_dir
+from localcode.decision import supported
 from localcode.ui.auth import KEY_ENV, control_token, new_secret, request_allowed, server_headers, server_key, write_auth_file
 
 HERE = run_dir()
@@ -244,13 +246,70 @@ class Supervisor:
         except Exception as e:  # noqa: BLE001
             log(f"supervisor: vision projector step failed: {e}")
 
+    def decision_model(self) -> dict:
+        """The decision model the /decide screen and `localcode decide` use.
+
+        It is not in the /models picker: it only answers typed decisions, so it
+        is fetched from the decision screen (after the user sees its size) and
+        swapped in for a decision when it is already on disk."""
+        from localcode.models_catalog import CHOICES
+        choice = next((c for c in CHOICES if c.supports_systemone), None)
+        if choice is None:
+            return {}
+        group = next((g for g in MODEL_GROUPS if g.supports_systemone and g.hf_repo == choice.hf_repo), None)
+        downloaded = find_model(choice.filename, self.models_dir) is not None
+        return {"group": group.key if group else "", "filename": choice.filename,
+                "name": (group.display_name if group else choice.name).split(" (")[0],
+                "size_gb": choice.size_gb, "downloaded": downloaded}
+
+    def decision_setup(self) -> dict:
+        """Download (if needed) and load the decision model. Only the decision
+        screen calls this, after the user confirmed the download size."""
+        info = self.decision_model()
+        if not info.get("group"):
+            return {"error": "No decision model is available"}
+        if self.current and not supported(self.current):
+            self._chat_model = (self.active.get("group"), self.active.get("filename"))
+        return self.select(info["group"], info["filename"])
+
+    def decision_restore(self) -> dict:
+        """Load the chat model a decision swapped out, if any."""
+        previous = getattr(self, "_chat_model", None)
+        if not previous or not all(previous) or not supported(self.current):
+            return {"ok": True, "restored": False}
+        res = self.select(*previous)
+        if "error" not in res:
+            self._chat_model = None
+        return res
+
+    def _await_ready(self, alias: str, timeout: float = DECISION_LOAD_TIMEOUT_SEC) -> None:
+        from localcode.decision import DecisionError
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            state = self.state.get("state")
+            if state == "ready" and self.current == alias:
+                return
+            if state in ("error", "idle") and self.state.get("model") == alias:
+                raise DecisionError(self.state.get("detail") or "The decision model could not be loaded", 409)
+            time.sleep(0.25)
+        raise DecisionError("The decision model is still loading; try again shortly", 409)
+
     def decision(self, body) -> dict:
-        from localcode.decision import DecisionError, post, supported, validate_request, validate_response
+        from localcode.decision import DecisionError, post, validate_request, validate_response
         data = validate_request(body)
-        if self.state.get("state") != "ready" or not self.current or self.proc is None:
-            raise DecisionError("Load a decision model before evaluating", 409)
-        if not supported(self.current):
-            raise DecisionError("This model does not support decisions. Select OpenJev with /models", 409)
+        if not (self.state.get("state") == "ready" and self.current and self.proc is not None and supported(self.current)):
+            # Swap the decision model in when it is on disk; never download here.
+            info = self.decision_model()
+            if not info.get("group"):
+                raise DecisionError("No decision model is available", 409)
+            if not info["downloaded"]:
+                raise DecisionError(
+                    f"{info['name']} is not downloaded yet ({info['size_gb']:.1f} GB). "
+                    "Open /decide in LocalCode and choose Download", 409)
+            res = self.decision_setup()
+            if "error" in res:
+                raise DecisionError(res["error"], 409)
+            self._await_ready(_alias(info["filename"]))
         model, process = self.current, self.proc
         result = post(f"http://127.0.0.1:{self.port}/v1/systemone", data, server_headers())
         if self.current != model or self.proc is not process or self.state.get("state") != "ready":
@@ -635,6 +694,8 @@ class Supervisor:
         loaded = process is not None and process.poll() is None and self.state["state"] == "ready"
         groups = []
         for g in MODEL_GROUPS:
+            if g.supports_systemone:
+                continue  # decision-only: fetched and loaded from /decide, not the picker
             groups.append({
                 "key": g.key, "display_name": g.display_name, "maker": g.maker,
                 "license": g.license, "hf_repo": g.hf_repo,
@@ -1225,6 +1286,7 @@ def make_handler(sup: Supervisor):
                                        inference_port=sup.port,
                                        group=sup.active.get("group"), filename=sup.active.get("filename"),
                                        supports_systemone=supported(sup.current),
+                                       decision_model=sup.decision_model(),
                                        **sup.context_info(), **sup.vision_info()))
             if u.path == "/server":
                 from localcode.ui.ports import preferred_port
@@ -1290,6 +1352,12 @@ def make_handler(sup: Supervisor):
                     return self._json(sup.decision(body))
                 except DecisionError as exc:
                     return self._json({"error": str(exc)}, exc.status)
+            if u.path == "/decision/setup":
+                res = sup.decision_setup()
+                return self._json(res, 200 if "error" not in res else 409)
+            if u.path == "/decision/restore":
+                res = sup.decision_restore()
+                return self._json(res, 200 if "error" not in res else 409)
             if u.path == "/select":
                 res = sup.select(str(body.get("group", "")), str(body.get("filename", "")))
                 return self._json(res, 200 if "error" not in res else 409)

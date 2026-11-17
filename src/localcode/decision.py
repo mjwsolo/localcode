@@ -154,7 +154,7 @@ def image_url(path: Path) -> str:
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(prog="localcode decide", description="Ask the loaded decision model a typed question; no coding tools are executed.")
+    parser = argparse.ArgumentParser(prog="localcode decide", description="Ask the decision model a typed question; LocalCode loads it if needed. No coding tools are executed.")
     parser.add_argument("--question", required=True)
     parser.add_argument("--type", choices=["yes-no", "choice", "score"], default="yes-no", dest="kind")
     parser.add_argument("--option", action="append", default=[], help="Choice label or ordered score level; repeat for each")
@@ -172,8 +172,9 @@ def main(argv=None) -> int:
         running = find_running()
         credentials = read_auth_file(run_dir())
         if running is None or credentials is None:
-            raise DecisionError("Start LocalCode and load OpenJev before using decide", 409)
-        data = post(f"http://127.0.0.1:{running[0]}/decision", body, control_headers(credentials[0]))
+            raise DecisionError("Start LocalCode before using decide", 409)
+        # LocalCode swaps the decision model in when it is not loaded, so allow for a load.
+        data = post(f"http://127.0.0.1:{running[0]}/decision", body, control_headers(credentials[0]), timeout=660)
         validate_response(data, body)
         print(json.dumps(data, indent=2, ensure_ascii=False))
         return 0

@@ -7,7 +7,7 @@ localcode has **no fixed default model**. When it starts, it checks your Mac's u
 
 ## The rule
 
-A model fits when its files plus the memory it uses while running (KV cache, context checkpoints, compute buffers, measured per model near a full 64K window) stay inside the memory your Mac's GPU can use: about two thirds of RAM on 16 to 36 GB Macs and three quarters or more above. localcode recommends the most capable model that fits. A few models, such as Flint (it always reasons, so tasks take longer) and the decision model OpenJev, are never the default pick, but you can choose them yourself.
+A model fits when its files plus the memory it uses while running (KV cache, context checkpoints, compute buffers, measured per model near a full 64K window) stay inside the memory your Mac's GPU can use: about two thirds of RAM on 16 to 36 GB Macs and three quarters or more above. localcode recommends the most capable model that fits. A few models, such as Flint (it always reasons, so tasks take longer), are never the default pick, but you can choose them yourself. The decision model OpenJev is not in `/models`; `/decide` downloads and loads it.
 
 ## Recommendations for each Mac
 

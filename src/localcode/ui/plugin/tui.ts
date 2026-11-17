@@ -1,7 +1,7 @@
 /**
  * The terminal UI entry of LocalCode's plugin directory (opencode v2 loads it for the
  * server plugin in the same directory). It shows the server plugin's notifications as
- * toasts and adds the LocalCode modes (/mode, /decide, /server).
+ * toasts and adds the LocalCode screens (/decide, /server).
  */
 import { LocalcodeRpc, type Toast } from "./rpc";
 import { setupModes, type ModesContext } from "./modes";
