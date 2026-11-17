@@ -243,7 +243,8 @@ def should_disable_metal_residency(model_path: str, ctx_size: int) -> bool:
     total grows, and when a decode-step spike crosses the GPU's
     `recommendedMaxWorkingSetSize` (~75% of RAM — a hard ceiling independent of
     free system RAM), the kernel kills the process outright. This is the exact
-    bug class in ggml-org/llama.cpp#16646 on the same M4 Max / 128 GB hardware.
+    bug class in ggml-org/llama.cpp#16646 on the same class of
+    high-memory Apple Silicon hardware.
 
     Setting GGML_METAL_NO_RESIDENCY=1 makes those buffers EVICTABLE instead of
     wired, so the OS pages under pressure rather than killing — turning a hard
