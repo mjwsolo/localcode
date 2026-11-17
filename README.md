@@ -20,10 +20,10 @@
 ## Install
 
 ```bash
-uv tool install localcode    # or: pip install -U localcode
+uv pip install localcode
 ```
 
-Upgrade with `uv tool upgrade localcode` (`uv pip install -U` does not upgrade a `uv tool` install; with pip, rerun `pip install -U localcode`).
+Upgrade with `uv pip install -U localcode`.
 
 ## Run
 
