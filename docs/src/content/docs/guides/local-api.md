@@ -101,9 +101,9 @@ This is the model inference API. LocalCode currently consumes MCP servers as a c
 
 ## Typed decisions (System One)
 
-A decision model answers typed questions about a state instead of writing text: a choice between your own labels, a yes/no probability, or a score. The model list has one, **OpenJev 27B (decision model)**. It is not a coding model, and its weights are CC BY-NC 4.0, so research and non-commercial use only.
+A decision model answers typed questions about a state instead of writing text: a choice between your own labels, a yes/no probability, or a score. LocalCode has one, **OpenJev 27B (decision model)**. It is not in `/models`: download it once from `/decide`. It is not a coding model, and its weights are CC BY-NC 4.0, so research and non-commercial use only.
 
-Load it from `/models`, then post to `/v1/systemone` on the same local endpoint:
+This endpoint answers only while OpenJev is loaded; `localcode decide` and `/decide` load it for you. Then post to `/v1/systemone` on the same local endpoint:
 
 ```python
 import json

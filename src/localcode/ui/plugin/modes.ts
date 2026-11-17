@@ -5,7 +5,8 @@
  * chat, so leaving a mode always returns to the exact session that was open.
  */
 type Kind = "yes-no" | "choice" | "score";
-type Status = { state: string; current?: string; supports_systemone?: boolean };
+type DecisionModel = { name?: string; size_gb?: number; downloaded?: boolean };
+type Status = { state: string; current?: string; supports_systemone?: boolean; detail?: string; pct?: number | null; decision_model?: DecisionModel };
 type Answer = { choice?: string; noul?: number; score?: number; probabilities?: Record<string, number>; legend?: Record<string, string> | string[] };
 type Result = { model: string; answers: Record<string, Answer>; usage?: { input_tokens?: number; output_tokens?: number } };
 type Form = { question: string; state: string; kind: Kind; options: string; image: string };
@@ -78,6 +79,8 @@ export function setupModes(context: ModesContext): () => void {
   let showing = false;
   let rerender = false;
   let disposed = false;
+  // Set when this visit asked LocalCode to load the decision model in place of the chat model.
+  let swapped = false;
   const control = (process.env.LOCALCODE_CONTROL_URL ?? "").replace(/\/$/, "");
   const headers = { "content-type": "application/json", "x-localcode-token": process.env.LOCALCODE_CONTROL_TOKEN ?? "" };
   const error = (message: string) => context.ui.toast.show({ variant: "error", message, duration: 8000 });
@@ -96,6 +99,10 @@ export function setupModes(context: ModesContext): () => void {
   const back = () => {
     pending?.abort();
     pageOpen = false;
+    const restore = swapped;
+    swapped = false;
+    // Leaving Decisions reloads the chat model a decision swapped out.
+    if (restore && control) void fetch(control + "/decision/restore", { method: "POST", headers, body: "{}", signal: AbortSignal.timeout(10000) }).catch(() => undefined);
   };
 
   async function poll() {
@@ -104,16 +111,51 @@ export function setupModes(context: ModesContext): () => void {
       const response = await fetch(control + "/status", { headers, signal: AbortSignal.timeout(2000) });
       if (!response.ok) return;
       const data = await response.json() as Status;
-      const next = { state: data.state, current: data.current, supports_systemone: data.supports_systemone };
+      const next = { state: data.state, current: data.current, supports_systemone: data.supports_systemone, pct: data.pct, decision_model: data.decision_model };
       if (JSON.stringify(next) === JSON.stringify(status)) return;
       status = next;
       refresh();
     } catch { /* Status is retried; explicit evaluation reports failures. */ }
   }
 
+  /**
+   * The decision model is not in /models: this row downloads it (after showing its
+   * size) or says it loads on Run, when it swaps out the chat model until Back to chat.
+   */
+  function modelRow(): Option {
+    const dm = status?.decision_model ?? {};
+    const name = dm.name ?? "OpenJev";
+    if (status?.state === "downloading" && !status?.supports_systemone) {
+      return { title: `Downloading ${name}`, value: "model", description: status.pct == null ? "Starting…" : `${status.pct}%`, category: "Decisions" };
+    }
+    if (status?.state === "loading") return { title: `Loading ${status.current && status.supports_systemone ? status.current : name}…`, value: "model", category: "Decisions" };
+    if (status?.state === "ready" && status?.supports_systemone) return { title: "Model: " + status.current, value: "model", description: "Ready for decisions", category: "Decisions" };
+    if (dm.downloaded === false) {
+      return { title: `Download ${name}`, value: "model", description: `${(dm.size_gb ?? 0).toFixed(1)} GB, needed once for decisions`, category: "Decisions" };
+    }
+    return { title: `Model: ${name}`, value: "model", description: "Loads when you run a decision", category: "Decisions" };
+  }
+
+  async function setupModel() {
+    const dm = status?.decision_model ?? {};
+    if (dm.downloaded !== false) return;
+    const name = dm.name ?? "OpenJev";
+    const ok = await context.ui.dialog.confirm({
+      title: `Download ${name}?`,
+      message: `${name} answers decisions. It is ${(dm.size_gb ?? 0).toFixed(1)} GB and replaces the loaded chat model while you use Decisions; Back to chat loads your model again.`,
+      label: { confirm: "Download", cancel: "Not now" },
+    });
+    if (!ok) return;
+    swapped = true;
+    const response = await fetch(control + "/decision/setup", { method: "POST", headers, body: "{}", signal: AbortSignal.timeout(10000) }).catch(() => undefined);
+    const data = response ? await response.json().catch(() => ({})) : {};
+    if (!response?.ok) error(data.error ?? "Could not start the download");
+    void poll();
+  }
+
   function rows(): Option[] {
     return [
-      { title: "Model: " + (status?.current ?? "none loaded"), value: "model", description: status?.supports_systemone ? "Ready for decisions" : "Select OpenJev with /models", category: "Decisions" },
+      modelRow(),
       // Actions sit right under the model row: the dialog is a scrolling list, and
       // below the inputs they fell out of view on a normal-height terminal.
       // The answer also rides on the Run row for the same reason.
@@ -164,7 +206,7 @@ export function setupModes(context: ModesContext): () => void {
         body.images = [`data:${mime};base64,${Buffer.from(await file.arrayBuffer()).toString("base64")}`];
       }
       if (controller.signal.aborted) return;
-      const response = await fetch(control + "/decision", { method: "POST", headers, body: JSON.stringify(body), signal: AbortSignal.any([controller.signal, AbortSignal.timeout(65000)]) });
+      const response = await fetch(control + "/decision", { method: "POST", headers, body: JSON.stringify(body), signal: AbortSignal.any([controller.signal, AbortSignal.timeout(660000)]) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? "Decision request failed");
       if (!pageOpen) return;
@@ -197,18 +239,23 @@ export function setupModes(context: ModesContext): () => void {
           back();
           break;
         }
-        if (value === "chat") { back(); break; }
+        if (value === "chat") {
+          back();
+          break;
+        }
         if (busy) continue;
-        // The model picker is a dialog of its own; the form keeps its fields for the next /decide.
-        if (value === "model") { back(); context.keymap.dispatch("model.list"); break; }
+        if (value === "model") await setupModel();
         if (value === "kind") await kind();
         else if (value === "question") await edit("question", "Decision question");
         else if (value === "state") await edit("state", "Content to evaluate (optional)");
         else if (value === "options") await edit("options", form.kind === "score" ? "Levels: lowest to highest, separated by commas" : "Choices: separated by commas");
         else if (value === "image") await edit("image", "Image file path (optional)");
         else if (value === "run") {
-          if (status?.state !== "ready" || status?.supports_systemone !== true) error("Select a decision model such as OpenJev using the Model row first");
-          else void evaluate();
+          if (status?.decision_model?.downloaded === false && !status?.supports_systemone) await setupModel();
+          else {
+            if (!status?.supports_systemone) swapped = true;
+            void evaluate();
+          }
         }
       }
     } finally {

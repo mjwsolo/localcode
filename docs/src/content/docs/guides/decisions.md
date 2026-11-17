@@ -7,7 +7,7 @@ OpenJev supports two ways to answer. **Chat** generates text in the usual conver
 
 ## Open Decisions
 
-Load **OpenJev** from `/models`, then type `/decide`. You can also start with:
+Type `/decide`. OpenJev, the decision model, is not in `/models`. The first time, the **Download OpenJev** row shows its size (about 19 GB) and downloads it after you confirm. After that it loads on its own when you run a decision. It replaces your chat model while you use Decisions, and **Back to chat** loads your model again. You can also start with:
 
 ```bash
 localcode --mode decisions
@@ -25,11 +25,11 @@ Optionally enter a PNG, JPEG or WebP image path, up to 5 MB. Image decisions req
 
 Decisions call `/v1/systemone` directly through the authenticated local supervisor. They do not send a chat prompt, execute coding tools, or take actions. The form and result stay in the current interface's memory; switching back preserves your chat session. A model switch during evaluation invalidates its result.
 
-The windows share the loaded model. Decisions currently require OpenJev; other models produce an explicit error. There is no automatic fallback to a text answer.
+The windows share the loaded model. Decisions always use OpenJev, never another model, and there is no fallback to a text answer. Nothing is downloaded without your confirmation.
 
 ## Use the CLI
 
-Keep LocalCode open with OpenJev loaded, then run:
+Keep LocalCode open, then run (LocalCode loads OpenJev if it is downloaded but not loaded):
 
 ```bash
 localcode decide --question "Which team should handle this?" \
