@@ -130,20 +130,9 @@ function fakeTui() {
   };
 }
 
-test("selecting Chat closes the chooser without opening anything else", async () => {
-  await withTui(async (host) => {
-    await host.command("localcode.mode");
-    expect(host.dialog()?.title).toBe("LocalCode mode");
-    await host.choose("chat");
-    expect(host.dialog()).toBeUndefined();
-    expect(host.dispatched).toEqual([]);
-  });
-});
-
 test("Decisions opens over the chat, keeps the form across visits and Back closes it", async () => {
   await withTui(async (host) => {
-    await host.command("localcode.mode");
-    await host.choose("decisions");
+    await host.command("localcode.decide");
     expect(host.dialog()?.title).toBe("Decisions · System One");
     expect(host.sizes.at(-1)).toBe("large");
     await host.choose("question");
@@ -156,12 +145,6 @@ test("Decisions opens over the chat, keeps the form across visits and Back close
     const question = (host.dialog() as any).options.find((option: any) => option.value === "question");
     expect(question).toBeDefined();
     await host.cancelDialog();
-    expect(host.dialog()).toBeUndefined();
-
-    // Opening the mode chooser over the form closes the form; Chat then leaves nothing open.
-    await host.command("localcode.decide");
-    await host.command("localcode.mode");
-    await host.choose("chat");
     expect(host.dialog()).toBeUndefined();
   });
 });
@@ -339,7 +322,7 @@ test("/server stops and starts and reports rejected operations", async () => {
 
 test("native keymap discovers server, mode and decide slash commands", async () => {
   await withTui((host) => {
-    expect(Object.fromEntries(host.slashes)).toEqual({server: "localcode.server", mode: "localcode.mode", decide: "localcode.decide"});
+    expect(Object.fromEntries(host.slashes)).toEqual({server: "localcode.server", decide: "localcode.decide"});
   });
 });
 
@@ -385,7 +368,7 @@ test("the terminal entry shows server notifications as toasts and adds the modes
   const dispose = await tui.setup(context as any);
   handler!({ data: { message: "Model server stopped", variant: "warning", title: "LocalCode", duration: 5000 } });
   expect(host.toasts).toEqual([{ message: "Model server stopped", variant: "warning", title: "LocalCode", duration: 5000 }]);
-  expect(host.slashes.size).toBe(3);
+  expect(host.slashes.size).toBe(2);
   dispose();
   expect(stopped).toBe(true);
 });

@@ -57,5 +57,5 @@ def platform_supported() -> bool:
 
 def plugin_path() -> Path:
     """The plugin directory the runtime loads: server.ts (agent hooks and the
-    todo tool) and tui.ts (notifications and the /mode, /decide, /server UI)."""
+    todo tool) and tui.ts (notifications and the /decide, /server UI)."""
     return Path(__file__).resolve().parent / "plugin"

@@ -19,7 +19,6 @@ Type `/` in the prompt to open the command palette. Text that starts with `/` is
 | `/export` | Export session transcript |
 | `/help` | Help |
 | `/mcps` | Toggle MCPs |
-| `/mode` | Choose Chat or Decisions |
 | `/models` | Switch model |
 | `/new` | New session |
 | `/open` | Open a session or project (also `/projects`, `/project`) |

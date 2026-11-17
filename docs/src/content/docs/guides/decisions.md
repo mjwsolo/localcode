@@ -5,9 +5,9 @@ description: Choose normal chat or typed System One inference with OpenJev.
 
 OpenJev supports two ways to answer. **Chat** generates text in the usual conversation. **Decisions** returns a choice, a yes/no probability, or an ordered score about content you supply.
 
-## Choose a mode
+## Open Decisions
 
-Load **OpenJev** from `/models`, then type `/mode` and choose **Decisions**. You can also use `/decide` or start with:
+Load **OpenJev** from `/models`, then type `/decide`. You can also start with:
 
 ```bash
 localcode --mode decisions

@@ -1,6 +1,6 @@
 /**
- * Terminal-only LocalCode modes for the opencode v2 TUI plugin API: /mode (Chat or
- * Decisions), /decide (the System One decision form) and /server (the shared model
+ * Terminal-only LocalCode screens for the opencode v2 TUI plugin API: /decide (the
+ * System One decision form) and /server (the shared model
  * server's connection, port and start/stop). Everything is a dialog over the current
  * chat, so leaving a mode always returns to the exact session that was open.
  */
@@ -218,14 +218,6 @@ export function setupModes(context: ModesContext): () => void {
     }
   }
 
-  async function choose() {
-    const value = await context.ui.dialog.select<string>({ title: "LocalCode mode", current: pageOpen ? "decisions" : "chat", options: [
-      { title: "Chat", value: "chat", description: "Ask questions and work on code" },
-      { title: "Decisions", value: "decisions", description: "Typed choices, yes/no probabilities and scores" },
-    ] });
-    if (value === "decisions") await open();
-  }
-
   let changingPort = false;
   let changingServer = false;
   // The /server dialog is a snapshot; while one is open, a start or stop in
@@ -359,7 +351,6 @@ export function setupModes(context: ModesContext): () => void {
 
   context.keymap.layer(() => ({ mode: "global", commands: [
     { id: "localcode.server", title: "Model server connection and port", group: "LocalCode", palette: true, slash: { name: "server" }, run: () => void server() },
-    { id: "localcode.mode", title: "Choose Chat or Decisions", group: "LocalCode", palette: true, slash: { name: "mode" }, run: () => void choose() },
     { id: "localcode.decide", title: "Open decision mode", group: "LocalCode", palette: true, slash: { name: "decide" }, run: () => void open() },
   ] }));
   const startup = process.env.LOCALCODE_MODE === "decisions" ? setTimeout(() => void open(), 100) : undefined;
