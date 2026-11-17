@@ -15,6 +15,12 @@ test("duplicate and missing choices cannot run", () => {
   expect(() => requestFor({...form, options: "billing\nbilling"})).toThrow();
   expect(() => requestFor({...form, options: "billing"})).toThrow();
   expect(() => requestFor({...form, question: ""})).toThrow();
+  expect(() => requestFor({...form, options: "billing, billing"})).toThrow();
+});
+
+test("choices typed on one line are split on commas and semicolons", () => {
+  expect(requestFor({...form, options: "red, yellow"}).questions.answer.criteria).toEqual({red: null, yellow: null});
+  expect(requestFor({...form, options: "red;yellow ; blue"}).questions.answer.criteria).toEqual({red: null, yellow: null, blue: null});
 });
 
 test("probability rows have unique identities so the native list keeps every answer", () => {

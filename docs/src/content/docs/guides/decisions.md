@@ -18,8 +18,8 @@ In the decision screen, enter a question and optional content. Choose an answer 
 | Type | Input | Result |
 | --- | --- | --- |
 | Yes / no | A question such as “Was the customer charged twice?” | Probabilities for yes and no |
-| Choice | Between 2 and 52 different labels, one per line | A selected label and probabilities for every label |
-| Score | Between 2 and 10 levels, lowest to highest | Probabilities for each level and a weighted score from zero to the last level's index |
+| Choice | Between 2 and 52 different labels, separated by commas | A selected label and probabilities for every label |
+| Score | Between 2 and 10 levels separated by commas, lowest to highest | Probabilities for each level and a weighted score from zero to the last level's index |
 
 Optionally enter a PNG, JPEG or WebP image path, up to 5 MB. Image decisions require OpenJev's vision projector. Select **Run decision** to evaluate; **Back to chat** returns to the conversation you left. Chat is the default on each launch.
 

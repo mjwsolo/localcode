@@ -31,12 +31,14 @@ export type ModesContext = {
 
 export function requestFor(form: Form) {
   if (!form.question.trim()) throw new Error("Enter a question first");
-  const options = form.options.split("\n").map((s) => s.trim()).filter(Boolean);
+  // The answer field is one line high and Enter submits it, so labels are
+  // separated by commas (or semicolons); new lines still work.
+  const options = form.options.split(/[\n,;]/).map((s) => s.trim()).filter(Boolean);
   if (form.kind === "choice" && (options.length < 2 || options.length > 52 || new Set(options).size !== options.length)) {
-    throw new Error("Enter 2 to 52 different choices, one per line");
+    throw new Error("Enter 2 to 52 different choices, separated by commas");
   }
   if (form.kind === "score" && (options.length < 2 || options.length > 10)) {
-    throw new Error("Enter 2 to 10 levels, one per line, lowest to highest");
+    throw new Error("Enter 2 to 10 levels, separated by commas, lowest to highest");
   }
   const question = {
     type: form.kind === "yes-no" ? "noul" : form.kind,
@@ -112,15 +114,16 @@ export function setupModes(context: ModesContext): () => void {
   function rows(): Option[] {
     return [
       { title: "Model: " + (status?.current ?? "none loaded"), value: "model", description: status?.supports_systemone ? "Ready for decisions" : "Select OpenJev with /models", category: "Decisions" },
+      // Actions sit right under the model row: the dialog is a scrolling list, and
+      // below the inputs they fell out of view on a normal-height terminal.
+      // The answer also rides on the Run row for the same reason.
+      { title: busy ? "Evaluating…" : "Run decision", value: "run", description: result ? "Last answer: " + summary(result) : undefined, category: "Actions" },
+      { title: "Back to chat", value: "chat", category: "Actions" },
       { title: "Question", value: "question", description: form.question || "What should the model decide?", category: "Input" },
       { title: "Content (optional)", value: "state", description: form.state.slice(0, 60) || "Text or JSON to evaluate", category: "Input" },
       { title: "Answer type: " + form.kind, value: "kind", category: "Input" },
-      ...(form.kind === "yes-no" ? [] : [{ title: form.kind === "score" ? "Levels (lowest to highest)" : "Choices", value: "options", description: form.options.replaceAll("\n", " · ") || "Enter one per line", category: "Input" }]),
+      ...(form.kind === "yes-no" ? [] : [{ title: form.kind === "score" ? "Levels (lowest to highest)" : "Choices", value: "options", description: form.options.split(/[\n,;]/).map((s) => s.trim()).filter(Boolean).join(" · ") || "Separate with commas, e.g. red, yellow", category: "Input" }]),
       { title: "Image (optional)", value: "image", description: form.image || "PNG, JPEG or WebP file path", category: "Input" },
-      // The answer also rides on this row: it stays in view when the full result
-      // rows below are cut off on a short terminal.
-      { title: busy ? "Evaluating…" : "Run decision", value: "run", description: result ? "Last answer: " + summary(result) : undefined, category: "Actions" },
-      { title: "Back to chat", value: "chat", category: "Actions" },
       ...(result ? [{ title: "Answered by " + result.model, value: "result:model", description: "Prediction only; no tools or code actions executed", category: "Result" }, ...answerRows(result), ...(result.answers.answer.score === undefined ? [] : [{ title: "Score", value: "result:score", footer: result.answers.answer.score.toFixed(3), category: "Result" }])] : []),
     ];
   }
@@ -201,7 +204,7 @@ export function setupModes(context: ModesContext): () => void {
         if (value === "kind") await kind();
         else if (value === "question") await edit("question", "Decision question");
         else if (value === "state") await edit("state", "Content to evaluate (optional)");
-        else if (value === "options") await edit("options", form.kind === "score" ? "Levels: lowest to highest, one per line" : "Choices: one per line");
+        else if (value === "options") await edit("options", form.kind === "score" ? "Levels: lowest to highest, separated by commas" : "Choices: separated by commas");
         else if (value === "image") await edit("image", "Image file path (optional)");
         else if (value === "run") {
           if (status?.state !== "ready" || status?.supports_systemone !== true) error("Select a decision model such as OpenJev using the Model row first");
