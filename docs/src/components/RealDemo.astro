@@ -1,29 +1,25 @@
 ---
 /**
- * A REAL recorded localcode turn — not a design preview.
- *
- * Frames are captured from the running localcode interface while the
- * agent works against a local llama-server, then assembled with ffmpeg. The repository's tests
- * genuinely pass at the end of the take; nothing here is authored.
- *
- * Regenerate: docs/demo-tapes/record.sh
+ * The product demo on the landing page: install, model picker, and three real sessions
+ * (a bug fix, a code walkthrough, a new app), with narration. Plays on request only.
  */
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
-const src = `${base}/demo/first-change-042.gif`;
-const still = `${base}/demo/first-change-final.png?v=a4688fab`;
+const src = `${base}/demo/localcode_demo.mp4`;
+const poster = `${base}/demo/localcode_demo.jpg`;
 ---
 
 <figure class="lc-demo">
   <div class="lc-demo__frame">
-    <img
+    <video
       src={src}
-      alt="A real localcode turn: it reads the stub and test, edits the file, runs pytest -q, and reports 1 passed"
-      width="1224"
-      height="748"
-      loading="lazy"
-      decoding="async"
-      style={`background-image:url(${still});background-size:cover`}
-    />
+      poster={poster}
+      width="1280"
+      height="720"
+      controls
+      playsinline
+      preload="none"
+      aria-label="localcode demo: installing, choosing a model, then fixing a bug, explaining code and building an app"
+    ></video>
   </div>
 </figure>
 
@@ -40,17 +36,10 @@ const still = `${base}/demo/first-change-final.png?v=a4688fab`;
     line-height: 0;
   }
 
-  .lc-demo__frame img {
+  .lc-demo__frame video {
     width: 100%;
     height: auto;
     display: block;
   }
 
-  /* caption removed — the frame speaks for itself */
-
-  @media (prefers-reduced-motion: reduce) {
-    .lc-demo__frame img {
-      content: none;
-    }
-  }
 </style>
