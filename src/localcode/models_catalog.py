@@ -161,6 +161,7 @@ class ModelChoice:
     #                   Glimmer: only "Reasoning strength: low|medium|high|xhigh" in the
     #                   system prompt; Meta recommends high/xhigh for agentic work)
     #   "none"          no reasoning channel at all (diffusion)
+    #   "reasoning_effort" the template's own effort kwarg, "none" when off (Inkling 2)
     #   "chat_template" legacy name for "server" (kept for old configs)
     reasoning_control: str = "chat_template"
     reasoning_budget_tokens: int = 8192
@@ -571,6 +572,8 @@ CHOICES: list[ModelChoice] = [
         notes=INKLING2_MINI_NOTES + " IQ4_NL (imatrix): for 32 GB Macs and up.",
         mmproj_filename="mmproj-Inkling-2-Mini-BF16.gguf",
         mmproj_size_gb=0.64,
+        reasoning_control="reasoning_effort",
+        reasoning_budget_tokens=0,
     ),
     ModelChoice(
         key="inkling-2-mini-q8",
@@ -588,6 +591,8 @@ CHOICES: list[ModelChoice] = [
         notes=INKLING2_MINI_NOTES + " Q8: near-lossless, for 48 GB Macs and up.",
         mmproj_filename="mmproj-Inkling-2-Mini-BF16.gguf",
         mmproj_size_gb=0.64,
+        reasoning_control="reasoning_effort",
+        reasoning_budget_tokens=0,
     ),
     ModelChoice(
         key="muse-glimmer",

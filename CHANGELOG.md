@@ -13,6 +13,11 @@ All notable changes to LocalCode will be documented here. The format follows
 - Ripple-65B Preview (Ricursive, dense 65B, community GGUFs pinned by
   checksum): Q4 40.4 GB for 64 GB Macs and up, IQ3 28.0 GB for 48 GB Macs.
   Opt-in, never recommended automatically.
+- Inkling 2 Mini 26B-A5B (Thinking Machines, ggml-org's GGUFs pinned by
+  checksum): a looped MoE with about 5B active parameters and image input.
+  IQ4_NL 17.6 GB for 32 GB Macs and up, Q8 27.8 GB for 48 GB and up. Its
+  thinking is switched off through the template's own effort setting, since
+  the usual switch leaves it thinking. Opt-in, never recommended automatically.
 
 ### Changed
 
@@ -22,6 +27,9 @@ All notable changes to LocalCode will be documented here. The format follows
   MTP drafting reads its states from GPU memory, Gemma 4 tool calls held to the tool's
   schema, less memory for vision models, and llama-server security fixes.
   The model server no longer gets `--defrag-thold`, which v1.0 removed.
+- The bundled llama.cpp then moves to upstream 6792507 (2026-11-21), which
+  adds Inkling 2 Mini, plus upstream's still-open fix #32704 so the model's
+  repeated layers keep their weight scales on every pass.
 
 - The interface runs on OpenCode upstream from 2026-11-15 (was 2026-10-17),
   about 2,200 upstream commits newer. Everything localcode changed is kept: no cloud
