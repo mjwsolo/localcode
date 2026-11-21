@@ -1,13 +1,13 @@
 diff --git a/src/llama-vocab.cpp b/src/llama-vocab.cpp
-index e90f1bd11..6ba7965a9 100644
+index f3e1d0192..ecd25d35e 100644
 --- a/src/llama-vocab.cpp
 +++ b/src/llama-vocab.cpp
-@@ -2576,7 +2576,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
-                     tokenizer_pre == "qwen2" ||
+@@ -2567,7 +2567,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                      tokenizer_pre == "deepseek-r1-qwen" ||
                      tokenizer_pre == "kormo" ||
--                    tokenizer_pre == "f2llmv2") {
-+                    tokenizer_pre == "f2llmv2" ||
+                     tokenizer_pre == "f2llmv2" ||
+-                    tokenizer_pre == "domyn-edge") {
++                    tokenizer_pre == "domyn-edge" ||
 +                    // fork: Kolibri-1 GGUFs converted before upstream support (#30673)
 +                    // name their pre-tokenizer "kolibri1"; it is the qwen2 split.
 +                    tokenizer_pre == "kolibri1") {

@@ -1,5 +1,5 @@
 diff --git a/tools/server/server-decision.h b/tools/server/server-decision.h
-index 82af98ca1..0abc470fe 100644
+index 175aa46eb..6c6dfb676 100644
 --- a/tools/server/server-decision.h
 +++ b/tools/server/server-decision.h
 @@ -84,8 +84,16 @@ struct server_decision_context {
