@@ -13,7 +13,7 @@ def test_diffusiongemma_catalog_entry_uses_release_gguf() -> None:
     choice = by_key("diffusiongemma")
 
     assert choice is not None
-    assert choice.name == "DiffusionGemma 26B-A4B (Q4)"
+    assert choice.name == "Gemma 4 Diffusion 26B-A4B (Q4)"
     assert choice.hf_repo == "unsloth/diffusiongemma-26B-A4B-it-GGUF"
     assert choice.filename == "diffusiongemma-26B-A4B-it-Q4_K_M.gguf"
     assert choice.size_gb == 15.7
@@ -90,7 +90,6 @@ _EXPECTED_VISION = {
     "inkling-2-mini": True,
     "inkling-2-mini-q8": True,
     "openjev": True,
-    "saluki": True,
 }
 
 
@@ -357,37 +356,6 @@ def test_retired_sidecars_are_names_nothing_current_uses(tmp_path):
     assert not any((tmp_path / n).exists() for n in RETIRED_SIDECARS)
     assert bootstrap.remove_retired_sidecars(tmp_path) == []   # idempotent
     assert bootstrap.remove_retired_sidecars(tmp_path / "missing") == []
-
-
-def test_saluki_picker_identity_capabilities_and_recommendation():
-    from localcode.models_catalog import by_filename, by_group, group_for_filename, recommend
-    from localcode.model_families import infer_family_from_profile, ModelFamily
-    from localcode.reasoning_capabilities import reasoning_capabilities
-    c = by_key("saluki")
-    assert c is not None and c.architecture == "qwen35"
-    assert len(c.revision) == 40 and len(c.sha256) == 64
-    assert c.size_bytes == 7898369152
-    assert by_filename(c.filename) == c
-    assert group_for_filename(c.filename) == by_group("saluki-27b")
-    assert c.supports_vision and c.supports_thinking and not c.supports_systemone
-    assert c.drafter is None and c.humaneval_pass_at_1 is None
-    assert infer_family_from_profile(c.filename) == ModelFamily.QWEN
-    assert reasoning_capabilities(c.filename).supports_budget
-    for ram in (8, 16, 24, 32, 64, 128):
-        assert recommend(ram).key != "saluki"
-
-
-def test_saluki_mixed_quant_is_visible_and_keeps_integrity_pin():
-    from localcode.hf_quants import _parse_label, _quant_from_entry
-    from localcode.models_catalog import by_group, choice_for_quant
-    c = by_key("saluki")
-    assert _parse_label(c.filename) == "IQ2-mix"
-    assert _quant_from_entry({"path": c.filename, "size": c.size_bytes}).label == "IQ2-mix"
-    assert _quant_from_entry({"path": c.mmproj_filename}) is None
-    browsed = choice_for_quant(by_group("saluki-27b"), c.filename, c.size_gb)
-    assert browsed.name.endswith("(IQ2-mix)")
-    assert (browsed.revision, browsed.sha256, browsed.size_bytes) == (c.revision, c.sha256, c.size_bytes)
-    assert _parse_label("model-draft-mtp.gguf") is None
 
 
 def test_ram_probe_honours_the_eval_knob(monkeypatch):

@@ -47,7 +47,12 @@ if INSTALLED:
 else:
     assert BIN == (ROOT / "src/localcode/bin").resolve(), "the checkout's package was not the one imported"
 
-REQUIRED_KEYS = {"gemma-12b", "qwen", "qwen38", "diffusiongemma", "north-mini-code", "muse-glimmer", "kolibri", "openjev", "saluki", "flint", "deepseek-v4-flash", "inkling-2-mini"}
+REQUIRED_KEYS = {"gemma-12b", "qwen", "qwen38", "diffusiongemma", "north-mini-code", "muse-glimmer", "kolibri", "openjev", "flint", "inkling-2-mini"}
+# Models too large to share the Mac with anything else (DeepSeek V4 Flash needs about
+# 97 GB of a 128 GB Mac). The release gate leaves them out, so it can run while the
+# owner's localcode has a model loaded; check them on their own on an idle Mac:
+#   python scripts/verify_models.py --models deepseek-v4-flash
+SEPARATE_KEYS = {"deepseek-v4-flash"}
 TOOL = {"type": "function", "function": {"name": "get_weather", "description": "Get weather in a city.", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}}
 
 
@@ -326,7 +331,7 @@ def validate_receipt(receipt, commit, hashes, keys):
     assert set(normal) == keys and REQUIRED_KEYS <= keys, "model coverage changed"
     for key, checks in normal.items():
         expected = {"auth", "template", "chat", "systemone" if key == "openjev" else "tool-loop"}
-        if key in {"qwen38", "openjev", "diffusiongemma", "saluki"}:
+        if key in {"qwen38", "openjev", "diffusiongemma"}:
             expected.add("runtime")
         if key == "openjev":
             expected.add("decision-control")
@@ -348,7 +353,8 @@ def main(argv=None):
     p.add_argument("--publish-status", action="store_true", help="record strict gate status for the exact clean commit")
     p.add_argument("--publish-receipt", action="store_true", help="publish a successful strict receipt after pushing its exact commit")
     args = p.parse_args(argv)
-    choices = [c for c in catalog.CHOICES if c.local_path.is_file() and (not args.models or c.key in args.models)]
+    choices = [c for c in catalog.CHOICES if c.local_path.is_file()
+               and (c.key in args.models if args.models else c.key not in SEPARATE_KEYS)]
     expected = set(args.models or []) | (REQUIRED_KEYS if args.strict else set())
     missing = expected - {c.key for c in choices}
     if missing or not choices:
@@ -383,7 +389,7 @@ def main(argv=None):
                     if cache:
                         runtime_turn(server, "Hi")
                         assert server.proc.poll() is None, "model server exited on the first harness greeting"
-                    checks = verify(server, runtime=choice.key in {"qwen38", "openjev", "diffusiongemma", "saluki"} and cache is None)
+                    checks = verify(server, runtime=choice.key in {"qwen38", "openjev", "diffusiongemma"} and cache is None)
                     if cache:
                         verify_long_context(server)
                         checks.extend(["runtime-greeting", "long-context"])

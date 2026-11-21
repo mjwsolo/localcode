@@ -138,7 +138,7 @@ GEMMA_PROFILES: dict[str, ModelProfile] = {
     ),
     "diffusiongemma-26b-moe": ModelProfile(
         key="diffusiongemma-26b-moe",
-        display_name="DiffusionGemma 26B-A4B",
+        display_name="Gemma 4 Diffusion 26B-A4B",
         default_model="diffusiongemma26b-q4",
         family="diffusiongemma",
         feature_variant="experimental",

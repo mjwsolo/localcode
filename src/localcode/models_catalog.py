@@ -390,7 +390,7 @@ CHOICES: list[ModelChoice] = [
         key="diffusiongemma",
         sha256="24523b6c833c9ce9f5f34f9b333ab1517d73d6f1e76a103645353114c8028bc5",
         size_bytes=16806810208,
-        name="DiffusionGemma 26B-A4B (Q4)",
+        name="Gemma 4 Diffusion 26B-A4B (Q4)",
         hf_repo="unsloth/diffusiongemma-26B-A4B-it-GGUF",
         filename="diffusiongemma-26B-A4B-it-Q4_K_M.gguf",
         size_gb=15.7,
@@ -570,23 +570,6 @@ CHOICES: list[ModelChoice] = [
         mmproj_filename="mmproj-Qwen3.8-27B-F16.gguf",
         mmproj_size_gb=0.9,
         mmproj_hf_filename="mmproj-F16.gguf",
-    ),
-    ModelChoice(
-        key="saluki",
-        name="Underdog Saluki 27B 1.0 (IQ2-mix)",
-        hf_repo="ConwayResearch/Underdog-Saluki-27B-1.0",
-        filename="Underdog-Saluki-27B-1.0-IQ2-mix.gguf",
-        revision="4f60eba09f4b6db63c72915d328d97e1d93edb8c",
-        sha256="4a673518b11b1c4445f9b9a9d3c40356f5ba39f6a6260dcb25f3fbfd475d9efb",
-        size_bytes=7898369152,
-        size_gb=7.9,
-        active_params="27B dense",
-        architecture="qwen35",
-        license="Apache 2.0",
-        humaneval_pass_at_1=None,
-        notes="Mixed 2-bit quantization of Qwen 3.8 27B by Underdog. 7.9 GB weights plus context, runtime and OS memory; file size is not total RAM use. Coding quality has not been benchmarked on LocalCode; opt-in, not an automatic recommendation. Optional F16 projector adds image input. No speculative drafter is bundled.",
-        mmproj_filename="mmproj-Underdog-Saluki-27B-1.0-F16.gguf",
-        mmproj_size_gb=0.928,
     ),
     ModelChoice(
         key="kolibri",
@@ -787,12 +770,11 @@ def _system_ram_gb() -> int:
 _NO_AUTO_RECOMMEND_ARCHS = {"diffusion_gemma", "kolibri1"}
 # Entries excluded by key, for models that share an architecture with a
 # recommended one: OpenJev is a qwen35 like Qwen 3.8, but it is a decision
-# model and must never be a first-run coding default. Saluki remains opt-in
-# until coding quality has been measured on this stack. Flint reasons on every
+# model and must never be a first-run coding default. Flint reasons on every
 # step (no off switch) and timed out where Qwen 3.6 finished on the 48 GB tier.
 # DeepSeek V4 Flash is a 97 GB first download that leaves a 128 GB Mac about
 # 30 GB for everything else, so it is a choice the user makes, never a default.
-_NO_AUTO_RECOMMEND_KEYS = {"openjev", "saluki", "flint", "flint-q8", "deepseek-v4-flash",
+_NO_AUTO_RECOMMEND_KEYS = {"openjev", "flint", "flint-q8", "deepseek-v4-flash",
                            "inkling-2-mini", "inkling-2-mini-q8"}
 
 
@@ -1004,6 +986,27 @@ MODEL_GROUPS: list[ModelGroup] = [
         drafter=DRAFTER_GEMMA_12B,
     ),
     ModelGroup(
+        key="diffusiongemma-26b-a4b",
+        display_name="Gemma 4 Diffusion 26B-A4B",
+        maker="Google",
+        hf_repo="unsloth/diffusiongemma-26B-A4B-it-GGUF",
+        family="gemma4",
+        architecture="diffusion_gemma",
+        license="Apache 2.0",
+        notes=(
+            "EXPERIMENTAL block-diffusion model — denoises whole 256-token "
+            "blocks in parallel instead of decoding token-by-token. Served by "
+            "the bundled llama-server like every other model (the fork hosts "
+            "the denoiser from llama.cpp PR #24423 inside the server), so the "
+            "model loads once and stays resident; output streams one block "
+            "at a time rather than token by token. The repo ships "
+            "plain quants only (Q4_K_M/Q5_K_M/Q6_K/Q8_0/BF16, no UD-* "
+            "dynamic quants); Q4_K_M (~15.7 GB) is the recommended pick. "
+            "Text-only."
+        ),
+        # Text-only: no vision sidecar.
+    ),
+    ModelGroup(
         key="qwen-3.6-35b-a3b",
         display_name="Qwen 3.6 35B-A3B",
         maker="Alibaba",
@@ -1090,39 +1093,6 @@ MODEL_GROUPS: list[ModelGroup] = [
         mmproj_size_gb=3.85,
         mmproj_hf_filename="mmproj-Muse-Glimmer-30B-BF16.gguf",
         drafter=DRAFTER_MUSE,
-    ),
-    ModelGroup(
-        key="diffusiongemma-26b-a4b",
-        display_name="DiffusionGemma 26B-A4B",
-        maker="Google",
-        hf_repo="unsloth/diffusiongemma-26B-A4B-it-GGUF",
-        family="gemma4",
-        architecture="diffusion_gemma",
-        license="Apache 2.0",
-        notes=(
-            "EXPERIMENTAL block-diffusion model — denoises whole 256-token "
-            "blocks in parallel instead of decoding token-by-token. Served by "
-            "the bundled llama-server like every other model (the fork hosts "
-            "the denoiser from llama.cpp PR #24423 inside the server), so the "
-            "model loads once and stays resident; output streams one block "
-            "at a time rather than token by token. The repo ships "
-            "plain quants only (Q4_K_M/Q5_K_M/Q6_K/Q8_0/BF16, no UD-* "
-            "dynamic quants); Q4_K_M (~15.7 GB) is the recommended pick. "
-            "Text-only."
-        ),
-        # Text-only: no vision sidecar.
-    ),
-    ModelGroup(
-        key="saluki-27b",
-        display_name="Underdog Saluki 27B 1.0",
-        maker="Underdog",
-        hf_repo="ConwayResearch/Underdog-Saluki-27B-1.0",
-        family="qwen",
-        architecture="qwen35",
-        license="Apache 2.0",
-        notes="Mixed 2-bit Qwen 3.8 27B: 7.9 GB weights, with additional RAM needed for context and runtime. Coding quality unmeasured on LocalCode; opt-in. Optional F16 projector enables images. No bundled speculative drafter.",
-        mmproj_filename="mmproj-Underdog-Saluki-27B-1.0-F16.gguf",
-        mmproj_size_gb=0.928,
     ),
     ModelGroup(
         key="kolibri-1",
