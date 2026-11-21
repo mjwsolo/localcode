@@ -15,8 +15,10 @@ TurboQuant llama-server (the fork hosts the block-diffusion denoiser inside
 the server, see llama-cpp-turboquant/PATCHES.md 0005). There is no per-arch
 runner and no second binary.
 """
+
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -79,7 +81,7 @@ def test_every_choice_is_wellformed(choice):
     assert choice.architecture in {
         "gemma4-iswa", "qwen35moe", "qwen35", "diffusion_gemma", "cohere2_moe",
         "muse_glimmer", "kolibri1", "flint", "deepseek4", "laguna",
-        "mellum", "ricursive",
+        "mellum", "ricursive", "inkling2_loop",
     }, f"unknown arch {choice.architecture!r}"
     # by_filename must round-trip to a choice carrying the same architecture
     # (this is the dispatch key the runtime keys off).
@@ -187,8 +189,14 @@ def test_launcher_only_silences_reasoning_where_a_switch_exists(choice, monkeypa
     cmd = server_command(f"/models/{choice.filename}", 8081, choice.key)
     has_switch = reasoning_capabilities(choice.filename).control is ReasoningControl.CHAT_TEMPLATE
     assert ("--reasoning" in cmd) == has_switch
-    if choice.architecture == "diffusion_gemma":
+    if choice.architecture == "diffusion_gemma" or choice.reasoning_control == "reasoning_effort":
         # The thought block the model always emits is parsed out, not leaked.
         assert cmd[cmd.index("--reasoning-format") + 1] == "auto"
     else:
         assert "--reasoning-format" not in cmd
+    if choice.reasoning_control == "reasoning_effort":
+        # Inkling 2 ignores enable_thinking; off is the template's own effort "none".
+        kwargs = cmd[cmd.index("--chat-template-kwargs") + 1]
+        assert json.loads(kwargs) == {"reasoning_effort": "none"}
+    else:
+        assert "--chat-template-kwargs" not in cmd

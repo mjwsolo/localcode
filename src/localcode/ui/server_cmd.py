@@ -50,6 +50,7 @@ def server_command(gguf: str, port: int, alias: str | None = None) -> list[str]:
     # Per-model policy from the catalog (models_catalog.ModelChoice.reasoning_control):
     #   "server" / "chat_template" -> the flags below silence it (gemma 4, Qwen 3.x)
     #   "always"                    -> no off switch exists (Muse Glimmer); don't send flags
+    #   "reasoning_effort"          -> the template's own effort switch (Inkling 2)
     #   "none"                      -> no reasoning channel at all
     control = "server"
     try:
@@ -80,6 +81,15 @@ def server_command(gguf: str, port: int, alias: str | None = None) -> list[str]:
     mode = os.environ.get("LOCALCODE_INTERNAL_THINKING_MODE") or cfg.runtime.internal_thinking_mode or "off"
     if control in ("server", "chat_template") and str(mode).strip().lower() != "on":
         cmd += ["--reasoning", "off", "--reasoning-budget", "0"]
+    if control == "reasoning_effort":
+        # The template reads its own `reasoning_effort` (Inkling 2: "none" to
+        # "max", default "high") and ignores enable_thinking, so `--reasoning
+        # off` left it thinking at high effort with the thought printed as the
+        # reply. Off = effort "none" as the server default. The parser stays on,
+        # so a thought the model still opens goes to reasoning_content.
+        if str(mode).strip().lower() != "on":
+            cmd += ["--chat-template-kwargs", '{"reasoning_effort":"none"}']
+        cmd += ["--reasoning-format", "auto"]
     # Vision: same rule as classic localcode (runtime.py) — pass --mmproj when the
     # catalog says this model ships a projector and the sidecar is on disk.
     mm = mmproj_for(gguf)

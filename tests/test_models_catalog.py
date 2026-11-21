@@ -93,6 +93,8 @@ _EXPECTED_VISION = {
     "mellum-q8": False,
     "ripple": False,
     "ripple-iq3": False,
+    "inkling-2-mini": True,
+    "inkling-2-mini-q8": True,
     "openjev": True,
     "saluki": True,
 }

@@ -12,7 +12,19 @@ The machine-readable form of this inventory lives at the repo root:
 | `patches/PINNED_UPSTREAM` | the upstream commit the series applies to |
 | `patches/000N-*.patch` | numbered patches, applied in order with `git apply` |
 
-**Pinned upstream:** `b1b770d90d94cad9e9ea5b993bdbc383a522fb28` (2026-11-13,
+**Pinned upstream:** `6792507b7f611a6fc68bfae3eeae85e88017fc60` (2026-11-21,
+master, 244 commits after `v1.0.0`; brings `inkling2_loop`, #32694). Rebased with
+the 3-way recipe below: 0001 resolved three conflicts (HIP shuffle macros kept
+on the TurboQuant side, the CUDA MUL_MAT_ID few-row MMQ path and BF16 set_rows
+kept beside the TurboQuant checks, the ISWA Q pre-rotation now calls
+`gctx.build_attn_mha`) and the op count is 101; 0005 keeps upstream's
+`vendor::hash` link; 0011 adds `kolibri1` beside upstream's `domyn-edge`.
+New `0013-inkling2-loop-scales.patch` is upstream #32704 (open at the bump):
+the loop slots are re-shared after the scale pass, so NVFP4-scaled quants keep
+their per-expert scales on the 2nd and 3rd pass. **Delete it** once #32704
+is merged upstream and the pin moves past it.
+
+**Pin before that:** `b1b770d90d94cad9e9ea5b993bdbc383a522fb28` (2026-11-13,
 tag `v1.0.0`, 148 commits after `7d7f02875`). Rebased with the 3-way recipe below:
 0001 kept upstream's new `GGML_TYPE_F8_E4M3` CUDA paths beside the TurboQuant
 ones (convert, fattn vec/common/mma, mul_mat and mul_mat_id dispatch),
