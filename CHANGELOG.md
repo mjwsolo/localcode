@@ -40,6 +40,10 @@ All notable changes to LocalCode will be documented here. The format follows
   OpenCode Go, usage-limit, /goal, service restart and MCP event tool features
   are left out, and the transcript keeps its current grouped view.
 - The UI patches 0009-0013 now live in the fork itself; `patches/ui` is empty.
+- Shorter command menu: /lsp (language servers were removed in 0.5.38),
+  /worktrees, /btw, /terminal, /variants and /effort, /reload, /redo,
+  /review, /close-tab, /reopen-closed-tab and the copy-session-ID and
+  copy-transcript entries are gone from "/" and the palette.
 - Launch tuning (threads, batch sizes, GPU layers, KV cache, run mode,
   drafting) is worked out for the Mac at every launch and no longer read
   from or written to config.toml, where an old value could stick across

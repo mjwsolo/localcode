@@ -8,16 +8,16 @@
 
 
 
-                         /btw                 One-shot answer from the session's context without
-                         /cd                  Change working directory
-                         /clear               Clear session
-                         /close-tab           Close tab
-                         /continue            Switch session
-                         /debug               View debug info
-                         /decide              Open decision mode
-                         /diff                Open diff viewer
-                         /effort              Switch model variant
-                         /exit                Exit the app
+                         /cd                Change working directory
+                         /clear             Clear session
+                         /continue          Switch session
+                         /debug             View debug info
+                         /decide            Open decision mode
+                         /diff              Open diff viewer
+                         /exit              Exit the app
+                         /help              Help
+                         /mcps              MCP servers
+                         /mode              Choose Chat or Decisions
 
                           /
 
