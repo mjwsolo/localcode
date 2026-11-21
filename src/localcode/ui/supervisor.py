@@ -841,6 +841,11 @@ class Supervisor:
 
     def _download_worker(self, g, filename: str, alias: str) -> None:
         """Fetch the model (and the drafter that ships with it) without touching the loaded one."""
+        # Time left comes from this download's own measured speed (never a separate speed
+        # test): first seen percentage and time, then the rate since. A resumed download
+        # starts above 0 %, so the rate counts only what this run fetched.
+        first: dict = {}
+
         def progress(prefix: str):
             def on_progress(msg: str) -> None:
                 pct = None
@@ -849,16 +854,25 @@ class Supervisor:
                         pct = int(msg.rsplit("(", 1)[1].split("%")[0])
                     except ValueError:
                         pct = None
-                self.download = {**self.download, "detail": prefix + msg, "pct": pct}
+                eta = None
+                if pct is not None and not prefix:
+                    now = time.monotonic()
+                    first.setdefault("t", now); first.setdefault("pct", pct)
+                    done, spent = pct - first["pct"], now - first["t"]
+                    if done >= 1 and spent >= 5:
+                        eta = int(spent * (100 - pct) / done)
+                self.download = {**self.download, "detail": prefix + msg, "pct": pct, "eta_s": eta}
             return on_progress
 
         def finish(state: str, detail: str) -> None:
-            self.download = {**self.download, "state": state, "detail": detail, "pct": None}
+            self.download = {**self.download, "state": state, "detail": detail, "pct": None, "eta_s": None}
             self._model_file_cache = None
             log(f"supervisor: download of {alias} -> {state}")
 
         try:
             quant = self._quant_for(g, filename)
+            if quant is not None:
+                self.download = {**self.download, "size_gb": round(float(quant.size_gb), 1)}
             choice = choice_for_quant(g, filename, quant.size_gb if quant else 0.0, getattr(quant, "shards", ()))
             ok, res = bootstrap.download_model(choice, on_progress=progress(""), cancel_event=self.download_cancel)
             if self.download_cancel.is_set():

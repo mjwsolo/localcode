@@ -85,3 +85,30 @@ def test_cancel_stops_only_the_download(sup, monkeypatch):
         threading.Event().wait(0.02)
     assert sup.download['state'] == 'cancelled'
     assert sup.state['state'] == 'ready' and sup.current == 'test-model'
+
+
+def test_time_left_comes_from_the_downloads_own_speed(sup, monkeypatch):
+    import localcode.ui.supervisor as module
+    clock = iter([100.0, 110.0, 120.0])
+    monkeypatch.setattr(module.time, 'monotonic', lambda: next(clock))
+    seen = []
+
+    def download_model(choice, on_progress, cancel_event):
+        # A resumed download: it starts at 40 %, so only what this run fetched counts.
+        for pct in (40, 50, 60):
+            on_progress(f'big-a.gguf: ({pct}%)')
+            seen.append(dict(sup.download))
+        (sup.models_dir / choice.filename).write_bytes(b'GGUF')
+        return True, str(sup.models_dir / choice.filename)
+    monkeypatch.setattr(module.bootstrap, 'download_model', download_model)
+    g = MODEL_GROUPS[0]
+    monkeypatch.setattr(module, 'MODEL_GROUPS', [SimpleNamespace(**{**g.__dict__, 'drafter': None})])
+    sup.select(g.key, 'big-a.gguf')
+    for _ in range(100):
+        if sup.download['state'] == 'done':
+            break
+        threading.Event().wait(0.02)
+    assert seen[0]['eta_s'] is None and seen[0]['size_gb'] == 1.0
+    assert seen[1]['eta_s'] == 50   # 10 % in 10 s, 50 % to go
+    assert seen[2]['eta_s'] == 40   # 20 % in 20 s, 40 % to go
+    assert sup.download['state'] == 'done' and sup.download['eta_s'] is None

@@ -27,7 +27,7 @@ ALIAS = "e2e-model"
 
 # A background download started from the picker: it runs for DOWNLOAD_SECONDS.
 DOWNLOAD = {}
-DOWNLOAD_SECONDS = 6
+DOWNLOAD_SECONDS = 12
 
 
 def download():
@@ -36,9 +36,10 @@ def download():
     if DOWNLOAD["state"] == "downloading":
         done = (time.time() - DOWNLOAD["t0"]) / DOWNLOAD_SECONDS
         if done >= 1:
-            DOWNLOAD.update(state="done", pct=None, detail="downloaded")
+            DOWNLOAD.update(state="done", pct=None, eta_s=None, detail="downloaded")
         else:
             DOWNLOAD["pct"] = int(done * 100)
+            DOWNLOAD["eta_s"] = 180  # fixed so screens stay stable
     return {k: v for k, v in DOWNLOAD.items() if k != "t0"}
 
 
@@ -181,7 +182,8 @@ class H(http.server.BaseHTTPRequestHandler):
             if name.endswith("Q4_K_M.gguf"):  # the downloaded quant
                 return self._json({"ok": True, "model": alias, "state": "loading"})
             DOWNLOAD.clear()
-            DOWNLOAD.update(group=req.get("group"), filename=name, model=alias, state="downloading", pct=0, detail="", t0=time.time())
+            DOWNLOAD.update(group=req.get("group"), filename=name, model=alias, state="downloading", pct=0, detail="",
+                            size_gb=5.1, eta_s=None, t0=time.time())
             return self._json({"ok": True, "model": alias, "state": "downloading", "background": True})
         if self.path == "/cancel" and DOWNLOAD.get("state") == "downloading":
             DOWNLOAD.update(state="cancelled", pct=None)

@@ -39,6 +39,9 @@ All notable changes to LocalCode will be documented here. The format follows
   background: the loaded model keeps answering, other installed models can
   still be picked, the prompt footer shows the progress, and a message says
   when it is ready (with no model loaded yet, it loads right away).
+- Downloads show the time left, measured from the download's own speed.
+  On first run, while the first model downloads, the input box says what
+  is downloading and that chat starts once it is loaded.
 - The /models lists no longer jump the cursor back to the current row every
   second while a download runs.
 - The footer showed 0.5.42 on the 0.5.43 candidates: the bundled UI was last
