@@ -41,6 +41,9 @@ All notable changes to LocalCode will be documented here. The format follows
   OpenCode Go, usage-limit, /goal, service restart and MCP event tool features
   are left out, and the transcript keeps its current grouped view.
 - The UI patches 0009-0013 now live in the fork itself; `patches/ui` is empty.
+- The footer showed 0.5.42 on the 0.5.43 candidates: the bundled UI was last
+  built before the version bump. It is rebuilt, and a test now fails whenever
+  the UI binary's version differs from the package version.
 
 ## 0.5.42 - 2026-11-02
 
