@@ -137,3 +137,24 @@ test("sidebar shows the session context", () =>
     assert.match(screen, /108 tokens/)
     await snap(s, "sidebar")
   }))
+
+test("the plan panel follows every plan update within a turn", () =>
+  journey("plan", {}, async (s) => {
+    await s.waitFor("localcode · e2e-model")
+    // The sidebar command exists inside a session, so start one first.
+    await s.type("hello there")
+    await s.key("Enter")
+    await s.waitFor(/Completed in/)
+    await s.type("/sidebar")
+    await s.waitFor("/show-sidebar")
+    await s.key("Enter")
+    await s.waitFor("Context")
+    await s.type("make a plan")
+    await s.key("Enter")
+    // The mock waits 2 s after each update, so each state is on screen mid-turn.
+    await s.waitFor(/\[•\] Alpha step/)
+    await s.waitFor(/\[✓\] Alpha step[\s\S]*\[•\] Beta step/)
+    await s.waitFor(/\[✓\] Beta step[\s\S]*\[•\] Gamma step/)
+    await s.waitFor(/Completed in/)
+    assert.match(await s.settle(), /\[•\] Gamma step/)
+  }))

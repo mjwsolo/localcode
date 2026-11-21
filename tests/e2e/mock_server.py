@@ -6,6 +6,8 @@ No model, no llama-server. Replies are fixed so screenshots are stable:
   - requests without tools (title generation)   -> "E2E title"
   - a user message containing "run ls"          -> one scripted shell tool call
   - a user message containing "read outside"    -> a read of /tmp/lce-outside/notes.txt (asks permission)
+  - a user message containing "make a plan"     -> three todowrite calls in one turn, each
+                                                   marking the next step done (2 s apart)
   - a tool result as the last message           -> "The command finished."
   - anything else                               -> a fixed two-line reply
 Usage: mock_server.py <port> [--no-model]
@@ -66,11 +68,27 @@ def status():
             "vision_available": False, "vision_size_gb": 0.0}
 
 
+PLAN_STEPS = ["Alpha step", "Beta step", "Gamma step"]
+
+
+def plan(done):
+    """Steps before `done` are completed, step `done` is in progress."""
+    return [{"content": c, "status": "completed" if i < done else "in_progress" if i == done else "pending",
+             "priority": "medium"} for i, c in enumerate(PLAN_STEPS)]
+
+
 def script(body):
     msgs = body.get("messages", [])
     if not body.get("tools"):
         return {"text": "E2E title"}
     last = msgs[-1] if msgs else {}
+    users = [m for m in msgs if m.get("role") == "user"]
+    if users and "make a plan" in json.dumps(users[-1].get("content")).lower():
+        start = max(i for i, m in enumerate(msgs) if m.get("role") == "user")
+        done = sum(1 for m in msgs[start:] if m.get("role") == "tool")
+        if done < len(PLAN_STEPS):
+            return {"tool": "todowrite", "args": {"todos": plan(done)}, "delay": 2 if done else 0}
+        return {"text": "Plan finished.", "delay": 2}
     if last.get("role") == "tool":
         return {"text": "The command finished."}
     if "read outside" in json.dumps(last.get("content")).lower():
@@ -141,6 +159,7 @@ class H(http.server.BaseHTTPRequestHandler):
             return self._json({"ok": True})
         body = json.loads(raw or b"{}")
         action = script(body)
+        time.sleep(action.get("delay", 0))
         rid = "chatcmpl-" + uuid.uuid4().hex[:12]
         model = body.get("model", ALIAS)
         if body.get("stream"):
