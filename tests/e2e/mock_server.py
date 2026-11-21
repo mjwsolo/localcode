@@ -6,6 +6,8 @@ No model, no llama-server. Replies are fixed so screenshots are stable:
   - requests without tools (title generation)   -> "E2E title"
   - a user message containing "run ls"          -> one scripted shell tool call
   - a user message containing "read outside"    -> a read of /tmp/lce-outside/notes.txt (asks permission)
+  - a user message containing "make a plan"     -> three todowrite calls in one turn, each
+                                                   marking the next step done (2 s apart)
   - a tool result as the last message           -> "The command finished."
   - anything else                               -> a fixed two-line reply
 Usage: mock_server.py <port> [--no-model]
@@ -22,6 +24,24 @@ from urllib.parse import parse_qs, urlparse
 PORT = int(sys.argv[1])
 NO_MODEL = "--no-model" in sys.argv
 ALIAS = "e2e-model"
+
+# A background download started from the picker: it runs for DOWNLOAD_SECONDS.
+DOWNLOAD = {}
+DOWNLOAD_SECONDS = 12
+
+
+def download():
+    if not DOWNLOAD:
+        return None
+    if DOWNLOAD["state"] == "downloading":
+        done = (time.time() - DOWNLOAD["t0"]) / DOWNLOAD_SECONDS
+        if done >= 1:
+            DOWNLOAD.update(state="done", pct=None, eta_s=None, detail="downloaded")
+        else:
+            DOWNLOAD["pct"] = int(done * 100)
+            DOWNLOAD["eta_s"] = 180  # fixed so screens stay stable
+    return {k: v for k, v in DOWNLOAD.items() if k != "t0"}
+
 
 REPLY = "Hello from the mock model.\nThis reply is fixed so screenshots stay stable."
 
@@ -52,8 +72,10 @@ def quants(key):
             "vision_size_gb": 0.0,
             "quants": [{"filename": f"{key}-{label}.gguf", "alias": f"{key}-{label}", "label": label,
                         "size_gb": size, "fit": fit, "tok_s": tok, "recommended": rec,
-                        "downloaded": dl, "current": False, "loaded": False,
-                        "downloading": False, "pct": None}
+                        "downloaded": dl or (DOWNLOAD.get("state") == "done" and DOWNLOAD.get("filename") == f"{key}-{label}.gguf"),
+                        "current": False, "loaded": False,
+                        "downloading": DOWNLOAD.get("state") == "downloading" and DOWNLOAD.get("filename") == f"{key}-{label}.gguf",
+                        "pct": DOWNLOAD.get("pct")}
                        for label, size, fit, tok, rec, dl in rows]}
 
 
@@ -63,7 +85,16 @@ def status():
             "version": "0.0.0", "process_id": 1, "warmup": "idle",
             "current": None if NO_MODEL else ALIAS, "port": PORT, "inference_port": PORT,
             "ctx": 32768, "group": None, "filename": None, "vision": False,
-            "vision_available": False, "vision_size_gb": 0.0}
+            "vision_available": False, "vision_size_gb": 0.0, "download": download()}
+
+
+PLAN_STEPS = ["Alpha step", "Beta step", "Gamma step"]
+
+
+def plan(done):
+    """Steps before `done` are completed, step `done` is in progress."""
+    return [{"content": c, "status": "completed" if i < done else "in_progress" if i == done else "pending",
+             "priority": "medium"} for i, c in enumerate(PLAN_STEPS)]
 
 
 def script(body):
@@ -71,6 +102,13 @@ def script(body):
     if not body.get("tools"):
         return {"text": "E2E title"}
     last = msgs[-1] if msgs else {}
+    users = [m for m in msgs if m.get("role") == "user"]
+    if users and "make a plan" in json.dumps(users[-1].get("content")).lower():
+        start = max(i for i, m in enumerate(msgs) if m.get("role") == "user")
+        done = sum(1 for m in msgs[start:] if m.get("role") == "tool")
+        if done < len(PLAN_STEPS):
+            return {"tool": "todowrite", "args": {"todos": plan(done)}, "delay": 2 if done else 0}
+        return {"text": "Plan finished.", "delay": 2}
     if last.get("role") == "tool":
         return {"text": "The command finished."}
     if "read outside" in json.dumps(last.get("content")).lower():
@@ -137,10 +175,24 @@ class H(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         ln = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(ln) if ln else b"{}"
+        if self.path == "/select":
+            req = json.loads(raw or b"{}")
+            name = req.get("filename", "")
+            alias = name.removesuffix(".gguf")
+            if name.endswith("Q4_K_M.gguf"):  # the downloaded quant
+                return self._json({"ok": True, "model": alias, "state": "loading"})
+            DOWNLOAD.clear()
+            DOWNLOAD.update(group=req.get("group"), filename=name, model=alias, state="downloading", pct=0, detail="",
+                            size_gb=5.1, eta_s=None, t0=time.time())
+            return self._json({"ok": True, "model": alias, "state": "downloading", "background": True})
+        if self.path == "/cancel" and DOWNLOAD.get("state") == "downloading":
+            DOWNLOAD.update(state="cancelled", pct=None)
+            return self._json({"ok": True})
         if not self.path.endswith("/chat/completions"):
             return self._json({"ok": True})
         body = json.loads(raw or b"{}")
         action = script(body)
+        time.sleep(action.get("delay", 0))
         rid = "chatcmpl-" + uuid.uuid4().hex[:12]
         model = body.get("model", ALIAS)
         if body.get("stream"):

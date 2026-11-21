@@ -137,3 +137,70 @@ test("sidebar shows the session context", () =>
     assert.match(screen, /108 tokens/)
     await snap(s, "sidebar")
   }))
+
+test("the plan panel follows every plan update within a turn", () =>
+  journey("plan", {}, async (s) => {
+    await s.waitFor("localcode · e2e-model")
+    // The sidebar command exists inside a session, so start one first.
+    await s.type("hello there")
+    await s.key("Enter")
+    await s.waitFor(/Completed in/)
+    await s.type("/sidebar")
+    await s.waitFor("/show-sidebar")
+    await s.key("Enter")
+    await s.waitFor("Context")
+    await s.type("make a plan")
+    await s.key("Enter")
+    // The mock waits 2 s after each update, so each state is on screen mid-turn.
+    await s.waitFor(/\[•\] Alpha step/)
+    await s.waitFor(/\[✓\] Alpha step[\s\S]*\[•\] Beta step/)
+    await s.waitFor(/\[✓\] Beta step[\s\S]*\[•\] Gamma step/)
+    await s.waitFor(/Completed in/)
+    assert.match(await s.settle(), /\[•\] Gamma step/)
+  }))
+
+test("a model downloads in the background while the chat keeps working", () =>
+  journey("background-download", {}, async (s) => {
+    await s.waitFor("localcode · e2e-model")
+    await s.type("/models")
+    await s.waitFor("/models")
+    await s.key("Enter")
+    await s.waitFor("Gamma 2 30B")
+    await s.key("Enter")
+    await s.waitFor("Available to download")
+    await s.settle()
+    // Q3_K_M is not downloaded: picking it starts a download.
+    await s.type("Q3")
+    await s.waitFor(/Q3_K_M\s+5\.1 GB/)
+    await s.key("Enter")
+    await s.waitFor(/Downloading in the background/)
+    // The prompt is not locked while the download runs.
+    await s.type("hello there")
+    await s.key("Enter")
+    await s.waitFor("Hello from the mock model.")
+    assert.match(await s.screen(), /e2e-model · downloading alpha-Q3_K_M \d+% · about 3 min left/)
+    await s.waitFor(/Download finished/, 30_000)
+    assert.match(await s.screen(), /alpha-Q3_K_M is ready\. Open \/models to switch to it\./)
+  }))
+
+test("the first download says what is happening and when chat can start", () =>
+  journey("first-download", { model: false }, async (s) => {
+    await s.waitFor("No model loaded")
+    await s.type("/models")
+    await s.waitFor("/models")
+    await s.key("Enter")
+    await s.waitFor("Gamma 2 30B")
+    await s.key("Enter")
+    await s.waitFor("Available to download")
+    await s.settle()
+    await s.type("Q3")
+    await s.waitFor(/Q3_K_M\s+5\.1 GB/)
+    await s.key("Enter")
+    await s.waitFor(/Downloading alpha-Q3_K_M \(5\.1 GB\)\. You can chat once it's loaded\./)
+    await s.waitFor(/localcode · Downloading \d+% · about 3 min left/)
+    // Sending now explains the wait instead of throwing the picker up again.
+    await s.type("hello")
+    await s.key("Enter")
+    await s.waitFor(/alpha-Q3_K_M is still downloading\s+\(\d+%\s+·\s+about 3 min\s+left\)\.\s+You can chat\s+once it's\s+loaded\./)
+    assert.doesNotMatch(await s.screen(), /Select a model/)
+  }))

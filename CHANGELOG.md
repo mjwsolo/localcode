@@ -7,12 +7,6 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ### Added
 
-- Mellum2.1 12B-A2.5B Thinking (JetBrains' own GGUFs): Q4 8.1 GB and Q8
-  12.9 GB, a fast small agentic model that fits 16 GB Macs. Opt-in, never
-  recommended automatically.
-- Ripple-65B Preview (Ricursive, dense 65B, community GGUFs pinned by
-  checksum): Q4 40.4 GB for 64 GB Macs and up, IQ3 28.0 GB for 48 GB Macs.
-  Opt-in, never recommended automatically.
 - Inkling 2 Mini 26B-A5B (Thinking Machines, Unsloth's quants pinned by
   checksum): a looped MoE with about 5B active parameters and image input.
   UD-Q4_K_XL 17.6 GB for 32 GB Macs and up, UD-Q8_K_XL 22.9 GB for 48 GB and
@@ -41,6 +35,18 @@ All notable changes to LocalCode will be documented here. The format follows
   OpenCode Go, usage-limit, /goal, service restart and MCP event tool features
   are left out, and the transcript keeps its current grouped view.
 - The UI patches 0009-0013 now live in the fork itself; `patches/ui` is empty.
+- Downloading a model no longer locks LocalCode. The download runs in the
+  background: the loaded model keeps answering, other installed models can
+  still be picked, the prompt footer shows the progress, and a message says
+  when it is ready (with no model loaded yet, it loads right away).
+- Downloads show the time left, measured from the download's own speed.
+  On first run, while the first model downloads, the input box says what
+  is downloading and that chat starts once it is loaded.
+- The /models lists no longer jump the cursor back to the current row every
+  second while a download runs.
+- The footer showed 0.5.42 on the 0.5.43 candidates: the bundled UI was last
+  built before the version bump. It is rebuilt, and a test now fails whenever
+  the UI binary's version differs from the package version.
 
 ## 0.5.42 - 2026-11-02
 
