@@ -270,7 +270,8 @@ class Supervisor:
         target = found or self.models_dir / filename
         if not is_shard(filename):
             return target.is_file()
-        sizes = {p.rsplit("/", 1)[-1]: n for p, n in (getattr(quant, "shards", None) or ())}
+        from localcode.hf_quants import local_name
+        sizes = {local_name(p): n for p, n in (getattr(quant, "shards", None) or ())}
         return split_complete(target, sizes)
 
     def start(self, alias: str, wait_s: int = 240) -> bool:

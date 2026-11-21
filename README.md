@@ -60,6 +60,7 @@ Speed: Gemma 4, Qwen 3.6, Muse Glimmer and Qwen 3.8 draft tokens with the vendor
 | --- | ---: | ---: |
 | [Gemma 4 12B](https://huggingface.co/unsloth/gemma-4-12b-it-GGUF) | 4.7 GB | 24.3 GB |
 | [Qwen 3.8 27B](https://huggingface.co/unsloth/Qwen3.8-27B-GGUF) | 6.2 GB | 54.7 GB |
+| [Inkling 2 Mini 26B-A5B](https://huggingface.co/unsloth/Inkling-2-Mini-GGUF) | 7.8 GB | 22.9 GB |
 | [Underdog Saluki 27B 1.0](https://huggingface.co/ConwayResearch/Underdog-Saluki-27B-1.0) | 7.9 GB | 7.9 GB |
 | [Mellum2.1 12B-A2.5B Thinking](https://huggingface.co/JetBrains/Mellum2.1-12B-A2.5B-Thinking-GGUF) | 8.1 GB | 24.3 GB |
 | [North-Mini-Code 30B-A3B](https://huggingface.co/unsloth/North-Mini-Code-1.0-GGUF) | 9.4 GB | 61.0 GB |
@@ -69,7 +70,6 @@ Speed: Gemma 4, Qwen 3.6, Muse Glimmer and Qwen 3.8 draft tokens with the vendor
 | [Flint 40B-A2.5B](https://huggingface.co/unsloth/flint-GGUF) | 11.4 GB | 79.6 GB |
 | [Muse Glimmer 30B](https://huggingface.co/unsloth/Muse-Glimmer-30B-GGUF) | 12.4 GB | 57.4 GB |
 | [DiffusionGemma 26B-A4B](https://huggingface.co/unsloth/diffusiongemma-26B-A4B-it-GGUF) | 16.8 GB | 50.5 GB |
-| [Inkling 2 Mini 26B-A5B](https://huggingface.co/ggml-org/Inkling-2-Mini-GGUF) | 17.6 GB | 52.2 GB |
 | [Ripple-65B Preview](https://huggingface.co/AtomicChat/Ripple-65B-Preview-GGUF) | 18.5 GB | 129.6 GB |
 | [OpenJev 27B (decisions)](https://huggingface.co/ggml-org/OpenJev-GGUF) | 19.4 GB | 53.8 GB |
 | [Kolibri 1 78B-A3B](https://huggingface.co/Hob-forge/Kolibri-1-GGUF) | 28.6 GB | 83.1 GB |

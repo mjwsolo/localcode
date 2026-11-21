@@ -269,8 +269,9 @@ def _is_complete_download(p: Path, catalog_entry) -> bool:
     shards = getattr(catalog_entry, "shards", ())
     if shards:
         # Split quant: p is the first shard; every shard must be beside it at its exact size.
+        from .hf_quants import local_name
         from .split_gguf import split_complete
-        return split_complete(p, {s_path.rsplit("/", 1)[-1]: n for s_path, n in shards})
+        return split_complete(p, {local_name(s_path): n for s_path, n in shards})
     try:
         size = p.stat().st_size
     except OSError:
@@ -555,6 +556,7 @@ def _download_split(
     shard names). Shards already complete on disk are skipped; partial shards
     resume like single files. Progress is combined across shards. Returns the
     FIRST shard's path, which is what llama-server loads."""
+    from .hf_quants import local_name
     shards = [(path, int(n)) for path, n in choice.shards]
     model_dir = choice.local_path.parent
     model_dir.mkdir(parents=True, exist_ok=True)
@@ -562,7 +564,7 @@ def _download_split(
     pending = []
     done_bytes = 0
     for repo_path, n in shards:
-        dest = model_dir / repo_path.rsplit("/", 1)[-1]
+        dest = model_dir / local_name(repo_path)
         if dest.is_file() and n and dest.stat().st_size == n:
             done_bytes += n
         else:
@@ -590,7 +592,8 @@ def _download_split(
 
     rev = getattr(choice, "revision", None) or "main"
     if on_progress:
-        on_progress(f"Downloading {choice.filename} and {len(shards) - 1} more parts (~{choice.size_gb:.1f} GB)...")
+        more = f" and {len(shards) - 1} more parts" if len(shards) > 1 else ""
+        on_progress(f"Downloading {choice.filename}{more} (~{choice.size_gb:.1f} GB)...")
     for repo_path, n, dest in pending:
         base = done_bytes
 
@@ -635,7 +638,7 @@ def _download_split(
                 pass
             return False, f"Download of {dest.name} was incomplete; retry the selection."
         done_bytes += n
-    first = model_dir / shards[0][0].rsplit("/", 1)[-1]
+    first = model_dir / local_name(shards[0][0])
     ok, reason = _verify_download_integrity(choice, first)
     if not ok:
         return False, reason

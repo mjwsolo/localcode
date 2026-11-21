@@ -13,11 +13,14 @@ All notable changes to LocalCode will be documented here. The format follows
 - Ripple-65B Preview (Ricursive, dense 65B, community GGUFs pinned by
   checksum): Q4 40.4 GB for 64 GB Macs and up, IQ3 28.0 GB for 48 GB Macs.
   Opt-in, never recommended automatically.
-- Inkling 2 Mini 26B-A5B (Thinking Machines, ggml-org's GGUFs pinned by
+- Inkling 2 Mini 26B-A5B (Thinking Machines, Unsloth's quants pinned by
   checksum): a looped MoE with about 5B active parameters and image input.
-  IQ4_NL 17.6 GB for 32 GB Macs and up, Q8 27.8 GB for 48 GB and up. Its
-  thinking is switched off through the template's own effort setting, since
-  the usual switch leaves it thinking. Opt-in, never recommended automatically.
+  UD-Q4_K_XL 17.6 GB for 32 GB Macs and up, UD-Q8_K_XL 22.9 GB for 48 GB and
+  up; the picker lists every quant from 7.8 GB. Unsloth keeps the files that
+  standard llama.cpp reads in a subfolder under a `.gguf_file` name; LocalCode
+  lists that folder and saves them as `.gguf`. Its thinking is switched off
+  through the template's own effort setting, since the usual switch leaves it
+  thinking. Opt-in, never recommended automatically.
 
 ### Changed
 
