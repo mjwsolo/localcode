@@ -59,6 +59,9 @@ const MAX_TODO_CONTINUATIONS = 15;
 const MAX_TODO_STUCK = 3;
 const MAX_BUILD_VERIFY = 3;
 const NUDGE_PREFIX = "SYSTEM:";
+// Tool calls in a row without a todowrite, while the plan has open items, before
+// the model is reminded once to bring its plan up to date (the sidebar shows it).
+const PLAN_REMINDER_AFTER = 8;
 /** The supervisor's control API requires the session token on every request. */
 const controlHeaders = (): Record<string, string> => ({
   "content-type": "application/json",
@@ -627,6 +630,9 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
   // of web searches repeated one query 162 times because they were switched on
   // by the first file or shell call, which never came.
   let toolsUsed = false;
+  let callsSincePlan = 0;
+  // The loop breaker steers the rest of the turn once it has spoken; no plan reminders then.
+  let loopSteered = false;
   let continueCount = 0;
   let stuckCount = 0;
   let lastRemaining = Number.MAX_SAFE_INTEGER;
@@ -685,6 +691,8 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
   // Mid-loop nudge: the prompt is inserted into history and picked up at the next
   // step, but the call resolves only when the whole loop ends, so never await it.
   function nudgeAsync(sessionID: string, text: string) {
+    // Every nudge carries the open plan, so it also counts as a plan reminder.
+    callsSincePlan = 0;
     nudge(sessionID, text).catch((e) => plog(`nudge failed: ${e?.message ?? e}`));
   }
 
@@ -694,6 +702,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
     if (!toolsUsed || interrupted.has(sessionID) || (activeSession && sessionID !== activeSession)) return "none";
     const decision = plateau.endRound();
     if (decision === "none" || planMode()) return "none";
+    loopSteered = true;
     const open = openTodos();
     if (decision === "repair-nudge") {
       plog(`round ${plateau.round}: ${plateau.repeated.evidence}`);
@@ -800,6 +809,8 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
         if (control) fetch(`${control}/warmup/cancel`, { method: "POST", headers: controlHeaders(), body: "{}" }).catch(() => {});
         workspaceActive = false;
         toolsUsed = false;
+        callsSincePlan = 0;
+        loopSteered = false;
         if (activeSession !== input.sessionID || interrupted.has(input.sessionID)) todos = [];
         activeSession = input.sessionID;
         interrupted.delete(input.sessionID);
@@ -833,6 +844,12 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
       toolsUsed = true;
       if (["read", "glob", "grep", "bash", "write", "edit", "multiedit", "apply_patch"].includes(input.tool)) workspaceActive = true;
       plateau.observe({ tool: input.tool, args: input.args, output: output?.output, metadata: output?.metadata });
+      if (input.tool === "todowrite") callsSincePlan = 0;
+      else if (++callsSincePlan >= PLAN_REMINDER_AFTER && input.sessionID && !plateauStopped && !loopSteered &&
+               todos.some((t) => t.status !== "completed" && t.status !== "cancelled")) {
+        callsSincePlan = 0;
+        nudgeAsync(input.sessionID, `${NUDGE_PREFIX} Plan check: ${PLAN_REMINDER_AFTER} tool calls since your last todowrite. If you finished or started an item, update the plan with todowrite now, then continue. If it is still accurate, just continue.`);
+      }
       for (const p of editedPaths({ tool: input.tool, args: input.args, output: output?.output, metadata: output?.metadata })) {
         const rel = relative(resolve(directory), resolve(directory, p)).replace(/\\/g, "/");
         agentTouched.add(rel);

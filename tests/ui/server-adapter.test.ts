@@ -198,3 +198,36 @@ test("old tool output is pruned at a new turn using the local model's input budg
     await dispose();
   }
 });
+
+test("a plan with open items gets one reminder after 8 tool calls without a todowrite", async () => {
+  const runtime = fakeRuntime();
+  const dispose = await plugin.setup(runtime.ctx);
+  try {
+    await runtime.sessionHooks.get("prompt")!({ sessionID: "ses", messageID: "msg", prompt: { text: "build it" }, metadata: {} });
+    await runtime.tools[0].execute({ todos: [{ content: "write app", status: "in_progress" }, { content: "test app", status: "pending" }] }, { sessionID: "ses" });
+    const call = async (n: number) => {
+      for (let i = 0; i < n; i++) {
+        const shell = { tool: "shell", sessionID: "ses", input: { command: `echo ${i}` } };
+        await runtime.toolHooks.get("execute.before")!(shell);
+        await runtime.toolHooks.get("execute.after")!({ ...shell, status: "completed", result: { content: [{ type: "text", text: `${i}` }], metadata: { exit: 0 } } });
+      }
+    };
+    const reminders = () => runtime.synthetic.filter((s) => s.text.includes("Plan check"));
+    await call(7);
+    await Bun.sleep(20);
+    expect(reminders()).toHaveLength(0);
+    await call(1);
+    await settle(() => reminders().length > 0);
+    expect(reminders()).toHaveLength(1);
+    expect(reminders()[0]).toMatchObject({ sessionID: "ses", delivery: "steer" });
+    expect(reminders()[0].text).toContain("[>] write app");
+    // A todowrite resets the count; a finished plan is never reminded.
+    await runtime.tools[0].execute({ todos: [{ content: "write app", status: "completed" }, { content: "test app", status: "completed" }] }, { sessionID: "ses" });
+    await runtime.toolHooks.get("execute.after")!({ tool: "todowrite", sessionID: "ses", input: {}, status: "completed", result: { content: [] } });
+    await call(10);
+    await Bun.sleep(20);
+    expect(reminders()).toHaveLength(1);
+  } finally {
+    await dispose();
+  }
+});
