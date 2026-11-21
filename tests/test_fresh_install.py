@@ -167,7 +167,7 @@ def test_cli_bootstrap_sets_llama_cpp(monkeypatch, tmp_path):
 
 # ── Test 10: Setup screen step 2 actually has server launch code ──
 def test_config_roundtrip():
-    """Write config, reload, verify all llama_cpp fields survive."""
+    """Write config, reload: user settings survive, launch tuning returns to the code's values."""
     from localcode.config import load_config, save_config
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -192,8 +192,9 @@ def test_config_roundtrip():
             ("base_url", "http://localhost:8081"),
             ("llama_cpp_binary", "/opt/bin/llama-server"),
             ("model", "/data/models/gemma.gguf"),
+            # Launch tuning never round-trips: it is worked out at every launch.
             ("kv_cache_type_k", "q8_0"),
-            ("kv_cache_type_v", "turbo4"),
+            ("kv_cache_type_v", "q8_0"),
             ("laptop_26b_runtime_mode", "turbo"),
         ]
         for field, expected in fields:

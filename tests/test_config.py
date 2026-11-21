@@ -148,7 +148,8 @@ class TestSaveConfig:
             assert reloaded.runtime.provider == "llama_cpp"
             assert reloaded.runtime.model == "my-model"
             assert reloaded.runtime.temperature == pytest.approx(0.42)
-            assert reloaded.runtime.llama_cpp_gpu_layers == 12
+            # Launch tuning is not saved: the code works it out at every launch.
+            assert reloaded.runtime.llama_cpp_gpu_layers == 999
             # browser / voice assertions dropped — sections removed in T0.9 purge
             assert reloaded.ui.show_debug is True
             assert reloaded.ui.thinking_mode == "full"

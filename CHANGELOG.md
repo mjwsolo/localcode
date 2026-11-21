@@ -35,6 +35,10 @@ All notable changes to LocalCode will be documented here. The format follows
   OpenCode Go, usage-limit, /goal, service restart and MCP event tool features
   are left out, and the transcript keeps its current grouped view.
 - The UI patches 0009-0013 now live in the fork itself; `patches/ui` is empty.
+- Launch tuning (threads, batch sizes, GPU layers, KV cache, run mode,
+  drafting) is worked out for the Mac at every launch and no longer read
+  from or written to config.toml, where an old value could stick across
+  upgrades. Threads count the cores that are not efficiency cores, at most 12.
 - The model is reminded to update its plan after 8 tool calls without one
   while the plan has open items, so the sidebar plan keeps up with the
   work (Qwen 3.8 updated it about once per 30 tool calls). Any other

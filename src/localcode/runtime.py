@@ -310,6 +310,24 @@ def apply_param_overrides(cmd: list[str], env: dict | None = None) -> list[str]:
     return cmd
 
 
+def _performance_cores() -> int | None:
+    """Apple Silicon cores that are not efficiency cores (every hw.perflevel whose
+    name is not "Efficiency"), or None when unknown."""
+    import subprocess
+
+    def sysctl(key: str) -> str:
+        return subprocess.run(["sysctl", "-n", key], capture_output=True, text=True, timeout=2, check=False).stdout.strip()
+    try:
+        levels = int(sysctl("hw.nperflevels") or 0)
+        total = 0
+        for i in range(levels):
+            if sysctl(f"hw.perflevel{i}.name").lower() != "efficiency":
+                total += int(sysctl(f"hw.perflevel{i}.physicalcpu") or 0)
+        return total or None
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None
+
+
 class LocalCodeRuntimeGateway:
     """Talks to the local llama.cpp (llama-server) backend."""
 
@@ -426,7 +444,10 @@ class LocalCodeRuntimeGateway:
         if self.config.llama_cpp_threads <= 0:
             cpu_count = os.cpu_count() or 4
             if platform.system() == "Darwin":
-                threads = max(4, min(cpu_count, 12))  # Apple Silicon: use perf cores
+                # Never the efficiency cores, and at most 12. Measured with every
+                # layer on the GPU: 4-12 threads were within noise, and more threads
+                # than that slowed MoE decode by about 10%.
+                threads = max(4, min(_performance_cores() or cpu_count, 12))
             else:
                 threads = max(2, min(cpu_count, 8))
         else:
