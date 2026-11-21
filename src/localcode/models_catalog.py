@@ -285,41 +285,6 @@ DEEPSEEK_V4_FLASH_NOTES = (
 )
 
 
-# Laguna XS 2.1 (Poolside, July 2026): an agentic-coding MoE. bartowski's repo
-# carries the full quant ladder (9-36 GB), so the picker covers small Macs too.
-LAGUNA_XS_REVISION = "8f7579d6ab7d3122716100116cf1a62f490ab6f3"
-LAGUNA_XS_NOTES = (
-    "Poolside Laguna XS 2.1: agentic-coding MoE, 33B total, about 3B active "
-    "per token (256 experts plus one shared), mixed sliding-window and global "
-    "attention, 256K trained context. Text-only. OpenMDW-1.1 license."
-)
-
-
-# Mellum2.1 12B-A2.5B Thinking (JetBrains, Oct 2026): a small agentic MoE that
-# fits 16 GB Macs. JetBrains publishes the GGUFs itself. Its MTP head is not
-# shipped as a drafter: the reported gain was about 1.05x, not worth 1.8 GB.
-MELLUM_REVISION = "4159d684ffdb09ba89dc2a58feb3e75c54eef036"
-MELLUM_NOTES = (
-    "JetBrains Mellum2.1 12B-A2.5B Thinking: agentic-coding MoE, 12B total, "
-    "about 2.5B active per token, 128K context. Small and fast, weaker on long "
-    "agent tasks than the 27-35B models (JetBrains reports SWE-bench Verified "
-    "47). Text-only. Apache 2.0."
-)
-
-
-# Ripple-65B Preview (Ricursive, Nov 2026): a dense 65B agentic-coding model.
-# Ricursive publishes no GGUF; AtomicChat's conversion is the most used and is
-# pinned here. Dense, so every token reads all 65B weights: expect slower
-# decoding than the MoE models. Needs llama.cpp v1.0 (arch `ricursive`).
-RIPPLE_REVISION = "df550a7178a87bbfb6ee2bdbd37603c553d536ee"
-RIPPLE_NOTES = (
-    "Ricursive Ripple-65B Preview: dense 65B agentic-coding model, 1M trained "
-    "context. Ricursive reports Terminal-Bench 2.1 80.5 and SWE-bench Verified "
-    "76.5 (vendor numbers). Dense, so it decodes slower than the MoE models. "
-    "A preview release with light post-training. Text-only. Apache 2.0."
-)
-
-
 # Inkling 2 Mini (Thinking Machines, Nov 2026): a looped MoE with image input.
 # Unsloth's root GGUFs use its own looped layout, which mainline llama.cpp cannot
 # read; the same tensors in the mainline `inkling2_loop` layout sit in
@@ -462,99 +427,6 @@ CHOICES: list[ModelChoice] = [
             "Apache 2.0. ~17.9 GiB; recommend 32 GB+ unified memory."
         ),
         reasoning_budget_tokens=0,
-    ),
-    ModelChoice(
-        key="laguna-xs",
-        # Pinned: bartowski re-uploads quants now and then; a new upload must
-        # be a visible change here.
-        revision=LAGUNA_XS_REVISION,
-        sha256="239b1417ab36565241b2cb5dd366b89919033b1cf16d6f51b8d870db3491dae6",
-        size_bytes=20548085120,
-        name="Laguna XS 2.1 33B-A3B (Q4)",
-        hf_repo="bartowski/Laguna-XS-2.1-GGUF",
-        filename="Laguna-XS-2.1-Q4_K_M.gguf",
-        size_gb=20.5,
-        active_params="3B active (33B total MoE, 256 experts + 1 shared)",
-        architecture="laguna",
-        license="OpenMDW-1.1",
-        humaneval_pass_at_1=None,
-        notes=LAGUNA_XS_NOTES,
-    ),
-    ModelChoice(
-        key="laguna-xs-q8",
-        revision=LAGUNA_XS_REVISION,
-        sha256="f8e63721a5ef5473fca6b93b4a9d24449bdf4f2d8a4626a60410f027ee8920b5",
-        size_bytes=35597116800,
-        name="Laguna XS 2.1 33B-A3B (Q8)",
-        hf_repo="bartowski/Laguna-XS-2.1-GGUF",
-        filename="Laguna-XS-2.1-Q8_0.gguf",
-        size_gb=35.6,
-        active_params="3B active (33B total MoE, 256 experts + 1 shared)",
-        architecture="laguna",
-        license="OpenMDW-1.1",
-        humaneval_pass_at_1=None,
-        notes=LAGUNA_XS_NOTES + " Q8: near-lossless, for 64 GB Macs and up.",
-    ),
-    ModelChoice(
-        key="mellum",
-        revision=MELLUM_REVISION,
-        sha256="ecc4d5b8107fc219e23c494b2d107552137637b6c6002ee713e0ba8af7fa2755",
-        size_bytes=8071295264,
-        name="Mellum2.1 12B-A2.5B Thinking (Q4)",
-        hf_repo="JetBrains/Mellum2.1-12B-A2.5B-Thinking-GGUF",
-        filename="Mellum2.1-12B-A2.5B-Thinking-Q4_K_M.gguf",
-        size_gb=8.1,
-        active_params="2.5B active (12B total MoE, 64 experts, 8 active)",
-        architecture="mellum",
-        license="Apache 2.0",
-        humaneval_pass_at_1=None,
-        notes=MELLUM_NOTES,
-    ),
-    ModelChoice(
-        key="mellum-q8",
-        revision=MELLUM_REVISION,
-        sha256="69e0ac02a16586c2c9e991f1e3b8a1eb403882e7ab9e69ea01eb23dbbbc6841f",
-        size_bytes=12925417760,
-        name="Mellum2.1 12B-A2.5B Thinking (Q8)",
-        hf_repo="JetBrains/Mellum2.1-12B-A2.5B-Thinking-GGUF",
-        filename="Mellum2.1-12B-A2.5B-Thinking-Q8_0.gguf",
-        size_gb=12.9,
-        active_params="2.5B active (12B total MoE, 64 experts, 8 active)",
-        architecture="mellum",
-        license="Apache 2.0",
-        humaneval_pass_at_1=None,
-        notes=MELLUM_NOTES + " Q8: near-lossless, for 24 GB Macs and up.",
-    ),
-    ModelChoice(
-        key="ripple",
-        # Pinned: a community conversion; a re-upload must be a visible change here.
-        revision=RIPPLE_REVISION,
-        sha256="9016e260f93992f0acc7cb590b012fe21fffddf767b53774387fac1b30ca7bfc",
-        size_bytes=40426079712,
-        name="Ripple-65B Preview (Q4)",
-        hf_repo="AtomicChat/Ripple-65B-Preview-GGUF",
-        filename="Ripple-65B-Preview-AD-Q4_K_M.gguf",
-        size_gb=40.4,
-        active_params="65B dense",
-        architecture="ricursive",
-        license="Apache 2.0",
-        humaneval_pass_at_1=None,
-        notes=RIPPLE_NOTES + " Q4: for 64 GB Macs and up.",
-    ),
-    ModelChoice(
-        key="ripple-iq3",
-        revision=RIPPLE_REVISION,
-        sha256="0aca90d6d3062dcadbc5f7988504c2b53588d99f648b4e0b09107a72e427401a",
-        size_bytes=27964982752,
-        name="Ripple-65B Preview (IQ3)",
-        hf_repo="AtomicChat/Ripple-65B-Preview-GGUF",
-        filename="Ripple-65B-Preview-AD-IQ3_XXS.gguf",
-        size_gb=28.0,
-        active_params="65B dense",
-        architecture="ricursive",
-        license="Apache 2.0",
-        humaneval_pass_at_1=None,
-        notes=RIPPLE_NOTES + " IQ3: for 48 GB Macs.",
     ),
     ModelChoice(
         key="inkling-2-mini",
@@ -920,11 +792,7 @@ _NO_AUTO_RECOMMEND_ARCHS = {"diffusion_gemma", "kolibri1"}
 # step (no off switch) and timed out where Qwen 3.6 finished on the 48 GB tier.
 # DeepSeek V4 Flash is a 97 GB first download that leaves a 128 GB Mac about
 # 30 GB for everything else, so it is a choice the user makes, never a default.
-# Laguna XS 2.1 stays opt-in until its coding quality is measured on this stack.
-# Mellum2.1 and Ripple-65B stay opt-in until their coding quality is measured
-# on this stack (Ripple is also a preview release).
-_NO_AUTO_RECOMMEND_KEYS = {"openjev", "saluki", "flint", "flint-q8", "deepseek-v4-flash", "laguna-xs", "laguna-xs-q8",
-                           "mellum", "mellum-q8", "ripple", "ripple-iq3",
+_NO_AUTO_RECOMMEND_KEYS = {"openjev", "saluki", "flint", "flint-q8", "deepseek-v4-flash",
                            "inkling-2-mini", "inkling-2-mini-q8"}
 
 
@@ -1187,36 +1055,6 @@ MODEL_GROUPS: list[ModelGroup] = [
             "builds a dedicated llama-server from llama.cpp PR #24260 on first "
             "use and serves it with stock flags. 256K context. Text-only."
         ),
-    ),
-    ModelGroup(
-        key="laguna-xs-2.1",
-        display_name="Laguna XS 2.1 33B-A3B",
-        maker="Poolside",
-        hf_repo="bartowski/Laguna-XS-2.1-GGUF",
-        family="laguna",
-        architecture="laguna",
-        license="OpenMDW-1.1",
-        notes=LAGUNA_XS_NOTES,
-    ),
-    ModelGroup(
-        key="mellum2.1-12b-a2.5b",
-        display_name="Mellum2.1 12B-A2.5B Thinking",
-        maker="JetBrains",
-        hf_repo="JetBrains/Mellum2.1-12B-A2.5B-Thinking-GGUF",
-        family="mellum",
-        architecture="mellum",
-        license="Apache 2.0",
-        notes=MELLUM_NOTES,
-    ),
-    ModelGroup(
-        key="ripple-65b-preview",
-        display_name="Ripple-65B Preview",
-        maker="Ricursive",
-        hf_repo="AtomicChat/Ripple-65B-Preview-GGUF",
-        family="ripple",
-        architecture="ricursive",
-        license="Apache 2.0",
-        notes=RIPPLE_NOTES,
     ),
     ModelGroup(
         key="inkling-2-mini",

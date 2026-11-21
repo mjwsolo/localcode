@@ -7,12 +7,6 @@ All notable changes to LocalCode will be documented here. The format follows
 
 ### Added
 
-- Mellum2.1 12B-A2.5B Thinking (JetBrains' own GGUFs): Q4 8.1 GB and Q8
-  12.9 GB, a fast small agentic model that fits 16 GB Macs. Opt-in, never
-  recommended automatically.
-- Ripple-65B Preview (Ricursive, dense 65B, community GGUFs pinned by
-  checksum): Q4 40.4 GB for 64 GB Macs and up, IQ3 28.0 GB for 48 GB Macs.
-  Opt-in, never recommended automatically.
 - Inkling 2 Mini 26B-A5B (Thinking Machines, Unsloth's quants pinned by
   checksum): a looped MoE with about 5B active parameters and image input.
   UD-Q4_K_XL 17.6 GB for 32 GB Macs and up, UD-Q8_K_XL 22.9 GB for 48 GB and
