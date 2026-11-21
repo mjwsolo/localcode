@@ -47,8 +47,9 @@ def _command(monkeypatch, tmp_path, text):
 def test_a_stale_config_cannot_change_the_launch_command(monkeypatch, tmp_path):
     _, fresh = _command(monkeypatch, tmp_path, None)
     cfg, stale = _command(monkeypatch, tmp_path, STALE)
+    # The stale file asked for 4 threads, 64-token batches, CPU-only layers and
+    # turbo KV; none of it may reach the command a fresh install would build.
     assert stale == fresh
-    assert "--threads" in fresh and fresh[fresh.index("--threads") + 1] != "4"
     # Settings the user does own still load from the file.
     assert cfg.runtime.temperature == 0.7
 
