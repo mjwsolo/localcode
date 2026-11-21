@@ -50,7 +50,7 @@ test("command palette opens on /", () =>
   journey("palette", {}, async (s) => {
     await s.waitFor("localcode · e2e-model")
     await s.type("/")
-    await s.waitFor("/btw")
+    await s.waitFor("/cd")
     const screen = await s.settle()
     for (const c of ["/clear", "/diff", "/exit"]) assert.ok(screen.includes(c), `palette lists ${c}`)
     await snap(s, "palette")
@@ -203,4 +203,29 @@ test("the first download says what is happening and when chat can start", () =>
     await s.key("Enter")
     await s.waitFor(/alpha-Q3_K_M is still downloading\s+\(\d+%\s+·\s+about 3 min\s+left\)\.\s+You can chat\s+once it's\s+loaded\./)
     assert.doesNotMatch(await s.screen(), /Select a model/)
+  }))
+
+test("commands LocalCode dropped are not offered in the / menu", () =>
+  journey("dropped-commands", {}, async (s) => {
+    await s.waitFor("localcode · e2e-model")
+    // A session, so session commands (/copy, /redo, copy transcript) are registered.
+    await s.type("hello there")
+    await s.key("Enter")
+    await s.waitFor(/Completed in/)
+    const offered = async (query) => {
+      await s.type(query)
+      await new Promise((r) => setTimeout(r, 600))
+      const screen = await s.screen()
+      for (let i = 0; i < query.length; i++) await s.key("Backspace")
+      await new Promise((r) => setTimeout(r, 300))
+      return screen
+    }
+    for (const gone of ["/lsp", "/worktrees", "/btw", "/terminal", "/variants", "/effort", "/reload", "/redo",
+                        "/copy-session", "/reopen", "/review", "/close-tab", "/variant"]) {
+      const screen = await offered(gone)
+      // A menu row is "/name", spaces, then its description (the input line has no description).
+      assert.doesNotMatch(screen, new RegExp(`^[ \\t]*${gone}[a-z-]*[ \\t]{2,}\\S`, "m"), `${gone} is still offered`)
+    }
+    assert.match(await offered("/copy"), /\/copy\s+Copy last assistant message/)
+    assert.match(await offered("/mod"), /\/models/)
   }))
