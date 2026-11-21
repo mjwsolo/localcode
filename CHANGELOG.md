@@ -40,6 +40,8 @@ All notable changes to LocalCode will be documented here. The format follows
   OpenCode Go, usage-limit, /goal, service restart and MCP event tool features
   are left out, and the transcript keeps its current grouped view.
 - The UI patches 0009-0013 now live in the fork itself; `patches/ui` is empty.
+- /models: the maker column fits the longest maker name; "Thinking Machines"
+  ran into the state column.
 - The command menu is now an allowlist: "/" and the palette offer only the
   commands LocalCode chose, so an upstream UI update can no longer add new
   ones unseen (an e2e test scrolls the whole menu against the list). Also

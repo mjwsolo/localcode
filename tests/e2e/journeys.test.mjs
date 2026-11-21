@@ -66,7 +66,8 @@ test("/models picker and quant list", () =>
     await s.waitFor("Gamma 2 30B")
     let screen = await s.settle()
     assert.match(screen, /Alpha 4 12B ★/)
-    assert.match(screen, /Beta 3 8B\s+Globex\s+Download/)
+    // The maker column fits the longest maker: "Thinking Machines" must not run into the state.
+    assert.match(screen, /Beta 3 8B\s+Thinking Machines {2,}Download/)
     await snap(s, "models-picker")
 
     await s.key("Enter")
