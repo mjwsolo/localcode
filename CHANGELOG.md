@@ -24,6 +24,11 @@ All notable changes to LocalCode will be documented here. The format follows
   MTP drafting reads its states from GPU memory, Gemma 4 tool calls held to the tool's
   schema, less memory for vision models, and llama-server security fixes.
   The model server no longer gets `--defrag-thold`, which v1.0 removed.
+- Inkling 2 Mini runs fully on the GPU. Unsloth's quants keep the experts in
+  NVFP4, which the Metal backend could not run, so about 11 GB of weights
+  stayed on the CPU while the log still said every layer was offloaded:
+  prompts were read about 5x slower and replies 1.5-3x slower. New patch 0014
+  adds Metal NVFP4 kernels (unslothai/llama.cpp#348).
 - The bundled llama.cpp then moves to upstream 6792507 (2026-11-21), which
   adds Inkling 2 Mini, plus upstream's still-open fix #32704 so the model's
   repeated layers keep their weight scales on every pass.
@@ -35,6 +40,10 @@ All notable changes to LocalCode will be documented here. The format follows
   OpenCode Go, usage-limit, /goal, service restart and MCP event tool features
   are left out, and the transcript keeps its current grouped view.
 - The UI patches 0009-0013 now live in the fork itself; `patches/ui` is empty.
+- Launch tuning (threads, batch sizes, GPU layers, KV cache, run mode,
+  drafting) is worked out for the Mac at every launch and no longer read
+  from or written to config.toml, where an old value could stick across
+  upgrades. Threads count the cores that are not efficiency cores, at most 12.
 - The model is reminded to update its plan after 8 tool calls without one
   while the plan has open items, so the sidebar plan keeps up with the
   work (Qwen 3.8 updated it about once per 30 tool calls). Any other

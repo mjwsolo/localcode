@@ -31,22 +31,10 @@ planner_hints_enabled = false
 adaptive_execution = false
 escalation_enabled = false
 low_overhead_mode = true
-laptop_26b_runtime_mode = "turbo"
 internal_thinking_mode = "off"
 quant_preset = "balanced"
 cache_policy = "adaptive"
 rolling_window_messages = 24
-llama_cpp_gpu_layers = 999
-llama_cpp_threads = 10
-llama_cpp_batch_size = 2048
-llama_cpp_spec_type = ""
-llama_cpp_draft_max = 64
-llama_cpp_mtp_draft = 4
-llama_cpp_expert_offload = false
-llama_cpp_draft_model = ""
-llama_cpp_lookup_cache = false
-kv_cache_type_k = "q8_0"
-kv_cache_type_v = "q8_0"
 llama_cpp_binary = ""
 vision_enabled = false
 temperature = 1.0
@@ -268,24 +256,11 @@ def save_config(config: AppConfig) -> Path:
         f"low_overhead_mode = {'true' if config.runtime.low_overhead_mode else 'false'}\n"
         f"max_rounds = {config.runtime.max_rounds}\n"
         f"thinking_budget_tokens = {config.runtime.thinking_budget_tokens}\n"
-        f'laptop_26b_runtime_mode = {_toml_str(config.runtime.laptop_26b_runtime_mode)}\n'
         f'internal_thinking_mode = {_toml_str(config.runtime.internal_thinking_mode)}\n'
         f'quant_preset = {_toml_str(config.runtime.quant_preset)}\n'
         f'cache_policy = {_toml_str(config.runtime.cache_policy)}\n'
         f"rolling_window_messages = {config.runtime.rolling_window_messages}\n"
-        f"llama_cpp_gpu_layers = {config.runtime.llama_cpp_gpu_layers}\n"
-        f"llama_cpp_threads = {config.runtime.llama_cpp_threads}\n"
-        f"llama_cpp_batch_size = {config.runtime.llama_cpp_batch_size}\n"
-        f'llama_cpp_spec_type = {_toml_str(config.runtime.llama_cpp_spec_type)}\n'
-        f"llama_cpp_draft_max = {config.runtime.llama_cpp_draft_max}\n"
-        f"llama_cpp_mtp_draft = {config.runtime.llama_cpp_mtp_draft}\n"
-        f"llama_cpp_expert_offload = {'true' if config.runtime.llama_cpp_expert_offload else 'false'}\n"
-        f'llama_cpp_draft_model = {_toml_str(config.runtime.llama_cpp_draft_model)}\n'
-        f"llama_cpp_lookup_cache = {'true' if config.runtime.llama_cpp_lookup_cache else 'false'}\n"
-        f'kv_cache_type_k = {_toml_str(config.runtime.kv_cache_type_k)}\n'
-        f'kv_cache_type_v = {_toml_str(config.runtime.kv_cache_type_v)}\n'
         f'llama_cpp_binary = {_toml_str(config.runtime.llama_cpp_binary)}\n'
-        f"llama_cpp_cache_reuse = {config.runtime.llama_cpp_cache_reuse}\n"
         f'model_dir = {_toml_str(config.runtime.model_dir)}\n'
         f"vision_enabled = {'true' if config.runtime.vision_enabled else 'false'}\n"
         f"temperature = {config.runtime.temperature}\n"
@@ -329,6 +304,15 @@ def save_config(config: AppConfig) -> Path:
     return path
 
 
+# Launch tuning the code owns. None of it is in the UI, so it is worked out for the
+# Mac at every launch (runtime.llama_server_command) and never read from or written
+# to config.toml: a saved value froze whatever it was when written, across upgrades,
+# and fresh installs wrote a hard-coded thread count. The
+# LOCALCODE_* variables beside these fields are internal test hooks (evals, the
+# model gate), not settings.
+_LAUNCH = RuntimeConfig()
+
+
 def load_config() -> AppConfig:
     ensure_home_dirs()
     path = get_config_path()
@@ -366,17 +350,17 @@ def load_config() -> AppConfig:
         low_overhead_mode=str(os.environ.get("LOCALCODE_LOW_OVERHEAD_MODE", runtime_data.get("low_overhead_mode", False))).lower() in {"1", "true", "yes", "on"},
         max_rounds=max(0, int(os.environ.get("LOCALCODE_MAX_ROUNDS", runtime_data.get("max_rounds", runtime_data.get("max_turns", 0))))),
         thinking_budget_tokens=int(os.environ.get("LOCALCODE_THINKING_BUDGET", runtime_data.get("thinking_budget_tokens", 0))),
-        laptop_26b_runtime_mode=os.environ.get("LOCALCODE_LAPTOP_26B_RUNTIME_MODE", runtime_data.get("laptop_26b_runtime_mode", "auto")),
+        laptop_26b_runtime_mode=os.environ.get("LOCALCODE_LAPTOP_26B_RUNTIME_MODE", _LAUNCH.laptop_26b_runtime_mode),
         internal_thinking_mode=os.environ.get("LOCALCODE_INTERNAL_THINKING_MODE", runtime_data.get("internal_thinking_mode", "off")),
         quant_preset=os.environ.get("LOCALCODE_QUANT_PRESET", runtime_data.get("quant_preset", "balanced")),
         cache_policy=os.environ.get("LOCALCODE_CACHE_POLICY", runtime_data.get("cache_policy", "adaptive")),
         rolling_window_messages=int(os.environ.get("LOCALCODE_ROLLING_WINDOW_MESSAGES", runtime_data.get("rolling_window_messages", 24))),
-        llama_cpp_gpu_layers=int(os.environ.get("LOCALCODE_LLAMA_CPP_GPU_LAYERS", runtime_data.get("llama_cpp_gpu_layers", 999))),
-        llama_cpp_threads=int(os.environ.get("LOCALCODE_LLAMA_CPP_THREADS", runtime_data.get("llama_cpp_threads", 8))),
-        llama_cpp_batch_size=int(os.environ.get("LOCALCODE_LLAMA_CPP_BATCH_SIZE", runtime_data.get("llama_cpp_batch_size", 128))),
+        llama_cpp_gpu_layers=int(os.environ.get("LOCALCODE_LLAMA_CPP_GPU_LAYERS", _LAUNCH.llama_cpp_gpu_layers)),
+        llama_cpp_threads=int(os.environ.get("LOCALCODE_LLAMA_CPP_THREADS", _LAUNCH.llama_cpp_threads)),
+        llama_cpp_batch_size=int(os.environ.get("LOCALCODE_LLAMA_CPP_BATCH_SIZE", _LAUNCH.llama_cpp_batch_size)),
         # These were saved but never loaded back (silent data loss on every
         # save→restart cycle): custom model dir and cache-reuse tuning.
-        llama_cpp_cache_reuse=int(os.environ.get("LOCALCODE_LLAMA_CPP_CACHE_REUSE", runtime_data.get("llama_cpp_cache_reuse", 256))),
+        llama_cpp_cache_reuse=int(os.environ.get("LOCALCODE_LLAMA_CPP_CACHE_REUSE", _LAUNCH.llama_cpp_cache_reuse)),
         model_dir=os.environ.get("LOCALCODE_MODEL_DIR", runtime_data.get("model_dir", "")),
         vision_enabled=str(os.environ.get("LOCALCODE_VISION_ENABLED", runtime_data.get("vision_enabled", False))).lower() in {"1", "true", "yes", "on"},
         # `llama_cpp_spec_type` migration (2026-04-26): old configs
@@ -391,10 +375,10 @@ def load_config() -> AppConfig:
         # Force-disable on load even if saved file says ngram-*,
         # unless the user EXPLICITLY opts in via env var.
         llama_cpp_spec_type=os.environ.get("LOCALCODE_LLAMA_CPP_SPEC_TYPE", ""),
-        llama_cpp_draft_max=int(os.environ.get("LOCALCODE_LLAMA_CPP_DRAFT_MAX", runtime_data.get("llama_cpp_draft_max", 64))),
-        llama_cpp_mtp_draft=int(os.environ.get("LOCALCODE_LLAMA_CPP_MTP_DRAFT", runtime_data.get("llama_cpp_mtp_draft", 4))),
-        llama_cpp_expert_offload=str(os.environ.get("LOCALCODE_LLAMA_CPP_EXPERT_OFFLOAD", runtime_data.get("llama_cpp_expert_offload", False))).lower() in {"1", "true", "yes", "on"},
-        llama_cpp_draft_model=os.environ.get("LOCALCODE_LLAMA_CPP_DRAFT_MODEL", runtime_data.get("llama_cpp_draft_model", "")),
+        llama_cpp_draft_max=int(os.environ.get("LOCALCODE_LLAMA_CPP_DRAFT_MAX", _LAUNCH.llama_cpp_draft_max)),
+        llama_cpp_mtp_draft=int(os.environ.get("LOCALCODE_LLAMA_CPP_MTP_DRAFT", _LAUNCH.llama_cpp_mtp_draft)),
+        llama_cpp_expert_offload=str(os.environ.get("LOCALCODE_LLAMA_CPP_EXPERT_OFFLOAD", _LAUNCH.llama_cpp_expert_offload)).lower() in {"1", "true", "yes", "on"},
+        llama_cpp_draft_model=os.environ.get("LOCALCODE_LLAMA_CPP_DRAFT_MODEL", _LAUNCH.llama_cpp_draft_model),
         # `llama_cpp_lookup_cache` migration (2026-04-26): old configs
         # auto-saved this as `true` from a previous performance.py
         # preset. Prompt-lookup speculative decoding causes verbatim
@@ -404,8 +388,8 @@ def load_config() -> AppConfig:
         # unless the user EXPLICITLY opts in via the env var. Saved
         # config gets rewritten to false on the next save_config call.
         llama_cpp_lookup_cache=str(os.environ.get("LOCALCODE_LLAMA_CPP_LOOKUP_CACHE", "false")).lower() in {"1", "true", "yes", "on"},
-        kv_cache_type_k=os.environ.get("LOCALCODE_KV_CACHE_TYPE_K", runtime_data.get("kv_cache_type_k", runtime_data.get("kv_cache_type", "q8_0"))),
-        kv_cache_type_v=os.environ.get("LOCALCODE_KV_CACHE_TYPE_V", runtime_data.get("kv_cache_type_v", runtime_data.get("kv_cache_type", "q8_0"))),
+        kv_cache_type_k=os.environ.get("LOCALCODE_KV_CACHE_TYPE_K", _LAUNCH.kv_cache_type_k),
+        kv_cache_type_v=os.environ.get("LOCALCODE_KV_CACHE_TYPE_V", _LAUNCH.kv_cache_type_v),
         llama_cpp_binary=os.environ.get("LOCALCODE_LLAMA_CPP_BINARY", runtime_data.get("llama_cpp_binary", "")),
         temperature=float(os.environ.get("LOCALCODE_TEMPERATURE", runtime_data.get("temperature", 1.0))),
         max_context_chars=int(os.environ.get("LOCALCODE_MAX_CONTEXT_CHARS", runtime_data.get("max_context_chars", 40000))),

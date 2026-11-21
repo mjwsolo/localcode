@@ -23,6 +23,14 @@ New `0013-inkling2-loop-scales.patch` is upstream #32704 (open at the bump):
 the loop slots are re-shared after the scale pass, so NVFP4-scaled quants keep
 their per-expert scales on the 2nd and 3rd pass. **Delete it** once #32704
 is merged upstream and the pin moves past it.
+New `0014-metal-nvfp4-kernels.patch` adds Metal kernels for NVFP4 in
+MUL_MAT, MUL_MAT_ID and GET_ROWS (unslothai/llama.cpp#348, a mirror of #330 by
+Lyxot; ggml-org #20456 is the open upstream equivalent). Without it the Metal
+backend rejects NVFP4, so every NVFP4 expert weight (Unsloth's Inkling quants
+keep the experts in NVFP4, about 11 GB) stayed on the CPU while the log still
+said every layer was offloaded: 90 graph splits, prompts about 5x slower.
+Two hunks were hand-placed beside the MXFP4 lines our kernels move. **Delete it**
+once upstream has Metal NVFP4 kernels.
 
 **Pin before that:** `b1b770d90d94cad9e9ea5b993bdbc383a522fb28` (2026-11-13,
 tag `v1.0.0`, 148 commits after `7d7f02875`). Rebased with the 3-way recipe below:
