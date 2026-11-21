@@ -47,7 +47,7 @@ if INSTALLED:
 else:
     assert BIN == (ROOT / "src/localcode/bin").resolve(), "the checkout's package was not the one imported"
 
-REQUIRED_KEYS = {"gemma-12b", "qwen", "qwen38", "diffusiongemma", "north-mini-code", "muse-glimmer", "kolibri", "openjev", "saluki", "flint", "deepseek-v4-flash", "inkling-2-mini"}
+REQUIRED_KEYS = {"gemma-12b", "qwen", "qwen38", "diffusiongemma", "north-mini-code", "muse-glimmer", "kolibri", "openjev", "flint", "deepseek-v4-flash", "inkling-2-mini"}
 TOOL = {"type": "function", "function": {"name": "get_weather", "description": "Get weather in a city.", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}}
 
 
@@ -326,7 +326,7 @@ def validate_receipt(receipt, commit, hashes, keys):
     assert set(normal) == keys and REQUIRED_KEYS <= keys, "model coverage changed"
     for key, checks in normal.items():
         expected = {"auth", "template", "chat", "systemone" if key == "openjev" else "tool-loop"}
-        if key in {"qwen38", "openjev", "diffusiongemma", "saluki"}:
+        if key in {"qwen38", "openjev", "diffusiongemma"}:
             expected.add("runtime")
         if key == "openjev":
             expected.add("decision-control")
@@ -383,7 +383,7 @@ def main(argv=None):
                     if cache:
                         runtime_turn(server, "Hi")
                         assert server.proc.poll() is None, "model server exited on the first harness greeting"
-                    checks = verify(server, runtime=choice.key in {"qwen38", "openjev", "diffusiongemma", "saluki"} and cache is None)
+                    checks = verify(server, runtime=choice.key in {"qwen38", "openjev", "diffusiongemma"} and cache is None)
                     if cache:
                         verify_long_context(server)
                         checks.extend(["runtime-greeting", "long-context"])

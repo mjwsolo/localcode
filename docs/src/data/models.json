@@ -42,20 +42,6 @@
         "experimental": false
       },
       {
-        "name": "Underdog Saluki 27B 1.0 (IQ2-mix)",
-        "base": "Underdog Saluki 27B 1.0",
-        "quant": "IQ2-mix",
-        "total": "27B",
-        "active": "27B dense",
-        "kind": "Dense",
-        "detail": null,
-        "file": "Underdog-Saluki-27B-1.0-IQ2-mix.gguf",
-        "size": 7.9,
-        "maker": "Underdog",
-        "logo": "qwen",
-        "experimental": false
-      },
-      {
         "name": "Qwen 3.6 35B-A3B (Q2)",
         "base": "Qwen 3.6 35B-A3B",
         "quant": "Q2",
@@ -103,20 +89,6 @@
         "size": 7.37,
         "maker": "Google",
         "logo": "gemma",
-        "experimental": false
-      },
-      {
-        "name": "Underdog Saluki 27B 1.0 (IQ2-mix)",
-        "base": "Underdog Saluki 27B 1.0",
-        "quant": "IQ2-mix",
-        "total": "27B",
-        "active": "27B dense",
-        "kind": "Dense",
-        "detail": null,
-        "file": "Underdog-Saluki-27B-1.0-IQ2-mix.gguf",
-        "size": 7.9,
-        "maker": "Underdog",
-        "logo": "qwen",
         "experimental": false
       },
       {
@@ -184,20 +156,6 @@
         "experimental": false
       },
       {
-        "name": "Underdog Saluki 27B 1.0 (IQ2-mix)",
-        "base": "Underdog Saluki 27B 1.0",
-        "quant": "IQ2-mix",
-        "total": "27B",
-        "active": "27B dense",
-        "kind": "Dense",
-        "detail": null,
-        "file": "Underdog-Saluki-27B-1.0-IQ2-mix.gguf",
-        "size": 7.9,
-        "maker": "Underdog",
-        "logo": "qwen",
-        "experimental": false
-      },
-      {
         "name": "Qwen 3.6 35B-A3B (Q2)",
         "base": "Qwen 3.6 35B-A3B",
         "quant": "Q2",
@@ -226,8 +184,8 @@
         "experimental": false
       },
       {
-        "name": "DiffusionGemma 26B-A4B (Q4)",
-        "base": "DiffusionGemma 26B-A4B",
+        "name": "Gemma 4 Diffusion 26B-A4B (Q4)",
+        "base": "Gemma 4 Diffusion 26B-A4B",
         "quant": "Q4",
         "total": "26B",
         "active": "4B (adaptive diffusion MoE)",
@@ -276,20 +234,6 @@
         "experimental": false
       },
       {
-        "name": "Underdog Saluki 27B 1.0 (IQ2-mix)",
-        "base": "Underdog Saluki 27B 1.0",
-        "quant": "IQ2-mix",
-        "total": "27B",
-        "active": "27B dense",
-        "kind": "Dense",
-        "detail": null,
-        "file": "Underdog-Saluki-27B-1.0-IQ2-mix.gguf",
-        "size": 7.9,
-        "maker": "Underdog",
-        "logo": "qwen",
-        "experimental": false
-      },
-      {
         "name": "Qwen 3.6 35B-A3B (Q2)",
         "base": "Qwen 3.6 35B-A3B",
         "quant": "Q2",
@@ -318,8 +262,8 @@
         "experimental": false
       },
       {
-        "name": "DiffusionGemma 26B-A4B (Q4)",
-        "base": "DiffusionGemma 26B-A4B",
+        "name": "Gemma 4 Diffusion 26B-A4B (Q4)",
+        "base": "Gemma 4 Diffusion 26B-A4B",
         "quant": "Q4",
         "total": "26B",
         "active": "4B (adaptive diffusion MoE)",
@@ -343,6 +287,20 @@
         "size": 15.9,
         "maker": "Meta",
         "logo": "meta",
+        "experimental": false
+      },
+      {
+        "name": "Inkling 2 Mini 26B-A5B (Q4)",
+        "base": "Inkling 2 Mini 26B-A5B",
+        "quant": "Q4",
+        "total": "26B",
+        "active": "about 5B effective active (26B total looped MoE, 128 experts, 8 active)",
+        "kind": "MoE",
+        "detail": "26B total looped MoE, 128 experts, 8 active",
+        "file": "Inkling-2-Mini-UD-Q4_K_XL.gguf",
+        "size": 17.6,
+        "maker": "Thinking Machines",
+        "logo": null,
         "experimental": false
       },
       {
@@ -385,6 +343,20 @@
         "size": 19.0,
         "maker": "OpenJev",
         "logo": "qwen",
+        "experimental": false
+      },
+      {
+        "name": "Inkling 2 Mini 26B-A5B (Q8)",
+        "base": "Inkling 2 Mini 26B-A5B",
+        "quant": "Q8",
+        "total": "26B",
+        "active": "about 5B effective active (26B total looped MoE, 128 experts, 8 active)",
+        "kind": "MoE",
+        "detail": "26B total looped MoE, 128 experts, 8 active",
+        "file": "Inkling-2-Mini-UD-Q8_K_XL.gguf",
+        "size": 22.9,
+        "maker": "Thinking Machines",
+        "logo": null,
         "experimental": false
       },
       {
@@ -438,20 +410,6 @@
         "experimental": false
       },
       {
-        "name": "Underdog Saluki 27B 1.0 (IQ2-mix)",
-        "base": "Underdog Saluki 27B 1.0",
-        "quant": "IQ2-mix",
-        "total": "27B",
-        "active": "27B dense",
-        "kind": "Dense",
-        "detail": null,
-        "file": "Underdog-Saluki-27B-1.0-IQ2-mix.gguf",
-        "size": 7.9,
-        "maker": "Underdog",
-        "logo": "qwen",
-        "experimental": false
-      },
-      {
         "name": "Qwen 3.6 35B-A3B (Q2)",
         "base": "Qwen 3.6 35B-A3B",
         "quant": "Q2",
@@ -480,8 +438,8 @@
         "experimental": false
       },
       {
-        "name": "DiffusionGemma 26B-A4B (Q4)",
-        "base": "DiffusionGemma 26B-A4B",
+        "name": "Gemma 4 Diffusion 26B-A4B (Q4)",
+        "base": "Gemma 4 Diffusion 26B-A4B",
         "quant": "Q4",
         "total": "26B",
         "active": "4B (adaptive diffusion MoE)",
@@ -505,6 +463,20 @@
         "size": 15.9,
         "maker": "Meta",
         "logo": "meta",
+        "experimental": false
+      },
+      {
+        "name": "Inkling 2 Mini 26B-A5B (Q4)",
+        "base": "Inkling 2 Mini 26B-A5B",
+        "quant": "Q4",
+        "total": "26B",
+        "active": "about 5B effective active (26B total looped MoE, 128 experts, 8 active)",
+        "kind": "MoE",
+        "detail": "26B total looped MoE, 128 experts, 8 active",
+        "file": "Inkling-2-Mini-UD-Q4_K_XL.gguf",
+        "size": 17.6,
+        "maker": "Thinking Machines",
+        "logo": null,
         "experimental": false
       },
       {
@@ -547,6 +519,20 @@
         "size": 19.0,
         "maker": "OpenJev",
         "logo": "qwen",
+        "experimental": false
+      },
+      {
+        "name": "Inkling 2 Mini 26B-A5B (Q8)",
+        "base": "Inkling 2 Mini 26B-A5B",
+        "quant": "Q8",
+        "total": "26B",
+        "active": "about 5B effective active (26B total looped MoE, 128 experts, 8 active)",
+        "kind": "MoE",
+        "detail": "26B total looped MoE, 128 experts, 8 active",
+        "file": "Inkling-2-Mini-UD-Q8_K_XL.gguf",
+        "size": 22.9,
+        "maker": "Thinking Machines",
+        "logo": null,
         "experimental": false
       },
       {
@@ -642,20 +628,6 @@
         "experimental": false
       },
       {
-        "name": "Underdog Saluki 27B 1.0 (IQ2-mix)",
-        "base": "Underdog Saluki 27B 1.0",
-        "quant": "IQ2-mix",
-        "total": "27B",
-        "active": "27B dense",
-        "kind": "Dense",
-        "detail": null,
-        "file": "Underdog-Saluki-27B-1.0-IQ2-mix.gguf",
-        "size": 7.9,
-        "maker": "Underdog",
-        "logo": "qwen",
-        "experimental": false
-      },
-      {
         "name": "Qwen 3.6 35B-A3B (Q2)",
         "base": "Qwen 3.6 35B-A3B",
         "quant": "Q2",
@@ -684,8 +656,8 @@
         "experimental": false
       },
       {
-        "name": "DiffusionGemma 26B-A4B (Q4)",
-        "base": "DiffusionGemma 26B-A4B",
+        "name": "Gemma 4 Diffusion 26B-A4B (Q4)",
+        "base": "Gemma 4 Diffusion 26B-A4B",
         "quant": "Q4",
         "total": "26B",
         "active": "4B (adaptive diffusion MoE)",
@@ -709,6 +681,20 @@
         "size": 15.9,
         "maker": "Meta",
         "logo": "meta",
+        "experimental": false
+      },
+      {
+        "name": "Inkling 2 Mini 26B-A5B (Q4)",
+        "base": "Inkling 2 Mini 26B-A5B",
+        "quant": "Q4",
+        "total": "26B",
+        "active": "about 5B effective active (26B total looped MoE, 128 experts, 8 active)",
+        "kind": "MoE",
+        "detail": "26B total looped MoE, 128 experts, 8 active",
+        "file": "Inkling-2-Mini-UD-Q4_K_XL.gguf",
+        "size": 17.6,
+        "maker": "Thinking Machines",
+        "logo": null,
         "experimental": false
       },
       {
@@ -751,6 +737,20 @@
         "size": 19.0,
         "maker": "OpenJev",
         "logo": "qwen",
+        "experimental": false
+      },
+      {
+        "name": "Inkling 2 Mini 26B-A5B (Q8)",
+        "base": "Inkling 2 Mini 26B-A5B",
+        "quant": "Q8",
+        "total": "26B",
+        "active": "about 5B effective active (26B total looped MoE, 128 experts, 8 active)",
+        "kind": "MoE",
+        "detail": "26B total looped MoE, 128 experts, 8 active",
+        "file": "Inkling-2-Mini-UD-Q8_K_XL.gguf",
+        "size": 22.9,
+        "maker": "Thinking Machines",
+        "logo": null,
         "experimental": false
       },
       {
@@ -874,20 +874,6 @@
         "experimental": false
       },
       {
-        "name": "Underdog Saluki 27B 1.0 (IQ2-mix)",
-        "base": "Underdog Saluki 27B 1.0",
-        "quant": "IQ2-mix",
-        "total": "27B",
-        "active": "27B dense",
-        "kind": "Dense",
-        "detail": null,
-        "file": "Underdog-Saluki-27B-1.0-IQ2-mix.gguf",
-        "size": 7.9,
-        "maker": "Underdog",
-        "logo": "qwen",
-        "experimental": false
-      },
-      {
         "name": "Qwen 3.6 35B-A3B (Q2)",
         "base": "Qwen 3.6 35B-A3B",
         "quant": "Q2",
@@ -916,8 +902,8 @@
         "experimental": false
       },
       {
-        "name": "DiffusionGemma 26B-A4B (Q4)",
-        "base": "DiffusionGemma 26B-A4B",
+        "name": "Gemma 4 Diffusion 26B-A4B (Q4)",
+        "base": "Gemma 4 Diffusion 26B-A4B",
         "quant": "Q4",
         "total": "26B",
         "active": "4B (adaptive diffusion MoE)",
@@ -941,6 +927,20 @@
         "size": 15.9,
         "maker": "Meta",
         "logo": "meta",
+        "experimental": false
+      },
+      {
+        "name": "Inkling 2 Mini 26B-A5B (Q4)",
+        "base": "Inkling 2 Mini 26B-A5B",
+        "quant": "Q4",
+        "total": "26B",
+        "active": "about 5B effective active (26B total looped MoE, 128 experts, 8 active)",
+        "kind": "MoE",
+        "detail": "26B total looped MoE, 128 experts, 8 active",
+        "file": "Inkling-2-Mini-UD-Q4_K_XL.gguf",
+        "size": 17.6,
+        "maker": "Thinking Machines",
+        "logo": null,
         "experimental": false
       },
       {
@@ -983,6 +983,20 @@
         "size": 19.0,
         "maker": "OpenJev",
         "logo": "qwen",
+        "experimental": false
+      },
+      {
+        "name": "Inkling 2 Mini 26B-A5B (Q8)",
+        "base": "Inkling 2 Mini 26B-A5B",
+        "quant": "Q8",
+        "total": "26B",
+        "active": "about 5B effective active (26B total looped MoE, 128 experts, 8 active)",
+        "kind": "MoE",
+        "detail": "26B total looped MoE, 128 experts, 8 active",
+        "file": "Inkling-2-Mini-UD-Q8_K_XL.gguf",
+        "size": 22.9,
+        "maker": "Thinking Machines",
+        "logo": null,
         "experimental": false
       },
       {

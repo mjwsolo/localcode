@@ -33,7 +33,7 @@ and long-context prefill followed by decoding. Legacy dispatch on the test Mac
 does not replace testing on physical older chips.
 OpenJev also verifies all three answer types through the authenticated supervisor
 bridge; its receipt must include `decision-control`.
-Qwen 3.8, OpenJev, DiffusionGemma and Saluki also run through the shipping OpenCode binary and plugin.
+Qwen 3.8, OpenJev and DiffusionGemma also run through the shipping OpenCode binary and plugin.
 Decision probabilities are checked for validity, not used as safety approvals.
 This is a compatibility gate, not a coding-quality benchmark or exhaustive eval.
 
