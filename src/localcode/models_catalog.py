@@ -319,6 +319,18 @@ RIPPLE_NOTES = (
 )
 
 
+# Inkling 2 Mini (Thinking Machines, Nov 2026): a looped MoE with image input.
+# ggml-org's conversion uses the mainline `inkling2_loop` layout (Unsloth's
+# root files use a different layout that mainline cannot read). Needs llama.cpp
+# after upstream #32694, plus #32704 (patch 0013) for NVFP4-scaled quants.
+INKLING2_MINI_REVISION = "db61c5b492a6a034d986328d28274af0a439aa6c"
+INKLING2_MINI_NOTES = (
+    "Thinking Machines Inkling 2 Mini: looped MoE, 26B total, about 5B "
+    "effective active per token (the middle 12 of 24 layers run three times), "
+    "128 experts with 8 active, image input, 1M trained context. Apache 2.0."
+)
+
+
 CHOICES: list[ModelChoice] = [
     ModelChoice(
         key="gemma",
@@ -541,6 +553,41 @@ CHOICES: list[ModelChoice] = [
         license="Apache 2.0",
         humaneval_pass_at_1=None,
         notes=RIPPLE_NOTES + " IQ3: for 48 GB Macs.",
+    ),
+    ModelChoice(
+        key="inkling-2-mini",
+        # Pinned: a re-upload must be a visible change here.
+        revision=INKLING2_MINI_REVISION,
+        sha256="cbdf3fa9dc50a4124977980f37da4f1fa764b0cfe800d275cd43d26ce2a81af4",
+        size_bytes=17627940768,
+        name="Inkling 2 Mini 26B-A5B (Q4)",
+        hf_repo="ggml-org/Inkling-2-Mini-GGUF",
+        filename="Inkling-2-Mini-IQ4_NL.gguf",
+        size_gb=17.6,
+        active_params="about 5B effective active (26B total looped MoE, 128 experts, 8 active)",
+        architecture="inkling2_loop",
+        license="Apache 2.0",
+        humaneval_pass_at_1=None,
+        notes=INKLING2_MINI_NOTES + " IQ4_NL (imatrix): for 32 GB Macs and up.",
+        mmproj_filename="mmproj-Inkling-2-Mini-BF16.gguf",
+        mmproj_size_gb=0.64,
+    ),
+    ModelChoice(
+        key="inkling-2-mini-q8",
+        revision=INKLING2_MINI_REVISION,
+        sha256="d57542f8aea5d7639beba5fc4ae7f584754916f63ac5d5a69328c27f652f45da",
+        size_bytes=27820099264,
+        name="Inkling 2 Mini 26B-A5B (Q8)",
+        hf_repo="ggml-org/Inkling-2-Mini-GGUF",
+        filename="Inkling-2-Mini-Q8_0.gguf",
+        size_gb=27.8,
+        active_params="about 5B effective active (26B total looped MoE, 128 experts, 8 active)",
+        architecture="inkling2_loop",
+        license="Apache 2.0",
+        humaneval_pass_at_1=None,
+        notes=INKLING2_MINI_NOTES + " Q8: near-lossless, for 48 GB Macs and up.",
+        mmproj_filename="mmproj-Inkling-2-Mini-BF16.gguf",
+        mmproj_size_gb=0.64,
     ),
     ModelChoice(
         key="muse-glimmer",
@@ -867,7 +914,8 @@ _NO_AUTO_RECOMMEND_ARCHS = {"diffusion_gemma", "kolibri1"}
 # Mellum2.1 and Ripple-65B stay opt-in until their coding quality is measured
 # on this stack (Ripple is also a preview release).
 _NO_AUTO_RECOMMEND_KEYS = {"openjev", "saluki", "flint", "flint-q8", "deepseek-v4-flash", "laguna-xs", "laguna-xs-q8",
-                           "mellum", "mellum-q8", "ripple", "ripple-iq3"}
+                           "mellum", "mellum-q8", "ripple", "ripple-iq3",
+                           "inkling-2-mini", "inkling-2-mini-q8"}
 
 
 def _auto_recommendable(c: "ModelChoice") -> bool:
@@ -1159,6 +1207,16 @@ MODEL_GROUPS: list[ModelGroup] = [
         architecture="ricursive",
         license="Apache 2.0",
         notes=RIPPLE_NOTES,
+    ),
+    ModelGroup(
+        key="inkling-2-mini",
+        display_name="Inkling 2 Mini 26B-A5B",
+        maker="Thinking Machines",
+        hf_repo="ggml-org/Inkling-2-Mini-GGUF",
+        family="inkling",
+        architecture="inkling2_loop",
+        license="Apache 2.0",
+        notes=INKLING2_MINI_NOTES,
     ),
     ModelGroup(
         key="muse-glimmer-30b",
