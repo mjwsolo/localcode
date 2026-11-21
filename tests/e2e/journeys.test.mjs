@@ -221,7 +221,7 @@ test("commands LocalCode dropped are not offered in the / menu", () =>
       return screen
     }
     for (const gone of ["/lsp", "/worktrees", "/btw", "/terminal", "/variants", "/effort", "/reload", "/redo",
-                        "/copy-session", "/reopen", "/review", "/close-tab"]) {
+                        "/copy-session", "/reopen", "/review", "/close-tab", "/variant"]) {
       const screen = await offered(gone)
       // A menu row is "/name", spaces, then its description (the input line has no description).
       assert.doesNotMatch(screen, new RegExp(`^[ \\t]*${gone}[a-z-]*[ \\t]{2,}\\S`, "m"), `${gone} is still offered`)
