@@ -35,6 +35,11 @@ All notable changes to LocalCode will be documented here. The format follows
   OpenCode Go, usage-limit, /goal, service restart and MCP event tool features
   are left out, and the transcript keeps its current grouped view.
 - The UI patches 0009-0013 now live in the fork itself; `patches/ui` is empty.
+- The model is reminded to update its plan after 8 tool calls without one
+  while the plan has open items, so the sidebar plan keeps up with the
+  work (Qwen 3.8 updated it about once per 30 tool calls). Any other
+  LocalCode note resets the count, and none is sent once the loop
+  breaker has stepped in.
 - Downloading a model no longer locks LocalCode. The download runs in the
   background: the loaded model keeps answering, other installed models can
   still be picked, the prompt footer shows the progress, and a message says
