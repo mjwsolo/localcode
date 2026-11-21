@@ -54,7 +54,7 @@ def _group(key, name, maker, lic, repo, rec, installed):
 
 GROUPS = [
     _group("alpha", "Alpha 4 12B", "Acme", "apache-2.0", "acme/alpha-gguf", True, 1),
-    _group("beta", "Beta 3 8B", "Globex", "mit", "globex/beta-gguf", False, 0),
+    _group("beta", "Beta 3 8B", "Thinking Machines", "mit", "globex/beta-gguf", False, 0),
     _group("gamma", "Gamma 2 30B", "Initech", "apache-2.0", "initech/gamma-gguf", False, 0),
 ]
 
