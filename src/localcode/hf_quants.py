@@ -88,6 +88,37 @@ class Quant:
 _SIDECAR_PREFIXES = ("mmproj", "mtp-", "mtp_", "dflash", "dspark")
 
 
+# Repos whose root GGUFs use a layout the bundled llama.cpp cannot read, with
+# the standard-layout copies in a subfolder. Unsloth's Inkling 2 Mini repo keeps
+# its own looped layout at the root and mainline copies in `Mainline_Support/`,
+# named `.gguf_file` so other tools do not mix the two. Only that folder is
+# listed for such a repo; each file downloads under its `.gguf` name.
+MAINLINE_FOLDERS = {"unsloth/Inkling-2-Mini-GGUF": "Mainline_Support"}
+MAINLINE_SUFFIX = ".gguf_file"
+
+
+def local_name(repo_path: str) -> str:
+    """The on-disk name of a repo file: its basename, `.gguf_file` -> `.gguf`."""
+    base = repo_path.rsplit("/", 1)[-1]
+    return base[: -len("_file")] if base.endswith(MAINLINE_SUFFIX) else base
+
+
+def _mainline_quants(entries: list[dict], folder: str) -> list[Quant]:
+    out: list[Quant] = []
+    for entry in entries:
+        path = entry.get("path", "")
+        if not (path.startswith(folder + "/") and path.endswith(MAINLINE_SUFFIX)):
+            continue
+        name = local_name(path)
+        label = _parse_label(name)
+        if label is None or name.lower().startswith(_SIDECAR_PREFIXES):
+            continue
+        n = _entry_bytes(entry)
+        out.append(Quant(filename=name, size_gb=round(n / 1e9, 3), label=label,
+                         is_mmproj=False, shards=((path, n),)))
+    return out
+
+
 def _quant_from_entry(entry: dict) -> Quant | None:
     """Build a Quant from one HF tree entry, or None if it's not a selectable
     model-weight quant.
@@ -225,8 +256,12 @@ def fetch_quants(hf_repo: str) -> list[Quant]:
         # Any network/HTTP/JSON failure: serve stale cache if we have one, else [].
         return cached[0] if cached else []
 
-    quants = [q for e in entries if (q := _quant_from_entry(e)) is not None]
-    quants += _split_quants(entries)
+    folder = MAINLINE_FOLDERS.get(hf_repo)
+    if folder:
+        quants = _mainline_quants(entries, folder)
+    else:
+        quants = [q for e in entries if (q := _quant_from_entry(e)) is not None]
+        quants += _split_quants(entries)
     quants.sort(key=lambda q: q.size_gb)
     _write_cache(hf_repo, quants)
     return quants

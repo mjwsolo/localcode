@@ -321,10 +321,11 @@ RIPPLE_NOTES = (
 
 
 # Inkling 2 Mini (Thinking Machines, Nov 2026): a looped MoE with image input.
-# ggml-org's conversion uses the mainline `inkling2_loop` layout (Unsloth's
-# root files use a different layout that mainline cannot read). Needs llama.cpp
-# after upstream #32694, plus #32704 (patch 0013) for NVFP4-scaled quants.
-INKLING2_MINI_REVISION = "db61c5b492a6a034d986328d28274af0a439aa6c"
+# Unsloth's root GGUFs use its own looped layout, which mainline llama.cpp cannot
+# read; the same tensors in the mainline `inkling2_loop` layout sit in
+# `Mainline_Support/` as `.gguf_file` (see hf_quants.MAINLINE_FOLDERS). They need
+# llama.cpp after upstream #32694 plus #32704 (patch 0013) for the NVFP4 scales.
+INKLING2_MINI_REVISION = "ea0c79b2ecd73669e774c8519b79bfabfddbc027"
 INKLING2_MINI_NOTES = (
     "Thinking Machines Inkling 2 Mini: looped MoE, 26B total, about 5B "
     "effective active per token (the middle 12 of 24 layers run three times), "
@@ -559,38 +560,42 @@ CHOICES: list[ModelChoice] = [
         key="inkling-2-mini",
         # Pinned: a re-upload must be a visible change here.
         revision=INKLING2_MINI_REVISION,
-        sha256="cbdf3fa9dc50a4124977980f37da4f1fa764b0cfe800d275cd43d26ce2a81af4",
-        size_bytes=17627940768,
+        sha256="e64276656f072e9b2197a61723667cbdb71da66a716ffd966e572c21088f3cd3",
+        size_bytes=17629760736,
         name="Inkling 2 Mini 26B-A5B (Q4)",
-        hf_repo="ggml-org/Inkling-2-Mini-GGUF",
-        filename="Inkling-2-Mini-IQ4_NL.gguf",
+        hf_repo="unsloth/Inkling-2-Mini-GGUF",
+        filename="Inkling-2-Mini-UD-Q4_K_XL.gguf",
+        shards=(("Mainline_Support/Inkling-2-Mini-UD-Q4_K_XL.gguf_file", 17629760736),),
         size_gb=17.6,
         active_params="about 5B effective active (26B total looped MoE, 128 experts, 8 active)",
         architecture="inkling2_loop",
         license="Apache 2.0",
         humaneval_pass_at_1=None,
-        notes=INKLING2_MINI_NOTES + " IQ4_NL (imatrix): for 32 GB Macs and up.",
-        mmproj_filename="mmproj-Inkling-2-Mini-BF16.gguf",
+        notes=INKLING2_MINI_NOTES + " UD-Q4_K_XL: for 32 GB Macs and up.",
+        mmproj_filename="mmproj-Inkling-2-Mini-F16.gguf",
         mmproj_size_gb=0.64,
+        mmproj_hf_filename="mmproj-F16.gguf",
         reasoning_control="reasoning_effort",
         reasoning_budget_tokens=0,
     ),
     ModelChoice(
         key="inkling-2-mini-q8",
         revision=INKLING2_MINI_REVISION,
-        sha256="d57542f8aea5d7639beba5fc4ae7f584754916f63ac5d5a69328c27f652f45da",
-        size_bytes=27820099264,
+        sha256="2da51788d43a17e1f033bec420fa83ba9cb87ac1f0130dc9135a4d2ed2678b68",
+        size_bytes=22867452896,
         name="Inkling 2 Mini 26B-A5B (Q8)",
-        hf_repo="ggml-org/Inkling-2-Mini-GGUF",
-        filename="Inkling-2-Mini-Q8_0.gguf",
-        size_gb=27.8,
+        hf_repo="unsloth/Inkling-2-Mini-GGUF",
+        filename="Inkling-2-Mini-UD-Q8_K_XL.gguf",
+        shards=(("Mainline_Support/Inkling-2-Mini-UD-Q8_K_XL.gguf_file", 22867452896),),
+        size_gb=22.9,
         active_params="about 5B effective active (26B total looped MoE, 128 experts, 8 active)",
         architecture="inkling2_loop",
         license="Apache 2.0",
         humaneval_pass_at_1=None,
-        notes=INKLING2_MINI_NOTES + " Q8: near-lossless, for 48 GB Macs and up.",
-        mmproj_filename="mmproj-Inkling-2-Mini-BF16.gguf",
+        notes=INKLING2_MINI_NOTES + " UD-Q8_K_XL: near-lossless, for 48 GB Macs and up.",
+        mmproj_filename="mmproj-Inkling-2-Mini-F16.gguf",
         mmproj_size_gb=0.64,
+        mmproj_hf_filename="mmproj-F16.gguf",
         reasoning_control="reasoning_effort",
         reasoning_budget_tokens=0,
     ),
@@ -1217,11 +1222,14 @@ MODEL_GROUPS: list[ModelGroup] = [
         key="inkling-2-mini",
         display_name="Inkling 2 Mini 26B-A5B",
         maker="Thinking Machines",
-        hf_repo="ggml-org/Inkling-2-Mini-GGUF",
+        hf_repo="unsloth/Inkling-2-Mini-GGUF",
         family="inkling",
         architecture="inkling2_loop",
         license="Apache 2.0",
         notes=INKLING2_MINI_NOTES,
+        mmproj_filename="mmproj-Inkling-2-Mini-F16.gguf",
+        mmproj_size_gb=0.64,
+        mmproj_hf_filename="mmproj-F16.gguf",
     ),
     ModelGroup(
         key="muse-glimmer-30b",

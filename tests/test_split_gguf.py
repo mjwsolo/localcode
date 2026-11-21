@@ -278,3 +278,65 @@ def test_projector_of_a_split_model_downloads_one_file(tmp_path, monkeypatch):
     assert ok, res
     assert calls == ["main/mmproj-F16.gguf"]
     assert Path(res).name == g.mmproj_filename
+
+
+INKLING = "unsloth/Inkling-2-Mini-GGUF"
+
+
+def inkling_tree():
+    return [
+        # Unsloth's own looped layout at the root: mainline llama.cpp cannot load these.
+        entry("Inkling-2-Mini-UD-Q4_K_XL.gguf", 17 * GB),
+        entry("Inkling-2-Mini-UD-IQ2_XXS.gguf", 8 * GB),
+        entry("dspark-Inkling-2-Mini-Q8_0.gguf", GB // 2),
+        entry("mmproj-F16.gguf", GB // 2),
+        # The same tensors in the mainline layout, renamed so tools do not mix them.
+        entry("Mainline_Support/Inkling-2-Mini-UD-Q4_K_XL.gguf_file", 17 * GB + 1),
+        entry("Mainline_Support/Inkling-2-Mini-UD-IQ2_XXS.gguf_file", 8 * GB + 1),
+        entry("Mainline_Support/README.md", 4000),
+    ]
+
+
+def test_mainline_folder_repo_lists_only_the_mainline_copies(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALCODE_HOME", str(tmp_path))
+
+    class Resp:
+        def raise_for_status(self): pass
+        def json(self): return inkling_tree()
+
+    monkeypatch.setattr(hf_quants.httpx, "get", lambda *a, **k: Resp())
+    quants = hf_quants.fetch_quants(INKLING)
+    assert [(q.filename, q.label) for q in quants] == [
+        ("Inkling-2-Mini-UD-IQ2_XXS.gguf", "UD-IQ2_XXS"),
+        ("Inkling-2-Mini-UD-Q4_K_XL.gguf", "UD-Q4_K_XL"),
+    ]
+    assert quants[1].shards == (("Mainline_Support/Inkling-2-Mini-UD-Q4_K_XL.gguf_file", 17 * GB + 1),)
+
+
+def test_mainline_file_downloads_under_its_gguf_name(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALCODE_MODEL_DIR", str(tmp_path / "models"))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    monkeypatch.setattr(bootstrap, "get_model_path", lambda *_: None)
+    g = next(x for x in models_catalog.MODEL_GROUPS if x.hf_repo == INKLING)
+    repo_path = "Mainline_Support/Inkling-2-Mini-UD-IQ2_XXS.gguf_file"
+    q = hf_quants.Quant("Inkling-2-Mini-UD-IQ2_XXS.gguf", 3 * 1048576 / 1e9, "UD-IQ2_XXS", False,
+                        ((repo_path, 3 * 1048576),))
+    calls, msgs = [], []
+    monkeypatch.setattr(bootstrap, "_download_parallel", fake_download({repo_path: b"z" * 3 * 1048576}, calls))
+    monkeypatch.setattr(bootstrap, "_verify_download_integrity", lambda *_: (True, ""))
+    choice = choice_for(g, q)
+    assert choice.mmproj_filename  # every Inkling quant keeps image input
+    ok, res = bootstrap.download_model(choice, on_progress=msgs.append)
+    assert ok, res
+    models = tmp_path / "models"
+    assert calls == [f"https://huggingface.co/{INKLING}/resolve/main/{repo_path}"]
+    assert res == str(models / "Inkling-2-Mini-UD-IQ2_XXS.gguf")
+    assert (models / "Inkling-2-Mini-UD-IQ2_XXS.gguf").stat().st_size == 3 * 1048576
+    assert not list(models.glob("*.gguf_file"))
+    assert "more parts" not in msgs[0]
+    assert bootstrap._is_complete_download(models / "Inkling-2-Mini-UD-IQ2_XXS.gguf", choice)
+
+
+def test_local_name_only_rewrites_the_mainline_suffix():
+    assert hf_quants.local_name("Mainline_Support/a-Q4_K_M.gguf_file") == "a-Q4_K_M.gguf"
+    assert hf_quants.local_name("BF16/a-BF16-00001-of-00002.gguf") == "a-BF16-00001-of-00002.gguf"
