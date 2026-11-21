@@ -17,7 +17,7 @@
                          /mcps              MCP servers
                          /models            Switch model
                          /new               New session
-                         /open              Open session or project
+                         /permissions       Permission preferences
 
                           /
 

@@ -223,7 +223,7 @@ test("commands LocalCode dropped are not offered in the / menu", () =>
     for (const gone of ["/lsp", "/worktrees", "/btw", "/terminal", "/variants", "/effort", "/reload", "/redo",
                         "/copy-session", "/reopen", "/review", "/close-tab", "/variant", "/sessions", "/continue", "/mode$", "/debug", "/toggle", "/select-terminal",
                         "/show-terminal", "/plugins", "/stash", "/queue", "/stats", "/verbosity",
-                        "/quit", "/q$", "/say", "/copy"]) {
+                        "/quit", "/q$", "/say", "/copy", "/open", "/project$", "/projects"]) {
       // "/mode$" means exactly /mode (not /models); other entries match as prefixes.
       const exact = gone.endsWith("$")
       const name = exact ? gone.slice(0, -1) : gone
@@ -239,7 +239,7 @@ test("commands LocalCode dropped are not offered in the / menu", () =>
 // whole real menu, on the home screen and in a session, and fail on anything else, so an
 // upstream UI update cannot add commands without someone choosing them.
 const MENU = new Set(["cd", "clear", "compact", "decide", "diff", "exit", "export", "help",
-  "mcps", "models", "new", "open", "project", "projects", "permissions", "project-context", "rename", "resume",
+  "mcps", "models", "new", "permissions", "project-context", "rename", "resume",
   "speak", "server", "settings", "show-sidebar", "skills", "status", "themes", "thinking", "undo", "vision"])
 
 async function menuNames(s) {
