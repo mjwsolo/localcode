@@ -222,7 +222,8 @@ test("commands LocalCode dropped are not offered in the / menu", () =>
     }
     for (const gone of ["/lsp", "/worktrees", "/btw", "/terminal", "/variants", "/effort", "/reload", "/redo",
                         "/copy-session", "/reopen", "/review", "/close-tab", "/variant", "/sessions", "/continue", "/mode$", "/debug", "/toggle", "/select-terminal",
-                        "/show-terminal", "/plugins", "/stash", "/queue", "/stats", "/verbosity"]) {
+                        "/show-terminal", "/plugins", "/stash", "/queue", "/stats", "/verbosity",
+                        "/quit", "/q$", "/say", "/copy"]) {
       // "/mode$" means exactly /mode (not /models); other entries match as prefixes.
       const exact = gone.endsWith("$")
       const name = exact ? gone.slice(0, -1) : gone
@@ -230,16 +231,16 @@ test("commands LocalCode dropped are not offered in the / menu", () =>
       // A menu row is "/name", spaces, then its description (the input line has no description).
       assert.doesNotMatch(screen, new RegExp(`^[ \\t]*${name}${exact ? "" : "[a-z-]*"}[ \\t]{2,}\\S`, "m"), `${name} is still offered`)
     }
-    assert.match(await offered("/copy"), /\/copy\s+Copy last assistant message/)
+    assert.match(await offered("/exp"), /\/export\s+Export session transcript/)
     assert.match(await offered("/mod"), /\/models/)
   }))
 
 // The menu is an allowlist (UI fork: packages/tui/src/util/localcode-menu.ts). Scroll the
 // whole real menu, on the home screen and in a session, and fail on anything else, so an
 // upstream UI update cannot add commands without someone choosing them.
-const MENU = new Set(["cd", "clear", "compact", "copy", "decide", "diff", "exit", "quit", "q", "export", "help",
+const MENU = new Set(["cd", "clear", "compact", "decide", "diff", "exit", "export", "help",
   "mcps", "models", "new", "open", "project", "projects", "permissions", "project-context", "rename", "resume",
-  "say", "speak", "server", "settings", "show-sidebar", "skills", "status", "themes", "thinking", "undo", "vision"])
+  "speak", "server", "settings", "show-sidebar", "skills", "status", "themes", "thinking", "undo", "vision"])
 
 async function menuNames(s) {
   const seen = new Set()
@@ -267,5 +268,5 @@ test("the / menu offers only LocalCode's allowlist", () =>
     const session = await menuNames(s)
     const extra = [...home, ...session].filter((name) => !MENU.has(name))
     assert.deepEqual(extra, [], `not on the allowlist: ${extra.join(", ")}`)
-    for (const name of ["models", "resume", "copy", "undo", "exit"]) assert.ok(session.has(name), `/${name} is offered`)
+    for (const name of ["models", "resume", "undo", "exit"]) assert.ok(session.has(name), `/${name} is offered`)
   }))

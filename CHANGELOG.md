@@ -45,7 +45,8 @@ All notable changes to LocalCode will be documented here. The format follows
   ones unseen (an e2e test scrolls the whole menu against the list). Also
   gone: /sessions and /continue (use /resume), /mode, /debug,
   /toggle-console, the terminal pane, /plugins, prompt stash and queue,
-  /stats, /verbosity-medium and /toggle-thinking (use /thinking).
+  /stats, /verbosity-medium and /toggle-thinking (use /thinking), /quit and
+  /q (use /exit), /say (use /speak) and /copy.
 - Underdog Saluki 27B is no longer in the catalog.
 - DiffusionGemma is listed as Gemma 4 Diffusion 26B-A4B, next to the other
   Gemma 4 models.
