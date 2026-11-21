@@ -9,8 +9,10 @@ All notable changes to LocalCode will be documented here. The format follows
 
 - Inkling 2 Mini 26B-A5B (Thinking Machines, Unsloth's quants pinned by
   checksum): a looped MoE with about 5B active parameters and image input.
-  UD-Q4_K_XL 17.6 GB for 32 GB Macs and up, UD-Q8_K_XL 22.9 GB for 48 GB and
-  up; the picker lists every quant from 7.8 GB. Unsloth keeps the files that
+  UD-Q4_K_XL 17.6 GB for 32 GB Macs and up; the picker lists Unsloth's quants
+  from 7.8 GB to 17.6 GB. UD-Q8_K_XL is left out: it keeps attention in BF16,
+  which Inkling's looped layers run on the CPU, 5-10x slower than UD-Q4_K_XL
+  for almost no quality gain (the experts are the same NVFP4 weights). Unsloth keeps the files that
   standard llama.cpp reads in a subfolder under a `.gguf_file` name; LocalCode
   lists that folder and saves them as `.gguf`. Its thinking is switched off
   through the template's own effort setting, since the usual switch leaves it

@@ -88,7 +88,6 @@ _EXPECTED_VISION = {
     "flint-q8": False,
     "deepseek-v4-flash": True,
     "inkling-2-mini": True,
-    "inkling-2-mini-q8": True,
     "openjev": True,
     "saluki": True,
 }

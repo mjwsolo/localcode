@@ -451,27 +451,6 @@ CHOICES: list[ModelChoice] = [
         reasoning_budget_tokens=0,
     ),
     ModelChoice(
-        key="inkling-2-mini-q8",
-        revision=INKLING2_MINI_REVISION,
-        sha256="2da51788d43a17e1f033bec420fa83ba9cb87ac1f0130dc9135a4d2ed2678b68",
-        size_bytes=22867452896,
-        name="Inkling 2 Mini 26B-A5B (Q8)",
-        hf_repo="unsloth/Inkling-2-Mini-GGUF",
-        filename="Inkling-2-Mini-UD-Q8_K_XL.gguf",
-        shards=(("Mainline_Support/Inkling-2-Mini-UD-Q8_K_XL.gguf_file", 22867452896),),
-        size_gb=22.9,
-        active_params="about 5B effective active (26B total looped MoE, 128 experts, 8 active)",
-        architecture="inkling2_loop",
-        license="Apache 2.0",
-        humaneval_pass_at_1=None,
-        notes=INKLING2_MINI_NOTES + " UD-Q8_K_XL: near-lossless, for 48 GB Macs and up.",
-        mmproj_filename="mmproj-Inkling-2-Mini-F16.gguf",
-        mmproj_size_gb=0.64,
-        mmproj_hf_filename="mmproj-F16.gguf",
-        reasoning_control="reasoning_effort",
-        reasoning_budget_tokens=0,
-    ),
-    ModelChoice(
         key="muse-glimmer",
         sha256="82bece304887a313ece08400bc030f6066c7bff5b906b0cd40308ec8a409fd38",
         size_bytes=15878222368,
@@ -793,7 +772,7 @@ _NO_AUTO_RECOMMEND_ARCHS = {"diffusion_gemma", "kolibri1"}
 # DeepSeek V4 Flash is a 97 GB first download that leaves a 128 GB Mac about
 # 30 GB for everything else, so it is a choice the user makes, never a default.
 _NO_AUTO_RECOMMEND_KEYS = {"openjev", "saluki", "flint", "flint-q8", "deepseek-v4-flash",
-                           "inkling-2-mini", "inkling-2-mini-q8"}
+                           "inkling-2-mini"}
 
 
 def _auto_recommendable(c: "ModelChoice") -> bool:

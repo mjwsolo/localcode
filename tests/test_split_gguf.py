@@ -293,6 +293,8 @@ def inkling_tree():
         # The same tensors in the mainline layout, renamed so tools do not mix them.
         entry("Mainline_Support/Inkling-2-Mini-UD-Q4_K_XL.gguf_file", 17 * GB + 1),
         entry("Mainline_Support/Inkling-2-Mini-UD-IQ2_XXS.gguf_file", 8 * GB + 1),
+        # Never offered: its BF16 attention runs on the CPU (hf_quants.EXCLUDED).
+        entry("Mainline_Support/Inkling-2-Mini-UD-Q8_K_XL.gguf_file", 23 * GB),
         entry("Mainline_Support/README.md", 4000),
     ]
 
