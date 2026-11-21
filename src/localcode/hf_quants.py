@@ -95,11 +95,6 @@ _SIDECAR_PREFIXES = ("mmproj", "mtp-", "mtp_", "dflash", "dspark")
 # listed for such a repo; each file downloads under its `.gguf` name.
 MAINLINE_FOLDERS = {"unsloth/Inkling-2-Mini-GGUF": "Mainline_Support"}
 MAINLINE_SUFFIX = ".gguf_file"
-# Files the picker never offers. Inkling UD-Q8_K_XL keeps attention in BF16, and
-# Inkling's looped layers hand those weights to ops the Metal backend rejects: about
-# 11 GB of attention ran on the CPU, prompts 5-10x slower than UD-Q4_K_XL (same
-# NVFP4 experts, Q8_0 attention). Other models' BF16 tensors stay on the GPU.
-EXCLUDED = {"unsloth/Inkling-2-Mini-GGUF": {"Inkling-2-Mini-UD-Q8_K_XL.gguf"}}
 
 
 def local_name(repo_path: str) -> str:
@@ -243,10 +238,7 @@ def fetch_quants(hf_repo: str) -> list[Quant]:
     the on-disk cache if present, otherwise return []. mmproj-*.gguf sidecars
     are included and flagged via ``Quant.is_mmproj``.
     """
-    excluded = EXCLUDED.get(hf_repo, set())
     cached = _read_cache(hf_repo)
-    if cached:
-        cached = ([q for q in cached[0] if q.filename not in excluded], cached[1])
     # Fresh cache wins outright — no network call needed.
     if cached and (time.time() - cached[1]) < _CACHE_TTL_SEC:
         return cached[0]
@@ -270,7 +262,6 @@ def fetch_quants(hf_repo: str) -> list[Quant]:
     else:
         quants = [q for e in entries if (q := _quant_from_entry(e)) is not None]
         quants += _split_quants(entries)
-    quants = [q for q in quants if q.filename not in excluded]
     quants.sort(key=lambda q: q.size_gb)
     _write_cache(hf_repo, quants)
     return quants
