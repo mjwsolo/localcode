@@ -158,3 +158,27 @@ test("the plan panel follows every plan update within a turn", () =>
     await s.waitFor(/Completed in/)
     assert.match(await s.settle(), /\[•\] Gamma step/)
   }))
+
+test("a model downloads in the background while the chat keeps working", () =>
+  journey("background-download", {}, async (s) => {
+    await s.waitFor("localcode · e2e-model")
+    await s.type("/models")
+    await s.waitFor("/models")
+    await s.key("Enter")
+    await s.waitFor("Gamma 2 30B")
+    await s.key("Enter")
+    await s.waitFor("Available to download")
+    await s.settle()
+    // Q3_K_M is not downloaded: picking it starts a download.
+    await s.type("Q3")
+    await s.waitFor(/Q3_K_M\s+5\.1 GB/)
+    await s.key("Enter")
+    await s.waitFor(/Downloading in the background/)
+    // The prompt is not locked while the download runs.
+    await s.type("hello there")
+    await s.key("Enter")
+    await s.waitFor("Hello from the mock model.")
+    assert.match(await s.screen(), /e2e-model · downloading alpha-Q3_K_M \d+%/)
+    await s.waitFor(/Download finished/, 20_000)
+    assert.match(await s.screen(), /alpha-Q3_K_M is ready\. Open \/models to switch to it\./)
+  }))

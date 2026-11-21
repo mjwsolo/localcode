@@ -98,6 +98,11 @@ class Supervisor:
         self.state = {"state": "idle", "model": None, "detail": "", "pct": None}
         self.cancel = threading.Event()
         self.active: dict = {}  # {"group": key, "filename": ..} while a download/switch runs
+        # A model download runs in the background, apart from the loaded model, so the
+        # user keeps working (and can switch to another installed model) meanwhile.
+        # {"group", "filename", "model", "state": downloading|done|error|cancelled, "detail", "pct"}
+        self.download: dict | None = None
+        self.download_cancel = threading.Event()
         self.ram_gb = _system_ram_gb()
         self.bandwidth = _bandwidth()
         self.log = open(HERE / "server.log", "ab", buffering=0)  # noqa: SIM115 (lives with the server)
@@ -404,6 +409,8 @@ class Supervisor:
         """Permanently forbid new model workers before stopping the current one."""
         self._closing.set()
         self.cancel.set()
+        if getattr(self, "download_cancel", None) is not None:
+            self.download_cancel.set()
         self.stop()
 
     def stop(self) -> None:
@@ -642,8 +649,8 @@ class Supervisor:
                 "recommended": g.hf_repo == rec, "current": g.hf_repo == cur,
                 "loaded": loaded and g.hf_repo == cur,
                 "installed_count": installed.get(g.key, 0),
-                "downloading": self.state["state"] == "downloading" and self.active.get("group") == g.key,
-                "pct": self.state["pct"] if self.active.get("group") == g.key else None,
+                "downloading": self.downloading() and self.download.get("group") == g.key,
+                "pct": self.download.get("pct") if self.downloading() and self.download.get("group") == g.key else None,
             })
         return {"ram_gb": self.ram_gb, "current": self.current, "groups": groups,
                 "models_dir": str(self.models_dir)}
@@ -733,8 +740,8 @@ class Supervisor:
                 "downloaded": q.filename in installed and (not is_shard(q.filename) or self._model_ready(q.filename, q, installed.get(q.filename))),
                 "current": _alias(q.filename) == self.current,
                 "loaded": loaded and _alias(q.filename) == self.current,
-                "downloading": self.state["state"] == "downloading" and self.active.get("filename") == q.filename,
-                "pct": self.state["pct"] if self.active.get("filename") == q.filename else None,
+                "downloading": self.downloading(q.filename),
+                "pct": self.download.get("pct") if self.downloading(q.filename) else None,
             })
         return {"group": g.key, "display_name": g.display_name, "maker": g.maker,
                 "license": g.license, "ram_gb": self.ram_gb, "quants": out,
@@ -779,8 +786,6 @@ class Supervisor:
                     self.state = {"state": "ready", "model": alias, "detail": "", "pct": None}
                 return {"ok": True, "model": alias, "state": "ready", "already_loaded": True,
                         "detail": "Model already loaded"}
-            if process is not None and process.poll() is None and self.progress().get("phase") != "idle":
-                return {"error": "A request is active or server activity cannot be verified. Cancel it or wait before switching models."}
             existing = find_model(filename, self.models_dir)
             target = self.models_dir / filename
             quant = self._quant_for(g, filename) if is_shard(filename) else None
@@ -795,6 +800,12 @@ class Supervisor:
                 listed = {q.filename for q in self._quant_rows(g)}
                 if filename not in listed:
                     return {"error": f"{filename} is not a file of {g.hf_repo}"}
+                # Not on disk: download in the background; the loaded model keeps serving.
+                return self._start_download(g, filename, alias)
+            if self.downloading(filename):
+                return {"error": f"{alias} is still downloading. It can be loaded when it finishes."}
+            if process is not None and process.poll() is None and self.progress().get("phase") != "idle":
+                return {"error": "A request is active or server activity cannot be verified. Cancel it or wait before switching models."}
             previous = (dict(self.state), dict(self.active), self.cancel.is_set())
             self.cancel.clear()
             self.active = {"group": key, "filename": filename}
@@ -813,6 +824,76 @@ class Supervisor:
                     if was_cancelled:
                         self.cancel.set()
                 self.lock.release()
+
+    def downloading(self, filename: str | None = None) -> bool:
+        dl = getattr(self, "download", None)
+        return bool(dl and dl.get("state") == "downloading" and (filename is None or dl.get("filename") == filename))
+
+    def _start_download(self, g, filename: str, alias: str) -> dict:
+        if self.downloading():
+            if self.downloading(filename):
+                return {"ok": True, "model": alias, "state": "downloading", "background": True}
+            return {"error": f"{self.download.get('model')} is still downloading. Cancel it in /models first, or wait for it to finish."}
+        self.download_cancel.clear()
+        self.download = {"group": g.key, "filename": filename, "model": alias, "state": "downloading", "detail": "", "pct": None}
+        threading.Thread(target=self._download_worker, args=(g, filename, alias), daemon=True).start()
+        return {"ok": True, "model": alias, "state": "downloading", "background": True}
+
+    def _download_worker(self, g, filename: str, alias: str) -> None:
+        """Fetch the model (and the drafter that ships with it) without touching the loaded one."""
+        def progress(prefix: str):
+            def on_progress(msg: str) -> None:
+                pct = None
+                if "(" in msg and "%)" in msg:
+                    try:
+                        pct = int(msg.rsplit("(", 1)[1].split("%")[0])
+                    except ValueError:
+                        pct = None
+                self.download = {**self.download, "detail": prefix + msg, "pct": pct}
+            return on_progress
+
+        def finish(state: str, detail: str) -> None:
+            self.download = {**self.download, "state": state, "detail": detail, "pct": None}
+            self._model_file_cache = None
+            log(f"supervisor: download of {alias} -> {state}")
+
+        try:
+            quant = self._quant_for(g, filename)
+            choice = choice_for_quant(g, filename, quant.size_gb if quant else 0.0, getattr(quant, "shards", ()))
+            ok, res = bootstrap.download_model(choice, on_progress=progress(""), cancel_event=self.download_cancel)
+            if self.download_cancel.is_set():
+                return finish("cancelled", "download cancelled")
+            if not ok:
+                return finish("error", str(res))
+            got = Path(res)
+            if got.parent != self.models_dir and not (self.models_dir / filename).exists():
+                # download_model saved under localcode's model_dir(); link it here.
+                if is_shard(filename):
+                    link_split(got, self.models_dir)
+                else:
+                    os.symlink(got, self.models_dir / filename)
+            # The drafter that ships with this model (its size was part of the figure the
+            # user picked). Missing it is not fatal: the model runs without speculation.
+            drafter = getattr(g, "drafter", None)
+            if drafter is not None and not drafter.local_path.is_file():
+                ok, res = bootstrap.download_drafter(choice_for_quant(g, filename, 0.0), on_progress=progress("drafter: "),
+                                                     cancel_event=self.download_cancel)
+                if self.download_cancel.is_set():
+                    return finish("cancelled", "download cancelled")
+                if not ok:
+                    log(f"supervisor: drafter download failed for {alias}: {res}")
+                else:
+                    self._drop_retired_sidecars()
+            finish("done", "downloaded")
+            # Nothing loaded yet (first run): there is no model to keep using, so load this one.
+            if not self.current and self.state["state"] in ("idle", "stopped", "error") and not self._closing.is_set():
+                res = self.select(g.key, filename)
+                if res.get("error"):
+                    log(f"supervisor: could not load {alias} after its download: {res['error']}")
+        except Exception as e:  # noqa: BLE001
+            import traceback
+            log(traceback.format_exc())
+            finish("error", str(e))
 
     def _select_worker(self, g, filename: str, alias: str) -> None:
         previous_process = getattr(self, "proc", None)
@@ -1152,6 +1233,9 @@ class Supervisor:
         return {"ok": True, "speaking": True}
 
     def cancel_download(self) -> dict:
+        if self.downloading():
+            self.download_cancel.set()
+            return {"ok": True}
         if self.state["state"] != "downloading":
             return {"error": "no download in progress"}
         self.cancel.set()
@@ -1166,7 +1250,7 @@ class Supervisor:
         return {"path": str(self.models_dir), "free_gb": free}
 
     def set_models_dir(self, raw: str) -> dict:
-        if self.state["state"] in ("downloading", "loading"):
+        if self.state["state"] in ("downloading", "loading") or self.downloading():
             return {"error": "wait for the current download/switch to finish"}
         path = Path(os.path.expanduser(raw.strip())).resolve()
         try:
@@ -1225,6 +1309,7 @@ def make_handler(sup: Supervisor):
                                        port=sup.gateway.port if getattr(sup, "gateway", None) else sup.port,
                                        inference_port=sup.port,
                                        group=sup.active.get("group"), filename=sup.active.get("filename"),
+                                       download=sup.download,
                                        supports_systemone=supported(sup.current),
                                        **sup.context_info(), **sup.vision_info()))
             if u.path == "/server":

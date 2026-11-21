@@ -25,6 +25,23 @@ PORT = int(sys.argv[1])
 NO_MODEL = "--no-model" in sys.argv
 ALIAS = "e2e-model"
 
+# A background download started from the picker: it runs for DOWNLOAD_SECONDS.
+DOWNLOAD = {}
+DOWNLOAD_SECONDS = 6
+
+
+def download():
+    if not DOWNLOAD:
+        return None
+    if DOWNLOAD["state"] == "downloading":
+        done = (time.time() - DOWNLOAD["t0"]) / DOWNLOAD_SECONDS
+        if done >= 1:
+            DOWNLOAD.update(state="done", pct=None, detail="downloaded")
+        else:
+            DOWNLOAD["pct"] = int(done * 100)
+    return {k: v for k, v in DOWNLOAD.items() if k != "t0"}
+
+
 REPLY = "Hello from the mock model.\nThis reply is fixed so screenshots stay stable."
 
 
@@ -54,8 +71,10 @@ def quants(key):
             "vision_size_gb": 0.0,
             "quants": [{"filename": f"{key}-{label}.gguf", "alias": f"{key}-{label}", "label": label,
                         "size_gb": size, "fit": fit, "tok_s": tok, "recommended": rec,
-                        "downloaded": dl, "current": False, "loaded": False,
-                        "downloading": False, "pct": None}
+                        "downloaded": dl or (DOWNLOAD.get("state") == "done" and DOWNLOAD.get("filename") == f"{key}-{label}.gguf"),
+                        "current": False, "loaded": False,
+                        "downloading": DOWNLOAD.get("state") == "downloading" and DOWNLOAD.get("filename") == f"{key}-{label}.gguf",
+                        "pct": DOWNLOAD.get("pct")}
                        for label, size, fit, tok, rec, dl in rows]}
 
 
@@ -65,7 +84,7 @@ def status():
             "version": "0.0.0", "process_id": 1, "warmup": "idle",
             "current": None if NO_MODEL else ALIAS, "port": PORT, "inference_port": PORT,
             "ctx": 32768, "group": None, "filename": None, "vision": False,
-            "vision_available": False, "vision_size_gb": 0.0}
+            "vision_available": False, "vision_size_gb": 0.0, "download": download()}
 
 
 PLAN_STEPS = ["Alpha step", "Beta step", "Gamma step"]
@@ -155,6 +174,18 @@ class H(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         ln = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(ln) if ln else b"{}"
+        if self.path == "/select":
+            req = json.loads(raw or b"{}")
+            name = req.get("filename", "")
+            alias = name.removesuffix(".gguf")
+            if name.endswith("Q4_K_M.gguf"):  # the downloaded quant
+                return self._json({"ok": True, "model": alias, "state": "loading"})
+            DOWNLOAD.clear()
+            DOWNLOAD.update(group=req.get("group"), filename=name, model=alias, state="downloading", pct=0, detail="", t0=time.time())
+            return self._json({"ok": True, "model": alias, "state": "downloading", "background": True})
+        if self.path == "/cancel" and DOWNLOAD.get("state") == "downloading":
+            DOWNLOAD.update(state="cancelled", pct=None)
+            return self._json({"ok": True})
         if not self.path.endswith("/chat/completions"):
             return self._json({"ok": True})
         body = json.loads(raw or b"{}")

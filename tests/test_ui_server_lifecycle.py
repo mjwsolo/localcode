@@ -247,6 +247,8 @@ def test_healthy_loaded_model_recovers_a_stale_error_without_restart(sup, monkey
 def test_model_switch_refuses_active_or_unverifiable_requests_from_other_clients(sup, phase):
     from localcode.ui.supervisor import MODEL_GROUPS
     sup.progress = lambda: {'phase': phase}
+    # An installed model: a missing one downloads in the background without touching the server.
+    (sup.models_dir / 'another-model.gguf').write_bytes(b'GGUF')
     before = dict(sup.state)
     result = sup.select(MODEL_GROUPS[0].key, 'another-model.gguf')
     assert 'error' in result and 'active' in result['error']
