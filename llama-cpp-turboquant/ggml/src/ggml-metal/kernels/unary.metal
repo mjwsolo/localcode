@@ -347,6 +347,41 @@ typedef decltype(kernel_swiglu_oai<float>) kernel_swiglu_oai_t;
 template [[host_name("kernel_swiglu_oai_f32")]] kernel kernel_swiglu_oai_t kernel_swiglu_oai<float>;
 template [[host_name("kernel_swiglu_oai_f16")]] kernel kernel_swiglu_oai_t kernel_swiglu_oai<half>;
 
+// SiTU: beta*tanh(gate/beta)*sigmoid(gate) * (linear_beta > 0 ? linear_beta*tanh(up/linear_beta) : up)
+// (ggml_situ stores beta and linear_beta in op params 2 and 3, which the GLU dispatch passes as alpha and limit)
+template<typename T>
+kernel void kernel_situ(
+        constant ggml_metal_kargs_glu & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        uint2 tgpig[[threadgroup_position_in_grid]],
+        uint2 tpitg[[thread_position_in_threadgroup]],
+        uint2   ntg[[threads_per_threadgroup]],
+        uint2  ntgs[[threadgroups_per_grid]]) {
+    device const T * src0_row = (device const T *) ((device const char *) src0 + tgpig.y*args.nb01) + args.i00;
+    device const T * src1_row = (device const T *) ((device const char *) src1 + tgpig.y*args.nb11) + args.i10;
+    device       T * dst_row  = (device       T *) ((device       char *) dst  + tgpig.y*args.nb1);
+
+    const float beta        = args.alpha;
+    const float linear_beta = args.limit;
+
+    for (int i0 = tgpig.x*ntg.x + tpitg.x; i0 < args.ne0; i0 += ntg.x*ntgs.x) {
+        const float gate = src0_row[i0];
+        const float up   = src1_row[i0];
+
+        const float act = beta*precise::tanh(gate/beta)/(1.0f + exp(-gate));
+        const float lin = linear_beta > 0.0f ? linear_beta*precise::tanh(up/linear_beta) : up;
+
+        dst_row[i0] = (T)(act*lin);
+    }
+}
+
+typedef decltype(kernel_situ<float>) kernel_situ_t;
+
+template [[host_name("kernel_situ_f32")]] kernel kernel_situ_t kernel_situ<float>;
+template [[host_name("kernel_situ_f16")]] kernel kernel_situ_t kernel_situ<half>;
+
 template<typename T>
 kernel void kernel_swiglu_clamp(
         constant ggml_metal_kargs_glu & args,

@@ -40,6 +40,11 @@ All notable changes to LocalCode will be documented here. The format follows
   OpenCode Go, usage-limit, /goal, service restart and MCP event tool features
   are left out, and the transcript keeps its current grouped view.
 - The UI patches 0009-0013 now live in the fork itself; `patches/ui` is empty.
+- Inkling 2 Mini is faster and lighter: banded attention for its distance
+  bias (Unsloth's llama.cpp work, including the Metal kernels) halves the GPU
+  working memory at 128K context (13.1 to 6.2 GB) and reads prompts about
+  20-30% faster; a fused SiTU op (with a new Metal kernel) trims 384 graph
+  operations per step. Generation is about 10% faster. Output is unchanged.
 - /models: the maker column fits the longest maker name; "Thinking Machines"
   ran into the state column.
 - The command menu is now an allowlist: "/" and the palette offer only the

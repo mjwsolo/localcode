@@ -287,6 +287,8 @@ extern "C" {
     // the precision parameters are stored as ggml_tensor.op_params to the respective ops
     enum ggml_prec {
         GGML_PREC_UNDEFINED = 0,
+        // true IEEE F32, no TF32/reassociation; ranks below GGML_PREC_F32 so "at least F32" checks accept it
+        GGML_PREC_F32_PEDANTIC = 5,
         GGML_PREC_F32       = 10,
         GGML_PREC_BF16      = 15,
         GGML_PREC_F16       = 20,
@@ -413,6 +415,7 @@ extern "C" {
         GGML_OP_FILL,
 
         GGML_OP_FLASH_ATTN_EXT,
+        GGML_OP_FLASH_ATTN_EXT_BANDED,
         GGML_OP_FLASH_ATTN_BACK,
         GGML_OP_SSM_CONV,
         GGML_OP_SSM_SCAN,
@@ -487,6 +490,7 @@ extern "C" {
         GGML_GLU_OP_GEGLU_ERF,
         GGML_GLU_OP_GEGLU_QUICK,
         GGML_GLU_OP_SWIGLU_CLAMP,
+        GGML_GLU_OP_SITU,
 
         GGML_GLU_OP_COUNT,
     };
@@ -1219,6 +1223,14 @@ extern "C" {
             struct ggml_tensor  * a,
             struct ggml_tensor  * b,
             float                 limit);
+
+    // situ(a, b) = beta*tanh(a/beta)*sigmoid(a) * linear_beta*tanh(b/linear_beta), b is used as is when linear_beta <= 0
+    GGML_API struct ggml_tensor * ggml_situ(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            float                 beta,
+            float                 linear_beta);
 
     // normalize along rows
     GGML_API struct ggml_tensor * ggml_norm(
@@ -2267,6 +2279,19 @@ extern "C" {
             float                 scale,
             float                 max_bias,
             float                 logit_softcap);
+
+    // flash attention with an additive banded relative-position bias, applied after scale, no dense bias tensor:
+    //   rel_logits: [rel_extent, n_head, n_batch, ne3]; rel_dist = q_idx + (n_kv - n_batch) - kv_idx
+    //   score += rel_logits[rel_dist, head, q_idx, batch] iff 0 <= rel_dist < rel_extent
+    GGML_API struct ggml_tensor * ggml_flash_attn_ext_banded(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * q,
+            struct ggml_tensor  * k,
+            struct ggml_tensor  * v,
+            struct ggml_tensor  * mask,
+            struct ggml_tensor  * rel_logits,
+            float                 scale,
+            int64_t               rel_extent);
 
     // same as ggml_flash_attn_ext, but each q slice attends to its own list of K/V rows
     // q:       [n_embd_k, n_batch, n_head,    ne3]
