@@ -321,6 +321,24 @@ def verify_long_context(server):
 def status(commit, state, description):
     # gh uses local credentials; GitHub tokens are not passed to inference subprocesses.
     subprocess.run(["gh", "api", "repos/mjwsolo/localcode/statuses/" + commit, "-f", "state=" + state, "-f", "context=local model gate", "-f", "description=" + description], check=True, stdout=subprocess.DEVNULL)
+    if state != "pending":
+        rerun_promotion(commit)
+
+
+def rerun_promotion(commit):
+    """The CI promotion check waits for this status, but if it already gave up (it ran
+    before the gate started, or timed out), rerun it now that the result is posted."""
+    try:
+        runs = json.loads(subprocess.run(
+            ["gh", "run", "list", "-R", "mjwsolo/localcode", "--workflow", "model-gate.yml", "--commit", commit,
+             "--json", "databaseId,status,conclusion", "-L", "20"],
+            check=True, capture_output=True, text=True).stdout)
+    except (OSError, subprocess.CalledProcessError, ValueError):
+        return
+    for run in runs:
+        if run.get("status") == "completed" and run.get("conclusion") in ("failure", "timed_out", "cancelled"):
+            subprocess.run(["gh", "run", "rerun", str(run["databaseId"]), "-R", "mjwsolo/localcode", "--failed"],
+                           check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def validate_receipt(receipt, commit, hashes, keys):

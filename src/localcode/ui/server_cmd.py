@@ -87,8 +87,18 @@ def server_command(gguf: str, port: int, alias: str | None = None) -> list[str]:
         # off` left it thinking at high effort with the thought printed as the
         # reply. Off = effort "none" as the server default. The parser stays on,
         # so a thought the model still opens goes to reasoning_content.
+        # Effort "none" alone still let it think at length (a coding prompt
+        # spent 850 tokens, sometimes the whole budget, before answering).
+        # Its template has no generation prompt: the model writes the turn
+        # header and picks thought, text or a tool itself. The packaged copy
+        # of that template (identical to the GGUF's, plus one block) opens the
+        # turn with an empty thought when effort is "none", so the model goes
+        # straight to the answer or the tool call. Measured fixes that failed:
+        # --reasoning-budget 0 looped on images, a logit ban on the thought
+        # token broke tool calls.
         if str(mode).strip().lower() != "on":
             cmd += ["--chat-template-kwargs", '{"reasoning_effort":"none"}']
+            cmd += ["--chat-template-file", str(Path(__file__).parent / "templates" / "inkling2-thinking-off.jinja")]
         cmd += ["--reasoning-format", "auto"]
     # Vision: same rule as classic localcode (runtime.py) — pass --mmproj when the
     # catalog says this model ships a projector and the sidecar is on disk.
