@@ -8,8 +8,8 @@ Each argument is an Inspect AI log (or a directory of them) written by
 
 Per task: pass rate over trials (pass@1 estimate). Paired difference = candidate - baseline
 on identical, nonempty task/model/trial sets. Invalid or incomplete inputs fail closed. Standard error of the mean paired difference across tasks.
-Blocks when the mean drop exceeds max(min_drop points, se_mult * SE) AND at least one task
-went from all-pass to all-fail (a reproducible regression, not noise). Exit 1 = blocked.
+Blocks when the mean drop exceeds max(min_drop points, se_mult * SE) AND either at least one task
+went from all-pass to all-fail, or the aggregate drop is large (20+ points over 5+ tasks). Exit 1 = blocked.
 Also lists tasks that regressed, improved, or are new, and the efficiency medians.
 """
 import argparse, json, math, statistics, sys
@@ -104,10 +104,19 @@ for model in sorted({key[1] for key in common}):
         continue
     print(f"  {model} median decode tok/s: {dB:.1f} -> {dC:.1f} ({(dC/dB-1)*100:+.0f}%)")
     speed_blocked |= dC < dB * (1 - a.max_speed_drop)
+    # Time to first token is dominated by prefill, so a prefill collapse is a
+    # speed regression even when decode is unchanged. Skipped when not measured.
+    fB, fC = med(rows_b, "prefill_tps"), med(rows_c, "prefill_tps")
+    if all(isinstance(v, (int, float)) and math.isfinite(v) and v > 0 for v in (fB, fC)):
+        print(f"  {model} median prefill tok/s: {fB:.1f} -> {fC:.1f} ({(fC/fB-1)*100:+.0f}%)")
+        speed_blocked |= fC < fB * (1 - a.max_speed_drop)
 pB, pC = med(allB, "prefill_tps"), med(allC, "prefill_tps")
 if pB and pC: print(f"  median prefill tok/s: baseline {pB:.1f} -> candidate {pC:.1f} ({(pC / pB - 1) * 100:+.0f}%)")
 vB, vC = med(allB, "tool_validity"), med(allC, "tool_validity")
 if vB is not None and vC is not None: print(f"  median tool-call validity: baseline {vB:.2f} -> candidate {vC:.2f}")
-blocked = ((-mean > threshold) and bool(regressed)) or speed_blocked
-print("\nRESULT:", "BLOCKED" if blocked else "OK", "(reproducible regressions confirmed)" if regressed and blocked else "")
+# A clear aggregate drop blocks even when no single task went from all-pass to
+# all-fail (every task losing half its trials is not noise).
+clear_drop = len(diffs) >= 5 and math.isfinite(se) and -mean > threshold and -mean >= 20.0
+blocked = ((-mean > threshold) and (bool(regressed) or clear_drop)) or speed_blocked
+print("\nRESULT:", "BLOCKED" if blocked else "OK", "(reproducible regressions confirmed)" if (regressed or clear_drop) and blocked else "")
 sys.exit(1 if blocked else 0)

@@ -29,11 +29,15 @@ def machine_observations() -> dict:
             return subprocess.check_output(args, text=True, stderr=subprocess.DEVNULL, timeout=2)
         except (OSError, subprocess.SubprocessError):
             return ''
-    processes = read(['ps', '-axo', 'comm='])
+    # The four commands are independent; run them together so the slowest one
+    # (not their sum) bounds the call.
+    from concurrent.futures import ThreadPoolExecutor
+    commands = (['ps', '-axo', 'comm='], ['sysctl', '-n', 'vm.swapusage'], ['pmset', '-g', 'batt'], ['pmset', '-g', 'therm'])
+    with ThreadPoolExecutor(max_workers=len(commands)) as pool:
+        processes, swap_text, battery, therm_text = pool.map(read, commands)
     servers = sum(line.strip().rsplit('/', 1)[-1].startswith('llama-server') for line in processes.splitlines()) if processes else None
-    swap = re.search(r'used\s*=\s*([\d.]+)([MG])', read(['sysctl', '-n', 'vm.swapusage']))
-    battery = read(['pmset', '-g', 'batt'])
-    therm = re.search(r'CPU_Speed_Limit\s*=\s*(\d+)', read(['pmset', '-g', 'therm']))
+    swap = re.search(r'used\s*=\s*([\d.]+)([MG])', swap_text)
+    therm = re.search(r'CPU_Speed_Limit\s*=\s*(\d+)', therm_text)
     return {
         'llama_server_processes': servers,
         'swap_used_bytes': int(float(swap[1]) * (1024**2 if swap[2] == 'M' else 1024**3)) if swap else None,

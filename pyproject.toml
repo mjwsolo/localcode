@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "localcode"
-version = "0.5.43rc9"
+version = "0.5.43rc12"
 description = "High-performance AI coding on consumer hardware."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -86,6 +86,7 @@ where = ["src"]
     "ui/plugin/*.ts",
     "ui/FORK_COMMIT",
     "ui/UPSTREAM_COMMIT",
+    "ui/templates/*.jinja",
     "skills/*.md",
 ]
 

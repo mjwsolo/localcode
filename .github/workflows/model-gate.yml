@@ -15,6 +15,8 @@ jobs:
   promotion:
     name: model promotion gate
     runs-on: ubuntu-latest
+    # Waits for the local gate (below), so a slow local run shows as in progress, not failed.
+    timeout-minutes: 160
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -33,9 +35,23 @@ jobs:
             echo 'No model/runtime changes; hosted tests suffice.'
             exit 0
           fi
-          state=$(gh api "repos/$GITHUB_REPOSITORY/commits/$head/status" --jq '[.statuses[] | select(.context == "local model gate")][0].state // "missing"')
-          if [ "$state" != success ]; then
-            echo "::error::Exact commit $head needs a successful local model gate. Run scripts/verify_models.py --strict --publish-status on your Mac, then rerun this check."
-            exit 1
-          fi
+          # The local gate runs on the owner's Mac for up to an hour and posts "pending" when it
+          # starts. Wait for its result here instead of failing at once, so the check reads as
+          # in progress while it runs. (The local gate also reruns this check if it gave up.)
+          deadline=$(( $(date +%s) + 150*60 ))
+          while :; do
+            state=$(gh api "repos/$GITHUB_REPOSITORY/commits/$head/status" --jq '[.statuses[] | select(.context == "local model gate")][0].state // "missing"')
+            case "$state" in
+              success) break ;;
+              failure|error)
+                echo "::error::The local model gate failed on $head. Fix it, then run scripts/verify_models.py --strict --publish-status again."
+                exit 1 ;;
+            esac
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::No local model gate result for $head after 150 minutes ($state). Run scripts/verify_models.py --strict --publish-status on your Mac; it reruns this check when it finishes."
+              exit 1
+            fi
+            echo "Local model gate on $head: $state; waiting."
+            sleep 30
+          done
           echo "Local gate passed on exact candidate $head. No Mac runner used."

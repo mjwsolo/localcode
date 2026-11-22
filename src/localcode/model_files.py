@@ -35,14 +35,14 @@ def model_files(models_dir: Path) -> dict[str, Path]:
     and do not follow directory symlinks; file symlinks are ordinary weights.
     """
     found: dict[str, Path] = {}
-    directories = 0
     for root in search_roots(models_dir):
         if not root.is_dir():
             continue
+        directories = 0   # per root, so one big root cannot starve the later ones
         for directory, children, files in os.walk(root, followlinks=False):
             directories += 1
             if directories > 5000:
-                return found
+                break
             depth = len(Path(directory).relative_to(root).parts)
             children[:] = sorted(name for name in children if name not in _SKIP) if depth < 6 else []
             for name in sorted(files):

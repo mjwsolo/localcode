@@ -118,10 +118,13 @@ def resolve_model_path(models_dir: Path, alias: str) -> Path:
 def link_split(existing_first: Path, models_dir: Path) -> None:
     """Symlink every shard found beside ``existing_first`` into ``models_dir``."""
     models_dir.mkdir(parents=True, exist_ok=True)
-    for src in shard_paths(existing_first.resolve()):
+    # Siblings are found by the shard names beside the (possibly symlinked) first
+    # shard, then each is resolved on its own: in a Hugging Face snapshot the shard
+    # names are links to differently named blobs.
+    for src in shard_paths(existing_first):
         dst = models_dir / src.name
         if src.is_file() and not dst.exists() and not dst.is_symlink():
-            dst.symlink_to(src)
+            dst.symlink_to(src.resolve())
 
 
 def remove_split(first: Path) -> list[str]:
