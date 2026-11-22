@@ -117,6 +117,24 @@ jobs:
         run: |
           scripts/ui_e2e.sh --installed "$RC_WORK/venv/bin/python" 2>&1 | tee "$RC_WORK/logs/ui-snapshots.log"
           exit "${PIPESTATUS[0]}"
+      - name: Verify project trust against the installed candidate
+        run: |
+          set -euo pipefail
+          "$RC_WORK/venv/bin/python" -m pip install --quiet pytest
+          # Run outside the checkout so its pytest config and conftest cannot load src/.
+          cp tests/test_comprehensive_project_trust.py "$RC_WORK/"
+          cd "$RC_WORK"
+          "$RC_WORK/venv/bin/python" -I - <<'PYTHON'
+          import platform
+          import socket
+
+          if (platform.system(), platform.machine()) != ("Darwin", "arm64"):
+              raise SystemExit("Project trust tests require an Apple Silicon Mac")
+          with socket.socket() as listener:
+              listener.bind(("127.0.0.1", 0))
+              listener.listen()
+          PYTHON
+          "$RC_WORK/venv/bin/python" -I -m pytest -v test_comprehensive_project_trust.py 2>&1 | tee logs/project-trust.log
       - name: Upload logs and snapshot diffs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
