@@ -68,6 +68,8 @@ All notable changes to LocalCode will be documented here. The format follows
   measured smaller with no speed loss for them.
 - The logo fits narrow terminals: the full wordmark, the same letters one
   column narrower, or stacked, on the home screen and the exit summary.
+- The interface uses your terminal's own background colour instead of
+  painting it near-black; panels and highlights are shaded from it.
 
 ### Fixed
 
