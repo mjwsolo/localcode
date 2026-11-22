@@ -71,6 +71,32 @@ Speed: Gemma 4, Qwen 3.6, Muse Glimmer and Qwen 3.8 draft tokens with the vendor
 | [Kolibri 1 78B-A3B](https://huggingface.co/Hob-forge/Kolibri-1-GGUF) | 28.6 GB | 83.1 GB |
 | [DeepSeek V4 Flash 284B-A13B](https://huggingface.co/unsloth/DeepSeek-V4-Flash-Vision-Exp-GGUF) | 82.4 GB | 161.9 GB |
 
+## Optimisations
+
+What LocalCode adds on top of the stock model server to make local models faster and better at coding.
+
+Speed
+- Drafting: the vendor's own drafter guesses tokens ahead (about 2x faster replies on Gemma 4, Qwen 3.6, Qwen 3.8 and Muse Glimmer)
+- Copy drafting: when the model rewrites a file it already read, it copies instead of generating (3.5 to 4x faster on rewrites)
+- Prompt cache reuse: the system prompt stays the same every turn, so the model only reads what is new
+- Warm-up: the first request's prompt is read while the model loads, so your first message starts sooner
+- Precompiled GPU kernels: no half-minute shader compile on first start
+- Threads matched to your Mac's performance cores
+- Flash attention on by default
+- Inkling 2: its experts run on the GPU (were silently on the CPU, about 5x slower), banded attention and a fused activation op halve its GPU memory and read prompts 20 to 30% faster
+- Downloads run in parallel, resume if interrupted, and keep going while you use another model
+
+Memory
+- 8-bit KV cache by default: half the memory of full precision, so longer context fits
+- Context sized from what the server reports, so long chats compact before they run out of room
+- The picker recommends the most capable model that fits your Mac
+
+Quality
+- Hidden thinking off by default, so answers come straight away; a model that gets stuck thinking is recovered instead of failing
+- Plan panel: the model keeps a task list and is reminded to update it
+- Stuck detection: a model that makes no progress, or keeps failing the same check, is nudged to change approach and then stopped so it reports what it has
+- Every release is tested live on every model (load, reply, tool calls, images) before it ships
+
 ## Network
 
 Inference is local. Three features use the network: model downloads, the `web_search` and `web_fetch` tools, and any MCP servers you add. See [Network Boundary](https://mjwsolo.github.io/localcode/concepts/network-boundary/) for the full list.
