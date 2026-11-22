@@ -414,6 +414,9 @@ def attach(ctrl: int, status: dict, ui_bin: Path, project_dir: Path, alias: str 
     if alias and current and alias != current:
         print(f"localcode: attaching to the running session's model {current}; use /models there to switch.",
               file=sys.stderr)
+    elif alias and not current:
+        print(f"localcode: the running session has no model loaded, so --model {alias} was not applied; "
+              "pick one with /models.", file=sys.stderr)
     rd = run_dir()
     rd.mkdir(parents=True, exist_ok=True)
     config_path = rd / f"session-{os.getpid()}.json"
