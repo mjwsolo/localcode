@@ -15,7 +15,7 @@ def sup(tmp_path):
     s.cancel = threading.Event()
     s.current = 'test-model'
     s.models_dir = tmp_path
-    (tmp_path / 'test-model.gguf').touch()
+    (tmp_path / 'test-model.gguf').write_bytes(b'GGUF')
     s.state = {'state': 'ready', 'model': s.current}
     s.proc = SimpleNamespace(poll=lambda: None)
     s.progress = lambda: {'phase': 'idle'}

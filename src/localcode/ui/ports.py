@@ -1,6 +1,7 @@
 """Reject an existing localcode instance, then choose unused local ports."""
 from __future__ import annotations
 
+import errno
 import json
 import os
 import socket
@@ -50,12 +51,17 @@ def _status(port: int) -> dict:
         return json.load(response)
 
 
+_bind_errors: list[OSError] = []
+
+
 def available(port: int) -> bool:
     with socket.socket() as sock:
         try:
             sock.bind(("127.0.0.1", port))
             return True
-        except OSError:
+        except OSError as error:
+            if error.errno != errno.EADDRINUSE:
+                _bind_errors.append(error)   # denied or unsupported, not just "taken"
             return False
 
 
@@ -74,6 +80,7 @@ def find_running(control_ports=range(8323, 8400)) -> tuple[int, dict] | None:
 
 
 def choose_ports(model_ports=range(8123, 8200), control_ports=range(8323, 8400)) -> tuple[int, int]:
+    _bind_errors.clear()
     preferred = preferred_port()
     if preferred is not None:
         if not available(preferred):
@@ -94,6 +101,8 @@ def choose_ports(model_ports=range(8123, 8200), control_ports=range(8323, 8400))
             continue
     model = next((port for port in model_ports if port != control and available(port)), None)
     if model is None or control is None:
+        if _bind_errors:
+            raise RuntimeError(f"Cannot bind a local port: {_bind_errors[0]}")
         raise RuntimeError("No free local model/control port pair")
     return model, control
 

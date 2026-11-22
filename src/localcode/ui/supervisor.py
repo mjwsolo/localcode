@@ -33,6 +33,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.request
@@ -61,6 +62,9 @@ from localcode.ui import run_dir
 from localcode.ui.auth import KEY_ENV, control_token, new_secret, request_allowed, server_headers, server_key, write_auth_file
 
 HERE = run_dir()
+
+
+VOICE_OPEN_WAIT_S = 8.0   # how long the dictation worker gets to confirm the microphone is open
 
 
 def log(message: str) -> None:
@@ -274,7 +278,10 @@ class Supervisor:
         """The file (every shard, at its listed size, for a split) is in the models dir."""
         target = found or self.models_dir / filename
         if not is_shard(filename):
-            return target.is_file()
+            try:
+                return target.is_file() and target.stat().st_size > 0   # an empty file is not a model
+            except OSError:
+                return False
         from localcode.hf_quants import local_name
         sizes = {local_name(p): n for p, n in (getattr(quant, "shards", None) or ())}
         return split_complete(target, sizes)
@@ -476,7 +483,14 @@ class Supervisor:
                 reread_s = float(os.environ.get("LOCALCODE_REREAD_MAX_S") or cb.REREAD_MAX_S)
             except ValueError:
                 reread_s = cb.REREAD_MAX_S
-            new, info = cb.budget(self.ctx, reserve, samples, self.pp_prior, reread_max_s=reread_s)
+            # budget() walks every sample; recompute only when its inputs changed.
+            key = (id(table), getattr(table, "generation", 0), len(samples), self.ctx, reserve, self.pp_prior, reread_s)
+            cached = self.__dict__.get("_budget_cache")
+            if cached is not None and cached[0] == key:
+                new, info = cached[1], cached[2]
+            else:
+                new, info = cb.budget(self.ctx, reserve, samples, self.pp_prior, reread_max_s=reread_s)
+                self._budget_cache = (key, new, info)
             step = max(1, self.ctx // cb.GRID)
             if self._budget is None or abs(new - self._budget) >= step:
                 if self._budget is not None:
@@ -675,7 +689,12 @@ class Supervisor:
                     self.__dict__.setdefault("_quant_done", {})[g.hf_repo] = done
                     def fetch():
                         try:
-                            memory[g.hf_repo] = (fetch_quants(g.hf_repo), time.time())
+                            listed = fetch_quants(g.hf_repo)
+                            # Stamp with the time the listing was really fetched. A failed
+                            # fetch returns the stale cache or [] and writes nothing, so it
+                            # must not look fresh (that hid variants for a day).
+                            saved = _read_cache(g.hf_repo)
+                            memory[g.hf_repo] = (listed, saved[1] if saved else fetched)
                         except Exception as exc:
                             log(f"Quant refresh failed: {type(exc).__name__}")
                         finally:
@@ -737,7 +756,7 @@ class Supervisor:
                 "filename": q.filename, "alias": _alias(q.filename), "label": q.label,
                 "size_gb": round(total_gb, 1), "fit": fit_badge(footprint, self.ram_gb, q.filename),
                 "tok_s": spd, "recommended": i == rec_idx,
-                "downloaded": q.filename in installed and (not is_shard(q.filename) or self._model_ready(q.filename, q, installed.get(q.filename))),
+                "downloaded": q.filename in installed and self._model_ready(q.filename, q, installed.get(q.filename)),
                 "current": _alias(q.filename) == self.current,
                 "loaded": loaded and _alias(q.filename) == self.current,
                 "downloading": self.downloading(q.filename),
@@ -755,7 +774,7 @@ class Supervisor:
         fitting = [i for i, q in enumerate(rows)
                    if fit_badge(footprint_gb(q.size_gb, group), self.ram_gb, q.filename) == "fits"]
         if not fitting:
-            return 0
+            return None   # nothing fits: do not star a quant the row itself calls too big
         speeds = {i: (estimate_decode_tok_s(rows[i].size_gb, name, self.bandwidth) or 0)
                   for i in fitting}
         fastest = max(speeds.values()) or 0
@@ -1148,7 +1167,15 @@ class Supervisor:
             opened.set(); done.set()
 
         threading.Thread(target=read, daemon=True).start()
-        opened.wait(timeout=8)
+        confirmed = opened.wait(timeout=VOICE_OPEN_WAIT_S)
+        if confirmed and proc.poll() is None:
+            return {"ok": True, "live": True}
+        if proc.poll() is None:
+            # No "recording" message: the microphone never opened. Do not claim to record.
+            proc.kill()
+            self.voice_proc, self.voice_live = None, False
+            return {"error": "could not open the microphone: it did not start within 8 seconds "
+                             "(grant microphone access to your terminal in System Settings → Privacy)"}
         if proc.poll() is not None:
             self.voice_proc, self.voice_live = None, False
             err = (self.voice_final or {}).get("error") or "unknown error"
@@ -1213,9 +1240,7 @@ class Supervisor:
         if not out.get("ok"):
             return {"error": out.get("text") or "transcription failed"}
         # whisper labels non-speech ("[wind blowing]", "(music)", "[BLANK_AUDIO]"); drop them
-        import re
-        text = re.sub(r"\s*[\[(][^\])]{0,40}[\])]\s*", " ", out.get("text", "")).strip()
-        return {"ok": True, "text": text}
+        return {"ok": True, "text": strip_non_speech_captions(out.get("text", ""))}
 
     def voice_speak(self, text: str) -> dict:
         with self.speech_lock:
@@ -1269,19 +1294,43 @@ class Supervisor:
         path = Path(os.path.expanduser(raw.strip())).resolve()
         try:
             path.mkdir(parents=True, exist_ok=True)
-            (path / ".localcode-write-test").touch(); (path / ".localcode-write-test").unlink()
+            # A uniquely named probe, so an existing file is never touched.
+            fd, probe = tempfile.mkstemp(prefix=".localcode-write-test-", dir=path)
+            os.close(fd)
+            Path(probe).unlink()
         except OSError as e:
             return {"error": f"cannot use {path}: {e}"}
-        self.models_dir = path
         # localcode's own download path reads model_dir() -> config runtime.model_dir /
         # LOCALCODE_MODEL_DIR, so persist it where every front end will see it.
-        os.environ["LOCALCODE_MODEL_DIR"] = str(path)
+        # Save first: a folder that would revert on restart is not reported as set.
         try:
             from localcode.config import load_config, save_config
             cfg = load_config(); cfg.runtime.model_dir = str(path); save_config(cfg)
         except Exception as e:  # noqa: BLE001
             log(f"supervisor: could not persist model_dir: {e}")
+            return {"error": f"could not save the models folder setting: {e}"}
+        self.models_dir = path
+        os.environ["LOCALCODE_MODEL_DIR"] = str(path)
         return dict(self.models_dir_info(), ok=True)
+
+
+_CAPTION_WORDS = (
+    "music", "applause", "laughter", "laughs", "laughing", "silence", "blank_audio", "blank audio",
+    "noise", "wind", "wind blowing", "coughs", "coughing", "sighs", "sniffs", "breathing", "inaudible",
+    "static", "clicking", "typing", "keyboard", "birds chirping", "background noise", "music playing",
+    "no audio", "speaking foreign language", "foreign language",
+)
+
+
+def strip_non_speech_captions(text: str) -> str:
+    """Drop whisper's non-speech labels ("[BLANK_AUDIO]", "(music)", "[wind blowing]")
+    and nothing else: dictated code such as items[0] or reset() stays intact."""
+    import re
+    def caption(m: "re.Match[str]") -> str:
+        inner = re.sub(r"[\s_*]+", " ", m.group(2)).strip().lower()
+        return " " if inner in _CAPTION_WORDS else m.group(0)
+    cleaned = re.sub(r"(?<![\w\])])\s*([\[(])([^\])]{0,40})[\])](?!\w)", caption, text)
+    return re.sub(r"[ \t]{2,}", " ", cleaned).strip()
 
 
 def _safe_filename(name: str) -> bool:

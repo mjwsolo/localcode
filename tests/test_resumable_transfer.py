@@ -13,6 +13,7 @@ from localcode.transfer import download
 @pytest.fixture
 def source(monkeypatch, loopback_listener):
     monkeypatch.setattr('localcode.transfer.CHUNK_BYTES', 65536)
+    monkeypatch.setattr('localcode.transfer.CHECKPOINT_SECONDS', 0)
     data = bytes(range(256)) * 8192
     state = {'etag': '"version1"', 'ranges': [], 'ignore': False, 'bad': False}
     class Handler(BaseHTTPRequestHandler):
@@ -121,7 +122,7 @@ def test_resume_after_process_is_killed(source,tmp_path):
     from pathlib import Path
     url,data,state=source;dest=tmp_path/'m'
     env=dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1]/'src'))
-    code='from pathlib import Path; import sys; import localcode.transfer as t; t.CHUNK_BYTES=65536; t.download(sys.argv[1],Path(sys.argv[2]),workers=1)'
+    code='from pathlib import Path; import sys; import localcode.transfer as t; t.CHUNK_BYTES=65536; t.CHECKPOINT_SECONDS=0; t.download(sys.argv[1],Path(sys.argv[2]),workers=1)'
     p=subprocess.Popen([sys.executable,'-c',code,url,str(dest)],env=env)
     checkpoint=dest.with_name('m.resume.json')
     try:
@@ -140,3 +141,17 @@ def test_resume_after_process_is_killed(source,tmp_path):
         assert not fetched.intersection(map(int,saved['done']))
     finally:
         if p.poll() is None:p.kill();p.wait(timeout=5)
+
+
+def test_checkpoints_are_batched_and_a_cancel_still_saves_progress(source, tmp_path, monkeypatch):
+    import localcode.transfer as transfer
+    monkeypatch.setattr(transfer, 'CHECKPOINT_SECONDS', 3600)
+    url, data, state = source; dest = tmp_path / 'm.gguf'
+    stop = threading.Event()
+    manifest = dest.with_name(dest.name + '.resume.json')
+    def progress(text):
+        if state['ranges'] and len(state['ranges']) > 4:
+            stop.set()
+    with pytest.raises(DownloadCancelled):
+        download(url, dest, workers=1, progress=progress, cancel=stop)
+    assert json.loads(manifest.read_text())['done'], 'verified chunks are saved when the download stops'

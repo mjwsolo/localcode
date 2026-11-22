@@ -164,7 +164,10 @@ def main(argv=None) -> int:
     parser.add_argument("--image", type=Path, help="Optional image")
     args = parser.parse_args(argv)
     try:
-        state = args.state_file.read_text() if args.state_file else args.state
+        try:
+            state = args.state_file.read_text(encoding="utf-8") if args.state_file else args.state
+        except UnicodeDecodeError:
+            raise DecisionError(f"{args.state_file} is not valid UTF-8 text")
         body = build_request(args.question, args.kind, args.option, state, [image_url(args.image)] if args.image else None)
         from .ui.auth import control_headers, read_auth_file
         from .ui import run_dir

@@ -12,6 +12,10 @@ import time
 import urllib.request
 
 CHUNK_BYTES = 8 * 1024 * 1024
+# The manifest grows with the file; rewriting and fsyncing it after every chunk is
+# quadratic on a large model. Chunks are fsynced as they land, so at most this long
+# of verified progress is re-fetched after a crash; a clean stop writes it at once.
+CHECKPOINT_SECONDS = 5.0
 
 
 class RangeUnsupported(OSError):
@@ -61,6 +65,7 @@ def download(url: str, dest: Path, *, workers=16, progress=None, cancel=None):
                 if saved.get('identity') == identity:
                     with part.open('rb') as f:
                         for key, digest in saved.get('done', {}).items():
+                            cancelled()
                             i = int(key)
                             if i < 0 or i * CHUNK_BYTES >= size:
                                 continue
@@ -112,6 +117,7 @@ def download(url: str, dest: Path, *, workers=16, progress=None, cancel=None):
             f.truncate(size)
         checkpoint()
         mutex = threading.Lock()
+        last_checkpoint = [time.monotonic()]
         stopped = threading.Event()
         transferred = {}
         initial = sum(min(CHUNK_BYTES, size-int(i)*CHUNK_BYTES) for i in done)
@@ -154,7 +160,9 @@ def download(url: str, dest: Path, *, workers=16, progress=None, cancel=None):
                         os.fsync(f.fileno())
                     with mutex:
                         done[str(i)] = digest.hexdigest()
-                        checkpoint()
+                        if time.monotonic() - last_checkpoint[0] >= CHECKPOINT_SECONDS:
+                            checkpoint()
+                            last_checkpoint[0] = time.monotonic()
             except BaseException:
                 stopped.set()
                 raise
@@ -174,6 +182,8 @@ def download(url: str, dest: Path, *, workers=16, progress=None, cancel=None):
                 if progress:
                     speed = (received-initial)/max(time.monotonic()-started, .001)
                     progress(f'Downloading: {received//1048576}/{size//1048576} MB ({min(100,received*100//size)}%) · {speed/1e6:.1f} MB/s')
+        with mutex:
+            checkpoint()   # whatever was verified survives a cancel or a failure
         cancelled()
         if isinstance(failure, RangeUnsupported):
             sequential()
