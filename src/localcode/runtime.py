@@ -532,6 +532,8 @@ class LocalCodeRuntimeGateway:
         # Metal (llama-cpp-turboquant/PATCHES.md). Keys fall back to q8_0.
         if (ctk or "").lower() == "turbo2":
             ctk = "q8_0"
+        if self._kv_f16_only(model_path):
+            ctk = ctv = "f16"
         if ctk and ctk != "f16":
             cmd.extend(["--cache-type-k", ctk])
         if ctv and ctv != "f16":
@@ -811,7 +813,7 @@ class LocalCodeRuntimeGateway:
         model — not just config, which can disagree with the launch path.
         The cohere2moe stock path ignores --cache-type and runs uncompressed
         f16; every other path uses the configured types (default f16)."""
-        if self._is_cohere_gguf(model_path):
+        if self._is_cohere_gguf(model_path) or self._kv_f16_only(model_path):
             return ("f16", "f16")
         k = (getattr(self.config, "kv_cache_type_k", "") or "f16").lower()
         v = (getattr(self.config, "kv_cache_type_v", "") or "f16").lower()
@@ -1095,6 +1097,21 @@ class LocalCodeRuntimeGateway:
 
     def _is_large_local_gguf(self, model_path: str | None = None) -> bool:
         return self._is_large_qwen_gguf(model_path) or self._is_large_gemma_gguf(model_path)
+
+    def _kv_f16_only(self, model_path: str | None = None) -> bool:
+        """True for models whose attention is faster AND smaller with an f16
+        KV cache. Inkling 2's banded attention has no quantized-cache kernel:
+        a q8_0 cache is converted to f16 in a scratch buffer on every chunk.
+        Measured at 128K context: 6.2 GB of scratch against 0.9 GB, 3.3 GB
+        less memory in total, and prompts read 2x faster at 32K tokens
+        (313 -> 646 tok/s) and 1.3x faster on an empty context."""
+        try:
+            from pathlib import Path
+            from localcode.models_catalog import by_filename
+            choice = by_filename(Path(str(model_path or getattr(self.config, "model", "") or "")).name)
+        except Exception:  # noqa: BLE001
+            return False
+        return choice is not None and choice.architecture == "inkling2_loop"
 
     def _is_cohere_gguf(self, model_path: str | None = None) -> bool:
         """True for the cohere2moe (North-Mini-Code) model.
