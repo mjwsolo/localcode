@@ -59,6 +59,30 @@ def tmp_repo(tmp_path: Path) -> Path:
     return repo
 
 
+_DOWNLOAD_TARGETS = {"_download_worker", "_select_worker", "_run_download", "_warmup_worker"}
+
+
+@pytest.fixture(autouse=True)
+def _join_download_threads():
+    """Wait for download/select worker threads a test started.
+
+    Those workers are daemon threads that call bootstrap download helpers. One
+    that outlives its test can reach a later test's monkeypatched
+    ``bootstrap._download_parallel`` and record a download that test never
+    asked for. Joining them at teardown keeps every test's patches its own.
+    """
+    import threading
+
+    before = set(threading.enumerate())
+    yield
+    for t in threading.enumerate():
+        target = getattr(t, "_target", None)
+        if t in before or t is threading.current_thread() or target is None:
+            continue
+        if getattr(target, "__name__", "") in _DOWNLOAD_TARGETS:
+            t.join(timeout=15)
+
+
 @pytest.fixture
 def mock_config(tmp_path: Path) -> AppConfig:
     """Return an AppConfig with sensible test defaults, using a temp LOCALCODE_HOME."""

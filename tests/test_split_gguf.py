@@ -284,9 +284,12 @@ def test_projector_of_a_split_model_downloads_one_file(tmp_path, monkeypatch):
     calls = []
 
     def download(url, dest, num_threads=16, on_progress=None, cancel_event=None):
+        if threading.current_thread() is not caller:
+            return  # a stray background download from another test
         calls.append(url.rsplit("/resolve/", 1)[1])
         dest.write_bytes(b"p" * (1024 ** 3 + 1))
 
+    caller = threading.current_thread()
     monkeypatch.setattr(bootstrap, "_download_parallel", download)
     ok, res = bootstrap.download_mmproj(choice)
     assert ok, res
