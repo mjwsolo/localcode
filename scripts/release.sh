@@ -102,7 +102,9 @@ publish_runs_failed() { # <sha>
 # ---- 2. candidate --------------------------------------------------------------
 say ""; say "== 2. publish candidate $RC =="
 setver "$RC"
-run g commit -qam "$RC"
+if [ "$DRY" = 1 ] || ! g diff --quiet HEAD -- pyproject.toml src/localcode/__init__.py; then
+  run g commit -qm "$RC" -- pyproject.toml src/localcode/__init__.py
+fi
 # main is protected (required checks, admins included) and publish.yml only
 # releases commits that are on main, so the version bump lands on main first:
 # push it to release/<version>, open a PR, let CI pass, merge it with a merge

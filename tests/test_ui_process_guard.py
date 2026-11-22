@@ -87,7 +87,10 @@ def test_force_killed_supervisor_cannot_orphan_model(tmp_path, ignore_term):
                 owner.wait(timeout=5)
             for pid in (model, guard):
                 if pid and alive(pid):
-                    os.kill(pid, signal.SIGKILL)
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass  # exited between the check and the kill: already gone
 
 
 def test_shutdown_prevents_background_worker_from_spawning_a_new_model(tmp_path):
