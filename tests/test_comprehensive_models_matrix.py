@@ -221,14 +221,21 @@ def test_inkling_runs_an_f16_kv_cache(monkeypatch):
 
 
 def test_prompt_chunk_size_per_model(monkeypatch):
-    """Gemma 4 26B-A4B and Qwen 3.6 35B-A3B read prompts faster in 2048-token
-    chunks; everything else keeps 512 (dense and Inkling measured slower)."""
+    """Flint, Kolibri and North always read prompts in 2048-token chunks; Gemma 4
+    26B-A4B and Qwen 3.6 35B-A3B only on 64 GB Macs and up; everything else 512."""
     from localcode.models_catalog import CHOICES
+    from localcode.runtime import LocalCodeRuntimeGateway
     from localcode.ui.server_cmd import server_command
 
     monkeypatch.delenv("LOCALCODE_INTERNAL_THINKING_MODE", raising=False)
-    for choice in CHOICES:
-        cmd = server_command(f"/models/{choice.filename}", 8081, choice.key)
-        ub = int(cmd[cmd.index("-ub") + 1])
-        big = choice.architecture == "qwen35moe" or (choice.architecture == "gemma4-iswa" and "A4B" in choice.name)
-        assert ub == (min(2048, int(cmd[cmd.index("-b") + 1])) if big else 512), choice.key
+    for ram in (32, 128):
+        monkeypatch.setattr(LocalCodeRuntimeGateway, "_system_ram_gb", lambda self, ram=ram: ram)
+        for choice in CHOICES:
+            try:
+                cmd = server_command(f"/models/{choice.filename}", 8081, choice.key)
+            except ValueError:
+                continue  # does not fit this Mac
+            ub = int(cmd[cmd.index("-ub") + 1])
+            always = choice.architecture in ("flint", "kolibri1", "cohere2_moe")
+            big = ram >= 64 and (choice.architecture == "qwen35moe" or (choice.architecture == "gemma4-iswa" and "A4B" in choice.name))
+            assert ub == (min(2048, int(cmd[cmd.index("-b") + 1])) if (always or big) else 512), (ram, choice.key)

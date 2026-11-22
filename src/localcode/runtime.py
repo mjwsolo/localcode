@@ -1102,11 +1102,13 @@ class LocalCodeRuntimeGateway:
     def _prompt_ubatch(self, model_path: str | None = None) -> int:
         """Tokens per prompt chunk. Mixture-of-experts models with many small
         experts read prompts faster in bigger chunks, because each expert then
-        sees more tokens per weight load: measured at 4K tokens, Gemma 4
-        26B-A4B +17% and Qwen 3.6 35B-A3B +21% at 2048, for about 0.5 GB more
-        working memory at 128K context. Dense models (Qwen 3.8 27B, -10%) and
-        Inkling 2 (-17%, and several GB more) are faster at 512, as are models
-        not measured yet."""
+        sees more tokens per weight load. Measured at a 4K prompt with 2048
+        against 512, generation unchanged, extra memory at 128K context with
+        LocalCode's own launch flags:
+          Flint +35% (+0.5 GB), Kolibri +30% (+0.6 GB), North +22% (+0.7 GB),
+          Qwen 3.6 35B-A3B +21% (+4.7 GB), Gemma 4 26B-A4B +17% (+1.7 GB).
+        The last two only get it on Macs with room to spare. Dense models
+        (Qwen 3.8 -10%, Muse +4%) and Inkling 2 (-17%) keep 512."""
         try:
             from pathlib import Path
             from localcode.models_catalog import by_filename
@@ -1115,9 +1117,12 @@ class LocalCodeRuntimeGateway:
             return 512
         if choice is None:
             return 512
-        if choice.architecture == "qwen35moe":
+        if choice.architecture in ("flint", "kolibri1", "cohere2_moe"):
             return 2048
-        if choice.architecture == "gemma4-iswa" and "A4B" in choice.name:
+        big_mac = self._system_ram_gb() >= 64
+        if choice.architecture == "qwen35moe" and big_mac:
+            return 2048
+        if choice.architecture == "gemma4-iswa" and "A4B" in choice.name and big_mac:
             return 2048
         return 512
 
