@@ -64,6 +64,9 @@ from localcode.ui.auth import KEY_ENV, control_token, new_secret, request_allowe
 HERE = run_dir()
 
 
+VOICE_OPEN_WAIT_S = 8.0   # how long the dictation worker gets to confirm the microphone is open
+
+
 def log(message: str) -> None:
     """Diagnostics must never paint over the terminal UI."""
     try:
@@ -1164,7 +1167,15 @@ class Supervisor:
             opened.set(); done.set()
 
         threading.Thread(target=read, daemon=True).start()
-        opened.wait(timeout=8)
+        confirmed = opened.wait(timeout=VOICE_OPEN_WAIT_S)
+        if confirmed and proc.poll() is None:
+            return {"ok": True, "live": True}
+        if proc.poll() is None:
+            # No "recording" message: the microphone never opened. Do not claim to record.
+            proc.kill()
+            self.voice_proc, self.voice_live = None, False
+            return {"error": "could not open the microphone: it did not start within 8 seconds "
+                             "(grant microphone access to your terminal in System Settings → Privacy)"}
         if proc.poll() is not None:
             self.voice_proc, self.voice_live = None, False
             err = (self.voice_final or {}).get("error") or "unknown error"
