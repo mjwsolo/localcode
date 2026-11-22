@@ -88,6 +88,7 @@ Speed
 
 Memory
 - 8-bit KV cache by default: half the memory of full precision, so longer context fits
+- Inkling 2 uses a 16-bit cache instead: its attention reads it directly, so long prompts read 1.4 to 1.8x faster and it needs 3.3 GB less memory at 128K context
 - Context sized from what the server reports, so long chats compact before they run out of room
 - The picker recommends the most capable model that fits your Mac
 
