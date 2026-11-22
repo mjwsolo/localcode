@@ -6,6 +6,11 @@ import { mkdirSync } from "node:fs"
 import { test } from "node:test"
 import { expectSnapshot, open } from "./harness.mjs"
 
+// The picker lists models once the catalog loads. waitFor returns as soon as the
+// row shows; the ceiling only matters on a slow shared runner (mock downloads
+// take 12 s).
+const PICKER_WAIT = 90_000
+
 async function journey(name, opts, body) {
   const s = await open(name, opts)
   try {
@@ -63,7 +68,7 @@ test("/models picker and quant list", () =>
     await s.waitFor("/models")
     await s.key("Enter")
     await s.waitFor("Select a model")
-    await s.waitFor("Gamma 2 30B")
+    await s.waitFor("Gamma 2 30B", PICKER_WAIT)
     let screen = await s.settle()
     assert.match(screen, /Alpha 4 12B ★/)
     // The maker column fits the longest maker: "Thinking Machines" must not run into the state.
@@ -166,7 +171,7 @@ test("a model downloads in the background while the chat keeps working", () =>
     await s.type("/models")
     await s.waitFor("/models")
     await s.key("Enter")
-    await s.waitFor("Gamma 2 30B")
+    await s.waitFor("Gamma 2 30B", PICKER_WAIT)
     await s.key("Enter")
     await s.waitFor("Available to download")
     await s.settle()
@@ -180,7 +185,7 @@ test("a model downloads in the background while the chat keeps working", () =>
     await s.key("Enter")
     await s.waitFor("Hello from the mock model.")
     assert.match(await s.screen(), /e2e-model · downloading alpha-Q3_K_M \d+% · about 3 min left/)
-    await s.waitFor(/Download finished/, 30_000)
+    await s.waitFor(/Download finished/, 90_000)
     assert.match(await s.screen(), /alpha-Q3_K_M is ready\. Open \/models to switch to it\./)
   }))
 
@@ -190,7 +195,7 @@ test("the first download says what is happening and when chat can start", () =>
     await s.type("/models")
     await s.waitFor("/models")
     await s.key("Enter")
-    await s.waitFor("Gamma 2 30B")
+    await s.waitFor("Gamma 2 30B", PICKER_WAIT)
     await s.key("Enter")
     await s.waitFor("Available to download")
     await s.settle()
