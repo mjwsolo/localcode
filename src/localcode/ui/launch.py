@@ -512,6 +512,8 @@ def main(model: str | None = None, project: str | None = None,
     try:
         ready_url = f"http://127.0.0.1:{port}/health" if alias else f"http://127.0.0.1:{ctrl}/status"
         deadline = time.monotonic() + WAIT_S
+        if alias:
+            print(f"localcode: loading {alias}; this can take a minute on the first start...", file=sys.stderr)
         while not _ok(ready_url):
             if sup.poll() is not None:
                 print(f"localcode: the model server failed to start (see {rd / 'supervisor.log'})", file=sys.stderr)
