@@ -85,10 +85,12 @@ def server_command(gguf: str, port: int, alias: str | None = None) -> list[str]:
         # The template reads its own `reasoning_effort` (Inkling 2: "none" to
         # "max", default "high") and ignores enable_thinking, so `--reasoning
         # off` left it thinking at high effort with the thought printed as the
-        # reply. Off = effort "none" as the server default. The parser stays on,
-        # so a thought the model still opens goes to reasoning_content.
+        # reply. Off = effort "none" as the server default, and a reasoning budget
+        # of 0: effort "none" alone still let Inkling open a thought, and on a
+        # coding request it spent all 600 tokens thinking with no reply. The
+        # budget closes any thought the moment it opens; the parser stays on.
         if str(mode).strip().lower() != "on":
-            cmd += ["--chat-template-kwargs", '{"reasoning_effort":"none"}']
+            cmd += ["--chat-template-kwargs", '{"reasoning_effort":"none"}', "--reasoning-budget", "0"]
         cmd += ["--reasoning-format", "auto"]
     # Vision: same rule as classic localcode (runtime.py) — pass --mmproj when the
     # catalog says this model ships a projector and the sidecar is on disk.
