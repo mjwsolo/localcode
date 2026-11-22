@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -313,6 +314,9 @@ def save_config(config: AppConfig) -> Path:
 _LAUNCH = RuntimeConfig()
 
 
+_WARNED_SECTIONS: set[tuple[str, str]] = set()
+
+
 def load_config() -> AppConfig:
     ensure_home_dirs()
     path = get_config_path()
@@ -331,6 +335,13 @@ def load_config() -> AppConfig:
             data = tomllib.loads(DEFAULT_CONFIG)
         except Exception:
             data = {}
+    for section in ("runtime", "ui"):
+        if section in data and not isinstance(data[section], dict):
+            if (str(path), section) not in _WARNED_SECTIONS:
+                _WARNED_SECTIONS.add((str(path), section))
+                print(f"localcode: ignoring [{section}] in {path}: expected a table, found "
+                      f"{type(data[section]).__name__}", file=sys.stderr)
+            data = {**data, section: {}}
     runtime_data = data.get("runtime", {})
     # search / browser / voice sections removed during T0.9 purge
     ui_data = data.get("ui", {})
