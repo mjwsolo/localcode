@@ -78,6 +78,32 @@ def test_dry_run_prints_every_step_in_order_and_changes_nothing(repo, tmp_path):
     assert git(repo, "ls-remote", "--tags", "origin") == ""
 
 
+@pytest.mark.parametrize("prepared", [False, True])
+def test_release_pushes_candidate_preserving_installed_version_lookup(repo, tmp_path, prepared):
+    git(repo, "config", "user.name", "Release tests")
+    git(repo, "config", "user.email", "tests@example.invalid")
+    version = "0.5.41rc1" if prepared else "0.5.40"
+    package = repo / "src/localcode/__init__.py"
+    lookup = '    __version__ = _pkg_version("localcode")'
+    package.write_text(f'try:\n{lookup}\nexcept Exception:\n    __version__ = "{version}"\n')
+    (repo / "pyproject.toml").write_text(f'[project]\nversion = "{version}"\n')
+    git(repo, "commit", "-qam", "candidate input")
+    git(repo, "push", "-q", "origin", "main")
+    head = git(repo, "rev-parse", "HEAD")
+    # Stop where the real run first needs GitHub. The push uses the fixture's bare remote.
+    gh = tmp_path / "bin/gh"
+    gh.parent.mkdir(exist_ok=True)
+    gh.write_text("#!/bin/sh\nexit 37\n")
+    gh.chmod(0o755)
+    result = release(repo, tmp_path, "0.5.41", "--model", "m")
+    assert result.returncode == 37, result.stdout + result.stderr
+    pushed = git(repo, "ls-remote", "origin", "refs/heads/release/0.5.41").split()[0]
+    assert (pushed == head) is prepared
+    contents = git(repo, "show", f"{pushed}:src/localcode/__init__.py")
+    assert lookup in contents
+    assert '    __version__ = "0.5.41rc1"' in contents
+
+
 @pytest.mark.parametrize("what", ["dirty", "branch", "behind", "llama", "changelog", "tagged"])
 def test_refuses_to_start(repo, tmp_path, what):
     pg = 1
