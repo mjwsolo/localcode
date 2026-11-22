@@ -275,7 +275,10 @@ class Supervisor:
         """The file (every shard, at its listed size, for a split) is in the models dir."""
         target = found or self.models_dir / filename
         if not is_shard(filename):
-            return target.is_file()
+            try:
+                return target.is_file() and target.stat().st_size > 0   # an empty file is not a model
+            except OSError:
+                return False
         from localcode.hf_quants import local_name
         sizes = {local_name(p): n for p, n in (getattr(quant, "shards", None) or ())}
         return split_complete(target, sizes)
@@ -743,7 +746,7 @@ class Supervisor:
                 "filename": q.filename, "alias": _alias(q.filename), "label": q.label,
                 "size_gb": round(total_gb, 1), "fit": fit_badge(footprint, self.ram_gb, q.filename),
                 "tok_s": spd, "recommended": i == rec_idx,
-                "downloaded": q.filename in installed and (not is_shard(q.filename) or self._model_ready(q.filename, q, installed.get(q.filename))),
+                "downloaded": q.filename in installed and self._model_ready(q.filename, q, installed.get(q.filename)),
                 "current": _alias(q.filename) == self.current,
                 "loaded": loaded and _alias(q.filename) == self.current,
                 "downloading": self.downloading(q.filename),
@@ -1219,9 +1222,7 @@ class Supervisor:
         if not out.get("ok"):
             return {"error": out.get("text") or "transcription failed"}
         # whisper labels non-speech ("[wind blowing]", "(music)", "[BLANK_AUDIO]"); drop them
-        import re
-        text = re.sub(r"\s*[\[(][^\])]{0,40}[\])]\s*", " ", out.get("text", "")).strip()
-        return {"ok": True, "text": text}
+        return {"ok": True, "text": strip_non_speech_captions(out.get("text", ""))}
 
     def voice_speak(self, text: str) -> dict:
         with self.speech_lock:
@@ -1293,6 +1294,25 @@ class Supervisor:
         self.models_dir = path
         os.environ["LOCALCODE_MODEL_DIR"] = str(path)
         return dict(self.models_dir_info(), ok=True)
+
+
+_CAPTION_WORDS = (
+    "music", "applause", "laughter", "laughs", "laughing", "silence", "blank_audio", "blank audio",
+    "noise", "wind", "wind blowing", "coughs", "coughing", "sighs", "sniffs", "breathing", "inaudible",
+    "static", "clicking", "typing", "keyboard", "birds chirping", "background noise", "music playing",
+    "no audio", "speaking foreign language", "foreign language",
+)
+
+
+def strip_non_speech_captions(text: str) -> str:
+    """Drop whisper's non-speech labels ("[BLANK_AUDIO]", "(music)", "[wind blowing]")
+    and nothing else: dictated code such as items[0] or reset() stays intact."""
+    import re
+    def caption(m: "re.Match[str]") -> str:
+        inner = re.sub(r"[\s_*]+", " ", m.group(2)).strip().lower()
+        return " " if inner in _CAPTION_WORDS else m.group(0)
+    cleaned = re.sub(r"(?<![\w\])])\s*([\[(])([^\])]{0,40})[\])](?!\w)", caption, text)
+    return re.sub(r"[ \t]{2,}", " ", cleaned).strip()
 
 
 def _safe_filename(name: str) -> bool:
