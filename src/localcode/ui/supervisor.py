@@ -676,7 +676,12 @@ class Supervisor:
                     self.__dict__.setdefault("_quant_done", {})[g.hf_repo] = done
                     def fetch():
                         try:
-                            memory[g.hf_repo] = (fetch_quants(g.hf_repo), time.time())
+                            listed = fetch_quants(g.hf_repo)
+                            # Stamp with the time the listing was really fetched. A failed
+                            # fetch returns the stale cache or [] and writes nothing, so it
+                            # must not look fresh (that hid variants for a day).
+                            saved = _read_cache(g.hf_repo)
+                            memory[g.hf_repo] = (listed, saved[1] if saved else fetched)
                         except Exception as exc:
                             log(f"Quant refresh failed: {type(exc).__name__}")
                         finally:
@@ -756,7 +761,7 @@ class Supervisor:
         fitting = [i for i, q in enumerate(rows)
                    if fit_badge(footprint_gb(q.size_gb, group), self.ram_gb, q.filename) == "fits"]
         if not fitting:
-            return 0
+            return None   # nothing fits: do not star a quant the row itself calls too big
         speeds = {i: (estimate_decode_tok_s(rows[i].size_gb, name, self.bandwidth) or 0)
                   for i in fitting}
         fastest = max(speeds.values()) or 0
