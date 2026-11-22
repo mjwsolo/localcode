@@ -104,6 +104,12 @@ for model in sorted({key[1] for key in common}):
         continue
     print(f"  {model} median decode tok/s: {dB:.1f} -> {dC:.1f} ({(dC/dB-1)*100:+.0f}%)")
     speed_blocked |= dC < dB * (1 - a.max_speed_drop)
+    # Time to first token is dominated by prefill, so a prefill collapse is a
+    # speed regression even when decode is unchanged. Skipped when not measured.
+    fB, fC = med(rows_b, "prefill_tps"), med(rows_c, "prefill_tps")
+    if all(isinstance(v, (int, float)) and math.isfinite(v) and v > 0 for v in (fB, fC)):
+        print(f"  {model} median prefill tok/s: {fB:.1f} -> {fC:.1f} ({(fC/fB-1)*100:+.0f}%)")
+        speed_blocked |= fC < fB * (1 - a.max_speed_drop)
 pB, pC = med(allB, "prefill_tps"), med(allC, "prefill_tps")
 if pB and pC: print(f"  median prefill tok/s: baseline {pB:.1f} -> candidate {pC:.1f} ({(pC / pB - 1) * 100:+.0f}%)")
 vB, vC = med(allB, "tool_validity"), med(allC, "tool_validity")
