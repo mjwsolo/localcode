@@ -339,8 +339,8 @@ def load_config() -> AppConfig:
         if section in data and not isinstance(data[section], dict):
             if (str(path), section) not in _WARNED_SECTIONS:
                 _WARNED_SECTIONS.add((str(path), section))
-                print(f"localcode: ignoring [{section}] in {path}: expected a table, found "
-                      f"{type(data[section]).__name__}", file=sys.stderr)
+                sys.stderr.write(f"localcode: ignoring [{section}] in {path}: expected a table, found "
+                                 f"{type(data[section]).__name__}\n")
             data = {**data, section: {}}
     runtime_data = data.get("runtime", {})
     # search / browser / voice sections removed during T0.9 purge
