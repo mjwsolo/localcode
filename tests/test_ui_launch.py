@@ -361,3 +361,39 @@ def test_runtime_env_never_downloads_language_servers_on_its_own(monkeypatch, tm
 
     monkeypatch.delenv("OPENCODE_DISABLE_LSP_DOWNLOAD", raising=False)
     assert runtime_env(tmp_path / "runtime.json", 1)["OPENCODE_DISABLE_LSP_DOWNLOAD"] == "1"
+
+
+def test_project_mcp_names_handle_inline_jsonc_comments(tmp_path):
+    from localcode.ui.launch import _project_mcp_names
+    (tmp_path / "opencode.jsonc").write_text(
+        '{\n  "mcp": { /* block */\n    "files": {"type": "remote", "url": "https://x/a"}, // inline\n'
+        '    "mail": {"type": "local", "command": ["x"]} // "quoted" text\n  }\n}\n')
+    assert _project_mcp_names(tmp_path) == ["files", "mail"]
+
+
+def test_relative_project_is_resolved_once(tmp_path, monkeypatch):
+    (tmp_path / "proj").mkdir()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("localcode.ui.platform_supported", lambda: True)
+    monkeypatch.setattr("localcode.ui.ui_binary_path", lambda: tmp_path / "ui")
+    seen = {}
+    monkeypatch.setattr("localcode.ui.launch.main", lambda model, project=None, **k: seen.update(project=project) or 0)
+    with pytest.raises(SystemExit):
+        entrypoint.main(["proj"])
+    assert Path(seen["project"]) == (tmp_path / "proj").resolve()
+    assert Path(seen["project"]).is_absolute()
+
+
+def test_external_model_with_managed_name_collision_is_reported(tmp_path):
+    from localcode.ui.launch import _model_alias
+    managed = tmp_path / "managed"
+    managed.mkdir()
+    (managed / "test.gguf").write_bytes(b"GGUFmanaged")
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    (outside / "test.gguf").write_bytes(b"GGUFexternal")
+    with pytest.raises(OSError) as e:
+        _model_alias(str(outside / "test.gguf"), managed)
+    assert str(outside / "test.gguf") in str(e.value) and str(managed / "test.gguf") in str(e.value)
+    # the same file reached through the managed folder is fine
+    assert _model_alias(str(managed / "test.gguf"), managed) == "test"

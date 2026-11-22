@@ -40,6 +40,13 @@ def _shutdown_supervisor(process) -> None:
         process.wait(timeout=5)
 
 
+def _same_file(a: Path, b: Path) -> bool:
+    try:
+        return a.samefile(b)
+    except OSError:
+        return False
+
+
 def _model_alias(model: str | None, directory: Path) -> str | None:
     if not model:
         return None
@@ -60,6 +67,9 @@ def _model_alias(model: str | None, directory: Path) -> str | None:
     if existing is None:
         return None
     target = directory / existing.name
+    if explicit.is_file() and target.exists() and not _same_file(target, existing):
+        raise OSError(f"{existing} has the same file name as {target}, a different model in the models folder; "
+                      "rename one of them")
     directory.mkdir(parents=True, exist_ok=True)
     if is_shard(existing.name):
         link_split(existing, directory)
@@ -298,6 +308,35 @@ def _mcp_server_names(mcp: object) -> list[str]:
     return sorted(names)
 
 
+def _strip_jsonc_comments(text: str) -> str:
+    """Drop // and /* */ comments outside strings; a "//" inside a URL stays."""
+    out: list[str] = []
+    i, n, in_str = 0, len(text), False
+    while i < n:
+        c = text[i]
+        if in_str:
+            out.append(c)
+            if c == "\\" and i + 1 < n:
+                out.append(text[i + 1])
+                i += 1
+            elif c == '"':
+                in_str = False
+        elif c == '"':
+            in_str = True
+            out.append(c)
+        elif text.startswith("//", i):
+            while i < n and text[i] != "\n":
+                i += 1
+            continue
+        elif text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            i = n if end < 0 else end + 1
+        else:
+            out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def _project_mcp_names(project_dir: Path) -> list[str]:
     """Server names declared in the project's own config files, if any."""
     names: set[str] = set()
@@ -306,9 +345,7 @@ def _project_mcp_names(project_dir: Path) -> list[str]:
         if not f.is_file():
             continue
         try:
-            # .jsonc: drop whole-line // comments only; a "//" inside a URL stays.
-            text = "\n".join(line for line in f.read_text().splitlines() if not line.lstrip().startswith("//"))
-            data = json.loads(text)
+            data = json.loads(_strip_jsonc_comments(f.read_text()))
         except (OSError, ValueError):
             continue
         if isinstance(data, dict):
@@ -377,6 +414,9 @@ def attach(ctrl: int, status: dict, ui_bin: Path, project_dir: Path, alias: str 
     if alias and current and alias != current:
         print(f"localcode: attaching to the running session's model {current}; use /models there to switch.",
               file=sys.stderr)
+    elif alias and not current:
+        print(f"localcode: the running session has no model loaded, so --model {alias} was not applied; "
+              "pick one with /models.", file=sys.stderr)
     rd = run_dir()
     rd.mkdir(parents=True, exist_ok=True)
     config_path = rd / f"session-{os.getpid()}.json"
@@ -472,6 +512,8 @@ def main(model: str | None = None, project: str | None = None,
     try:
         ready_url = f"http://127.0.0.1:{port}/health" if alias else f"http://127.0.0.1:{ctrl}/status"
         deadline = time.monotonic() + WAIT_S
+        if alias:
+            print(f"localcode: loading {alias}; this can take a minute on the first start...", file=sys.stderr)
         while not _ok(ready_url):
             if sup.poll() is not None:
                 print(f"localcode: the model server failed to start (see {rd / 'supervisor.log'})", file=sys.stderr)

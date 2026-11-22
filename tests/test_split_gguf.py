@@ -133,6 +133,20 @@ def test_link_and_remove_cover_all_shards(tmp_path):
     assert all((src / n).exists() for n in names)
 
 
+def test_link_split_follows_snapshot_symlinks_to_hash_named_blobs(tmp_path):
+    snap, blobs, dst = tmp_path / "snap", tmp_path / "blobs", tmp_path / "models"
+    snap.mkdir()
+    blobs.mkdir()
+    names = make_split(tmp_path / "scratch") if (tmp_path / "scratch").mkdir() is None else []
+    for i, n in enumerate(names):
+        blob = blobs / f"hash{i}"
+        blob.write_bytes((tmp_path / "scratch" / n).read_bytes())
+        (snap / n).symlink_to(blob)
+    split_gguf.link_split(snap / names[0], dst)
+    assert sorted(p.name for p in dst.iterdir()) == names
+    assert all((dst / n).resolve().parent == blobs.resolve() for n in names)
+
+
 def group_and_stem():
     g = supervisor.MODEL_GROUPS[0]
     stem = g.hf_repo.rsplit("/", 1)[-1].removesuffix("-GGUF")

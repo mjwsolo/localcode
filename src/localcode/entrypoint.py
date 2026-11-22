@@ -69,12 +69,18 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     project = args.project
+    if args.model:
+        # A relative model file is relative to where the user typed it, not the project.
+        typed = Path(args.model).expanduser()
+        if typed.is_file():
+            args.model = str(typed.resolve())
     if project:
-        project_dir = Path(project).resolve()
+        project_dir = Path(project).expanduser().resolve()
         if not project_dir.is_dir():
             print(f"localcode: directory not found: {project}", file=sys.stderr)
             sys.exit(1)
         os.chdir(project_dir)
+        project = str(project_dir)   # already inside it: a relative path would resolve twice
 
     from .ui import platform_supported, ui_binary_path
     if not platform_supported():
