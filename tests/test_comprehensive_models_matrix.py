@@ -197,5 +197,10 @@ def test_launcher_only_silences_reasoning_where_a_switch_exists(choice, monkeypa
         # Inkling 2 ignores enable_thinking; off is the template's own effort "none".
         kwargs = cmd[cmd.index("--chat-template-kwargs") + 1]
         assert json.loads(kwargs) == {"reasoning_effort": "none"}
+        # Off also opens the turn with an empty thought (packaged template).
+        template = Path(cmd[cmd.index("--chat-template-file") + 1])
+        assert template.is_file()
+        assert "<|message_model|><|content_thinking|><|end_message|>" in template.read_text()
     else:
         assert "--chat-template-kwargs" not in cmd
+        assert "--chat-template-file" not in cmd
