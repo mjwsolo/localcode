@@ -1,0 +1,527 @@
+diff --git a/ggml/include/ggml.h b/ggml/include/ggml.h
+index 2044c9f40..21972e786 100644
+--- a/ggml/include/ggml.h
++++ b/ggml/include/ggml.h
+@@ -490,6 +490,7 @@ extern "C" {
+         GGML_GLU_OP_GEGLU_ERF,
+         GGML_GLU_OP_GEGLU_QUICK,
+         GGML_GLU_OP_SWIGLU_CLAMP,
++        GGML_GLU_OP_SITU,
+ 
+         GGML_GLU_OP_COUNT,
+     };
+@@ -1223,6 +1224,14 @@ extern "C" {
+             struct ggml_tensor  * b,
+             float                 limit);
+ 
++    // situ(a, b) = beta*tanh(a/beta)*sigmoid(a) * linear_beta*tanh(b/linear_beta), b is used as is when linear_beta <= 0
++    GGML_API struct ggml_tensor * ggml_situ(
++            struct ggml_context * ctx,
++            struct ggml_tensor  * a,
++            struct ggml_tensor  * b,
++            float                 beta,
++            float                 linear_beta);
++
+     // normalize along rows
+     GGML_API struct ggml_tensor * ggml_norm(
+             struct ggml_context * ctx,
+diff --git a/ggml/src/ggml-cpu/ggml-cpu.c b/ggml/src/ggml-cpu/ggml-cpu.c
+index fb5caeee4..c3e14ac76 100644
+--- a/ggml/src/ggml-cpu/ggml-cpu.c
++++ b/ggml/src/ggml-cpu/ggml-cpu.c
+@@ -2412,6 +2412,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
+                 case GGML_GLU_OP_GEGLU_ERF:
+                 case GGML_GLU_OP_GEGLU_QUICK:
+                 case GGML_GLU_OP_SWIGLU_CLAMP:
++                case GGML_GLU_OP_SITU:
+                     {
+                         n_tasks = n_threads;
+                     } break;
+diff --git a/ggml/src/ggml-cpu/ops.cpp b/ggml/src/ggml-cpu/ops.cpp
+index 5932b9899..460a67165 100644
+--- a/ggml/src/ggml-cpu/ops.cpp
++++ b/ggml/src/ggml-cpu/ops.cpp
+@@ -3720,6 +3720,69 @@ static void ggml_compute_forward_swiglu_clamp(const ggml_compute_params * params
+     }
+ }
+ 
++// ggml_compute_forward_situ
++
++static inline float ggml_situ_f32(float gate, float up, float beta, float linear_beta) {
++    const float act = beta*tanhf(gate/beta)/(1.0f + expf(-gate));
++    return act*(linear_beta > 0.0f ? linear_beta*tanhf(up/linear_beta) : up);
++}
++
++template <typename T>
++static void ggml_compute_forward_situ_impl(const ggml_compute_params * params, ggml_tensor * dst) {
++    const ggml_tensor * src0 = dst->src[0];
++    const ggml_tensor * src1 = dst->src[1];
++
++    GGML_ASSERT(src1 != nullptr);
++    GGML_ASSERT(ggml_is_contiguous_1(src0));
++    GGML_ASSERT(ggml_is_contiguous_1(src1));
++    GGML_ASSERT(ggml_is_contiguous_1(dst));
++    GGML_ASSERT(src0->type == src1->type);
++
++    const int nc = src0->ne[0];
++    const int nr = ggml_nrows(src0);
++
++    GGML_ASSERT(dst->ne[0] == nc);
++    GGML_ASSERT(ggml_nrows(dst) == nr);
++
++    const float beta        = ggml_get_op_params_f32(dst, 2);
++    const float linear_beta = ggml_get_op_params_f32(dst, 3);
++
++    const int dr  = (nr + params->nth - 1)/params->nth;
++    const int ir0 = dr*params->ith;
++    const int ir1 = MIN(ir0 + dr, nr);
++
++    for (int i1 = ir0; i1 < ir1; i1++) {
++        const T * gate = (const T *) ((const char *) src0->data + i1*src0->nb[1]);
++        const T * up   = (const T *) ((const char *) src1->data + i1*src1->nb[1]);
++        T       * out  = (T *)       ((char *)       dst->data  + i1*dst->nb[1]);
++
++        for (int k = 0; k < nc; k++) {
++            if constexpr (std::is_same_v<T, float>) {
++                out[k] = ggml_situ_f32(gate[k], up[k], beta, linear_beta);
++            } else {
++                out[k] = type_conversion_table<T>::from_f32(ggml_situ_f32(
++                    type_conversion_table<T>::to_f32(gate[k]), type_conversion_table<T>::to_f32(up[k]), beta, linear_beta));
++            }
++        }
++    }
++}
++
++static void ggml_compute_forward_situ(const ggml_compute_params * params, ggml_tensor * dst) {
++    switch (dst->src[0]->type) {
++        case GGML_TYPE_F32:
++            ggml_compute_forward_situ_impl<float>(params, dst);
++            break;
++        case GGML_TYPE_F16:
++            ggml_compute_forward_situ_impl<ggml_fp16_t>(params, dst);
++            break;
++        case GGML_TYPE_BF16:
++            ggml_compute_forward_situ_impl<ggml_bf16_t>(params, dst);
++            break;
++        default:
++            GGML_ABORT("fatal error");
++    }
++}
++
+ // ggml_compute_forward_geglu_erf
+ 
+ static void ggml_compute_forward_geglu_erf_f32(
+@@ -10575,6 +10638,10 @@ void ggml_compute_forward_glu(
+             {
+                 ggml_compute_forward_swiglu_clamp(params, dst);
+             } break;
++        case GGML_GLU_OP_SITU:
++            {
++                ggml_compute_forward_situ(params, dst);
++            } break;
+         default:
+             {
+                 GGML_ABORT("fatal error");
+diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
+index e6c70e78e..f2318d077 100644
+--- a/ggml/src/ggml-cuda/ggml-cuda.cu
++++ b/ggml/src/ggml-cuda/ggml-cuda.cu
+@@ -3074,6 +3074,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
+                 case GGML_GLU_OP_SWIGLU_CLAMP:
+                     ggml_cuda_op_swiglu_clamp(ctx, dst);
+                     break;
++                case GGML_GLU_OP_SITU:
++                    ggml_cuda_op_situ(ctx, dst);
++                    break;
+                 default:
+                     return false;
+             }
+@@ -6516,6 +6519,9 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
+                         return false;
+                     }
+                     return ggml_is_contiguous_1(op->src[0]);
++                case GGML_GLU_OP_SITU:
++                    return op->src[0]->type != GGML_TYPE_BF16 && op->src[1] &&
++                        ggml_is_contiguous_1(op->src[0]) && ggml_is_contiguous_1(op->src[1]);
+                 default:
+                     return false;
+             }
+diff --git a/ggml/src/ggml-cuda/unary.cu b/ggml/src/ggml-cuda/unary.cu
+index b3b6aa48d..1fb78440c 100644
+--- a/ggml/src/ggml-cuda/unary.cu
++++ b/ggml/src/ggml-cuda/unary.cu
+@@ -555,6 +555,53 @@ void ggml_cuda_op_swiglu_clamp(ggml_backend_cuda_context & ctx, ggml_tensor * ds
+     }
+ }
+ 
++// situ: split only, gate and up are row-strided views (e.g. the halves of a fused gate_up)
++
++template <typename T>
++static __global__ void situ_kernel(const T * gate, const T * up, T * dst, const int64_t k, const int64_t n, const int64_t o0, const int64_t o1,
++        const float beta, const float linear_beta) {
++    const int64_t i = int64_t(blockDim.x)*blockIdx.x + threadIdx.x;
++
++    if (i >= k) {
++        return;
++    }
++
++    const int64_t j0 = (i / n) * o0 + (i % n);
++    const int64_t j1 = (i / n) * o1 + (i % n);
++
++    dst[i] = (T) ggml_cuda_op_situ_single((float) gate[j0], (float) up[j1], beta, linear_beta);
++}
++
++template <typename T>
++static void situ_cuda(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, const float beta, const float linear_beta, cudaStream_t stream) {
++    const int64_t k          = ggml_nelements(dst);
++    const int64_t num_blocks = (k + CUDA_GLU_BLOCK_SIZE - 1) / CUDA_GLU_BLOCK_SIZE;
++    situ_kernel<<<num_blocks, CUDA_GLU_BLOCK_SIZE, 0, stream>>>((const T *) src0->data, (const T *) src1->data, (T *) dst->data,
++        k, src0->ne[0], src0->nb[1] / sizeof(T), src1->nb[1] / sizeof(T), beta, linear_beta);
++}
++
++void ggml_cuda_op_situ(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
++    const ggml_tensor * src0 = dst->src[0];
++    const ggml_tensor * src1 = dst->src[1];
++
++    GGML_ASSERT(src1 != nullptr);
++    GGML_ASSERT(ggml_is_contiguous_1(src0) && src0->nb[0] == ggml_element_size(src0));
++    GGML_ASSERT(ggml_is_contiguous_1(src1) && src1->nb[0] == ggml_element_size(src1));
++    GGML_ASSERT(ggml_is_contiguous(dst));
++    GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16);
++    GGML_ASSERT(src0->type == src1->type && src0->type == dst->type);
++    GGML_ASSERT(ggml_are_same_shape(src0, src1) && ggml_are_same_shape(src0, dst));
++
++    const float beta        = ggml_get_op_params_f32(dst, 2);
++    const float linear_beta = ggml_get_op_params_f32(dst, 3);
++
++    if (src0->type == GGML_TYPE_F16) {
++        situ_cuda<half>(src0, src1, dst, beta, linear_beta, ctx.stream());
++    } else {
++        situ_cuda<float>(src0, src1, dst, beta, linear_beta, ctx.stream());
++    }
++}
++
+ /* CUDA kernel + launcher for xIELU */
+ 
+ template <typename T>
+diff --git a/ggml/src/ggml-cuda/unary.cuh b/ggml/src/ggml-cuda/unary.cuh
+index c6ffdb9d6..94b008679 100644
+--- a/ggml/src/ggml-cuda/unary.cuh
++++ b/ggml/src/ggml-cuda/unary.cuh
+@@ -85,6 +85,8 @@ void ggml_cuda_op_swiglu_oai(ggml_backend_cuda_context & ctx, ggml_tensor * dst)
+ 
+ void ggml_cuda_op_swiglu_clamp(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
+ 
++void ggml_cuda_op_situ(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
++
+ void ggml_cuda_op_geglu_erf(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
+ 
+ void ggml_cuda_op_geglu_quick(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
+@@ -122,6 +124,11 @@ __device__ __forceinline__ float ggml_cuda_op_swiglu_clamp_single(float gate, fl
+     return ggml_cuda_op_silu_single(gate) * up;
+ }
+ 
++__device__ __forceinline__ float ggml_cuda_op_situ_single(float gate, float up, float beta, float linear_beta) {
++    const float act = beta * tanhf(gate / beta) / (1.0f + expf(-gate));
++    return act * (linear_beta > 0.0f ? linear_beta * tanhf(up / linear_beta) : up);
++}
++
+ __device__ __forceinline__ float ggml_cuda_op_glu_single(ggml_glu_op op, float gate, float up, float limit) {
+     switch (op) {
+         case GGML_GLU_OP_SWIGLU:
+diff --git a/ggml/src/ggml-metal/ggml-metal-device.cpp b/ggml/src/ggml-metal/ggml-metal-device.cpp
+index bb29682cc..97d80ae75 100644
+--- a/ggml/src/ggml-metal/ggml-metal-device.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-device.cpp
+@@ -320,6 +320,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_glu(ggml_metal_l
+                 case GGML_GLU_OP_GEGLU_ERF:    op_str = "geglu_erf";    break;
+                 case GGML_GLU_OP_GEGLU_QUICK:  op_str = "geglu_quick";  break;
+                 case GGML_GLU_OP_SWIGLU_CLAMP: op_str = "swiglu_clamp"; break;
++                case GGML_GLU_OP_SITU:         op_str = "situ";         break;
+                 default: GGML_ABORT("fatal error");
+             } break;
+         default: GGML_ABORT("fatal error");
+diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
+index fafefca96..84c8ababe 100644
+--- a/ggml/src/ggml-metal/ggml-metal-device.m
++++ b/ggml/src/ggml-metal/ggml-metal-device.m
+@@ -1735,6 +1735,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
+                 case GGML_GLU_OP_GEGLU_ERF:
+                 case GGML_GLU_OP_GEGLU_QUICK:
+                 case GGML_GLU_OP_SWIGLU_CLAMP:
++                case GGML_GLU_OP_SITU:
+                     return ggml_is_contiguous_1(op->src[0]) && (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16);
+                default:
+                     return false;
+diff --git a/ggml/src/ggml-metal/kernels/unary.metal b/ggml/src/ggml-metal/kernels/unary.metal
+index b361da996..d3452a0cc 100644
+--- a/ggml/src/ggml-metal/kernels/unary.metal
++++ b/ggml/src/ggml-metal/kernels/unary.metal
+@@ -347,6 +347,41 @@ typedef decltype(kernel_swiglu_oai<float>) kernel_swiglu_oai_t;
+ template [[host_name("kernel_swiglu_oai_f32")]] kernel kernel_swiglu_oai_t kernel_swiglu_oai<float>;
+ template [[host_name("kernel_swiglu_oai_f16")]] kernel kernel_swiglu_oai_t kernel_swiglu_oai<half>;
+ 
++// SiTU: beta*tanh(gate/beta)*sigmoid(gate) * (linear_beta > 0 ? linear_beta*tanh(up/linear_beta) : up)
++// (ggml_situ stores beta and linear_beta in op params 2 and 3, which the GLU dispatch passes as alpha and limit)
++template<typename T>
++kernel void kernel_situ(
++        constant ggml_metal_kargs_glu & args,
++        device const char * src0,
++        device const char * src1,
++        device       char * dst,
++        uint2 tgpig[[threadgroup_position_in_grid]],
++        uint2 tpitg[[thread_position_in_threadgroup]],
++        uint2   ntg[[threads_per_threadgroup]],
++        uint2  ntgs[[threadgroups_per_grid]]) {
++    device const T * src0_row = (device const T *) ((device const char *) src0 + tgpig.y*args.nb01) + args.i00;
++    device const T * src1_row = (device const T *) ((device const char *) src1 + tgpig.y*args.nb11) + args.i10;
++    device       T * dst_row  = (device       T *) ((device       char *) dst  + tgpig.y*args.nb1);
++
++    const float beta        = args.alpha;
++    const float linear_beta = args.limit;
++
++    for (int i0 = tgpig.x*ntg.x + tpitg.x; i0 < args.ne0; i0 += ntg.x*ntgs.x) {
++        const float gate = src0_row[i0];
++        const float up   = src1_row[i0];
++
++        const float act = beta*precise::tanh(gate/beta)/(1.0f + exp(-gate));
++        const float lin = linear_beta > 0.0f ? linear_beta*precise::tanh(up/linear_beta) : up;
++
++        dst_row[i0] = (T)(act*lin);
++    }
++}
++
++typedef decltype(kernel_situ<float>) kernel_situ_t;
++
++template [[host_name("kernel_situ_f32")]] kernel kernel_situ_t kernel_situ<float>;
++template [[host_name("kernel_situ_f16")]] kernel kernel_situ_t kernel_situ<half>;
++
+ template<typename T>
+ kernel void kernel_swiglu_clamp(
+         constant ggml_metal_kargs_glu & args,
+diff --git a/ggml/src/ggml-vulkan/ggml-vulkan.cpp b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+index 7e30538f7..5cdbfba56 100644
+--- a/ggml/src/ggml-vulkan/ggml-vulkan.cpp
++++ b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+@@ -3928,6 +3928,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
+     CREATE_GLU(swiglu, SWIGLU)
+     CREATE_GLU(swiglu_oai, SWIGLU_OAI)
+     CREATE_GLU(swiglu_clamp, SWIGLU_CLAMP)
++    CREATE_GLU(situ, SITU)
+     CREATE_GLU(geglu_erf, GEGLU_ERF)
+     CREATE_GLU(geglu_quick, GEGLU_QUICK)
+ #undef CREATE_GLU
+@@ -13716,6 +13717,7 @@ bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph, in
+         case GGML_GLU_OP_GEGLU_ERF:
+         case GGML_GLU_OP_GEGLU_QUICK:
+         case GGML_GLU_OP_SWIGLU_CLAMP:
++        case GGML_GLU_OP_SITU:
+             ggml_vk_glu(ctx, compute_ctx, src0, src1, node);
+             break;
+         default:
+@@ -16682,6 +16684,8 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
+                 case GGML_GLU_OP_GEGLU_QUICK:
+                 case GGML_GLU_OP_SWIGLU_CLAMP:
+                     return ggml_vk_is_float_elementwise(op) && (!op->src[1] || op->src[1]->type == op->type);
++                case GGML_GLU_OP_SITU:
++                    return ggml_vk_is_float_elementwise(op) && op->src[1] && op->src[1]->type == op->type;
+                 default:
+                     return false;
+             }
+diff --git a/ggml/src/ggml-vulkan/vulkan-shaders/situ.comp b/ggml/src/ggml-vulkan/vulkan-shaders/situ.comp
+new file mode 100644
+index 000000000..759235207
+--- /dev/null
++++ b/ggml/src/ggml-vulkan/vulkan-shaders/situ.comp
+@@ -0,0 +1,18 @@
++#version 450
++
++#include "glu_head.glsl"
++
++// overflow-safe tanh, as in unary.comp
++float situ_tanh(float x) {
++    return 1.0f - 2.0f / (exp(2.0f*x) + 1.0f);
++}
++
++// p.alpha = beta, p.limit = linear beta
++float op(float a, float b) {
++    const float act = p.alpha * situ_tanh(a / p.alpha) / (1.0f + exp(-a));
++    const float up  = p.limit > 0.0f ? p.limit * situ_tanh(b / p.limit) : b;
++
++    return act * up;
++}
++
++#include "glu_main.glsl"
+diff --git a/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp b/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp
+index 56ac69f6b..d854542ad 100644
+--- a/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp
++++ b/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp
+@@ -1006,7 +1006,7 @@ void process_shaders() {
+                                      "elu", "xielu", "sgn", "softplus", "step", "round", "ceil", "floor", "trunc"}) {
+             string_to_spv(op + "_" + t, "unary.comp", merge_maps(dict, {{"OP", "op_" + op}}));
+         }
+-        for (const std::string op : {"geglu", "reglu", "swiglu", "swiglu_oai", "swiglu_clamp", "geglu_erf", "geglu_quick"}) {
++        for (const std::string op : {"geglu", "reglu", "swiglu", "swiglu_oai", "swiglu_clamp", "situ", "geglu_erf", "geglu_quick"}) {
+             string_to_spv(op + "_" + t, op + ".comp", dict);
+         }
+         string_to_spv("log_" + t, "log.comp", dict);
+diff --git a/ggml/src/ggml.c b/ggml/src/ggml.c
+index 5fa6a2bbc..496084159 100644
+--- a/ggml/src/ggml.c
++++ b/ggml/src/ggml.c
+@@ -1316,9 +1316,10 @@ static const char * GGML_GLU_OP_NAME[GGML_GLU_OP_COUNT] = {
+     "GEGLU_ERF",
+     "GEGLU_QUICK",
+     "SWIGLU_CLAMP",
++    "SITU",
+ };
+ 
+-static_assert(GGML_GLU_OP_COUNT == 7, "GGML_GLU_OP_COUNT != 7");
++static_assert(GGML_GLU_OP_COUNT == 8, "GGML_GLU_OP_COUNT != 8");
+ 
+ static_assert(sizeof(struct ggml_object)%GGML_MEM_ALIGN == 0, "ggml_object size must be a multiple of GGML_MEM_ALIGN");
+ static_assert(sizeof(struct ggml_tensor)%GGML_MEM_ALIGN == 0, "ggml_tensor size must be a multiple of GGML_MEM_ALIGN");
+@@ -3170,6 +3171,22 @@ struct ggml_tensor * ggml_swiglu_clamp(
+     return result;
+ }
+ 
++struct ggml_tensor * ggml_situ(
++        struct ggml_context * ctx,
++        struct ggml_tensor  * a,
++        struct ggml_tensor  * b,
++        float                 beta,
++        float                 linear_beta) {
++    GGML_ASSERT(b != NULL);
++    GGML_ASSERT(beta > 0.0f);
++
++    struct ggml_tensor * result = ggml_glu_impl(ctx, a, b, GGML_GLU_OP_SITU, false);
++    ggml_set_op_params_f32(result, 2, beta);
++    ggml_set_op_params_f32(result, 3, linear_beta);
++
++    return result;
++}
++
+ // ggml_norm
+ 
+ static struct ggml_tensor * ggml_norm_impl(
+diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
+index b78840e8a..ce1f366cf 100644
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -2676,17 +2676,9 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+                 } break;
+             case LLM_FFN_SITU:
+                 {
+-                    // situ(gate, up) = beta*tanh(gate/beta)*sigmoid(gate) * lb*tanh(up/lb)
++                    // situ(gate, up) = beta*tanh(gate/beta)*sigmoid(gate) * lb*tanh(up/lb), one op on the strided gate/up views
+                     GGML_ASSERT(has_gate);
+-                    const float beta = hparams.situ_beta;
+-                    const float lb   = hparams.situ_linear_beta;
+-
+-                    ggml_tensor * act = ggml_scale(ctx0, ggml_tanh(ctx0, ggml_scale(ctx0, cur, 1.0f/beta)), beta);
+-                    act = ggml_mul(ctx0, act, ggml_sigmoid(ctx0, cur));
+-                    if (lb > 0.0f) {
+-                        up = ggml_scale(ctx0, ggml_tanh(ctx0, ggml_scale(ctx0, up, 1.0f/lb)), lb);
+-                    }
+-                    cur = ggml_mul(ctx0, act, up);
++                    cur = ggml_situ(ctx0, cur, up, hparams.situ_beta, hparams.situ_linear_beta);
+                     cb(cur, "ffn_moe_situ", il);
+                 } break;
+             case LLM_FFN_GELU:
+diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
+index 3ea319a94..8dde71d54 100644
+--- a/tests/test-backend-ops.cpp
++++ b/tests/test-backend-ops.cpp
+@@ -2495,6 +2495,67 @@ struct test_swiglu_clamp : public test_case {
+     }
+ };
+ 
++// GGML_OP_GLU (SITU)
++struct test_situ : public test_case {
++    const ggml_type type;
++    const std::array<int64_t, 4> ne_a;
++    int v; // view (1 : a and b are the two halves of one tensor, as for a fused gate_up)
++    float beta;
++    float linear_beta;
++
++    std::string vars() override {
++        return VARS_TO_STR5(type, ne_a, v, beta, linear_beta);
++    }
++
++    test_situ(ggml_type type = GGML_TYPE_F32,
++              std::array<int64_t, 4> ne_a = {128, 2, 2, 2},
++              int v = 0,
++              float beta = 4.0f,
++              float linear_beta = 25.0f)
++        : type(type), ne_a(ne_a), v(v), beta(beta), linear_beta(linear_beta) {}
++
++    ggml_tensor * build_graph(ggml_context * ctx) override {
++        ggml_tensor * a;
++        ggml_tensor * b;
++        if (v & 1) {
++            auto ne = ne_a; ne[0] *= 2;
++            ggml_tensor * gate_up = ggml_new_tensor(ctx, type, 4, ne.data());
++            ggml_set_param(gate_up);
++            ggml_set_name(gate_up, "gate_up");
++
++            a = ggml_view_4d(ctx, gate_up, ne_a[0], ne_a[1], ne_a[2], ne_a[3], gate_up->nb[1], gate_up->nb[2], gate_up->nb[3], 0);
++            ggml_set_name(a, "gate");
++            b = ggml_view_4d(ctx, gate_up, ne_a[0], ne_a[1], ne_a[2], ne_a[3], gate_up->nb[1], gate_up->nb[2], gate_up->nb[3],
++                    ne_a[0]*ggml_element_size(gate_up));
++            ggml_set_name(b, "up");
++        } else {
++            a = ggml_new_tensor(ctx, type, 4, ne_a.data());
++            ggml_set_param(a);
++            ggml_set_name(a, "a");
++
++            b = ggml_new_tensor(ctx, type, 4, ne_a.data());
++            ggml_set_param(b);
++            ggml_set_name(b, "b");
++        }
++
++        ggml_tensor * out = ggml_situ(ctx, a, b, beta, linear_beta);
++        ggml_set_name(out, "out");
++
++        return out;
++    }
++
++    void initialize_tensors(ggml_context * ctx) override {
++        // wide enough to saturate both tanh terms
++        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
++            init_tensor_uniform(t, -60.f, 60.f);
++        }
++    }
++
++    double max_nmse_err() override {
++        return type == GGML_TYPE_F32 ? 1e-7 : 5e-6;
++    }
++};
++
+ // GGML_OP_GET_ROWS
+ struct test_get_rows : public test_case {
+     const ggml_type type;
+@@ -10997,7 +11058,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+     for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_BF16}) {
+         for (int v : {0, 1}) {
+             for (int op = 0; op < GGML_GLU_OP_COUNT; op++) {
+-                if (op == GGML_GLU_OP_SWIGLU_OAI || op == GGML_GLU_OP_SWIGLU_CLAMP) {
++                // these take parameters, tested below
++                if (op == GGML_GLU_OP_SWIGLU_OAI || op == GGML_GLU_OP_SWIGLU_CLAMP || op == GGML_GLU_OP_SITU) {
+                     continue;
+                 }
+ 
+@@ -11030,6 +11092,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+         }
+     }
+ 
++    for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_BF16}) {
++        for (int v : {0, 1}) {
++            for (float linear_beta : {0.0f, 25.0f}) {
++                test_cases.emplace_back(new test_situ(type, { 128, 2, 2, 2 }, v, 4.0f, linear_beta));
++            }
++        }
++    }
++
+     for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_Q4_0}) {
+         test_cases.emplace_back(new test_get_rows(type, 300*256,   5,         4,   1,   2, false));
+         test_cases.emplace_back(new test_get_rows(type,     256,   80000, 70000,   2,   1, false));

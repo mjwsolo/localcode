@@ -2568,8 +2568,9 @@ struct llama_model_inkling2 : public llama_model_base {
 
     struct graph : public llm_graph_context {
         graph(const llm_graph_params & params);
-        ggml_tensor * mix(const std::vector<ggml_tensor *> & blocks, ggml_tensor * cur, ggml_tensor * query);
-        ggml_tensor * clip(ggml_tensor * cur, ggml_tensor * scale, float threshold);
+        // il: the layer whose device runs the mix (the shared stacks are kept per device), -1 if unknown
+        ggml_tensor * mix(const std::vector<ggml_tensor *> & blocks, ggml_tensor * cur, ggml_tensor * query, int il = -1);
+        ggml_tensor * clip(ggml_tensor * cur, ggml_tensor * scale, float threshold, int il);
         ggml_tensor * convolve(
                 ggml_tensor * cur,
                 ggml_tensor * weight,
@@ -2578,7 +2579,8 @@ struct llama_model_inkling2 : public llama_model_base {
                 ggml_tensor * history,
                 llm_graph_input_rs * inp,
                 int64_t offset);
-        ggml_tensor * control(ggml_tensor * cur, ggml_tensor * message, const loop_layer & loop, int ctrl);
+        ggml_tensor * control(ggml_tensor * cur, ggml_tensor * cur_norm, ggml_tensor * message, ggml_tensor * message_norm,
+                const loop_layer & loop, int ctrl);
 
     protected:
         // the helpers alone, a derived graph builds its own body
@@ -2591,6 +2593,11 @@ struct llama_model_inkling2 : public llama_model_base {
         ggml_tensor * build_layer(int il, int ip, ggml_tensor * cur, std::vector<ggml_tensor *> & blocks,
                 ggml_tensor * messages = nullptr, const loop_layer * loop = nullptr);
         void build_output(ggml_tensor * cur, const std::vector<ggml_tensor *> & blocks);
+        // banded flash attention for layer il on its device and cache
+        bool use_banded(int il, bool swa);
+        std::vector<std::pair<std::pair<bool, ggml_backend_dev_t>, bool>> banded_dev_ok;
+        // [base, swa] contiguous mask of the banded attention, shared by the layers of a graph
+        ggml_tensor * mask_banded[2] = { nullptr, nullptr };
 
         llm_graph_input_mem_hybrid_iswa_rel * inp  = nullptr;
         llm_graph_input_attn_kv_iswa        * attn = nullptr;
@@ -2598,6 +2605,19 @@ struct llama_model_inkling2 : public llama_model_base {
 
         ggml_tensor * inp_out_ids = nullptr;
         ggml_tensor * tau         = nullptr; // log-scaled positions
+
+        // the normalized block stacks of mix(), per block list
+        struct block_stack {
+            ggml_tensor * states   = nullptr;
+            ggml_tensor * states_t = nullptr;
+        };
+        std::map<std::pair<ggml_backend_dev_t, std::vector<ggml_tensor *>>, block_stack> block_stacks;
+        // the rows of each mix, the stack of its blocks and its current input last
+        std::map<std::pair<ggml_backend_dev_t, std::vector<ggml_tensor *>>, block_stack> mix_states;
+        const block_stack * stack(const std::vector<ggml_tensor *> & blocks, int il);
+
+        // the clip thresholds, per layer device, row count and threshold (and the zero sinks, keyed by -n_head)
+        std::map<std::pair<std::pair<ggml_backend_dev_t, int64_t>, float>, ggml_tensor *> clip_limits;
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
@@ -2660,6 +2680,18 @@ struct llama_model_lfm2moe : public llama_model_base {
 
     template <bool iswa>
     using graph = llama_model_lfm2::graph<iswa>;
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
+struct llama_model_inkling : public llama_model_base {
+    llama_model_inkling(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    struct graph : public llm_graph_context {
+        graph(const llama_model & model, const llm_graph_params & params);
+    };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };

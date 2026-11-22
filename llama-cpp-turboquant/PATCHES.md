@@ -31,6 +31,24 @@ keep the experts in NVFP4, about 11 GB) stayed on the CPU while the log still
 said every layer was offloaded: 90 graph splits, prompts about 5x slower.
 Two hunks were hand-placed beside the MXFP4 lines our kernels move. **Delete it**
 once upstream has Metal NVFP4 kernels.
+New `0015-inkling-banded-attention.patch` is Unsloth's Inkling attention stack:
+unslothai/llama.cpp #378 (Inkling 1 and `GGML_OP_FLASH_ATTN_EXT_BANDED`), #385
+(relative-bias attention chunked over query rows), #386 (banded flash attention
+for the Inkling 2 relative bias, shared masks, fewer repeated graph nodes) and
+#404 (the banded op in both Metal attention kernels, half8x8 and the M5 tensor
+kernel), as one diff against their upstream base. With the TurboQuant op it
+makes the op count 102. Measured on Inkling 2 Mini UD-Q4_K_XL at 128K context:
+the Metal compute buffer drops from 13.1 to 6.2 GB and output is token-identical
+to the build without it. It supersedes ggml-org #32752 (mask in chunks), which
+fixes the same buffer growth differently. **Delete it** once upstream has banded
+attention for Inkling.
+New `0016-situ-glu-op.patch` takes the SiTU GLU op from unslothai #403
+(`GGML_GLU_OP_SITU`, CPU/CUDA/Vulkan) and adds the Metal kernel it lacked
+(`kernel_situ_f32/f16`; test-backend-ops SITU passes 8/8 on Metal), so the MoE
+SiTU chain is one op: 384 fewer graph nodes per Inkling step. #403's graph
+rewrite is not taken; 0015 already carries Unsloth's own graph slimming for the
+same code. The DSpark drafter (ggml-org #32218/#32773) is not taken either: it
+changed greedy output on Inkling (longer hidden reasoning, different answers).
 
 **Pin before that:** `b1b770d90d94cad9e9ea5b993bdbc383a522fb28` (2026-11-13,
 tag `v1.0.0`, 148 commits after `7d7f02875`). Rebased with the 3-way recipe below:
