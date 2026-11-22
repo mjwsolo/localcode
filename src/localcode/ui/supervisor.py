@@ -33,6 +33,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.request
@@ -1269,18 +1270,23 @@ class Supervisor:
         path = Path(os.path.expanduser(raw.strip())).resolve()
         try:
             path.mkdir(parents=True, exist_ok=True)
-            (path / ".localcode-write-test").touch(); (path / ".localcode-write-test").unlink()
+            # A uniquely named probe, so an existing file is never touched.
+            fd, probe = tempfile.mkstemp(prefix=".localcode-write-test-", dir=path)
+            os.close(fd)
+            Path(probe).unlink()
         except OSError as e:
             return {"error": f"cannot use {path}: {e}"}
-        self.models_dir = path
         # localcode's own download path reads model_dir() -> config runtime.model_dir /
         # LOCALCODE_MODEL_DIR, so persist it where every front end will see it.
-        os.environ["LOCALCODE_MODEL_DIR"] = str(path)
+        # Save first: a folder that would revert on restart is not reported as set.
         try:
             from localcode.config import load_config, save_config
             cfg = load_config(); cfg.runtime.model_dir = str(path); save_config(cfg)
         except Exception as e:  # noqa: BLE001
             log(f"supervisor: could not persist model_dir: {e}")
+            return {"error": f"could not save the models folder setting: {e}"}
+        self.models_dir = path
+        os.environ["LOCALCODE_MODEL_DIR"] = str(path)
         return dict(self.models_dir_info(), ok=True)
 
 
