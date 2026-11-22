@@ -480,7 +480,14 @@ class Supervisor:
                 reread_s = float(os.environ.get("LOCALCODE_REREAD_MAX_S") or cb.REREAD_MAX_S)
             except ValueError:
                 reread_s = cb.REREAD_MAX_S
-            new, info = cb.budget(self.ctx, reserve, samples, self.pp_prior, reread_max_s=reread_s)
+            # budget() walks every sample; recompute only when its inputs changed.
+            key = (id(table), getattr(table, "generation", 0), len(samples), self.ctx, reserve, self.pp_prior, reread_s)
+            cached = self.__dict__.get("_budget_cache")
+            if cached is not None and cached[0] == key:
+                new, info = cached[1], cached[2]
+            else:
+                new, info = cb.budget(self.ctx, reserve, samples, self.pp_prior, reread_max_s=reread_s)
+                self._budget_cache = (key, new, info)
             step = max(1, self.ctx // cb.GRID)
             if self._budget is None or abs(new - self._budget) >= step:
                 if self._budget is not None:

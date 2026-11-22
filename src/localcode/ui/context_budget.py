@@ -53,6 +53,7 @@ class TimingTable:
         self._pending: dict[int, dict] = {}
         self._carry = ""
         self.samples: list[Sample] = []
+        self.generation = 0   # bumped when samples are discarded, so cached results can tell
 
     def feed(self, text: str) -> int:
         text = self._carry + text
@@ -86,7 +87,7 @@ class TimingTable:
         return added
 
     def clear(self) -> None:
-        self._pending.clear(); self._carry = ""; self.samples.clear()
+        self._pending.clear(); self._carry = ""; self.samples.clear(); self.generation += 1
 
 
 def _near(samples: list[Sample], c: int, step: int, key: str, min_n: str, min_val: int) -> float | None:
