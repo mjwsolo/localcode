@@ -197,7 +197,5 @@ def test_launcher_only_silences_reasoning_where_a_switch_exists(choice, monkeypa
         # Inkling 2 ignores enable_thinking; off is the template's own effort "none".
         kwargs = cmd[cmd.index("--chat-template-kwargs") + 1]
         assert json.loads(kwargs) == {"reasoning_effort": "none"}
-        # Effort "none" alone still let Inkling think; the budget closes any thought.
-        assert cmd[cmd.index("--reasoning-budget") + 1] == "0"
     else:
         assert "--chat-template-kwargs" not in cmd

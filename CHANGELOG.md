@@ -40,10 +40,6 @@ All notable changes to LocalCode will be documented here. The format follows
   OpenCode Go, usage-limit, /goal, service restart and MCP event tool features
   are left out, and the transcript keeps its current grouped view.
 - The UI patches 0009-0013 now live in the fork itself; `patches/ui` is empty.
-- Inkling 2 Mini's thinking really switches off. Its template's effort "none"
-  still let it open a hidden thought, and on a coding request it could spend
-  the whole reply budget thinking and answer nothing; a reasoning budget of 0
-  now closes any thought as it opens.
 - Inkling 2 Mini is faster and lighter: banded attention for its distance
   bias (Unsloth's llama.cpp work, including the Metal kernels) halves the GPU
   working memory at 128K context (13.1 to 6.2 GB) and reads prompts about
