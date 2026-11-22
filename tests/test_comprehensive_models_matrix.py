@@ -218,3 +218,17 @@ def test_inkling_runs_an_f16_kv_cache(monkeypatch):
         cmd = server_command(f"/models/{choice.filename}", 8081, choice.key)
         if choice.architecture == "inkling2_loop":
             assert "--cache-type-k" not in cmd and "--cache-type-v" not in cmd, choice.key
+
+
+def test_prompt_chunk_size_per_model(monkeypatch):
+    """Gemma 4 26B-A4B and Qwen 3.6 35B-A3B read prompts faster in 2048-token
+    chunks; everything else keeps 512 (dense and Inkling measured slower)."""
+    from localcode.models_catalog import CHOICES
+    from localcode.ui.server_cmd import server_command
+
+    monkeypatch.delenv("LOCALCODE_INTERNAL_THINKING_MODE", raising=False)
+    for choice in CHOICES:
+        cmd = server_command(f"/models/{choice.filename}", 8081, choice.key)
+        ub = int(cmd[cmd.index("-ub") + 1])
+        big = choice.architecture == "qwen35moe" or (choice.architecture == "gemma4-iswa" and "A4B" in choice.name)
+        assert ub == (min(2048, int(cmd[cmd.index("-b") + 1])) if big else 512), choice.key

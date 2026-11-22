@@ -601,14 +601,15 @@ class LocalCodeRuntimeGateway:
         # but large hybrid/MoE GGUFs on 16 GB Macs can OOM during prefill
         # with 2K batches. Respect explicit config first; otherwise clamp
         # the known-unstable Qwen-35B-on-16GB shape.
+        ubatch = self._prompt_ubatch(model_path)
         if mode in ("turbo", "turbo-think", "context"):
             batch = self._effective_llama_batch_size(model_path)
-            cmd.extend(["-b", str(batch), "-ub", str(min(512, batch))])
+            cmd.extend(["-b", str(batch), "-ub", str(min(ubatch, batch))])
         else:
             batch = self.config.llama_cpp_batch_size
             if batch <= 0:
                 batch = 2048 if platform.system() == "Darwin" else 128
-            cmd.extend(["-b", str(batch), "-ub", str(min(512, batch))])
+            cmd.extend(["-b", str(batch), "-ub", str(min(ubatch, batch))])
         # Honor the GGUF's embedded jinja chat template (Unsloth Apr-2026 GGUFs ship
         # the corrected Gemma 4 template that fixes tool-call special-token round-tripping)
         cmd.extend(["--jinja"])
@@ -1097,6 +1098,28 @@ class LocalCodeRuntimeGateway:
 
     def _is_large_local_gguf(self, model_path: str | None = None) -> bool:
         return self._is_large_qwen_gguf(model_path) or self._is_large_gemma_gguf(model_path)
+
+    def _prompt_ubatch(self, model_path: str | None = None) -> int:
+        """Tokens per prompt chunk. Mixture-of-experts models with many small
+        experts read prompts faster in bigger chunks, because each expert then
+        sees more tokens per weight load: measured at 4K tokens, Gemma 4
+        26B-A4B +17% and Qwen 3.6 35B-A3B +21% at 2048, for about 0.5 GB more
+        working memory at 128K context. Dense models (Qwen 3.8 27B, -10%) and
+        Inkling 2 (-17%, and several GB more) are faster at 512, as are models
+        not measured yet."""
+        try:
+            from pathlib import Path
+            from localcode.models_catalog import by_filename
+            choice = by_filename(Path(str(model_path or getattr(self.config, "model", "") or "")).name)
+        except Exception:  # noqa: BLE001
+            return 512
+        if choice is None:
+            return 512
+        if choice.architecture == "qwen35moe":
+            return 2048
+        if choice.architecture == "gemma4-iswa" and "A4B" in choice.name:
+            return 2048
+        return 512
 
     def _kv_f16_only(self, model_path: str | None = None) -> bool:
         """True for models whose attention is faster AND smaller with an f16
