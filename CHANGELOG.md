@@ -58,6 +58,44 @@ All notable changes to LocalCode will be documented here. The format follows
 - Underdog Saluki 27B is no longer in the catalog.
 - DiffusionGemma is listed as Gemma 4 Diffusion 26B-A4B, next to the other
   Gemma 4 models.
+- Inkling 2 Mini with thinking off now answers straight away: its template
+  opens the turn with an empty thought, so a coding prompt no longer spends
+  hundreds of tokens (sometimes the whole budget) thinking first. Tool calls
+  and images work as before.
+- Inkling 2 Mini uses an f16 KV cache: its banded attention converted a q8_0
+  cache to f16 on every prompt chunk. Long prompts read 1.4 to 1.8x faster and
+  it needs 3.3 GB less memory at 128K context. Other models keep q8_0, which
+  measured smaller with no speed loss for them.
+- The logo fits narrow terminals: the full wordmark, the same letters one
+  column narrower, or stacked, on the home screen and the exit summary.
+- The interface uses your terminal's own background colour instead of
+  painting it near-black; panels and highlights are shaded from it.
+
+### Fixed
+
+- `localcode <dir>` with a relative path opened `<dir>/<dir>`.
+- `--model` with a file whose name matches a different managed file loaded
+  the managed one; it now stops and names both paths.
+- Importing a split model from a Hugging Face snapshot kept only the first
+  shard.
+- Choosing a models folder deleted an existing `.localcode-write-test` file,
+  and reported success when saving the setting failed.
+- The picker starred a quant even when none fit; a failed listing fetch hid a
+  model's quants for a day instead of retrying.
+- An empty model file counted as downloaded.
+- Voice dictation's cleanup removed code such as `items[0]` and `reset()`.
+- A mistyped config section crashed startup; `decide --state-file` with
+  non-UTF-8 input printed a traceback; a denied port was reported as "no free
+  port".
+- Downloads rewrote the whole checksum record after every chunk; cancelling
+  during resume checks now stops at once.
+- The context budget and the /server diagnostics got slower in long sessions.
+- The microphone reported recording before capture had started.
+- A second window launched with `--model` against an idle server now says the
+  model was not applied; a long model load now says what it is loading.
+- The release gate blocks a clear drop in overall coding pass rate and a
+  collapse in prompt speed, not only a task going from all pass to all fail.
+- The model promotion check waits for the local gate instead of failing.
 - Shorter command menu: /lsp (language servers were removed in 0.5.38),
   /worktrees, /btw, /terminal, /variants and /effort, /reload, /redo,
   /review, /close-tab, /reopen-closed-tab and the copy-session-ID and
