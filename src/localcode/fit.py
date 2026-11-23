@@ -104,3 +104,17 @@ def fit(files_gb: float, ram_gb: float, filename: str | None = None) -> str:
     if need <= budget:
         return "tight"
     return "too_big"
+
+
+HEADROOM_MIN_GB = 8.0
+HEADROOM_FRACTION = 0.20
+
+
+def free_gb(files_gb: float, ram_gb: float, filename: str | None = None) -> float:
+    """Physical RAM left with the files loaded at the default context."""
+    return ram_gb - (files_gb + runtime_overhead_gb(filename, files_gb))
+
+
+def comfortable(files_gb: float, ram_gb: float, filename: str | None = None) -> bool:
+    """True when loading leaves max(8 GB, 20% of RAM) of physical memory free."""
+    return fit(files_gb, ram_gb, filename) == "fits" and free_gb(files_gb, ram_gb, filename) >= max(HEADROOM_MIN_GB, HEADROOM_FRACTION * ram_gb)

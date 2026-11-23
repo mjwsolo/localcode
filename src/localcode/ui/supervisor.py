@@ -46,6 +46,7 @@ import localcode
 from localcode import bootstrap
 from localcode.model_files import model_files, find_model
 from localcode.split_gguf import display_alias, is_shard, link_split, resolve_model_path, split_complete, total_bytes
+from localcode.fit import comfortable, free_gb
 from localcode.hf_quants import fetch_quants, fit_badge
 from localcode.models_catalog import (
     MODEL_GROUPS,
@@ -741,6 +742,7 @@ class Supervisor:
                     continue
         rows.sort(key=lambda q: q.size_gb)
         rec_idx = self._recommended_quant_idx(rows, g.display_name, g)
+        max_idx = self._largest_fit_idx(rows, g)
         process = getattr(self, "proc", None)
         loaded = process is not None and process.poll() is None and self.state["state"] == "ready"
         out = []
@@ -756,6 +758,8 @@ class Supervisor:
                 "filename": q.filename, "alias": _alias(q.filename), "label": q.label,
                 "size_gb": round(total_gb, 1), "fit": fit_badge(footprint, self.ram_gb, q.filename),
                 "tok_s": spd, "recommended": i == rec_idx,
+                "comfortable": comfortable(footprint, self.ram_gb, q.filename),
+                "free_gb": round(max(free_gb(footprint, self.ram_gb, q.filename), 0.0), 1),
                 "downloaded": q.filename in installed and self._model_ready(q.filename, q, installed.get(q.filename)),
                 "current": _alias(q.filename) == self.current,
                 "loaded": loaded and _alias(q.filename) == self.current,
@@ -764,25 +768,36 @@ class Supervisor:
             })
         return {"group": g.key, "display_name": g.display_name, "maker": g.maker,
                 "license": g.license, "ram_gb": self.ram_gb, "quants": out,
+                "largest_fit_idx": max_idx,
                 "listing": g.hf_repo in getattr(self, "_quant_pending", set()),
                 "drafter_size_gb": round(draft_gb, 2),
                 "vision_size_gb": round(float(getattr(g, "mmproj_size_gb", 0.0) or 0.0), 2) if getattr(g, "mmproj_filename", None) else 0.0}
 
+    def _largest_fit_idx(self, rows, group=None) -> int | None:
+        fitting = [i for i, q in enumerate(rows)
+                   if fit_badge(footprint_gb(q.size_gb, group), self.ram_gb, q.filename) == "fits"]
+        return max(fitting, key=lambda i: rows[i].size_gb) if fitting else None
+
     def _recommended_quant_idx(self, rows, name: str, group=None) -> int | None:
+        """Star the largest quant that leaves headroom (max(8 GB, 20% of RAM) free)
+        and is responsive enough. When none leaves that, fall back to the largest
+        that fits; that row is shown as tight on memory."""
         if not rows:
             return None
         fitting = [i for i, q in enumerate(rows)
                    if fit_badge(footprint_gb(q.size_gb, group), self.ram_gb, q.filename) == "fits"]
         if not fitting:
             return None   # nothing fits: do not star a quant the row itself calls too big
+        roomy = [i for i in fitting if comfortable(footprint_gb(rows[i].size_gb, group), self.ram_gb, rows[i].filename)]
+        pool = roomy or fitting
         speeds = {i: (estimate_decode_tok_s(rows[i].size_gb, name, self.bandwidth) or 0)
-                  for i in fitting}
+                  for i in pool}
         fastest = max(speeds.values()) or 0
         if fastest <= 0:
-            return max(fitting, key=lambda i: rows[i].size_gb)
+            return max(pool, key=lambda i: rows[i].size_gb)
         bar = fastest * MIN_SPEED_FRACTION
-        responsive = [i for i in fitting if speeds[i] >= bar]
-        return max(responsive or fitting, key=lambda i: rows[i].size_gb)
+        responsive = [i for i in pool if speeds[i] >= bar]
+        return max(responsive or pool, key=lambda i: rows[i].size_gb)
 
     # ---- select (download + switch), runs on its own thread ------------------
     def select(self, key: str, filename: str) -> dict:
