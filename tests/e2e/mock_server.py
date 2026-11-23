@@ -23,6 +23,12 @@ from urllib.parse import parse_qs, urlparse
 
 PORT = int(sys.argv[1])
 NO_MODEL = "--no-model" in sys.argv
+# --vision=off-available: no projector loaded, one can be downloaded (0.9 GB)
+# --vision=off-unavailable: no projector loaded and none exists for this model
+# --vision=on: images are readable. Default is off-unavailable.
+VISION = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--vision=")), "off-unavailable")
+# Every POST path and chat request the mock saw, for tests (GET /_log).
+LOG = []
 ALIAS = "e2e-model"
 
 # A background download started from the picker: it runs for DOWNLOAD_SECONDS.
@@ -62,21 +68,22 @@ GROUPS = [
 def quants(key):
     g = next((g for g in GROUPS if g["key"] == key), GROUPS[0])
     rows = [
-        ("Q3_K_M", 5.1, "tight", 41.0, False, False),
-        ("Q4_K_M", 6.9, "fits", 33.5, True, True),
-        ("Q6_K", 9.8, "fits", 24.0, False, False),
-        ("Q8_0", 12.7, "tight", 19.5, False, False),
+        ("Q3_K_M", 5.1, "fits", 41.0, False, False, True, 21.4),
+        ("Q4_K_M", 6.9, "fits", 33.5, True, True, True, 19.6),
+        ("Q6_K", 9.8, "fits", 24.0, False, False, True, 16.7),
+        ("Q8_0", 12.7, "fits", 19.5, False, False, False, 6.8),
     ]
     return {"group": g["key"], "display_name": g["display_name"], "maker": g["maker"],
             "license": g["license"], "ram_gb": 32, "listing": False, "drafter_size_gb": 0.0,
-            "vision_size_gb": 0.0,
+            "vision_size_gb": 0.0, "largest_fit_idx": 3,
             "quants": [{"filename": f"{key}-{label}.gguf", "alias": f"{key}-{label}", "label": label,
                         "size_gb": size, "fit": fit, "tok_s": tok, "recommended": rec,
+                        "comfortable": comfy, "free_gb": free,
                         "downloaded": dl or (DOWNLOAD.get("state") == "done" and DOWNLOAD.get("filename") == f"{key}-{label}.gguf"),
                         "current": False, "loaded": False,
                         "downloading": DOWNLOAD.get("state") == "downloading" and DOWNLOAD.get("filename") == f"{key}-{label}.gguf",
                         "pct": DOWNLOAD.get("pct")}
-                       for label, size, fit, tok, rec, dl in rows]}
+                       for label, size, fit, tok, rec, dl, comfy, free in rows]}
 
 
 def status():
@@ -84,8 +91,8 @@ def status():
             "detail": "", "pct": None, "server_running": not NO_MODEL, "server_ready": not NO_MODEL,
             "version": "0.0.0", "process_id": 1, "warmup": "idle",
             "current": None if NO_MODEL else ALIAS, "port": PORT, "inference_port": PORT,
-            "ctx": 32768, "group": None, "filename": None, "vision": False,
-            "vision_available": False, "vision_size_gb": 0.0, "download": download()}
+            "ctx": 32768, "group": None, "filename": None, "vision": VISION == "on",
+            "vision_available": VISION == "off-available", "vision_size_gb": 0.9 if VISION == "off-available" else 0.0, "download": download()}
 
 
 PLAN_STEPS = ["Alpha step", "Beta step", "Gamma step"]
@@ -164,6 +171,8 @@ class H(http.server.BaseHTTPRequestHandler):
                                "models_dir": "~/models"})
         if p == "/quants":
             return self._json(quants(parse_qs(u.query).get("group", ["alpha"])[0]))
+        if p == "/_log":
+            return self._json(LOG)
         if p == "/voice/status":
             return self._json({"available": False})
         if p == "/progress":
@@ -175,6 +184,11 @@ class H(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         ln = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(ln) if ln else b"{}"
+        LOG.append(self.path)
+        if self.path == "/vision/install":
+            global VISION
+            VISION = "on"
+            return self._json({"ok": True})
         if self.path == "/select":
             req = json.loads(raw or b"{}")
             name = req.get("filename", "")

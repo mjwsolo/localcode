@@ -79,7 +79,11 @@ test("/models picker and quant list", () =>
     await s.waitFor("Available to download")
     screen = await s.settle()
     assert.match(screen, /Q4_K_M ★\s+6\.9 GB/)
-    assert.match(screen, /Q8_0\s+12\.7 GB/)
+    assert.match(screen, /Q8_0 max\s+12\.7 GB/)
+    assert.match(screen, /Q3_K_M\s+5\.1 GB\s+✓ fits\s+leaves ~21\.4 GB free/)
+    assert.match(screen, /Q4_K_M ★\s+6\.9 GB\s+✓ fits\s+leaves ~19\.6 GB free/)
+    // The largest that fits is selectable and marked; it is under the comfort floor, so it says tight.
+    assert.match(screen, /Q8_0 max\s+12\.7 GB\s+✓ fits\s+tight: ~6\.8 GB free/)
     await snap(s, "models-quants")
   }))
 
@@ -275,4 +279,49 @@ test("the / menu offers only LocalCode's allowlist", () =>
     const extra = [...home, ...session].filter((name) => !MENU.has(name))
     assert.deepEqual(extra, [], `not on the allowlist: ${extra.join(", ")}`)
     for (const name of ["models", "resume", "undo", "exit"]) assert.ok(session.has(name), `/${name} is offered`)
+  }))
+
+// #259: an image bound for a model that cannot see it is never sent silently.
+const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFklEQVR4nGM4YWBAEmIY1TCqYfhqAAD1mygQumZKZwAAAABJRU5ErkJggg==", "base64")
+const imageFiles = { "README.md": "# demo\n", "shot.png": PNG }
+async function attachImage(s) {
+  await s.waitFor("localcode · e2e-model")
+  // A terminal paste of an image path becomes an attachment.
+  await s.term.write(`\x1b[200~${s.ws}/shot.png\x1b[201~`)
+  await s.waitFor(/\[Image/)
+  await s.type("what is this")
+  await s.key("Enter")
+}
+const chatPosts = async (s) => (await s.posts()).filter((p) => p.endsWith("/chat/completions"))
+
+test("an image without vision support is not sent; the model can download it", () =>
+  journey("novision-dl", { files: imageFiles, mockArgs: ["--vision=off-available"] }, async (s) => {
+    await attachImage(s)
+    await s.waitFor("can't see images yet")
+    const screen = await s.settle()
+    assert.match(screen, /Download vision support \(0\.9 GB\)/)
+    assert.match(screen, /Switch model/)
+    assert.doesNotMatch(screen, /Send without image/)
+    assert.deepEqual(await chatPosts(s), [], "no chat request while blocked")
+    await s.key("Enter")
+    await s.waitFor("Enable images for this model?")
+    await s.key("Enter")
+    await s.waitFor("Images enabled")
+    assert.ok((await s.posts()).includes("/vision/install"), "vision install requested")
+    assert.deepEqual(await chatPosts(s), [], "still nothing sent")
+  }))
+
+test("an image without vision support and no projector offers switch or an explicit send", () =>
+  journey("novision-none", { files: imageFiles, mockArgs: ["--vision=off-unavailable"] }, async (s) => {
+    await attachImage(s)
+    await s.waitFor("can't see images yet")
+    const screen = await s.settle()
+    assert.match(screen, /Switch model/)
+    assert.match(screen, /Send without image/)
+    assert.doesNotMatch(screen, /Download vision support/)
+    assert.deepEqual(await chatPosts(s), [], "no chat request while blocked")
+    await s.key("Down")
+    await s.key("Enter")
+    await s.waitFor("This reply is fixed so screenshots stay stable.")
+    assert.equal((await chatPosts(s)).length >= 1, true)
   }))
