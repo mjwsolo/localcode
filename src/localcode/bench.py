@@ -20,6 +20,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -257,6 +258,22 @@ class ModelReport:
     load_buffers_mb: float | None = None
     warnings: list[str] = field(default_factory=list)
 
+    @classmethod
+    def from_json(cls, d: dict) -> "ModelReport":
+        r = cls(str(d.get("model", "")), status=d.get("status", "ok"), reason=d.get("reason", ""),
+                ctx=int(d.get("context") or 0))
+        for k, v in (d.get("sizes") or {}).items():
+            for key in ("ttft_range", "prefill_range", "gen_range"):
+                if v.get(key) is not None:
+                    v[key] = tuple(v[key])
+            r.sizes[int(k)] = v
+        r.skipped_sizes = [int(x) for x in d.get("skipped_sizes") or []]
+        r.peak_memory_mb = d.get("peak_memory_mb")
+        r.memory_source = d.get("memory_source") or ""
+        r.load_buffers_mb = d.get("load_buffers_mb")
+        r.warnings = list(d.get("warnings") or [])
+        return r
+
     def to_json(self) -> dict:
         return {"model": self.name, "status": self.status, "reason": self.reason, "context": self.ctx,
                 "sizes": {str(k): v for k, v in self.sizes.items()}, "skipped_sizes": self.skipped_sizes,
@@ -306,27 +323,7 @@ def bench_model(path: Path, runs: int, *, progress=print) -> ModelReport:
             report.status, report.reason = "failed", "the model server did not become ready"
             return report
         sampler.start()
-        before = thermal_snapshot()
-        stream_request(base, key, name, synthetic_prompt(256, f"warmup-{time.time_ns()}"))
-        series: list[float] = []
-        for size in sizes:
-            res = []
-            for n in range(runs):
-                progress(f"  {name}: ~{size // 1024}K prompt, run {n + 1}/{runs}")
-                r = stream_request(base, key, name, synthetic_prompt(size, f"{size}-{n}-{time.time_ns()}"))
-                res.append(r)
-                series.append(r.gen_tps)
-            report.sizes[size] = {
-                "runs": len(res),
-                "prompt_tokens": int(median([r.prompt_tokens for r in res]) or 0),
-                "ttft_s": median([r.ttft_s for r in res]),
-                "ttft_range": spread([r.ttft_s for r in res]),
-                "prefill_tps": median([r.prefill_tps for r in res]),
-                "prefill_range": spread([r.prefill_tps for r in res]),
-                "gen_tps": median([r.gen_tps for r in res]),
-                "gen_range": spread([r.gen_tps for r in res]),
-            }
-        report.warnings += throttle_flags(series, before, thermal_snapshot())
+        measure(report, base, key, name, sizes, runs, progress)
     except Exception as exc:  # noqa: BLE001
         report.status, report.reason = "failed", f"{type(exc).__name__}: {exc}"
     finally:
@@ -340,6 +337,95 @@ def bench_model(path: Path, runs: int, *, progress=print) -> ModelReport:
             pass
         log.close()
     return report
+
+
+def measure(report: ModelReport, base: str, key: str, name: str, sizes: list[int], runs: int, progress=print) -> None:
+    """One warm-up request, then `runs` measured requests per size, against a
+    server that is already answering at `base`. Fills report.sizes/warnings."""
+    before = thermal_snapshot()
+    stream_request(base, key, name, synthetic_prompt(256, f"warmup-{time.time_ns()}"))
+    series: list[float] = []
+    for size in sizes:
+        res = []
+        for n in range(runs):
+            progress(f"  {name}: ~{size // 1024}K prompt, run {n + 1}/{runs}")
+            r = stream_request(base, key, name, synthetic_prompt(size, f"{size}-{n}-{time.time_ns()}"))
+            res.append(r)
+            series.append(r.gen_tps)
+        report.sizes[size] = {
+            "runs": len(res),
+            "prompt_tokens": int(median([r.prompt_tokens for r in res]) or 0),
+            "ttft_s": median([r.ttft_s for r in res]),
+            "ttft_range": spread([r.ttft_s for r in res]),
+            "prefill_tps": median([r.prefill_tps for r in res]),
+            "prefill_range": spread([r.prefill_tps for r in res]),
+            "gen_tps": median([r.gen_tps for r in res]),
+            "gen_range": spread([r.gen_tps for r in res]),
+        }
+    report.warnings += throttle_flags(series, before, thermal_snapshot())
+
+
+def server_pid(parent: int) -> int:
+    """The llama-server under a supervisor-owned guard process, else the process itself."""
+    out = _run_text(["pgrep", "-P", str(parent)]).split()
+    return int(out[0]) if out and out[0].isdigit() else parent
+
+
+def bench_running(name: str, base: str, key: str, ctx: int, pid: int | None, runs: int = 2,
+                  sizes: tuple[int, ...] = (1024, 8192), progress=lambda m: None) -> ModelReport:
+    """Benchmark the model a LocalCode session already has loaded, over its own
+    server. Nothing is launched or stopped; the caller owns the server."""
+    report = ModelReport(name, ctx=ctx)
+    use = [s for s in sizes if fits(s, ctx)] if ctx else list(sizes)
+    report.skipped_sizes = [s for s in sizes if s not in use]
+    if not use:
+        report.status, report.reason = "skipped", f"context {ctx} is too small for any benchmark size"
+        return report
+    sampler = MemorySampler(server_pid(pid)) if pid else None
+    try:
+        if sampler:
+            sampler.start()
+        measure(report, base, key, name, use, runs, progress)
+    except Exception as exc:  # noqa: BLE001
+        report.status, report.reason = "failed", f"{type(exc).__name__}: {exc}"
+    finally:
+        if sampler:
+            report.peak_memory_mb = round(sampler.finish(), 1) or None
+            report.memory_source = sampler.source
+    return report
+
+
+def bench_via_session(control_port: int, token: str, runs: int, sizes: tuple[int, ...], progress=lambda m: None,
+                      poll_s: float = 2.0, timeout_s: float = 3600) -> ModelReport:
+    """Ask the running session's supervisor to benchmark its loaded model and wait."""
+    from localcode.ui.http import local_urlopen
+    from localcode.ui.auth import control_headers
+    url = f"http://127.0.0.1:{control_port}/bench"
+    hdr = {**control_headers(token), "Content-Type": "application/json"}
+    body = json.dumps({"runs": runs, "sizes": list(sizes)}).encode()
+    try:
+        with local_urlopen(urllib.request.Request(url, data=body, headers=hdr, method="POST"), timeout=10) as r:
+            json.load(r)
+    except urllib.error.HTTPError as exc:
+        try:
+            msg = json.loads(exc.read()).get("error", str(exc))
+        except (ValueError, OSError):
+            msg = str(exc)
+        raise RuntimeError(msg) from exc
+    end = time.monotonic() + timeout_s
+    last = ""
+    while time.monotonic() < end:
+        with local_urlopen(urllib.request.Request(url, headers=control_headers(token)), timeout=10) as r:
+            st = json.load(r)
+        if st.get("progress") and st["progress"] != last:
+            last = st["progress"]
+            progress(last)
+        if st.get("state") == "done":
+            return ModelReport.from_json(st["report"])
+        if st.get("state") == "error":
+            raise RuntimeError(st.get("error") or "benchmark failed")
+        time.sleep(poll_s)
+    raise RuntimeError("benchmark timed out")
 
 
 def _terminate(proc) -> None:
@@ -477,6 +563,46 @@ def build_json(reports: list[ModelReport], runs: int, notes: list[str]) -> dict:
 
 # ---------------------------------------------------------------- CLI
 
+def _bench_session(args, session, say, input_fn) -> int:
+    """`localcode bench` while LocalCode is running: measure its loaded model over its own server."""
+    from localcode.ui import run_dir
+    from localcode.ui.auth import read_auth_file
+    ctrl, status = session
+    current = status.get("current")
+    auth = read_auth_file(run_dir())
+    if not auth:
+        print("localcode bench: cannot authenticate to the running session.", file=sys.stderr)
+        return 1
+    print(f"Benchmarking {current} through the running LocalCode session (about 1 warm-up + {args.runs} runs at "
+          "~1K, 8K and 32K tokens). It is busy meanwhile; wait to chat.", file=sys.stderr)
+    warn = power_warning()
+    if warn:
+        print(f"Warning: {warn}.", file=sys.stderr)
+    if not args.yes:
+        try:
+            answer = input_fn("Start now? [y/N] ")
+        except EOFError:
+            answer = ""
+        if answer.strip().lower() not in ("y", "yes"):
+            print("Cancelled; nothing was started.", file=sys.stderr)
+            return 0
+    try:
+        report = bench_via_session(ctrl, auth[0], args.runs, SIZES, progress=say)
+    except Exception as exc:  # noqa: BLE001
+        print(f"localcode bench: {exc}", file=sys.stderr)
+        return 1
+    data = build_json([report], args.runs, [warn] if warn else [])
+    saved = results_dir() / f"bench-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
+    saved.write_text(json.dumps(data, indent=2))
+    if args.json == "-":
+        print(json.dumps(data, indent=2))
+    else:
+        print(render_table([report], args.compare))
+        if args.json:
+            Path(args.json).expanduser().write_text(json.dumps(data, indent=2))
+    return 0 if report.status == "ok" else 1
+
+
 def main(argv: list[str] | None = None, *, input_fn=input, progress=None) -> int:
     parser = argparse.ArgumentParser(
         prog="localcode bench",
@@ -493,14 +619,33 @@ def main(argv: list[str] | None = None, *, input_fn=input, progress=None) -> int
         print("localcode bench: --runs must be at least 1", file=sys.stderr)
         return 2
 
-    reason = serving_reason()
-    if reason:
-        print(f"localcode bench: {reason}. Close LocalCode (and any other llama-server) first so the "
-              "measurements are not shared with another model.", file=sys.stderr)
-        return 1
+    session = None
+    try:
+        from localcode.ui.ports import find_running
+        session = find_running()
+    except Exception:  # noqa: BLE001, S110
+        pass
+    if session is None:
+        reason = serving_reason()
+        if reason:
+            print(f"localcode bench: {reason}. Close LocalCode (and any other llama-server) first so the "
+                  "measurements are not shared with another model.", file=sys.stderr)
+            return 1
 
     files = downloaded_models()
     reports: list[ModelReport] = []
+    if session is not None:
+        current = session[1].get("current") or ""
+        wanted = [current] if current else []
+        if args.models:
+            names, missing = resolve_names(args.models.split(","), files)
+            wanted = names + missing
+        if args.all_downloaded or not current or any(w != current for w in wanted):
+            print("localcode bench: a LocalCode session is serving "
+                  f"{current or 'no model'}, so only that model can be measured. Close LocalCode or run /bench "
+                  "inside it; then run `localcode bench` again to compare other models.", file=sys.stderr)
+            return 1
+        return _bench_session(args, session, say, input_fn)
     if args.models:
         names, missing = resolve_names(args.models.split(","), files)
     elif args.all_downloaded:

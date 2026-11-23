@@ -133,6 +133,19 @@ test("/status dialog", () =>
     await snap(s, "status")
   }))
 
+test("/mcps is a plain list with a hint for adding and importing", () =>
+  journey("mcps", {}, async (s) => {
+    await s.waitFor("localcode · e2e-model")
+    await s.type("/mcps")
+    await s.waitFor("/mcps")
+    await s.key("Enter")
+    await s.waitFor("MCP servers")
+    const screen = (await s.settle()).replace(/\s+/g, " ")
+    assert.match(screen, /Add: localcode mcp add <name> -- <command>/)
+    assert.match(screen, /localcode mcp import/)
+    assert.doesNotMatch(screen, /ctrl\+a|ctrl\+d/i)
+  }))
+
 test("sidebar shows the session context", () =>
   journey("sidebar", {}, async (s) => {
     await s.waitFor("localcode · e2e-model")
@@ -248,7 +261,7 @@ test("commands LocalCode dropped are not offered in the / menu", () =>
 // The menu is an allowlist (UI fork: packages/tui/src/util/localcode-menu.ts). Scroll the
 // whole real menu, on the home screen and in a session, and fail on anything else, so an
 // upstream UI update cannot add commands without someone choosing them.
-const MENU = new Set(["cd", "clear", "compact", "decide", "diff", "exit", "export", "help",
+const MENU = new Set(["bench", "cd", "clear", "compact", "decide", "diff", "exit", "export", "help",
   "mcps", "models", "new", "permissions", "project-context", "rename", "resume",
   "speak", "server", "settings", "show-sidebar", "skills", "status", "themes", "thinking", "undo", "vision"])
 
@@ -300,6 +313,8 @@ test("an image without vision support is not sent; the model can download it", (
     await s.waitFor("can't see images yet")
     const screen = await s.settle()
     assert.match(screen, /Download vision support \(0\.9 GB\)/)
+    assert.match(screen, /reads images with a separate 0\.9 GB/)
+    assert.match(screen, /Same as running \/vision/)
     assert.match(screen, /Switch model/)
     assert.doesNotMatch(screen, /Send without image/)
     assert.deepEqual(await chatPosts(s), [], "no chat request while blocked")
@@ -316,6 +331,7 @@ test("an image without vision support and no projector offers switch or an expli
     await attachImage(s)
     await s.waitFor("can't see images yet")
     const screen = await s.settle()
+    assert.match(screen, /can't read images/)
     assert.match(screen, /Switch model/)
     assert.match(screen, /Send without image/)
     assert.doesNotMatch(screen, /Download vision support/)

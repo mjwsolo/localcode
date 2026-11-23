@@ -315,6 +315,38 @@ def test_mcp_command_forwards_to_the_runtime_with_session_env(monkeypatch, tmp_p
     assert len(calls) == 2
 
 
+def test_mcp_add_forwards_double_dash_command_intact(monkeypatch, tmp_path):
+    from localcode.ui import launch
+
+    calls = []
+    monkeypatch.setattr(launch, "ui_binary_path", lambda: tmp_path / "localcode-ui")
+    monkeypatch.setattr(launch, "run_dir", lambda: tmp_path / "run")
+    monkeypatch.setattr(launch.subprocess, "call", lambda argv, cwd, env: (calls.append(argv), 0)[1])
+    monkeypatch.chdir(tmp_path)
+    assert launch.mcp_main(["add", "files", "--", "npx", "-y", "srv", "--flag"]) == 0
+    assert calls[-1][1:] == ["mcp", "add", "files", "--", "npx", "-y", "srv", "--flag"]
+
+
+def test_mcp_remove_deletes_from_project_and_user_config(monkeypatch, tmp_path, capsys):
+    from localcode.ui import launch
+
+    monkeypatch.chdir(tmp_path)
+    xdg = tmp_path / "xdg"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
+    spec = {"type": "local", "command": ["x"]}
+    (tmp_path / "localcode.json").write_text(json.dumps({"model": "k", "mcp": {"servers": {"a": spec, "b": spec}}}))
+    assert launch.mcp_main(["remove", "a"]) == 0
+    data = json.loads((tmp_path / "localcode.json").read_text())
+    assert list(data["mcp"]["servers"]) == ["b"] and data["model"] == "k"
+    assert launch.mcp_main(["remove", "a"]) == 1
+    assert "--global" in capsys.readouterr().err
+    (xdg / "localcode-agent").mkdir(parents=True)
+    (xdg / "localcode-agent" / "localcode.json").write_text(json.dumps({"mcp": {"g": spec}}))
+    assert launch.mcp_main(["remove", "g", "--global"]) == 0
+    assert json.loads((xdg / "localcode-agent" / "localcode.json").read_text())["mcp"] == {}
+    assert launch.mcp_main(["remove"]) == 2
+
+
 def test_mcp_add_explains_project_scope_trust(monkeypatch, tmp_path, capsys):
     from localcode.ui import launch
 

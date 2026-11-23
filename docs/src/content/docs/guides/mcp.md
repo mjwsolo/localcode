@@ -7,11 +7,16 @@ localcode is an MCP client. A server you add gives the agent that server's tools
 
 ## Add a server
 
+Same form as Claude Code: the command goes after `--`.
+
 ```
-localcode mcp add
+localcode mcp add <name> -- <command> [args...]    # a local server
+localcode mcp add <name> --url <url>               # a remote server
+localcode mcp add --global <name> -- <command>     # keep it for every project
+localcode mcp remove <name>                        # add --global for a user-config server
 ```
 
-It asks four things: where to keep it (this project, or your user config for every project), a name, local or remote, and the command or URL. Local servers are programs that run on your Mac; remote servers are URLs, and the ones that use OAuth sign in with:
+Local servers are programs that run on your Mac; remote servers are URLs, and the ones that use OAuth sign in with:
 
 ```
 localcode mcp auth <name>
@@ -42,7 +47,7 @@ Nothing runs at import. Every imported server is written with `"enabled": false`
 
 ## Manage servers in a session
 
-`/mcps` lists your servers. From it you can add a server (name, local or remote, command or URL; the command is shown before it is saved), enable or disable one (saved to your config), and remove one after a confirmation.
+`/mcps` is a plain list: each server's name, whether it is on or off, and its status (connected, failed, or needs sign-in). Space turns the highlighted server on or off, and the choice is saved to your config. Enter opens sign-in for a server that needs it, or shows the error for one that failed. Adding and removing servers happens in the terminal with `localcode mcp add` and `localcode mcp remove`; the list shows that reminder at the bottom.
 
 ## Project or user scope
 
@@ -52,7 +57,7 @@ A server kept in your user config (`~/.config/localcode-agent/localcode.json`) i
 localcode --trust-project
 ```
 
-`localcode mcp add` tells you this when you choose the project scope, and `localcode mcp list` names project servers it is hiding until you pass `--trust-project`. Review a project's server commands before trusting it.
+`localcode mcp add` tells you this when it writes to the project scope, and `localcode mcp list` names project servers it is hiding until you pass `--trust-project`. Review a project's server commands before trusting it.
 
 ## Mail, calendar and other accounts
 

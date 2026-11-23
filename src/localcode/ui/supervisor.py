@@ -117,6 +117,8 @@ class Supervisor:
         self.ctx_total = ctx
         self.slots = 1
         self.pp_prior: float | None = None     # prefill tokens/s from the warm-up replay
+        self._bench: dict = {}
+        self._bench_lock = threading.Lock()
         self._timing = None                    # context_budget.TimingTable for the loaded model
         self._log_offset = 0                   # server.log bytes already fed to it
         self._budget: int | None = None
@@ -226,6 +228,39 @@ class Supervisor:
                 self.lock.release()
         threading.Thread(target=work, daemon=True).start()
         return {"ok": True}
+
+    def bench_start(self, runs: int = 2, sizes=(1024, 8192)) -> dict:
+        """User-requested (/bench): measure the loaded model over its own server.
+        Runs on a thread; poll bench_status(). Nothing is loaded or stopped."""
+        from localcode import bench
+        if not self.current or self.state.get("state") != "ready" or self.proc is None:
+            return {"error": "no model is loaded and ready"}
+        try:
+            runs = int(runs)
+            sizes = tuple(int(x) for x in sizes)
+        except (TypeError, ValueError):
+            return {"error": "bad runs or sizes"}
+        if not 1 <= runs <= 5 or not sizes or any(x not in bench.SIZES for x in sizes):
+            return {"error": "runs must be 1-5 and sizes among 1K, 8K, 32K"}
+        with self._bench_lock:
+            if self._bench.get("state") == "running":
+                return {"error": "a benchmark is already running"}
+            self._bench = {"state": "running", "progress": "starting", "model": self.current}
+        alias, port, ctx, pid = self.current, self.port, self.ctx, self.proc.pid
+
+        def work() -> None:
+            try:
+                rep = bench.bench_running(alias, f"http://127.0.0.1:{port}/v1", server_key(), ctx, pid, runs, sizes,
+                                          progress=lambda m: self._bench.update(progress=m.strip()))
+                self._bench = {"state": "done", "model": alias, "report": rep.to_json(),
+                               "power": bench.power_warning()}
+            except Exception as exc:  # noqa: BLE001
+                self._bench = {"state": "error", "model": alias, "error": f"{type(exc).__name__}: {exc}"}
+        threading.Thread(target=work, daemon=True).start()
+        return {"ok": True}
+
+    def bench_status(self) -> dict:
+        return dict(self._bench) or {"state": "idle"}
 
     def ensure_mmproj(self, alias: str) -> None:
         """Fetch the model's vision projector (mmproj sidecar). Only called on an
@@ -1413,6 +1448,8 @@ def make_handler(sup: Supervisor):
                 return self._json(sup.voice_partial())
             if u.path == "/progress":
                 return self._json(sup.progress())
+            if u.path == "/bench":
+                return self._json(sup.bench_status())
             self._json({"error": "not found"}, 404)
 
         def do_POST(self):
@@ -1467,6 +1504,11 @@ def make_handler(sup: Supervisor):
                 return self._json(res, 200 if "error" not in res else 400)
             if u.path == "/vision/install":
                 res = sup.vision_install()
+                return self._json(res, 200 if "error" not in res else 409)
+            if u.path == "/bench":
+                if not isinstance(body, dict):
+                    return self._json({"error": "Expected a JSON object"}, 400)
+                res = sup.bench_start(body.get("runs", 2), body.get("sizes", (1024, 8192)))
                 return self._json(res, 200 if "error" not in res else 409)
             if u.path == "/voice/setup":
                 ok, msg = sup.voice_setup()

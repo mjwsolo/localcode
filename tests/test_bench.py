@@ -87,6 +87,7 @@ def test_stream_request_against_fake(fake_server):
 
 
 def _patch_env(monkeypatch, tmp_path, files):
+    monkeypatch.setattr("localcode.ui.ports.find_running", lambda *a, **k: None)
     monkeypatch.setattr(bench, "serving_reason", lambda: None)
     monkeypatch.setattr(bench, "downloaded_models", lambda: files)
     monkeypatch.setattr(bench, "power_warning", lambda: None)
@@ -95,6 +96,7 @@ def _patch_env(monkeypatch, tmp_path, files):
 
 
 def test_refuses_when_serving(monkeypatch, capsys):
+    monkeypatch.setattr("localcode.ui.ports.find_running", lambda *a, **k: None)
     monkeypatch.setattr(bench, "serving_reason", lambda: "a LocalCode session is serving a model")
     assert bench.main(["--yes"]) == 1
     assert "serving" in capsys.readouterr().err
@@ -173,3 +175,54 @@ def test_server_command_value_error_is_skip(monkeypatch, tmp_path):
     monkeypatch.setattr("localcode.ui.server_cmd.server_command", boom)
     r = bench.bench_model(gguf, 1)
     assert r.status == "skipped" and "RAM" in r.reason
+
+
+def test_bench_running_uses_the_given_server_and_launches_nothing(monkeypatch, fake_server):
+    port = fake_server.server_address[1]
+    monkeypatch.setattr(bench, "thermal_snapshot", lambda: 100)
+    launched = []
+    monkeypatch.setattr(bench.subprocess, "Popen", lambda *a, **k: launched.append(a))
+    rep = bench.bench_running("m", f"http://127.0.0.1:{port}/v1", "", 16384, None, runs=2, sizes=(1024, 8192, 32768))
+    assert launched == []
+    assert rep.status == "ok" and set(rep.sizes) == {1024, 8192} and rep.skipped_sizes == [32768]
+    assert rep.sizes[1024]["runs"] == 2 and rep.sizes[1024]["gen_tps"] == 40.0
+    again = bench.ModelReport.from_json(json.loads(json.dumps(rep.to_json())))
+    assert again.sizes[8192]["prefill_tps"] == 500.0 and "Gen tok/s" in bench.render_table([again], False)
+
+
+def test_supervisor_bench_endpoint_state(monkeypatch, fake_server):
+    from localcode.ui import supervisor
+    monkeypatch.setattr(bench, "thermal_snapshot", lambda: 100)
+    sup = supervisor.Supervisor("x", fake_server.server_address[1], __import__("pathlib").Path("."), 16384)
+    assert "error" in sup.bench_start()                       # nothing loaded
+    sup.current, sup.state = "m", {"state": "ready"}
+    sup.proc = type("P", (), {"pid": 0})()
+    assert "error" in sup.bench_start(runs=9)                 # out of range
+    assert "error" in sup.bench_start(sizes=(5,))
+    assert sup.bench_start(runs=1, sizes=(1024,)) == {"ok": True}
+    assert "error" in sup.bench_start()                       # already running
+    import time
+    for _ in range(100):
+        if sup.bench_status()["state"] != "running":
+            break
+        time.sleep(0.05)
+    st = sup.bench_status()
+    assert st["state"] == "done" and st["report"]["sizes"]["1024"]["gen_tps"] == 40.0
+
+
+def test_cli_benchmarks_the_running_session_model(monkeypatch, tmp_path, capsys):
+    _patch_env(monkeypatch, tmp_path, {"m": tmp_path / "m.gguf", "other": tmp_path / "o.gguf"})
+    monkeypatch.setattr("localcode.ui.ports.find_running", lambda *a, **k: (8323, {"current": "m", "port": 1}))
+    monkeypatch.setattr("localcode.ui.auth.read_auth_file", lambda d: ("tok", "key"))
+    rep = bench.ModelReport("m", ctx=16384)
+    rep.sizes[1024] = {"runs": 1, "prompt_tokens": 1000, "ttft_s": 1.0, "ttft_range": None, "prefill_tps": 500.0,
+                       "prefill_range": None, "gen_tps": 40.0, "gen_range": None}
+    seen = {}
+    monkeypatch.setattr(bench, "bench_via_session", lambda ctrl, tok, runs, sizes, progress=None: seen.update(c=ctrl, t=tok) or rep)
+    assert bench.main(["--yes"]) == 0
+    assert seen == {"c": 8323, "t": "tok"} and "Gen tok/s" in capsys.readouterr().out
+    # other models need the server free, and the message says how
+    assert bench.main(["--models", "other", "--yes"]) == 1
+    err = capsys.readouterr().err
+    assert "Close LocalCode or run /bench" in err
+    assert bench.main(["--all-downloaded", "--yes"]) == 1

@@ -8,6 +8,7 @@
 
 
 
+                         /bench             Benchmark the loaded model's speed
                          /cd                Change working directory
                          /clear             Clear session
                          /decide            Open decision mode
@@ -17,7 +18,6 @@
                          /mcps              MCP servers
                          /models            Switch model
                          /new               New session
-                         /permissions       Permission preferences
 
                           /
 
