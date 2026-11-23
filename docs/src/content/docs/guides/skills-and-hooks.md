@@ -20,6 +20,16 @@ In the interface:
 /skills     # list the skills that were found and where each came from
 ```
 
+### Bring skills from Claude Code
+
+localcode does not read Claude Code's skill folders on its own: they are written for Claude, and a long list of skills costs tokens in every request. To reuse some, copy the ones you want:
+
+```text
+localcode mcp import --from claude
+```
+
+You choose from a list that shows each skill's size, roughly how many tokens its description adds to every request, and whether the folder contains scripts. Chosen skills are copied (not linked) into `~/.config/localcode-agent/skills/<name>/`; your Claude Code folders are left alone. Review a skill that contains scripts before you rely on it, since the model may run them. Removing a copied skill is deleting its folder.
+
 Skills are read from disk only. localcode does not fetch skills from a URL.
 
 ## Hooks

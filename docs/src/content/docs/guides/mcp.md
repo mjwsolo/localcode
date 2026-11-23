@@ -26,6 +26,24 @@ localcode mcp debug <name>     # connect and print the tools it exposes
 
 The server is in your config from then on. In a session, `/mcps` lists the configured servers and toggles each one on or off.
 
+## Import from other agents
+
+If you already use MCP servers in Claude Code, Codex or Cursor, copy them over:
+
+```
+localcode mcp import                  # asks which ones
+localcode mcp import --dry-run        # show what would happen, write nothing
+localcode mcp import --from codex     # only one source
+```
+
+It reads only user-level files, and only when you run this command: `~/.claude.json` (its `mcpServers` entry), `~/.codex/config.toml` and `~/.cursor/mcp.json`. Project `.mcp.json` files are never read. You pick the servers by number, then see a summary that shows each local server's exact command line and the names (never the values) of its environment variables and headers. The values are copied into your localcode config, so those secrets then exist in two places.
+
+Nothing runs at import. Every imported server is written with `"enabled": false`; turn it on in `/mcps` once you have checked its command. Your config is backed up to `localcode.json.bak-<timestamp>` before it is changed, a server whose name is already taken by a different one is skipped with a suggested new name, and running the import again changes nothing. The same command also offers your Claude Code skills; see [Skills](/localcode/guides/skills-and-hooks).
+
+## Manage servers in a session
+
+`/mcps` lists your servers. From it you can add a server (name, local or remote, command or URL; the command is shown before it is saved), enable or disable one (saved to your config), and remove one after a confirmation.
+
 ## Project or user scope
 
 A server kept in your user config (`~/.config/localcode-agent/localcode.json`) is available in every project. A server kept in the project's `localcode.json` is part of that project's configuration, and project configuration can run code, so it loads only when you launch with:
