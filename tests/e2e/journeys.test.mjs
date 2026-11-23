@@ -80,10 +80,10 @@ test("/models picker and quant list", () =>
     screen = await s.settle()
     assert.match(screen, /Q4_K_M ★\s+6\.9 GB/)
     assert.match(screen, /Q8_0 max\s+12\.7 GB/)
-    assert.match(screen, /Q3_K_M\s+5\.1 GB\s+✓ fits\s+leaves ~21\.4 GB free/)
-    assert.match(screen, /Q4_K_M ★\s+6\.9 GB\s+✓ fits\s+leaves ~19\.6 GB free/)
+    assert.match(screen, /Q3_K_M\s+5\.1 GB\s+✓ fits\s+~21\.4 GB/)
+    assert.match(screen, /Q4_K_M ★\s+6\.9 GB\s+✓ fits\s+~19\.6 GB/)
     // The largest that fits is selectable and marked; it is under the comfort floor, so it says tight.
-    assert.match(screen, /Q8_0 max\s+12\.7 GB\s+✓ fits\s+tight: ~6\.8 GB free/)
+    assert.match(screen, /Q8_0 max\s+12\.7 GB\s+✓ fits\s+~6\.8 GB tight/)
     await snap(s, "models-quants")
   }))
 
