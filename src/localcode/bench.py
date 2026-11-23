@@ -307,7 +307,7 @@ def bench_model(path: Path, runs: int, *, progress=print) -> ModelReport:
             return report
         sampler.start()
         before = thermal_snapshot()
-        stream_request(base, key, name, synthetic_prompt(256, "warmup"))
+        stream_request(base, key, name, synthetic_prompt(256, f"warmup-{time.time_ns()}"))
         series: list[float] = []
         for size in sizes:
             res = []
