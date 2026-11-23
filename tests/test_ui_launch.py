@@ -94,6 +94,7 @@ def test_write_config_points_at_local_server_and_plugin(tmp_path):
     # no subagents and no code mode
     assert {(rule["action"], rule["effect"]) for rule in cfg["permissions"]} == {
         ("subagent", "deny"), ("execute", "deny"), ("doom_loop", "ask"),
+        ("shell.unsandboxed", "ask"),
         ("external_directory", "ask"), ("external_directory", "allow"),
     }
     assert cfg["agents"] == {"plan": {"disabled": True}}

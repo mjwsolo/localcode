@@ -202,6 +202,8 @@ def write_config(path: Path, *, port: int, ctx: int, alias: str | None) -> None:
             {"action": "execute", "resource": "*", "effect": "deny"},
             # A third identical tool call in one step asks first, as opencode v1 did.
             {"action": "doom_loop", "resource": "*", "effect": "ask"},
+            # A command the shell sandbox blocked runs outside it only with a person's yes.
+            {"action": "shell.unsandboxed", "resource": "*", "effect": "ask"},
             *_external_directory_rules(),
         ],
         "agents": {"plan": {"disabled": True}},
