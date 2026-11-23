@@ -275,7 +275,7 @@ def runtime_env(config_path: Path, ctrl: int, *, trust_project: bool = False) ->
     return env
 
 
-MCP_HELP = """usage: localcode mcp <add|list|auth|logout> [args] [--trust-project]
+MCP_HELP = """usage: localcode mcp <add|list|auth|logout|import> [args] [--trust-project]
 
 Manage the MCP servers the agent can use. The commands are the runtime's own:
   add       localcode mcp add <name> -- <command> [args...]   (a local server)
@@ -285,6 +285,8 @@ Manage the MCP servers the agent can use. The commands are the runtime's own:
   list      servers and their status (OAuth state for remote servers)
   auth      sign in to a remote server that uses OAuth: localcode mcp auth <name>
   logout    forget a remote server's OAuth tokens
+  import    copy MCP servers and skills from Claude Code, Codex or Cursor; asks
+            first, servers start disabled: localcode mcp import --help
 
 Servers declared in the project's localcode.json load only when you launch
 with --trust-project (project configuration can run code). Pass the same flag
@@ -363,6 +365,9 @@ def mcp_main(argv: list[str]) -> int:
     if not args or args[0] in {"-h", "--help", "help"}:
         print(MCP_HELP, end="")
         return 0
+    if args[0] == "import":
+        from ..importer import cli_main
+        return cli_main(args[1:])
     ui_bin = ui_binary_path()
     if ui_bin is None:
         print("localcode: the UI binary is missing from this install. Reinstall with `pip install -U localcode`.", file=sys.stderr)
