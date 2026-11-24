@@ -146,6 +146,22 @@ test("/mcps is a plain list with a hint for adding and importing", () =>
     assert.doesNotMatch(screen, /ctrl\+a|ctrl\+d/i)
   }))
 
+test("/skills shows each skill's cost and source, and space turns one off", () =>
+  journey("skills-toggle", {}, async (s) => {
+    await s.waitFor("localcode · e2e-model")
+    await s.type("/skills")
+    await s.waitFor("/skills")
+    await s.key("Enter")
+    await s.waitFor("Skills")
+    let screen = await s.settle()
+    assert.match(screen, /\[x\] /)
+    assert.match(screen, / tok/)
+    await s.key(" ")
+    await s.waitFor(/\[ \] /)
+    screen = await s.settle()
+    assert.match(screen, / · off/)
+  }))
+
 test("sidebar shows the session context", () =>
   journey("sidebar", {}, async (s) => {
     await s.waitFor("localcode · e2e-model")

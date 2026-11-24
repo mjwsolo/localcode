@@ -66,6 +66,15 @@ else
   ok "write to temp dir" 'echo t > "$TMPDIR/sbm-$$" && rm "$TMPDIR/sbm-$$"'
 fi
 
+# Repository metadata: hooks run later outside the sandbox, so they are read-only here. .git/config stays writable
+# (git init, branch, remote and fetch write it).
+ok "git branch, checkout, remote add, config write" 'git init -q 2>/dev/null; git -c user.email=a@b.c -c user.name=t commit -q --allow-empty -m a; git branch b && git checkout -q b && git remote add o https://example.invalid/x.git && git config user.name x'
+blocked "write .git/hooks/pre-commit" sb 'git init -q 2>/dev/null; printf "#!/bin/sh\nexit 0\n" > .git/hooks/pre-commit'
+blocked "write project localcode.json" sb 'echo {} > localcode.json'
+blocked "write project .mcp.json" sb 'echo {} > .mcp.json'
+blocked "write project .localcode-agent/x" sb 'mkdir -p .localcode-agent && echo x > .localcode-agent/x'
+blocked "write ~/.zshrc (fake home)" sbfake 'echo x >> "$HOME/.zshrc"'
+blocked "write ~/.config/localcode-agent (fake home)" sbfake 'mkdir -p "$HOME/.config/localcode-agent" && echo x > "$HOME/.config/localcode-agent/cli.json"'
 blocked "write to ~/sandbox-test-x" sb 'echo x > "$HOME/sandbox-test-x"'
 blocked "write outside project via cd .." sb 'cd .. && echo x > ../sbm-escape.txt'
 blocked "script that cd's out and writes" sb 'printf "cd /\ncd \"$HOME\"\necho x > sbm-script-out\n" > s.sh && sh s.sh'

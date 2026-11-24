@@ -17,8 +17,10 @@ localcode reads skill folders from two places:
 In the interface:
 
 ```text
-/skills     # list the skills that were found and where each came from
+/skills     # list the skills that were found and where each came from; space turns one on or off
 ```
+
+In `/skills` each row shows `[x]` (on) or `[ ]` (off), where the skill came from and roughly how many tokens its description adds to every request. A skill that is off is not offered to the model and cannot be loaded, until you turn it on again. A skill with `disable-model-invocation: true` in its frontmatter is never offered to the model on its own, but you can still use it by name.
 
 ### Bring skills from Claude Code
 
