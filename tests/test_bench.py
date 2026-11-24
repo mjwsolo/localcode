@@ -226,3 +226,113 @@ def test_cli_benchmarks_the_running_session_model(monkeypatch, tmp_path, capsys)
     err = capsys.readouterr().err
     assert "Close LocalCode or run /bench" in err
     assert bench.main(["--all-downloaded", "--yes"]) == 1
+
+
+# ---------------------------------------------------------------- cancel, concurrency, history
+
+class _Slow(_Fake):
+    def do_POST(self):
+        self.rfile.read(int(self.headers["Content-Length"]))
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        import time as _t
+        for _ in range(100):
+            self.wfile.write(b'data: {"choices": [{"delta": {"content": "a"}}]}\n\n')
+            self.wfile.flush()
+            _t.sleep(0.05)
+
+
+def _loaded_sup(port):
+    from localcode.ui import supervisor
+    sup = supervisor.Supervisor("x", port, __import__("pathlib").Path("."), 16384)
+    sup.current, sup.state = "m", {"state": "ready"}
+    sup.proc = type("P", (), {"pid": 0})()
+    return sup
+
+
+def test_bench_cancel_concurrency_and_status(monkeypatch, tmp_path):
+    import time
+    monkeypatch.setattr(bench, "thermal_snapshot", lambda: 100)
+    monkeypatch.setattr("localcode.paths.GLOBAL_STATE_DIR", tmp_path, raising=False)
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), _Slow)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        sup = _loaded_sup(srv.server_address[1])
+        assert "error" in sup.bench_cancel()                       # nothing running
+        assert sup.bench_start(runs=1, sizes=(1024,)) == {"ok": True}
+        st = sup.bench_status()
+        assert st["state"] == "running" and st["total"] == 1 and "elapsed_s" in st
+        second = sup.bench_start()
+        assert "already running" in second["error"] and second["status"]["state"] == "running"
+        assert sup.bench_cancel() == {"ok": True}
+        assert sup.bench_status()["state"] == "cancelled"
+        time.sleep(0.3)
+        assert sup.bench_status()["state"] == "cancelled"          # the worker never overwrites it
+        assert sup.bench_start(runs=1, sizes=(1024,)) == {"ok": True}   # a new run may start
+        sup.bench_cancel()
+    finally:
+        srv.shutdown()
+
+
+def _write_run(d, name, created, model, gen, version="0.5.0", notes=(), warnings=(), machine="Apple M3, 32 GB"):
+    sizes = {"1024": {"ttft_s": 1.0, "prefill_tps": 500.0, "gen_tps": gen},
+             "8192": {"ttft_s": 9.0, "prefill_tps": 450.0, "gen_tps": gen - 2}}
+    data = {"schema": 1, "localcode_version": version, "created": created, "notes": list(notes), "machine": machine,
+            "on_battery": any("battery" in n for n in notes),
+            "models": [{"model": model, "status": "ok", "sizes": sizes, "peak_memory_mb": 20480.0, "warnings": list(warnings)}]}
+    (d / name).write_text(json.dumps(data))
+
+
+@pytest.fixture()
+def results(monkeypatch, tmp_path):
+    d = tmp_path / "bench"
+    d.mkdir()
+    monkeypatch.setattr(bench, "results_dir", lambda: d)
+    return d
+
+
+def test_history_is_newest_first_and_not_deduplicated(results):
+    _write_run(results, "bench-20260101-100000.json", "2026-01-01T10:00:00", "Qwen3.8-27B-UD-Q4_K_XL", 30)
+    _write_run(results, "bench-20260102-100000.json", "2026-01-02T10:00:00", "Qwen3.8-27B-UD-Q4_K_XL", 32)
+    _write_run(results, "bench-20260103-100000.json", "2026-01-03T10:00:00", "gemma-4-12B-Q8_0", 50)
+    (results / "bench-broken.json").write_text("{nope")
+    rows = bench.load_history()
+    assert [r["gen_1k"] for r in rows] == [50, 32, 30]
+    assert rows[0]["display"] == "gemma-4-12B" and rows[0]["quant"] == "Q8_0"
+    assert rows[1]["quant"] == "UD-Q4_K_XL" and rows[1]["machine"] == "Apple M3, 32 GB"
+    assert rows[1]["peak_memory_mb"] == 20480.0
+    assert "Gen 1K" in bench.render_history(rows) and "No saved" in bench.render_history([])
+
+
+def test_compare_deltas_and_condition_marks(results):
+    _write_run(results, "bench-20260101-100000.json", "2026-01-01T10:00:00", "A", 40, version="0.4.0")
+    _write_run(results, "bench-20260102-100000.json", "2026-01-02T10:00:00", "B", 20, notes=["on battery power"])
+    _write_run(results, "bench-20260103-100000.json", "2026-01-03T10:00:00", "B", 25, warnings=["generation slowed during the run"])
+    _write_run(results, "bench-20260104-100000.json", "2026-01-04T10:00:00", "A", 44)
+    hist = bench.load_history()
+    cur = hist[0]
+    rows = bench.compare_with_history(cur, hist)
+    assert [(r["model"], r["relation"]) for r in rows] == [("A", "previous run"), ("B", "best run")]
+    prev, other = rows
+    assert prev["delta"]["gen_pct"] == 10 and prev["mismatch"] == ["LocalCode 0.4.0"]
+    assert other["delta"]["gen_pct"] == 76 and other["mismatch"] == ["throttled"]
+    battery = bench.compare_with_history(hist[0], [hist[0], hist[2]])
+    assert battery[0]["mismatch"] == ["on battery"]
+
+
+def test_delete_run(results):
+    _write_run(results, "bench-20260101-100000.json", "2026-01-01T10:00:00", "A", 40)
+    rid = bench.load_history()[0]["id"]
+    assert not bench.delete_run("../evil.json#0") and not bench.delete_run("bench-x.json#9")
+    assert bench.delete_run(rid) and bench.load_history() == []
+    assert not (results / "bench-20260101-100000.json").exists()
+
+
+def test_cli_history_and_saved_compare(results, capsys):
+    _write_run(results, "bench-20260101-100000.json", "2026-01-01T10:00:00", "other-Q4_K_M", 33)
+    assert bench.main(["--history"]) == 0
+    assert "other-Q4_K_M" in capsys.readouterr().out
+    rep = bench.ModelReport("now", sizes={1024: {"gen_tps": 40.0}})
+    text = bench.render_saved_compare([rep])
+    assert "other-Q4_K_M (2026-01-01" in text and "-18% gen" in text

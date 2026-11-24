@@ -208,7 +208,33 @@ def wait_healthy(base: str, proc, deadline_s: float = HEALTH_TIMEOUT_S) -> bool:
     return False
 
 
-def stream_request(base: str, key: str, model: str, prompt: str, timeout: float = 1800) -> RunResult:
+class Cancelled(Exception):
+    """The user cancelled a benchmark run."""
+
+
+class CancelToken:
+    """Lets another thread abort a benchmark: sets a flag and closes the request in flight."""
+
+    def __init__(self) -> None:
+        self.cancelled = False
+        self.resp = None
+
+    def cancel(self) -> None:
+        self.cancelled = True
+        resp = self.resp
+        if resp is not None:
+            try:
+                resp.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def check(self) -> None:
+        if self.cancelled:
+            raise Cancelled()
+
+
+def stream_request(base: str, key: str, model: str, prompt: str, timeout: float = 1800,
+                   cancel: CancelToken | None = None) -> RunResult:
     from localcode.ui.http import local_urlopen
     body = {"model": model, "stream": True, "max_tokens": MAX_TOKENS, "temperature": 0,
             "cache_prompt": False, "stream_options": {"include_usage": True},
@@ -218,28 +244,42 @@ def stream_request(base: str, key: str, model: str, prompt: str, timeout: float 
     t_first = None
     chunks = 0
     timings = usage = None
+    if cancel:
+        cancel.check()
     with local_urlopen(req, timeout=timeout) as resp:
-        for raw in resp:
-            line = raw.decode("utf-8", "replace").strip()
-            if not line.startswith("data:"):
-                continue
-            data = line[5:].strip()
-            if data == "[DONE]":
-                break
-            try:
-                obj = json.loads(data)
-            except ValueError:
-                continue
-            if obj.get("timings"):
-                timings = obj["timings"]
-            if obj.get("usage"):
-                usage = obj["usage"]
-            for choice in obj.get("choices") or []:
-                delta = choice.get("delta") or {}
-                if delta.get("content") or delta.get("reasoning_content"):
-                    chunks += 1
-                    if t_first is None:
-                        t_first = time.monotonic()
+        if cancel:
+            cancel.resp = resp
+        try:
+            for raw in resp:
+                line = raw.decode("utf-8", "replace").strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    obj = json.loads(data)
+                except ValueError:
+                    continue
+                if obj.get("timings"):
+                    timings = obj["timings"]
+                if obj.get("usage"):
+                    usage = obj["usage"]
+                for choice in obj.get("choices") or []:
+                    delta = choice.get("delta") or {}
+                    if delta.get("content") or delta.get("reasoning_content"):
+                        chunks += 1
+                        if t_first is None:
+                            t_first = time.monotonic()
+        except Exception:
+            if cancel and cancel.cancelled:
+                raise Cancelled() from None  # the close() from cancel() surfaces as a read error
+            raise
+        finally:
+            if cancel:
+                cancel.resp = None
+    if cancel:
+        cancel.check()
     return summarize_run(t0, t_first, time.monotonic(), timings=timings, usage=usage, chunks=chunks)
 
 
@@ -339,18 +379,23 @@ def bench_model(path: Path, runs: int, *, progress=print) -> ModelReport:
     return report
 
 
-def measure(report: ModelReport, base: str, key: str, name: str, sizes: list[int], runs: int, progress=print) -> None:
+def measure(report: ModelReport, base: str, key: str, name: str, sizes: list[int], runs: int, progress=print,
+            cancel: CancelToken | None = None, on_step=None) -> None:
     """One warm-up request, then `runs` measured requests per size, against a
     server that is already answering at `base`. Fills report.sizes/warnings."""
     before = thermal_snapshot()
-    stream_request(base, key, name, synthetic_prompt(256, f"warmup-{time.time_ns()}"))
+    if on_step:
+        on_step(0, len(sizes) * runs)
+    stream_request(base, key, name, synthetic_prompt(256, f"warmup-{time.time_ns()}"), cancel=cancel)
     series: list[float] = []
     for size in sizes:
         res = []
         for n in range(runs):
             progress(f"  {name}: ~{size // 1024}K prompt, run {n + 1}/{runs}")
-            r = stream_request(base, key, name, synthetic_prompt(size, f"{size}-{n}-{time.time_ns()}"))
+            r = stream_request(base, key, name, synthetic_prompt(size, f"{size}-{n}-{time.time_ns()}"), cancel=cancel)
             res.append(r)
+            if on_step:
+                on_step(len(series) + 1, len(sizes) * runs)
             series.append(r.gen_tps)
         report.sizes[size] = {
             "runs": len(res),
@@ -372,7 +417,8 @@ def server_pid(parent: int) -> int:
 
 
 def bench_running(name: str, base: str, key: str, ctx: int, pid: int | None, runs: int = 2,
-                  sizes: tuple[int, ...] = (1024, 8192), progress=lambda m: None) -> ModelReport:
+                  sizes: tuple[int, ...] = (1024, 8192), progress=lambda m: None,
+                  cancel: CancelToken | None = None, on_step=None) -> ModelReport:
     """Benchmark the model a LocalCode session already has loaded, over its own
     server. Nothing is launched or stopped; the caller owns the server."""
     report = ModelReport(name, ctx=ctx)
@@ -385,7 +431,9 @@ def bench_running(name: str, base: str, key: str, ctx: int, pid: int | None, run
     try:
         if sampler:
             sampler.start()
-        measure(report, base, key, name, use, runs, progress)
+        measure(report, base, key, name, use, runs, progress, cancel=cancel, on_step=on_step)
+    except Cancelled:
+        report.status, report.reason = "cancelled", "cancelled"
     except Exception as exc:  # noqa: BLE001
         report.status, report.reason = "failed", f"{type(exc).__name__}: {exc}"
     finally:
@@ -553,12 +601,204 @@ def results_dir() -> Path:
     return d
 
 
+def machine_label() -> str:
+    """Chip and RAM as the machine profile reports them; nothing about the user."""
+    try:
+        from localcode.performance import detect_machine_profile
+        m = detect_machine_profile()
+        gpu = m.gpu_summary if m.gpu_summary != "none" else ""
+        return f"{gpu}, {m.memory_gb} GB".lstrip(", ")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def build_json(reports: list[ModelReport], runs: int, notes: list[str]) -> dict:
     from localcode import __version__
     return {"schema": SCHEMA_VERSION, "localcode_version": __version__,
             "created": datetime.now().astimezone().isoformat(timespec="seconds"),
             "runs_per_size": runs, "max_tokens": MAX_TOKENS, "notes": notes,
+            "machine": machine_label(),
+            "on_battery": any("battery" in n for n in notes),
             "models": [r.to_json() for r in reports]}
+
+
+def save_results(data: dict) -> Path:
+    base = datetime.now().strftime("bench-%Y%m%d-%H%M%S")
+    d = results_dir()
+    path, n = d / f"{base}.json", 1
+    while path.exists():
+        n += 1
+        path = d / f"{base}-{n}.json"
+    path.write_text(json.dumps(data, indent=2))
+    return path
+
+
+# ---------------------------------------------------------------- history
+
+_QUANT = re.compile(r"((?:UD-)?(?:IQ|Q)\d[A-Za-z0-9_]*|BF16|F16|MXFP4\w*|NVFP4)$", re.I)
+
+
+def split_quant(name: str) -> tuple[str, str]:
+    m = _QUANT.search(name)
+    if not m:
+        return name, ""
+    return name[:m.start()].rstrip("-_ ") or name, m.group(1)
+
+
+def _size_stat(sizes: dict, size: int, key: str):
+    s = sizes.get(str(size)) or sizes.get(size) or {}
+    return s.get(key)
+
+
+def load_history() -> list[dict]:
+    """Every saved successful model run, newest first. Nothing is merged or deduplicated."""
+    rows: list[dict] = []
+    for f in sorted(results_dir().glob("bench-*.json")):
+        try:
+            data = json.loads(f.read_text())
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        for i, m in enumerate(data.get("models") or []):
+            if not isinstance(m, dict) or m.get("status", "ok") != "ok" or not m.get("sizes"):
+                continue
+            name = str(m.get("model", ""))
+            display, quant = split_quant(name)
+            sizes = m.get("sizes") or {}
+            warnings = list(m.get("warnings") or []) + [n for n in (data.get("notes") or []) if n not in (m.get("warnings") or [])]
+            rows.append({
+                "id": f"{f.name}#{i}", "date": str(data.get("created", "")), "version": str(data.get("localcode_version", "")),
+                "model": name, "display": display, "quant": quant, "machine": str(data.get("machine", "")),
+                "context": m.get("context"),
+                "ttft_s": _size_stat(sizes, 1024, "ttft_s"),
+                "prefill_1k": _size_stat(sizes, 1024, "prefill_tps"), "prefill_8k": _size_stat(sizes, 8192, "prefill_tps"),
+                "gen_1k": _size_stat(sizes, 1024, "gen_tps"), "gen_8k": _size_stat(sizes, 8192, "gen_tps"),
+                "peak_memory_mb": m.get("peak_memory_mb"), "warnings": warnings,
+                "throttled": any("throttl" in w.lower() or "slowed" in w.lower() for w in warnings),
+                "on_battery": bool(data.get("on_battery")) or any("battery" in w for w in warnings),
+            })
+    rows.sort(key=lambda r: (r["date"], r["id"]), reverse=True)
+    return rows
+
+
+def delete_run(run_id: str) -> bool:
+    fname, _, idx = run_id.partition("#")
+    if not re.fullmatch(r"bench-[\w-]+\.json", fname) or not idx.isdigit():
+        return False
+    path = results_dir() / fname
+    try:
+        data = json.loads(path.read_text())
+        models = data["models"]
+        models.pop(int(idx))
+    except (OSError, ValueError, KeyError, IndexError, TypeError):
+        return False
+    if any(isinstance(m, dict) and m.get("status", "ok") == "ok" for m in models):
+        path.write_text(json.dumps(data, indent=2))
+    else:
+        path.unlink()
+    return True
+
+
+def _pct(cur, prev, lower_is_better: bool = False):
+    if not cur or not prev:
+        return None
+    ratio = (prev / cur) if lower_is_better else (cur / prev)
+    return round((ratio - 1) * 100)
+
+
+def mismatch_reasons(cur: dict, other: dict) -> list[str]:
+    out = []
+    if cur.get("version") != other.get("version"):
+        out.append(f"LocalCode {other.get('version') or '?'}")
+    for label, row in (("throttled", other), ("on battery", other)):
+        key = "throttled" if label == "throttled" else "on_battery"
+        if row.get(key) and not cur.get(key):
+            out.append(label)
+    if cur.get("on_battery") and not other.get("on_battery"):
+        out.append("this run on battery")
+    if cur.get("throttled") and not other.get("throttled"):
+        out.append("this run throttled")
+    if cur.get("machine") != other.get("machine"):
+        out.append("other machine")
+    return out
+
+
+def compare_with_history(cur: dict, history: list[dict]) -> list[dict]:
+    """This model's previous run plus the best previous run of every other model, with
+    deltas against `cur` (positive = the current run is faster) and why a row may not compare."""
+    prior = [h for h in history if h["id"] != cur.get("id")]
+    picks: list[dict] = []
+    same = [h for h in prior if h["model"] == cur["model"]]
+    if same:
+        picks.append(dict(same[0], relation="previous run"))
+    best: dict[str, dict] = {}
+    for h in prior:
+        if h["model"] != cur["model"] and (h["model"] not in best or (h.get("gen_1k") or 0) > (best[h["model"]].get("gen_1k") or 0)):
+            best[h["model"]] = h
+    picks += [dict(h, relation="best run") for h in sorted(best.values(), key=lambda h: -(h.get("gen_1k") or 0))]
+    for p in picks:
+        p["delta"] = {"gen_pct": _pct(cur.get("gen_1k"), p.get("gen_1k")),
+                      "prefill_pct": _pct(cur.get("prefill_1k"), p.get("prefill_1k")),
+                      "ttft_pct": _pct(cur.get("ttft_s"), p.get("ttft_s"), True)}
+        p["mismatch"] = mismatch_reasons(cur, p)
+    return picks
+
+
+def current_row(report: ModelReport, data: dict, run_id: str = "") -> dict:
+    """The history-shaped row for a just-finished run (so it can be compared)."""
+    name = report.name
+    display, quant = split_quant(name)
+    sizes = {str(k): v for k, v in report.sizes.items()}
+    warnings = list(report.warnings) + list(data.get("notes") or [])
+    return {"id": run_id, "date": data.get("created", ""), "version": data.get("localcode_version", ""), "model": name,
+            "display": display, "quant": quant, "machine": data.get("machine", ""), "context": report.ctx,
+            "ttft_s": _size_stat(sizes, 1024, "ttft_s"),
+            "prefill_1k": _size_stat(sizes, 1024, "prefill_tps"), "prefill_8k": _size_stat(sizes, 8192, "prefill_tps"),
+            "gen_1k": _size_stat(sizes, 1024, "gen_tps"), "gen_8k": _size_stat(sizes, 8192, "gen_tps"),
+            "peak_memory_mb": report.peak_memory_mb, "warnings": warnings,
+            "throttled": any("throttl" in w.lower() or "slowed" in w.lower() for w in warnings),
+            "on_battery": bool(data.get("on_battery"))}
+
+
+def render_saved_compare(reports: list[ModelReport]) -> str:
+    """For --compare: the newest saved run of every model that was not measured now, with its date."""
+    now = {r.name for r in reports}
+    seen: dict[str, dict] = {}
+    for h in load_history():
+        if h["model"] not in now and h["model"] not in seen:
+            seen[h["model"]] = h
+    if not seen:
+        return ""
+    base = next((r for r in reports if r.status == "ok"), None)
+    cur = current_row(base, {}) if base else None
+    lines = ["", "Saved results for other models (not measured now):"]
+    for h in seen.values():
+        line = f"  {h['model']} ({h['date'][:10]}, LocalCode {h['version']}): gen {_f(h['gen_1k'])} tok/s at 1K, prefill {_f(h['prefill_1k'], 0)} tok/s, first token {_f(h['ttft_s'], 2)} s"
+        if cur and cur["gen_1k"] and h["gen_1k"]:
+            line += f" ({_pct(h['gen_1k'], cur['gen_1k']):+d}% gen vs {cur['model']})"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _f(v, nd=1) -> str:
+    return "-" if v is None else f"{v:.{nd}f}"
+
+
+def render_history(rows: list[dict]) -> str:
+    if not rows:
+        return "No saved benchmark results yet. Run /bench in LocalCode or `localcode bench`."
+    head = ["Date", "LocalCode", "Model", "Machine", "TTFT s", "Prefill 1K", "Prefill 8K", "Gen 1K", "Gen 8K", "Mem GB", "Notes"]
+    table = [head]
+    for r in rows:
+        notes = [n for n, on in (("throttled", r["throttled"]), ("battery", r["on_battery"])) if on]
+        table.append([r["date"][:16].replace("T", " "), r["version"], r["model"], r["machine"], _f(r["ttft_s"], 2),
+                      _f(r["prefill_1k"], 0), _f(r["prefill_8k"], 0), _f(r["gen_1k"]), _f(r["gen_8k"]),
+                      _f(r["peak_memory_mb"] / 1024 if r["peak_memory_mb"] else None), ", ".join(notes)])
+    widths = [max(len(str(row[i])) for row in table) for i in range(len(head))]
+    lines = ["  ".join(str(c).ljust(widths[i]) for i, c in enumerate(row)).rstrip() for row in table]
+    lines.insert(1, "  ".join("-" * w for w in widths))
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------- CLI
@@ -592,12 +832,13 @@ def _bench_session(args, session, say, input_fn) -> int:
         print(f"localcode bench: {exc}", file=sys.stderr)
         return 1
     data = build_json([report], args.runs, [warn] if warn else [])
-    saved = results_dir() / f"bench-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
-    saved.write_text(json.dumps(data, indent=2))
+    saved = save_results(data)
     if args.json == "-":
         print(json.dumps(data, indent=2))
     else:
         print(render_table([report], args.compare))
+        if args.compare:
+            print(render_saved_compare([report]))
         if args.json:
             Path(args.json).expanduser().write_text(json.dumps(data, indent=2))
     return 0 if report.status == "ok" else 1
@@ -611,10 +852,14 @@ def main(argv: list[str] | None = None, *, input_fn=input, progress=None) -> int
     parser.add_argument("--all-downloaded", action="store_true", help="Benchmark every downloaded model")
     parser.add_argument("--compare", action="store_true", help="Add columns relative to the first model")
     parser.add_argument("--json", nargs="?", const="-", metavar="PATH", help="Print results as JSON, or write them to PATH")
+    parser.add_argument("--history", action="store_true", help="Show saved benchmark results, newest first")
     parser.add_argument("--runs", type=int, default=3, help="Measured runs per prompt size (default 3)")
     parser.add_argument("--yes", "-y", action="store_true", help="Do not ask before starting")
     args = parser.parse_args(argv)
     say = progress or (lambda m: print(m, file=sys.stderr))
+    if args.history:
+        print(render_history(load_history()))
+        return 0
     if args.runs < 1:
         print("localcode bench: --runs must be at least 1", file=sys.stderr)
         return 2
@@ -692,12 +937,13 @@ def main(argv: list[str] | None = None, *, input_fn=input, progress=None) -> int
             time.sleep(COOLDOWN_S)
     # keep order: benchmarked first, then not-downloaded
     data = build_json(reports, args.runs, notes)
-    saved = results_dir() / f"bench-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
-    saved.write_text(json.dumps(data, indent=2))
+    saved = save_results(data)
     if args.json == "-":
         print(json.dumps(data, indent=2))
     else:
         print(render_table(reports, args.compare))
+        if args.compare:
+            print(render_saved_compare(reports))
         if warn:
             print(f"\nNote: {warn}.")
         if args.json:

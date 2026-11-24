@@ -162,6 +162,8 @@ export async function open(name, { model = true, files, mockArgs = [] } = {}) {
     ws,
     /** Paths of every POST the mock saw (control and chat endpoints). */
     posts: async () => (await (await fetch(`http://127.0.0.1:${mockPort}/_log`)).json()),
+    /** POST to the mock's control API, as another client (the CLI) would. */
+    mockPost: async (path) => (await fetch(`http://127.0.0.1:${mockPort}${path}`, { method: "POST", body: "{}" })).json(),
     screen,
     type: (t) => term.type(t),
     key: (...k) => term.press(...k),

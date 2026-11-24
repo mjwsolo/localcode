@@ -15,9 +15,9 @@
                          /diff              Open diff viewer
                          /exit              Exit the app
                          /help              Help
+                         /import            Import from other agents
                          /mcps              MCP servers
                          /models            Switch model
-                         /new               New session
 
                           /
 

@@ -60,6 +60,8 @@ from localcode.models_catalog import (
 QUANT_COLD_WAIT_SEC = 2.5  # max wait for the first-ever quant listing
 MIN_SPEED_FRACTION = 0.5  # same rule as tui/screens/model_picker.py
 from localcode.ui import run_dir
+
+IMPORT_SOURCES = {"claude": "Claude Code", "codex": "Codex", "cursor": "Cursor"}
 from localcode.ui.auth import KEY_ENV, control_token, new_secret, request_allowed, server_headers, server_key, write_auth_file
 
 HERE = run_dir()
@@ -119,6 +121,7 @@ class Supervisor:
         self.pp_prior: float | None = None     # prefill tokens/s from the warm-up replay
         self._bench: dict = {}
         self._bench_lock = threading.Lock()
+        self._bench_token = None
         self._timing = None                    # context_budget.TimingTable for the loaded model
         self._log_offset = 0                   # server.log bytes already fed to it
         self._budget: int | None = None
@@ -244,23 +247,140 @@ class Supervisor:
             return {"error": "runs must be 1-5 and sizes among 1K, 8K, 32K"}
         with self._bench_lock:
             if self._bench.get("state") == "running":
-                return {"error": "a benchmark is already running"}
-            self._bench = {"state": "running", "progress": "starting", "model": self.current}
+                return {"error": "a benchmark is already running", "status": self.bench_status()}
+            token = bench.CancelToken()
+            self._bench_token = token
+            self._bench = {"state": "running", "progress": "starting", "model": self.current,
+                           "step": 0, "total": len(sizes) * runs, "started_at": time.time()}
         alias, port, ctx, pid = self.current, self.port, self.ctx, self.proc.pid
+        started = self._bench["started_at"]
+
+        def on_step(done: int, total: int) -> None:
+            if self._bench_token is token:
+                self._bench.update(step=done, total=total)
 
         def work() -> None:
             try:
                 rep = bench.bench_running(alias, f"http://127.0.0.1:{port}/v1", server_key(), ctx, pid, runs, sizes,
-                                          progress=lambda m: self._bench.update(progress=m.strip()))
-                self._bench = {"state": "done", "model": alias, "report": rep.to_json(),
-                               "power": bench.power_warning()}
+                                          progress=lambda m: self._bench.update(progress=m.strip())
+                                          if self._bench_token is token else None,
+                                          cancel=token, on_step=on_step)
+                power = bench.power_warning()
+                final = {"state": "done", "model": alias, "report": rep.to_json(), "power": power}
+                if rep.status == "ok" and not token.cancelled:
+                    data = bench.build_json([rep], runs, [power] if power else [])
+                    path = bench.save_results(data)
+                    cur = bench.current_row(rep, data, f"{path.name}#0")
+                    final["compare"] = bench.compare_with_history(cur, bench.load_history())
+                    final["current"] = cur
             except Exception as exc:  # noqa: BLE001
-                self._bench = {"state": "error", "model": alias, "error": f"{type(exc).__name__}: {exc}"}
+                final = {"state": "error", "model": alias, "error": f"{type(exc).__name__}: {exc}"}
+            with self._bench_lock:
+                if self._bench_token is token and not token.cancelled:
+                    self._bench = dict(final, started_at=started, finished_at=time.time())
         threading.Thread(target=work, daemon=True).start()
         return {"ok": True}
 
+    def bench_cancel(self) -> dict:
+        """User pressed esc in /bench: abort the request in flight and mark the run cancelled."""
+        with self._bench_lock:
+            if self._bench.get("state") != "running":
+                return {"error": "no benchmark is running"}
+            self._bench_token.cancel()
+            self._bench = {"state": "cancelled", "model": self._bench.get("model"),
+                           "started_at": self._bench.get("started_at"), "finished_at": time.time()}
+        return {"ok": True}
+
+    def bench_history(self) -> dict:
+        from localcode import bench
+        return {"runs": bench.load_history()}
+
+    def bench_delete(self, run_id) -> dict:
+        from localcode import bench
+        if not bench.delete_run(str(run_id)):
+            return {"error": "no such saved run"}
+        return {"ok": True}
+
     def bench_status(self) -> dict:
-        return dict(self._bench) or {"state": "idle"}
+        st = dict(self._bench) or {"state": "idle"}
+        if st.get("state") == "running" and st.get("started_at"):
+            st["elapsed_s"] = round(time.time() - st["started_at"], 1)
+        return st
+
+    # ---------------------------------------------------------------- import from other agents
+
+    def import_detect(self) -> dict:
+        """User-requested (/import): read the user-level configs of other agents now and
+        describe what could be brought over. Secret values never leave this process."""
+        from localcode import importer
+        det = importer.detect()
+        plan = {(s.item.kind, s.item.source, s.item.name): s for s in importer.plan(det.items)}
+        items = []
+        for i, it in enumerate(det.items):
+            step = plan[(it.kind, it.source, it.name)]
+            row = {"id": str(i), "kind": it.kind, "source": it.source, "label": IMPORT_SOURCES.get(it.source, it.source),
+                   "name": it.name, "status": step.status, "final_name": step.final_name,
+                   "warnings": list(it.warnings)}
+            if step.suggestion:
+                row["suggestion"] = step.suggestion
+            if it.kind == "mcp":
+                spec = it.spec
+                row["transport"] = spec.get("type")
+                if spec.get("type") == "local":
+                    row["command"] = " ".join(importer._quote(a) for a in importer.mask_args([str(c) for c in spec.get("command", [])]))
+                    row["env_names"] = sorted(spec.get("environment") or {})
+                else:
+                    row["url"] = importer.mask_url(str(spec.get("url", "")))
+                    row["header_names"] = sorted(spec.get("headers") or {})
+            else:
+                row.update(description=it.description, size_bytes=it.size, size=importer._human(it.size),
+                           tokens=importer.description_tokens(it.description, it.name), has_scripts=it.has_scripts)
+            items.append(row)
+        return {"items": items, "notes": det.notes}
+
+    def import_apply(self, ids) -> dict:
+        from localcode import importer
+        det = importer.detect()
+        try:
+            chosen = [det.items[int(i)] for i in ids]
+        except (TypeError, ValueError, IndexError):
+            return {"error": "unknown item"}
+        if not chosen:
+            return {"error": "nothing selected"}
+        steps = importer.plan(chosen)
+        for st in steps:
+            if st.status == "clash":        # never overwrite: take the suggested free name
+                st.status, st.final_name = "new", st.suggestion
+        res = importer.apply(steps)
+        if res.get("error"):
+            return {"error": res["error"]}
+        home = str(Path.home())
+        bak = res.get("backup")
+        if bak and bak.startswith(home):
+            bak = "~" + bak[len(home):]
+        return {"ok": True, "servers": res["servers"], "skills": res["skills"], "backup": bak}
+
+    def import_hint(self) -> str | None:
+        """First-launch pointer to /import. Checks only that other agents' files exist
+        (never opens them) and answers once; the answer is remembered in the state dir."""
+        from localcode.paths import global_state_dir
+        marker = global_state_dir() / "import-hint-shown"
+        if marker.exists():
+            return None
+        home = Path.home()
+        found = []
+        for label, rels in (("Claude Code", (".claude.json", ".claude/skills")), ("Codex", (".codex/config.toml",)),
+                            ("Cursor", (".cursor/mcp.json",))):
+            if any(os.path.exists(home / r) for r in rels):
+                found.append(label)
+        if not found:
+            return None
+        try:
+            marker.write_text("1")
+        except OSError:
+            return None
+        names = found[0] if len(found) == 1 else f"{found[0]} (and {' and '.join(found[1:])})"
+        return f"Found settings from {names}. Type /import to bring over your MCP servers and skills."
 
     def ensure_mmproj(self, alias: str) -> None:
         """Fetch the model's vision projector (mmproj sidecar). Only called on an
@@ -1424,6 +1544,8 @@ def make_handler(sup: Supervisor):
                                        group=sup.active.get("group"), filename=sup.active.get("filename"),
                                        download=sup.download,
                                        supports_systemone=supported(sup.current),
+                                       import_hint=sup.import_hint() if "hint=1" in u.query else None,
+                                       bench_running=sup.bench_status().get("state") == "running",
                                        **sup.context_info(), **sup.vision_info()))
             if u.path == "/server":
                 from localcode.ui.ports import preferred_port
@@ -1450,6 +1572,10 @@ def make_handler(sup: Supervisor):
                 return self._json(sup.progress())
             if u.path == "/bench":
                 return self._json(sup.bench_status())
+            if u.path == "/bench/history":
+                return self._json(sup.bench_history())
+            if u.path == "/import/detect":
+                return self._json(sup.import_detect())
             self._json({"error": "not found"}, 404)
 
         def do_POST(self):
@@ -1505,6 +1631,15 @@ def make_handler(sup: Supervisor):
             if u.path == "/vision/install":
                 res = sup.vision_install()
                 return self._json(res, 200 if "error" not in res else 409)
+            if u.path == "/bench/history/delete":
+                res = sup.bench_delete(body.get("id", "") if isinstance(body, dict) else "")
+                return self._json(res, 200 if "error" not in res else 404)
+            if u.path == "/bench/cancel":
+                res = sup.bench_cancel()
+                return self._json(res, 200 if "error" not in res else 409)
+            if u.path == "/import/apply":
+                res = sup.import_apply(body.get("items", []) if isinstance(body, dict) else [])
+                return self._json(res, 200 if "error" not in res else 400)
             if u.path == "/bench":
                 if not isinstance(body, dict):
                     return self._json({"error": "Expected a JSON object"}, 400)

@@ -231,3 +231,65 @@ def test_symlinked_skill_dir_and_inner_links_not_followed(home, tmp_path):
     run(home, ["--yes"])
     dest = importer.skills_dir(home) / "linked"
     assert (dest / "SKILL.md").is_file() and not (dest / "leak.txt").exists()
+
+
+# ---------------------------------------------------------------- supervisor endpoints
+
+@pytest.fixture
+def sup(home, monkeypatch, tmp_path):
+    from localcode.ui import supervisor
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setattr("localcode.paths.GLOBAL_STATE_DIR", tmp_path / "state", raising=False)
+    return supervisor.Supervisor.__new__(supervisor.Supervisor)
+
+
+def test_detect_endpoint_masks_secrets(sup, home):
+    write_claude(home, {"fs": {"command": "npx", "args": ["srv", "--api-key", SECRET], "env": {"TOKEN": SECRET}},
+                        "gh": {"type": "http", "url": "https://x.example/mcp?token=" + SECRET, "headers": {"Authorization": SECRET}}})
+    skill = home / ".claude" / "skills" / "tidy"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("---\ndescription: tidy things\n---\nbody")
+    (skill / "run.sh").write_text("echo hi")
+    out = sup.import_detect()
+    assert SECRET not in json.dumps(out)
+    by = {i["name"]: i for i in out["items"]}
+    assert by["fs"]["command"] == "npx srv --api-key ***" and by["fs"]["env_names"] == ["TOKEN"]
+    assert by["fs"]["label"] == "Claude Code" and by["gh"]["header_names"] == ["Authorization"]
+    assert by["tidy"]["has_scripts"] and by["tidy"]["tokens"] > 0 and by["tidy"]["size"]
+    assert by["fs"]["status"] == "new"
+
+
+def test_apply_endpoint_writes_disabled_and_reports_clash(sup, home):
+    write_claude(home, {"fs": {"command": "npx", "args": ["srv"]}})
+    ids = [i["id"] for i in sup.import_detect()["items"]]
+    res = sup.import_apply(ids)
+    assert res["ok"] and res["servers"] == ["fs"] and res["backup"] is None
+    assert json.loads(cfg_path(home).read_text())["mcp"]["fs"]["enabled"] is False
+    again = sup.import_apply(ids)
+    assert again["servers"] == []                       # already there, nothing rewritten
+    assert "error" in sup.import_apply(["99"]) and "error" in sup.import_apply([])
+    write_claude(home, {"fs": {"command": "other"}})
+    res = sup.import_apply([sup.import_detect()["items"][0]["id"]])
+    assert res["servers"] == ["fs-claude"]
+    assert res["backup"].startswith("~/") and str(home) not in res["backup"]
+
+
+def test_import_hint_checks_existence_only_and_shows_once(sup, home, monkeypatch):
+    assert sup.import_hint() is None                    # nothing to find
+    (home / ".claude.json").write_text("{}")
+    (home / ".codex").mkdir()
+    (home / ".codex" / "config.toml").write_text("")
+    os.chmod(home / ".claude.json", 0)
+    os.chmod(home / ".codex" / "config.toml", 0)
+    opened = []
+    real_open = open
+    monkeypatch.setattr("builtins.open", lambda *a, **k: (opened.append(a[0]), real_open(*a, **k))[1])
+    monkeypatch.setattr(Path, "read_text", lambda *a, **k: opened.append("read_text") or "")
+    try:
+        msg = sup.import_hint()
+    finally:
+        os.chmod(home / ".claude.json", 0o600)
+        os.chmod(home / ".codex" / "config.toml", 0o600)
+    assert msg == "Found settings from Claude Code (and Codex). Type /import to bring over your MCP servers and skills."
+    assert not [o for o in opened if "claude.json" in str(o) or "config.toml" in str(o)]
+    assert sup.import_hint() is None                    # shown once
