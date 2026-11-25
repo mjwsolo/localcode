@@ -198,6 +198,20 @@
         "experimental": true
       },
       {
+        "name": "Inkling 2 Mini 26B-A5B (Q4)",
+        "base": "Inkling 2 Mini 26B-A5B",
+        "quant": "Q4",
+        "total": "26B",
+        "active": "about 5B effective active (26B total looped MoE, 128 experts, 8 active)",
+        "kind": "MoE",
+        "detail": "26B total looped MoE, 128 experts, 8 active",
+        "file": "Inkling-2-Mini-UD-Q4_K_XL.gguf",
+        "size": 17.6,
+        "maker": "Thinking Machines",
+        "logo": null,
+        "experimental": false
+      },
+      {
         "name": "North Mini Code 30B-A3B (Q4)",
         "base": "North Mini Code 30B-A3B",
         "quant": "Q4",

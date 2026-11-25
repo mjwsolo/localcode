@@ -253,6 +253,7 @@ class Supervisor:
             self._bench = {"state": "running", "progress": "starting", "model": self.current,
                            "step": 0, "total": len(sizes) * runs, "started_at": time.time()}
         alias, port, ctx, pid = self.current, self.port, self.ctx, self.proc.pid
+        load_s = getattr(self, "load_s", None)
         started = self._bench["started_at"]
 
         def on_step(done: int, total: int) -> None:
@@ -264,7 +265,7 @@ class Supervisor:
                 rep = bench.bench_running(alias, f"http://127.0.0.1:{port}/v1", server_key(), ctx, pid, runs, sizes,
                                           progress=lambda m: self._bench.update(progress=m.strip())
                                           if self._bench_token is token else None,
-                                          cancel=token, on_step=on_step)
+                                          cancel=token, on_step=on_step, load_s=load_s)
                 power = bench.power_warning()
                 final = {"state": "done", "model": alias, "report": rep.to_json(), "power": power}
                 if rep.status == "ok" and not token.cancelled:
@@ -467,18 +468,21 @@ class Supervisor:
                 self._budget = None
                 self._budget_info = {}
             from localcode.ui.process_guard import spawn_owned
+            self.load_s = None
+            t_launch = time.monotonic()
             self.proc = spawn_owned(cmd, stdout=self.log, lease_fd=getattr(self, "lease_fd", None))
             process = self.proc
             log(f"supervisor: started model process guard pid {self.proc.pid} for {alias}")
-        for _ in range(wait_s):
+        for _ in range(wait_s * 4):
             if self._closing.is_set() or process.poll() is not None:
                 return False
             if self.healthy():
+                self.load_s = round(time.monotonic() - t_launch, 1)
                 self.current = alias
                 self._probe_props()
                 self._start_warmup(alias)
                 return True
-            time.sleep(1)
+            time.sleep(0.25)
         return False
 
     # ---- prompt warm-up (see ui/warmup.py) ----------------------------------

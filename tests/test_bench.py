@@ -190,6 +190,23 @@ def test_bench_running_uses_the_given_server_and_launches_nothing(monkeypatch, f
     assert again.sizes[8192]["prefill_tps"] == 500.0 and "Gen tok/s" in bench.render_table([again], False)
 
 
+def test_load_time_is_carried_through_json_table_and_history(monkeypatch, fake_server):
+    port = fake_server.server_address[1]
+    monkeypatch.setattr(bench, "thermal_snapshot", lambda: 100)
+    rep = bench.bench_running("m", f"http://127.0.0.1:{port}/v1", "", 16384, None, runs=1, sizes=(1024, 8192),
+                              load_s=27.4)
+    again = bench.ModelReport.from_json(json.loads(json.dumps(rep.to_json())))
+    assert again.load_s == 27.4 and again.first_reply_s is None
+    lines = bench.render_table([again], False).splitlines()
+    assert "Load s" in lines[0] and "1st reply s" in lines[0]
+    assert "27.4" in lines[2] and "27.4" not in lines[3]       # once per model, on its first row
+    data = bench.build_json([again], 1, [])
+    row = bench.current_row(again, data)
+    assert row["load_s"] == 27.4
+    prev = dict(row, id="old", load_s=54.8)
+    assert bench.compare_with_history(row, [prev])[0]["delta"]["load_pct"] == 100   # twice as fast to load
+
+
 def test_supervisor_bench_endpoint_state(monkeypatch, fake_server):
     from localcode.ui import supervisor
     monkeypatch.setattr(bench, "thermal_snapshot", lambda: 100)
@@ -207,6 +224,7 @@ def test_supervisor_bench_endpoint_state(monkeypatch, fake_server):
             break
         time.sleep(0.05)
     st = sup.bench_status()
+    assert st["report"]["load_s"] is None                      # this session did not start the server
     assert st["state"] == "done" and st["report"]["sizes"]["1024"]["gen_tps"] == 40.0
 
 

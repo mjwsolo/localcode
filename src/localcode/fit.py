@@ -39,6 +39,10 @@ RUNTIME_OVERHEAD: tuple[tuple[str, float, float], ...] = (
     ("North-Mini-Code", 2.8, 0.0),
     # 2.0 GB at an 80K prompt in a 128K window (compressed attention keeps KV small).
     ("DeepSeek-V4-Flash", 2.1, 0.0),
+    # 16-bit cache (16 KB/token), 1.2 GB of fixed loop state and compute buffers.
+    # Peaks measured 2026-11-25 with each window about 90% full: 4.3 GB at 80K
+    # (Q4), 4.6 GB at 90K (Q4), 4.9 GB at 96K with 8 checkpoints (Q8).
+    ("Inkling-2-Mini", 5.0, 0.0),
 )
 RUNTIME_OVERHEAD_DEFAULT = (3.0, 0.3)
 

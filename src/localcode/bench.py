@@ -2,8 +2,8 @@
 
 For each model it starts the same llama-server command LocalCode itself would
 launch, sends identical synthetic code-like prompts of about 1K, 8K and 32K
-tokens, and reports time to first token, prompt reading speed, generation
-speed and approximate peak memory. Everything stays on this machine: only
+tokens, and reports load time, time to first token, prompt reading speed,
+generation speed and approximate peak memory. Everything stays on this machine: only
 already-downloaded models are used, nothing is downloaded or uploaded.
 """
 from __future__ import annotations
@@ -204,7 +204,7 @@ def wait_healthy(base: str, proc, deadline_s: float = HEALTH_TIMEOUT_S) -> bool:
                     return True
         except Exception:  # noqa: BLE001
             pass
-        time.sleep(1)
+        time.sleep(0.25)
     return False
 
 
@@ -296,6 +296,8 @@ class ModelReport:
     peak_memory_mb: float | None = None
     memory_source: str = ""
     load_buffers_mb: float | None = None
+    load_s: float | None = None          # server start until it answers /health
+    first_reply_s: float | None = None   # first short reply after loading (one-off GPU setup)
     warnings: list[str] = field(default_factory=list)
 
     @classmethod
@@ -311,6 +313,8 @@ class ModelReport:
         r.peak_memory_mb = d.get("peak_memory_mb")
         r.memory_source = d.get("memory_source") or ""
         r.load_buffers_mb = d.get("load_buffers_mb")
+        r.load_s = d.get("load_s")
+        r.first_reply_s = d.get("first_reply_s")
         r.warnings = list(d.get("warnings") or [])
         return r
 
@@ -318,7 +322,8 @@ class ModelReport:
         return {"model": self.name, "status": self.status, "reason": self.reason, "context": self.ctx,
                 "sizes": {str(k): v for k, v in self.sizes.items()}, "skipped_sizes": self.skipped_sizes,
                 "peak_memory_mb": self.peak_memory_mb, "memory_source": self.memory_source,
-                "load_buffers_mb": self.load_buffers_mb, "warnings": self.warnings}
+                "load_buffers_mb": self.load_buffers_mb, "load_s": self.load_s,
+                "first_reply_s": self.first_reply_s, "warnings": self.warnings}
 
 
 def ctx_from_command(cmd: list[str]) -> int:
@@ -356,14 +361,16 @@ def bench_model(path: Path, runs: int, *, progress=print) -> ModelReport:
     base = f"http://127.0.0.1:{port}/v1"
     log = tempfile.TemporaryFile()
     progress(f"  loading {name} (context {report.ctx})...")
+    t_launch = time.monotonic()
     proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
     sampler = MemorySampler(proc.pid)
     try:
+        sampler.start()
         if not wait_healthy(base, proc):
             report.status, report.reason = "failed", "the model server did not become ready"
             return report
-        sampler.start()
-        measure(report, base, key, name, sizes, runs, progress)
+        report.load_s = round(time.monotonic() - t_launch, 1)
+        report.first_reply_s = measure(report, base, key, name, sizes, runs, progress)
     except Exception as exc:  # noqa: BLE001
         report.status, report.reason = "failed", f"{type(exc).__name__}: {exc}"
     finally:
@@ -380,13 +387,16 @@ def bench_model(path: Path, runs: int, *, progress=print) -> ModelReport:
 
 
 def measure(report: ModelReport, base: str, key: str, name: str, sizes: list[int], runs: int, progress=print,
-            cancel: CancelToken | None = None, on_step=None) -> None:
+            cancel: CancelToken | None = None, on_step=None) -> float:
     """One warm-up request, then `runs` measured requests per size, against a
-    server that is already answering at `base`. Fills report.sizes/warnings."""
+    server that is already answering at `base`. Fills report.sizes/warnings and
+    returns the warm-up's wall time (on a fresh server: the first reply)."""
     before = thermal_snapshot()
     if on_step:
         on_step(0, len(sizes) * runs)
+    t_warm = time.monotonic()
     stream_request(base, key, name, synthetic_prompt(256, f"warmup-{time.time_ns()}"), cancel=cancel)
+    warm_s = round(time.monotonic() - t_warm, 1)
     series: list[float] = []
     for size in sizes:
         res = []
@@ -408,6 +418,7 @@ def measure(report: ModelReport, base: str, key: str, name: str, sizes: list[int
             "gen_range": spread([r.gen_tps for r in res]),
         }
     report.warnings += throttle_flags(series, before, thermal_snapshot())
+    return warm_s
 
 
 def server_pid(parent: int) -> int:
@@ -418,10 +429,12 @@ def server_pid(parent: int) -> int:
 
 def bench_running(name: str, base: str, key: str, ctx: int, pid: int | None, runs: int = 2,
                   sizes: tuple[int, ...] = (1024, 8192), progress=lambda m: None,
-                  cancel: CancelToken | None = None, on_step=None) -> ModelReport:
+                  cancel: CancelToken | None = None, on_step=None,
+                  load_s: float | None = None, first_reply_s: float | None = None) -> ModelReport:
     """Benchmark the model a LocalCode session already has loaded, over its own
-    server. Nothing is launched or stopped; the caller owns the server."""
-    report = ModelReport(name, ctx=ctx)
+    server. Nothing is launched or stopped; the caller owns the server and
+    passes the load timings it recorded when it started it."""
+    report = ModelReport(name, ctx=ctx, load_s=load_s, first_reply_s=first_reply_s)
     use = [s for s in sizes if fits(s, ctx)] if ctx else list(sizes)
     report.skipped_sizes = [s for s in sizes if s not in use]
     if not use:
@@ -558,7 +571,7 @@ def _pm(med, rng, nd=1):
 def render_table(reports: list[ModelReport], compare: bool) -> str:
     ok = [r for r in reports if r.status == "ok"]
     base = ok[0] if ok else None
-    head = ["Model", "Prompt", "TTFT s", "Prefill tok/s", "Gen tok/s", "Peak mem GB~"]
+    head = ["Model", "Load s", "1st reply s", "Prompt", "TTFT s", "Prefill tok/s", "Gen tok/s", "Peak mem GB~"]
     if compare:
         head += ["TTFT vs 1st", "Prefill vs 1st", "Gen vs 1st"]
     rows = [head]
@@ -566,9 +579,10 @@ def render_table(reports: list[ModelReport], compare: bool) -> str:
         if r.status != "ok":
             rows.append([r.name, r.status.upper(), r.reason] + [""] * (len(head) - 3))
             continue
-        for size, s in r.sizes.items():
+        for i, (size, s) in enumerate(r.sizes.items()):
             mem = _fmt(r.peak_memory_mb / 1024, 1) if r.peak_memory_mb else "-"
-            row = [r.name, f"{size // 1024}K", _pm(s["ttft_s"], s["ttft_range"], 2),
+            load = [_fmt(r.load_s), _fmt(r.first_reply_s)] if i == 0 else ["", ""]
+            row = [r.name, *load, f"{size // 1024}K", _pm(s["ttft_s"], s["ttft_range"], 2),
                    _pm(s["prefill_tps"], s["prefill_range"], 0), _pm(s["gen_tps"], s["gen_range"], 1), mem]
             if compare:
                 b = base.sizes.get(size) if base else None
@@ -583,6 +597,8 @@ def render_table(reports: list[ModelReport], compare: bool) -> str:
     lines = ["  ".join(str(c).ljust(widths[i]) for i, c in enumerate(row)).rstrip() for row in rows]
     lines.insert(1, "  ".join("-" * w for w in widths))
     notes = ["", "Values are medians with (min-max). TTFT is the time to the first generated token.",
+             "Load is from starting the model server until it answers; 1st reply is the first short answer",
+             "after that (it includes any one-off GPU setup).",
              "Peak memory is approximate (process footprint, sampled every 0.5 s)."]
     if compare:
         notes.append("Compare columns are speedups relative to the first model; above 1.00x is faster.")
@@ -674,7 +690,8 @@ def load_history() -> list[dict]:
                 "ttft_s": _size_stat(sizes, 1024, "ttft_s"),
                 "prefill_1k": _size_stat(sizes, 1024, "prefill_tps"), "prefill_8k": _size_stat(sizes, 8192, "prefill_tps"),
                 "gen_1k": _size_stat(sizes, 1024, "gen_tps"), "gen_8k": _size_stat(sizes, 8192, "gen_tps"),
-                "peak_memory_mb": m.get("peak_memory_mb"), "warnings": warnings,
+                "peak_memory_mb": m.get("peak_memory_mb"), "load_s": m.get("load_s"),
+                "first_reply_s": m.get("first_reply_s"), "warnings": warnings,
                 "throttled": any("throttl" in w.lower() or "slowed" in w.lower() for w in warnings),
                 "on_battery": bool(data.get("on_battery")) or any("battery" in w for w in warnings),
             })
@@ -740,7 +757,8 @@ def compare_with_history(cur: dict, history: list[dict]) -> list[dict]:
     for p in picks:
         p["delta"] = {"gen_pct": _pct(cur.get("gen_1k"), p.get("gen_1k")),
                       "prefill_pct": _pct(cur.get("prefill_1k"), p.get("prefill_1k")),
-                      "ttft_pct": _pct(cur.get("ttft_s"), p.get("ttft_s"), True)}
+                      "ttft_pct": _pct(cur.get("ttft_s"), p.get("ttft_s"), True),
+                      "load_pct": _pct(cur.get("load_s"), p.get("load_s"), True)}
         p["mismatch"] = mismatch_reasons(cur, p)
     return picks
 
@@ -756,7 +774,8 @@ def current_row(report: ModelReport, data: dict, run_id: str = "") -> dict:
             "ttft_s": _size_stat(sizes, 1024, "ttft_s"),
             "prefill_1k": _size_stat(sizes, 1024, "prefill_tps"), "prefill_8k": _size_stat(sizes, 8192, "prefill_tps"),
             "gen_1k": _size_stat(sizes, 1024, "gen_tps"), "gen_8k": _size_stat(sizes, 8192, "gen_tps"),
-            "peak_memory_mb": report.peak_memory_mb, "warnings": warnings,
+            "peak_memory_mb": report.peak_memory_mb, "load_s": report.load_s,
+            "first_reply_s": report.first_reply_s, "warnings": warnings,
             "throttled": any("throttl" in w.lower() or "slowed" in w.lower() for w in warnings),
             "on_battery": bool(data.get("on_battery"))}
 
@@ -847,7 +866,7 @@ def _bench_session(args, session, say, input_fn) -> int:
 def main(argv: list[str] | None = None, *, input_fn=input, progress=None) -> int:
     parser = argparse.ArgumentParser(
         prog="localcode bench",
-        description="Measure time to first token, prompt speed, generation speed and memory of downloaded models.")
+        description="Measure load time, time to first token, prompt speed, generation speed and memory of downloaded models.")
     parser.add_argument("--models", help="Comma separated model names (as shown in /models); default: the model LocalCode would pick")
     parser.add_argument("--all-downloaded", action="store_true", help="Benchmark every downloaded model")
     parser.add_argument("--compare", action="store_true", help="Add columns relative to the first model")
