@@ -68,7 +68,7 @@ Four things matter, roughly in this order:
 
 The model server's GPU kernels ship precompiled, so the first start after an install or update takes seconds rather than 20 to 30. If the shipped kernels do not match your hardware, the server compiles them as before.
 
-localcode does not publish throughput figures, because real speed depends on your chip, context length, thermal state and other running tasks. To measure your own Mac, run `/bench` in the interface or `localcode bench` in a terminal: it reports load time, time to first token, prompt and generation speed, and peak memory, and can compare the models you have downloaded.
+localcode does not publish throughput figures, because real speed depends on your chip, context length, thermal state and other running tasks. To measure your own Mac, run `/bench`: it shows the loaded model's load time, time to first token, prompt and generation speed, and peak memory, and compares it with your earlier runs.
 
 ## Hidden reasoning
 

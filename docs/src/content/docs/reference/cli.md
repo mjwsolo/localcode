@@ -9,7 +9,6 @@ localcode --version
 localcode api [--json] [--show-key] [--port PORT|auto]
 localcode doctor
 localcode mcp add|list|auth|debug|import|remove
-localcode bench [--models NAMES|--all-downloaded] [--compare] [--json [PATH]] [--history] [--runs N]
 localcode [DIR] --mode chat|decisions
 localcode decide --question TEXT [--type yes-no|choice|score] [--option LABEL ...]
 ```
@@ -35,8 +34,6 @@ A second `localcode` opens another interface session attached to the running mod
 `localcode doctor` diagnoses the installation: the selected context mode, detected model files, model processes and the running service state, without printing API keys or prompts.
 
 `localcode mcp add|list|auth|debug` manages MCP servers; see [MCP](/localcode/guides/mcp).
-
-`localcode bench` measures how fast downloaded models run on this Mac: load time (starting the model server until it answers), the first short reply after loading, time to first token, prompt reading and generation speed at about 1K, 8K and 32K tokens, and approximate peak memory. `--compare` adds columns relative to the first model, `--history` lists saved runs, `--json` prints or saves the results. It only uses models you already downloaded and sends nothing anywhere. While LocalCode is open it measures the loaded model through that session; `/bench` inside the interface does the same and shows the load time of the current model.
 
 `localcode decide` evaluates a typed question using the running OpenJev model and prints JSON. Supply `--state TEXT` or `--state-file PATH`, and optionally `--image PATH`. Repeat `--option` for choice labels or ordered score levels. See [Chat and Decisions](/localcode/guides/decisions).
 
