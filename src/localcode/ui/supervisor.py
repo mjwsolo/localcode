@@ -46,6 +46,7 @@ import localcode
 from localcode import bootstrap
 from localcode.model_files import model_files, find_model
 from localcode.split_gguf import display_alias, is_shard, link_split, resolve_model_path, split_complete, total_bytes
+from localcode.fit import comfortable, free_gb
 from localcode.hf_quants import fetch_quants, fit_badge
 from localcode.models_catalog import (
     MODEL_GROUPS,
@@ -59,6 +60,8 @@ from localcode.models_catalog import (
 QUANT_COLD_WAIT_SEC = 2.5  # max wait for the first-ever quant listing
 MIN_SPEED_FRACTION = 0.5  # same rule as tui/screens/model_picker.py
 from localcode.ui import run_dir
+
+IMPORT_SOURCES = {"claude": "Claude Code", "codex": "Codex", "cursor": "Cursor"}
 from localcode.ui.auth import KEY_ENV, control_token, new_secret, request_allowed, server_headers, server_key, write_auth_file
 
 HERE = run_dir()
@@ -116,6 +119,9 @@ class Supervisor:
         self.ctx_total = ctx
         self.slots = 1
         self.pp_prior: float | None = None     # prefill tokens/s from the warm-up replay
+        self._bench: dict = {}
+        self._bench_lock = threading.Lock()
+        self._bench_token = None
         self._timing = None                    # context_budget.TimingTable for the loaded model
         self._log_offset = 0                   # server.log bytes already fed to it
         self._budget: int | None = None
@@ -226,6 +232,157 @@ class Supervisor:
         threading.Thread(target=work, daemon=True).start()
         return {"ok": True}
 
+    def bench_start(self, runs: int = 2, sizes=(1024, 8192)) -> dict:
+        """User-requested (/bench): measure the loaded model over its own server.
+        Runs on a thread; poll bench_status(). Nothing is loaded or stopped."""
+        from localcode import bench
+        if not self.current or self.state.get("state") != "ready" or self.proc is None:
+            return {"error": "no model is loaded and ready"}
+        try:
+            runs = int(runs)
+            sizes = tuple(int(x) for x in sizes)
+        except (TypeError, ValueError):
+            return {"error": "bad runs or sizes"}
+        if not 1 <= runs <= 5 or not sizes or any(x not in bench.SIZES for x in sizes):
+            return {"error": "runs must be 1-5 and sizes among 1K, 8K, 32K"}
+        with self._bench_lock:
+            if self._bench.get("state") == "running":
+                return {"error": "a benchmark is already running", "status": self.bench_status()}
+            token = bench.CancelToken()
+            self._bench_token = token
+            self._bench = {"state": "running", "progress": "starting", "model": self.current,
+                           "step": 0, "total": len(sizes) * runs, "started_at": time.time()}
+        alias, port, ctx, pid = self.current, self.port, self.ctx, self.proc.pid
+        load_s = getattr(self, "load_s", None)
+        started = self._bench["started_at"]
+
+        def on_step(done: int, total: int) -> None:
+            if self._bench_token is token:
+                self._bench.update(step=done, total=total)
+
+        def work() -> None:
+            try:
+                rep = bench.bench_running(alias, f"http://127.0.0.1:{port}/v1", server_key(), ctx, pid, runs, sizes,
+                                          progress=lambda m: self._bench.update(progress=m.strip())
+                                          if self._bench_token is token else None,
+                                          cancel=token, on_step=on_step, load_s=load_s)
+                power = bench.power_warning()
+                final = {"state": "done", "model": alias, "report": rep.to_json(), "power": power}
+                if rep.status == "ok" and not token.cancelled:
+                    data = bench.build_json([rep], runs, [power] if power else [])
+                    path = bench.save_results(data)
+                    cur = bench.current_row(rep, data, f"{path.name}#0")
+                    final["compare"] = bench.compare_with_history(cur, bench.load_history())
+                    final["current"] = cur
+            except Exception as exc:  # noqa: BLE001
+                final = {"state": "error", "model": alias, "error": f"{type(exc).__name__}: {exc}"}
+            with self._bench_lock:
+                if self._bench_token is token and not token.cancelled:
+                    self._bench = dict(final, started_at=started, finished_at=time.time())
+        threading.Thread(target=work, daemon=True).start()
+        return {"ok": True}
+
+    def bench_cancel(self) -> dict:
+        """User pressed esc in /bench: abort the request in flight and mark the run cancelled."""
+        with self._bench_lock:
+            if self._bench.get("state") != "running":
+                return {"error": "no benchmark is running"}
+            self._bench_token.cancel()
+            self._bench = {"state": "cancelled", "model": self._bench.get("model"),
+                           "started_at": self._bench.get("started_at"), "finished_at": time.time()}
+        return {"ok": True}
+
+    def bench_history(self) -> dict:
+        from localcode import bench
+        return {"runs": bench.load_history()}
+
+    def bench_delete(self, run_id) -> dict:
+        from localcode import bench
+        if not bench.delete_run(str(run_id)):
+            return {"error": "no such saved run"}
+        return {"ok": True}
+
+    def bench_status(self) -> dict:
+        st = dict(self._bench) or {"state": "idle"}
+        if st.get("state") == "running" and st.get("started_at"):
+            st["elapsed_s"] = round(time.time() - st["started_at"], 1)
+        return st
+
+    # ---------------------------------------------------------------- import from other agents
+
+    def import_detect(self) -> dict:
+        """User-requested (/import): read the user-level configs of other agents now and
+        describe what could be brought over. Secret values never leave this process."""
+        from localcode import importer
+        det = importer.detect()
+        plan = {(s.item.kind, s.item.source, s.item.name): s for s in importer.plan(det.items)}
+        items = []
+        for i, it in enumerate(det.items):
+            step = plan[(it.kind, it.source, it.name)]
+            row = {"id": str(i), "kind": it.kind, "source": it.source, "label": IMPORT_SOURCES.get(it.source, it.source),
+                   "name": it.name, "status": step.status, "final_name": step.final_name,
+                   "warnings": list(it.warnings)}
+            if step.suggestion:
+                row["suggestion"] = step.suggestion
+            if it.kind == "mcp":
+                spec = it.spec
+                row["transport"] = spec.get("type")
+                if spec.get("type") == "local":
+                    row["command"] = " ".join(importer._quote(a) for a in importer.mask_args([str(c) for c in spec.get("command", [])]))
+                    row["env_names"] = sorted(spec.get("environment") or {})
+                else:
+                    row["url"] = importer.mask_url(str(spec.get("url", "")))
+                    row["header_names"] = sorted(spec.get("headers") or {})
+            else:
+                row.update(description=it.description, size_bytes=it.size, size=importer._human(it.size),
+                           tokens=importer.description_tokens(it.description, it.name), has_scripts=it.has_scripts)
+            items.append(row)
+        return {"items": items, "notes": det.notes}
+
+    def import_apply(self, ids) -> dict:
+        from localcode import importer
+        det = importer.detect()
+        try:
+            chosen = [det.items[int(i)] for i in ids]
+        except (TypeError, ValueError, IndexError):
+            return {"error": "unknown item"}
+        if not chosen:
+            return {"error": "nothing selected"}
+        steps = importer.plan(chosen)
+        for st in steps:
+            if st.status == "clash":        # never overwrite: take the suggested free name
+                st.status, st.final_name = "new", st.suggestion
+        res = importer.apply(steps)
+        if res.get("error"):
+            return {"error": res["error"]}
+        home = str(Path.home())
+        bak = res.get("backup")
+        if bak and bak.startswith(home):
+            bak = "~" + bak[len(home):]
+        return {"ok": True, "servers": res["servers"], "skills": res["skills"], "backup": bak}
+
+    def import_hint(self) -> str | None:
+        """First-launch pointer to /import. Checks only that other agents' files exist
+        (never opens them) and answers once; the answer is remembered in the state dir."""
+        from localcode.paths import global_state_dir
+        marker = global_state_dir() / "import-hint-shown"
+        if marker.exists():
+            return None
+        home = Path.home()
+        found = []
+        for label, rels in (("Claude Code", (".claude.json", ".claude/skills")), ("Codex", (".codex/config.toml",)),
+                            ("Cursor", (".cursor/mcp.json",))):
+            if any(os.path.exists(home / r) for r in rels):
+                found.append(label)
+        if not found:
+            return None
+        try:
+            marker.write_text("1")
+        except OSError:
+            return None
+        names = found[0] if len(found) == 1 else f"{found[0]} (and {' and '.join(found[1:])})"
+        return f"Found settings from {names}. Type /import to bring over your MCP servers and skills."
+
     def ensure_mmproj(self, alias: str) -> None:
         """Fetch the model's vision projector (mmproj sidecar). Only called on an
         explicit user request (vision_install); failure only means text-only."""
@@ -311,18 +468,21 @@ class Supervisor:
                 self._budget = None
                 self._budget_info = {}
             from localcode.ui.process_guard import spawn_owned
+            self.load_s = None
+            t_launch = time.monotonic()
             self.proc = spawn_owned(cmd, stdout=self.log, lease_fd=getattr(self, "lease_fd", None))
             process = self.proc
             log(f"supervisor: started model process guard pid {self.proc.pid} for {alias}")
-        for _ in range(wait_s):
+        for _ in range(wait_s * 4):
             if self._closing.is_set() or process.poll() is not None:
                 return False
             if self.healthy():
+                self.load_s = round(time.monotonic() - t_launch, 1)
                 self.current = alias
                 self._probe_props()
                 self._start_warmup(alias)
                 return True
-            time.sleep(1)
+            time.sleep(0.25)
         return False
 
     # ---- prompt warm-up (see ui/warmup.py) ----------------------------------
@@ -741,6 +901,7 @@ class Supervisor:
                     continue
         rows.sort(key=lambda q: q.size_gb)
         rec_idx = self._recommended_quant_idx(rows, g.display_name, g)
+        max_idx = self._largest_fit_idx(rows, g)
         process = getattr(self, "proc", None)
         loaded = process is not None and process.poll() is None and self.state["state"] == "ready"
         out = []
@@ -756,6 +917,8 @@ class Supervisor:
                 "filename": q.filename, "alias": _alias(q.filename), "label": q.label,
                 "size_gb": round(total_gb, 1), "fit": fit_badge(footprint, self.ram_gb, q.filename),
                 "tok_s": spd, "recommended": i == rec_idx,
+                "comfortable": comfortable(footprint, self.ram_gb, q.filename),
+                "free_gb": round(max(free_gb(footprint, self.ram_gb, q.filename), 0.0), 1),
                 "downloaded": q.filename in installed and self._model_ready(q.filename, q, installed.get(q.filename)),
                 "current": _alias(q.filename) == self.current,
                 "loaded": loaded and _alias(q.filename) == self.current,
@@ -764,25 +927,36 @@ class Supervisor:
             })
         return {"group": g.key, "display_name": g.display_name, "maker": g.maker,
                 "license": g.license, "ram_gb": self.ram_gb, "quants": out,
+                "largest_fit_idx": max_idx,
                 "listing": g.hf_repo in getattr(self, "_quant_pending", set()),
                 "drafter_size_gb": round(draft_gb, 2),
                 "vision_size_gb": round(float(getattr(g, "mmproj_size_gb", 0.0) or 0.0), 2) if getattr(g, "mmproj_filename", None) else 0.0}
 
+    def _largest_fit_idx(self, rows, group=None) -> int | None:
+        fitting = [i for i, q in enumerate(rows)
+                   if fit_badge(footprint_gb(q.size_gb, group), self.ram_gb, q.filename) == "fits"]
+        return max(fitting, key=lambda i: rows[i].size_gb) if fitting else None
+
     def _recommended_quant_idx(self, rows, name: str, group=None) -> int | None:
+        """Star the largest quant that leaves headroom (max(8 GB, 20% of RAM) free)
+        and is responsive enough. When none leaves that, fall back to the largest
+        that fits; that row is shown as tight on memory."""
         if not rows:
             return None
         fitting = [i for i, q in enumerate(rows)
                    if fit_badge(footprint_gb(q.size_gb, group), self.ram_gb, q.filename) == "fits"]
         if not fitting:
             return None   # nothing fits: do not star a quant the row itself calls too big
+        roomy = [i for i in fitting if comfortable(footprint_gb(rows[i].size_gb, group), self.ram_gb, rows[i].filename)]
+        pool = roomy or fitting
         speeds = {i: (estimate_decode_tok_s(rows[i].size_gb, name, self.bandwidth) or 0)
-                  for i in fitting}
+                  for i in pool}
         fastest = max(speeds.values()) or 0
         if fastest <= 0:
-            return max(fitting, key=lambda i: rows[i].size_gb)
+            return max(pool, key=lambda i: rows[i].size_gb)
         bar = fastest * MIN_SPEED_FRACTION
-        responsive = [i for i in fitting if speeds[i] >= bar]
-        return max(responsive or fitting, key=lambda i: rows[i].size_gb)
+        responsive = [i for i in pool if speeds[i] >= bar]
+        return max(responsive or pool, key=lambda i: rows[i].size_gb)
 
     # ---- select (download + switch), runs on its own thread ------------------
     def select(self, key: str, filename: str) -> dict:
@@ -1374,6 +1548,8 @@ def make_handler(sup: Supervisor):
                                        group=sup.active.get("group"), filename=sup.active.get("filename"),
                                        download=sup.download,
                                        supports_systemone=supported(sup.current),
+                                       import_hint=sup.import_hint() if "hint=1" in u.query else None,
+                                       bench_running=sup.bench_status().get("state") == "running",
                                        **sup.context_info(), **sup.vision_info()))
             if u.path == "/server":
                 from localcode.ui.ports import preferred_port
@@ -1398,6 +1574,12 @@ def make_handler(sup: Supervisor):
                 return self._json(sup.voice_partial())
             if u.path == "/progress":
                 return self._json(sup.progress())
+            if u.path == "/bench":
+                return self._json(sup.bench_status())
+            if u.path == "/bench/history":
+                return self._json(sup.bench_history())
+            if u.path == "/import/detect":
+                return self._json(sup.import_detect())
             self._json({"error": "not found"}, 404)
 
         def do_POST(self):
@@ -1452,6 +1634,20 @@ def make_handler(sup: Supervisor):
                 return self._json(res, 200 if "error" not in res else 400)
             if u.path == "/vision/install":
                 res = sup.vision_install()
+                return self._json(res, 200 if "error" not in res else 409)
+            if u.path == "/bench/history/delete":
+                res = sup.bench_delete(body.get("id", "") if isinstance(body, dict) else "")
+                return self._json(res, 200 if "error" not in res else 404)
+            if u.path == "/bench/cancel":
+                res = sup.bench_cancel()
+                return self._json(res, 200 if "error" not in res else 409)
+            if u.path == "/import/apply":
+                res = sup.import_apply(body.get("items", []) if isinstance(body, dict) else [])
+                return self._json(res, 200 if "error" not in res else 400)
+            if u.path == "/bench":
+                if not isinstance(body, dict):
+                    return self._json({"error": "Expected a JSON object"}, 400)
+                res = sup.bench_start(body.get("runs", 2), body.get("sizes", (1024, 8192)))
                 return self._json(res, 200 if "error" not in res else 409)
             if u.path == "/voice/setup":
                 ok, msg = sup.voice_setup()

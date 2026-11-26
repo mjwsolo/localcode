@@ -23,6 +23,55 @@ from urllib.parse import parse_qs, urlparse
 
 PORT = int(sys.argv[1])
 NO_MODEL = "--no-model" in sys.argv
+# --vision=off-available: no projector loaded, one can be downloaded (0.9 GB)
+# --vision=off-unavailable: no projector loaded and none exists for this model
+# --vision=on: images are readable. Default is off-unavailable.
+VISION = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--vision=")), "off-unavailable")
+# --bench-history: /bench/history has saved runs. --import-hint: /status carries the one-time /import hint once.
+BENCH_HISTORY = "--bench-history" in sys.argv
+IMPORT_HINT = ["Found settings from Claude Code (and Codex). Type /import to bring over your MCP servers and skills."] if "--import-hint" in sys.argv else []
+# A scripted slow benchmark: 4 steps, 2 s each. BENCH = {"t0": float, "cancelled": bool} while one exists.
+BENCH = {}
+BENCH_STEPS, BENCH_STEP_S = 4, 2.0
+IMPORT_ITEMS = [
+    {"id": "0", "kind": "mcp", "source": "claude", "label": "Claude Code", "name": "files", "status": "new", "final_name": "files",
+     "warnings": [], "transport": "local", "command": "npx -y @example/files-server --root . --api-key ***", "env_names": ["API_TOKEN"]},
+    {"id": "1", "kind": "skill", "source": "claude", "label": "Claude Code", "name": "tidy", "status": "new", "final_name": "tidy",
+     "warnings": [], "description": "tidy things", "size_bytes": 2048, "size": "2 KB", "tokens": 12, "has_scripts": True},
+    {"id": "2", "kind": "mcp", "source": "codex", "label": "Codex", "name": "docs", "status": "new", "final_name": "docs",
+     "warnings": [], "transport": "remote", "url": "https://docs.example/mcp", "header_names": []},
+]
+HISTORY = [
+    {"id": "bench-20260102-100000.json#0", "date": "2026-01-02T10:00:00", "version": "0.5.0", "model": "alpha-Q4_K_M", "display": "alpha",
+     "quant": "Q4_K_M", "machine": "Apple M3, 32 GB", "ttft_s": 1.2, "prefill_1k": 480.0, "prefill_8k": 450.0, "gen_1k": 33.0,
+     "gen_8k": 31.0, "peak_memory_mb": 9216.0, "warnings": [], "throttled": False, "on_battery": False},
+    {"id": "bench-20260101-100000.json#0", "date": "2026-01-01T10:00:00", "version": "0.4.0", "model": "beta-Q8_0", "display": "beta",
+     "quant": "Q8_0", "machine": "Apple M3, 32 GB", "ttft_s": 2.0, "prefill_1k": 300.0, "prefill_8k": 280.0, "gen_1k": 20.0,
+     "gen_8k": 18.0, "peak_memory_mb": 16384.0, "warnings": ["on battery power"], "throttled": False, "on_battery": True},
+]
+
+
+def bench_status():
+    if not BENCH:
+        return {"state": "idle"}
+    if BENCH.get("cancelled"):
+        return {"state": "cancelled", "model": ALIAS}
+    el = time.time() - BENCH["t0"]
+    step = int(el // BENCH_STEP_S)
+    if step >= BENCH_STEPS:
+        row = dict(HISTORY[0], id="bench-new.json#0", model=ALIAS, gen_1k=36.3)
+        cmp = [dict(HISTORY[0], relation="best run", delta={"gen_pct": 10, "prefill_pct": 4, "ttft_pct": -5}, mismatch=[]),
+               dict(HISTORY[1], relation="best run", delta={"gen_pct": 82, "prefill_pct": 60, "ttft_pct": 40}, mismatch=["LocalCode 0.4.0", "on battery"])]
+        rep = {"model": ALIAS, "status": "ok", "reason": "", "context": 32768, "skipped_sizes": [], "warnings": [], "peak_memory_mb": 9216.0,
+               "sizes": {"1024": {"prompt_tokens": 1000, "ttft_s": 1.1, "prefill_tps": 500.0, "gen_tps": 36.3},
+                         "8192": {"prompt_tokens": 8000, "ttft_s": 9.0, "prefill_tps": 450.0, "gen_tps": 34.0}}}
+        return {"state": "done", "model": ALIAS, "report": rep, "power": None, "compare": cmp, "current": row}
+    return {"state": "running", "model": ALIAS, "progress": f"  {ALIAS}: ~1K prompt, run {step + 1}/4", "step": step,
+            "total": BENCH_STEPS, "started_at": BENCH["t0"], "elapsed_s": round(el, 1)}
+
+
+# Every POST path and chat request the mock saw, for tests (GET /_log).
+LOG = []
 ALIAS = "e2e-model"
 
 # A background download started from the picker: it runs for DOWNLOAD_SECONDS.
@@ -62,21 +111,25 @@ GROUPS = [
 def quants(key):
     g = next((g for g in GROUPS if g["key"] == key), GROUPS[0])
     rows = [
-        ("Q3_K_M", 5.1, "tight", 41.0, False, False),
-        ("Q4_K_M", 6.9, "fits", 33.5, True, True),
-        ("Q6_K", 9.8, "fits", 24.0, False, False),
-        ("Q8_0", 12.7, "tight", 19.5, False, False),
+        ("Q3_K_M", 5.1, "fits", 41.0, False, False, True, 21.4),
+        ("Q4_K_M", 6.9, "fits", 33.5, True, True, True, 19.6),
+        ("Q6_K", 9.8, "fits", 24.0, False, False, True, 16.7),
+        ("Q8_0", 12.7, "fits", 19.5, False, False, False, 6.8),
     ]
     return {"group": g["key"], "display_name": g["display_name"], "maker": g["maker"],
             "license": g["license"], "ram_gb": 32, "listing": False, "drafter_size_gb": 0.0,
-            "vision_size_gb": 0.0,
+            "vision_size_gb": 0.0, "largest_fit_idx": 3,
             "quants": [{"filename": f"{key}-{label}.gguf", "alias": f"{key}-{label}", "label": label,
                         "size_gb": size, "fit": fit, "tok_s": tok, "recommended": rec,
+                        "comfortable": comfy, "free_gb": free,
                         "downloaded": dl or (DOWNLOAD.get("state") == "done" and DOWNLOAD.get("filename") == f"{key}-{label}.gguf"),
                         "current": False, "loaded": False,
                         "downloading": DOWNLOAD.get("state") == "downloading" and DOWNLOAD.get("filename") == f"{key}-{label}.gguf",
                         "pct": DOWNLOAD.get("pct")}
-                       for label, size, fit, tok, rec, dl in rows]}
+                       for label, size, fit, tok, rec, dl, comfy, free in rows]}
+
+
+QUERY = ""
 
 
 def status():
@@ -84,8 +137,9 @@ def status():
             "detail": "", "pct": None, "server_running": not NO_MODEL, "server_ready": not NO_MODEL,
             "version": "0.0.0", "process_id": 1, "warmup": "idle",
             "current": None if NO_MODEL else ALIAS, "port": PORT, "inference_port": PORT,
-            "ctx": 32768, "group": None, "filename": None, "vision": False,
-            "vision_available": False, "vision_size_gb": 0.0, "download": download()}
+            "ctx": 32768, "group": None, "filename": None, "vision": VISION == "on",
+            "vision_available": VISION == "off-available", "vision_size_gb": 0.9 if VISION == "off-available" else 0.0, "download": download(),
+            "bench_running": bench_status()["state"] == "running", "import_hint": IMPORT_HINT.pop() if IMPORT_HINT and "hint=1" in QUERY else None}
 
 
 PLAN_STEPS = ["Alpha step", "Beta step", "Gamma step"]
@@ -158,14 +212,24 @@ class H(http.server.BaseHTTPRequestHandler):
         if p == "/slots":
             return self._json([{"id": 0, "n_ctx": 32768, "is_processing": False}])
         if p == "/status":
+            global QUERY
+            QUERY = u.query
             return self._json(status())
         if p == "/catalog":
             return self._json({"ram_gb": 32, "current": None if NO_MODEL else ALIAS, "groups": GROUPS,
                                "models_dir": "~/models"})
         if p == "/quants":
             return self._json(quants(parse_qs(u.query).get("group", ["alpha"])[0]))
+        if p == "/_log":
+            return self._json(LOG)
         if p == "/voice/status":
             return self._json({"available": False})
+        if p == "/bench":
+            return self._json(bench_status())
+        if p == "/bench/history":
+            return self._json({"runs": HISTORY if BENCH_HISTORY else []})
+        if p == "/import/detect":
+            return self._json({"items": IMPORT_ITEMS, "notes": []})
         if p == "/progress":
             return self._json({"phase": "idle"})
         if p == "/models_dir":
@@ -175,6 +239,27 @@ class H(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         ln = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(ln) if ln else b"{}"
+        LOG.append(self.path)
+        if self.path == "/vision/install":
+            global VISION
+            VISION = "on"
+            return self._json({"ok": True})
+        if self.path == "/bench":
+            if bench_status()["state"] == "running":
+                return self._json({"error": "a benchmark is already running", "status": bench_status()}, 409)
+            BENCH.clear()
+            BENCH.update(t0=time.time(), cancelled=False)
+            return self._json({"ok": True})
+        if self.path == "/bench/cancel":
+            if bench_status()["state"] != "running":
+                return self._json({"error": "no benchmark is running"}, 409)
+            BENCH["cancelled"] = True
+            return self._json({"ok": True})
+        if self.path == "/import/apply":
+            ids = json.loads(raw or b"{}").get("items", [])
+            picked = [i for i in IMPORT_ITEMS if i["id"] in ids]
+            return self._json({"ok": True, "servers": [i["name"] for i in picked if i["kind"] == "mcp"],
+                               "skills": [i["name"] for i in picked if i["kind"] == "skill"], "backup": None})
         if self.path == "/select":
             req = json.loads(raw or b"{}")
             name = req.get("filename", "")

@@ -8,16 +8,16 @@
 
 
 
+                         /bench             Benchmark the loaded model's speed
                          /cd                Change working directory
                          /clear             Clear session
                          /decide            Open decision mode
                          /diff              Open diff viewer
                          /exit              Exit the app
                          /help              Help
+                         /import            Import from other agents
                          /mcps              MCP servers
                          /models            Switch model
-                         /new               New session
-                         /permissions       Permission preferences
 
                           /
 

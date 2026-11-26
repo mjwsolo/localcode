@@ -13,16 +13,16 @@
                     Search versions…
 
                     Downloaded
-                  ● Q4_K_M ★                6.9 GB    ✓ fits      Ready
+                  ● Q4_K_M ★                6.9 GB    ✓ fits      ~19.6 GB      Ready
 
                     Available to download
-                    Q3_K_M                  5.1 GB    ~ tight     Download
-                    Q6_K                    9.8 GB    ✓ fits      Download
-                    Q8_0                    12.7 GB   ~ tight     Download
+                    Q3_K_M                  5.1 GB    ✓ fits      ~21.4 GB      Download
+                    Q6_K                    9.8 GB    ✓ fits      ~16.7 GB      Download
+                    Q8_0 max                12.7 GB   ✓ fits      ~6.8 GB tight Download
 
-                    ★ Recommended · acme/alpha-gguf
+                    ★ recommended · max = largest that fits · enter select · esc back
 
-                    Size      Memory      State    enter load / download / cancel ⇣   esc back
+                                            Size      Memory      Free          State
 
 
 

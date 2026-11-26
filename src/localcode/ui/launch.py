@@ -202,6 +202,8 @@ def write_config(path: Path, *, port: int, ctx: int, alias: str | None) -> None:
             {"action": "execute", "resource": "*", "effect": "deny"},
             # A third identical tool call in one step asks first, as opencode v1 did.
             {"action": "doom_loop", "resource": "*", "effect": "ask"},
+            # A command the shell sandbox blocked runs outside it only with a person's yes.
+            {"action": "shell.unsandboxed", "resource": "*", "effect": "ask"},
             *_external_directory_rules(),
         ],
         "agents": {"plan": {"disabled": True}},
@@ -275,16 +277,19 @@ def runtime_env(config_path: Path, ctrl: int, *, trust_project: bool = False) ->
     return env
 
 
-MCP_HELP = """usage: localcode mcp <add|list|auth|logout> [args] [--trust-project]
+MCP_HELP = """usage: localcode mcp <add|remove|list|auth|logout|import> [args] [--trust-project]
 
 Manage the MCP servers the agent can use. The commands are the runtime's own:
   add       localcode mcp add <name> -- <command> [args...]   (a local server)
             localcode mcp add <name> --url <url>              (a remote server)
             writes the server into this project's localcode.json; add --global
             to write it into your user config so it loads in every project
+  remove    localcode mcp remove <name> [--global]   delete a server from the config
   list      servers and their status (OAuth state for remote servers)
   auth      sign in to a remote server that uses OAuth: localcode mcp auth <name>
   logout    forget a remote server's OAuth tokens
+  import    copy MCP servers and skills from Claude Code, Codex or Cursor; asks
+            first, servers start disabled: localcode mcp import --help
 
 Servers declared in the project's localcode.json load only when you launch
 with --trust-project (project configuration can run code). Pass the same flag
@@ -353,6 +358,55 @@ def _project_mcp_names(project_dir: Path) -> list[str]:
     return sorted(names)
 
 
+def _remove_from_config(file: Path, name: str) -> bool:
+    """Delete server `name` from one config file (flat or mcp.servers layout).
+    Only that entry changes; the rest of the file is rewritten as JSON, so a
+    .jsonc file loses its comments."""
+    try:
+        data = json.loads(_strip_jsonc_comments(file.read_text()))
+    except (OSError, ValueError):
+        return False
+    mcp = data.get("mcp") if isinstance(data, dict) else None
+    if not isinstance(mcp, dict):
+        return False
+    holder = None
+    if name not in {"servers", "timeout"} and isinstance(mcp.get(name), dict):
+        holder = mcp
+    elif isinstance(mcp.get("servers"), dict) and isinstance(mcp["servers"].get(name), dict):
+        holder = mcp["servers"]
+    if holder is None:
+        return False
+    del holder[name]
+    tmp = file.with_name(f".{file.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(data, indent=2) + "\n")
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, file)
+    return True
+
+
+def mcp_remove(args: list[str]) -> int:
+    """`localcode mcp remove <name> [--global]`: the runtime has no remove command."""
+    glob = "--global" in args
+    names = [a for a in args if not a.startswith("-")]
+    if len(names) != 1:
+        print("usage: localcode mcp remove <name> [--global]", file=sys.stderr)
+        return 2
+    name = names[0]
+    if glob:
+        base = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "localcode-agent"
+        files = [base / "localcode.json", base / "localcode.jsonc"]
+    else:
+        files = [Path.cwd() / n for n in PROJECT_CONFIGS]
+    for f in files:
+        if f.is_file() and _remove_from_config(f, name):
+            print(f"Removed {name} from {f.name}.")
+            return 0
+    where = "your user config" if glob else "this project's config"
+    hint = "" if glob else " Use --global for a server in your user config."
+    print(f"localcode: no MCP server named {name} in {where}.{hint}", file=sys.stderr)
+    return 1
+
+
 def mcp_main(argv: list[str]) -> int:
     """`localcode mcp ...`: run the runtime's own MCP commands with this
     install's config and trust environment, so a user never edits JSON by hand
@@ -363,6 +417,11 @@ def mcp_main(argv: list[str]) -> int:
     if not args or args[0] in {"-h", "--help", "help"}:
         print(MCP_HELP, end="")
         return 0
+    if args[0] == "import":
+        from ..importer import cli_main
+        return cli_main(args[1:])
+    if args[0] in {"remove", "rm"}:
+        return mcp_remove(args[1:])
     ui_bin = ui_binary_path()
     if ui_bin is None:
         print("localcode: the UI binary is missing from this install. Reinstall with `pip install -U localcode`.", file=sys.stderr)

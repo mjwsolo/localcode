@@ -97,7 +97,7 @@ export function expectSnapshot(name, text) {
  * Open a session. opts.model false starts with no model loaded.
  * Returns { term, screen(), type(), key(), waitFor(), settle(), snap(), ws, close() }.
  */
-export async function open(name, { model = true, files } = {}) {
+export async function open(name, { model = true, files, mockArgs = [] } = {}) {
   const root = join("/tmp", `lce-${process.pid}-${name.replace(/\W+/g, "_")}`)
   rmSync(root, { recursive: true, force: true })
   const home = join(root, "home")
@@ -117,7 +117,7 @@ export async function open(name, { model = true, files } = {}) {
   spawnSync("git", ["init", "-q", "-b", "main"], { cwd: ws })
 
   const mockPort = await freePort()
-  const mock = spawn(PYTHON, [join(HERE, "mock_server.py"), String(mockPort), ...(model ? [] : ["--no-model"])], { stdio: "ignore" })
+  const mock = spawn(PYTHON, [join(HERE, "mock_server.py"), String(mockPort), ...(model ? [] : ["--no-model"]), ...mockArgs], { stdio: "ignore" })
   await waitHttp(`http://127.0.0.1:${mockPort}/health`)
 
   // The same runtime config a real session gets, written by the product code.
@@ -160,6 +160,10 @@ export async function open(name, { model = true, files } = {}) {
   const api = {
     term,
     ws,
+    /** Paths of every POST the mock saw (control and chat endpoints). */
+    posts: async () => (await (await fetch(`http://127.0.0.1:${mockPort}/_log`)).json()),
+    /** POST to the mock's control API, as another client (the CLI) would. */
+    mockPost: async (path) => (await fetch(`http://127.0.0.1:${mockPort}${path}`, { method: "POST", body: "{}" })).json(),
     screen,
     type: (t) => term.type(t),
     key: (...k) => term.press(...k),

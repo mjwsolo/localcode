@@ -7,11 +7,16 @@ localcode is an MCP client. A server you add gives the agent that server's tools
 
 ## Add a server
 
+Same form as Claude Code: the command goes after `--`.
+
 ```
-localcode mcp add
+localcode mcp add <name> -- <command> [args...]    # a local server
+localcode mcp add <name> --url <url>               # a remote server
+localcode mcp add --global <name> -- <command>     # keep it for every project
+localcode mcp remove <name>                        # add --global for a user-config server
 ```
 
-It asks four things: where to keep it (this project, or your user config for every project), a name, local or remote, and the command or URL. Local servers are programs that run on your Mac; remote servers are URLs, and the ones that use OAuth sign in with:
+Local servers are programs that run on your Mac; remote servers are URLs, and the ones that use OAuth sign in with:
 
 ```
 localcode mcp auth <name>
@@ -26,6 +31,24 @@ localcode mcp debug <name>     # connect and print the tools it exposes
 
 The server is in your config from then on. In a session, `/mcps` lists the configured servers and toggles each one on or off.
 
+## Import from other agents
+
+If you already use MCP servers in Claude Code, Codex or Cursor, copy them over:
+
+```
+localcode mcp import                  # asks which ones
+localcode mcp import --dry-run        # show what would happen, write nothing
+localcode mcp import --from codex     # only one source
+```
+
+It reads only user-level files, and only when you run this command: `~/.claude.json` (its `mcpServers` entry), `~/.codex/config.toml` and `~/.cursor/mcp.json`. Project `.mcp.json` files are never read. You pick the servers by number, then see a summary that shows each local server's exact command line and the names (never the values) of its environment variables and headers. The values are copied into your localcode config, so those secrets then exist in two places.
+
+Nothing runs at import. Every imported server is written with `"enabled": false`; turn it on in `/mcps` once you have checked its command. Your config is backed up to `localcode.json.bak-<timestamp>` before it is changed, a server whose name is already taken by a different one is skipped with a suggested new name, and running the import again changes nothing. The same command also offers your Claude Code skills; see [Skills](/localcode/guides/skills-and-hooks).
+
+## Manage servers in a session
+
+`/mcps` is a plain list: each server's name, whether it is on or off, and its status (connected, failed, or needs sign-in). Space turns the highlighted server on or off, and the choice is saved to your config. Enter opens sign-in for a server that needs it, or shows the error for one that failed. Adding and removing servers happens in the terminal with `localcode mcp add` and `localcode mcp remove`; the list shows that reminder at the bottom.
+
 ## Project or user scope
 
 A server kept in your user config (`~/.config/localcode-agent/localcode.json`) is available in every project. A server kept in the project's `localcode.json` is part of that project's configuration, and project configuration can run code, so it loads only when you launch with:
@@ -34,7 +57,7 @@ A server kept in your user config (`~/.config/localcode-agent/localcode.json`) i
 localcode --trust-project
 ```
 
-`localcode mcp add` tells you this when you choose the project scope, and `localcode mcp list` names project servers it is hiding until you pass `--trust-project`. Review a project's server commands before trusting it.
+`localcode mcp add` tells you this when it writes to the project scope, and `localcode mcp list` names project servers it is hiding until you pass `--trust-project`. Review a project's server commands before trusting it.
 
 ## Mail, calendar and other accounts
 

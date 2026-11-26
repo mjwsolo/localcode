@@ -443,7 +443,7 @@ CHOICES: list[ModelChoice] = [
         architecture="inkling2_loop",
         license="Apache 2.0",
         humaneval_pass_at_1=None,
-        notes=INKLING2_MINI_NOTES + " UD-Q4_K_XL: for 32 GB Macs and up.",
+        notes=INKLING2_MINI_NOTES + " UD-Q4_K_XL: for 36 GB Macs and up.",
         mmproj_filename="mmproj-Inkling-2-Mini-F16.gguf",
         mmproj_size_gb=0.64,
         mmproj_hf_filename="mmproj-F16.gguf",
@@ -824,11 +824,13 @@ def recommend(ram_gb: int | None = None) -> ModelChoice:
     """
     if ram_gb is None:
         ram_gb = _system_ram_gb()
-    from .fit import fit
-    candidates = [
+    from .fit import comfortable, fit
+    fitting = [
         c for c in CHOICES
         if _auto_recommendable(c) and fit(footprint_gb(c.size_gb, c), ram_gb, c.filename) == "fits"
     ]
+    # Prefer models that leave max(8 GB, 20% of RAM) free; fall back to any that fit.
+    candidates = [c for c in fitting if comfortable(footprint_gb(c.size_gb, c), ram_gb, c.filename)] or fitting
     if candidates:
         # Most capable that fits; tie-break toward the larger (better-quant) file.
         return min(candidates, key=lambda c: (_capability_rank(c), -c.size_gb))

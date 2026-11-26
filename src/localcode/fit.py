@@ -39,6 +39,10 @@ RUNTIME_OVERHEAD: tuple[tuple[str, float, float], ...] = (
     ("North-Mini-Code", 2.8, 0.0),
     # 2.0 GB at an 80K prompt in a 128K window (compressed attention keeps KV small).
     ("DeepSeek-V4-Flash", 2.1, 0.0),
+    # 16-bit cache (16 KB/token), 1.2 GB of fixed loop state and compute buffers.
+    # Peaks measured 2026-11-25 with each window about 90% full: 4.3 GB at 80K
+    # (Q4), 4.6 GB at 90K (Q4), 4.9 GB at 96K with 8 checkpoints (Q8).
+    ("Inkling-2-Mini", 5.0, 0.0),
 )
 RUNTIME_OVERHEAD_DEFAULT = (3.0, 0.3)
 
@@ -104,3 +108,17 @@ def fit(files_gb: float, ram_gb: float, filename: str | None = None) -> str:
     if need <= budget:
         return "tight"
     return "too_big"
+
+
+HEADROOM_MIN_GB = 8.0
+HEADROOM_FRACTION = 0.20
+
+
+def free_gb(files_gb: float, ram_gb: float, filename: str | None = None) -> float:
+    """Physical RAM left with the files loaded at the default context."""
+    return ram_gb - (files_gb + runtime_overhead_gb(filename, files_gb))
+
+
+def comfortable(files_gb: float, ram_gb: float, filename: str | None = None) -> bool:
+    """True when loading leaves max(8 GB, 20% of RAM) of physical memory free."""
+    return fit(files_gb, ram_gb, filename) == "fits" and free_gb(files_gb, ram_gb, filename) >= max(HEADROOM_MIN_GB, HEADROOM_FRACTION * ram_gb)

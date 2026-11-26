@@ -97,6 +97,8 @@ print(answer.choices[0].message.content)
 
 Start LocalCode and load a model before using the API. The first LocalCode window owns the model service. Closing that window stops the endpoint, even if other attached windows remain open. Closing an attached window does not stop the service. The port and key can change on the next run. Keep the key private. The server listens only on your Mac, so another machine cannot connect to it.
 
+To use it from VS Code extensions such as Continue or Cline, see [VS Code and other editors](/localcode/guides/vs-code).
+
 This is the model inference API. LocalCode currently consumes MCP servers as a client; it does not expose its coding actions as an MCP server.
 
 ## Typed decisions (System One)

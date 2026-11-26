@@ -9,14 +9,38 @@ All notable changes to LocalCode will be documented here. The format follows
 
 - Inkling 2 Mini 26B-A5B (Thinking Machines, Unsloth's quants pinned by
   checksum): a looped MoE with about 5B active parameters and image input.
-  UD-Q4_K_XL 17.6 GB for 32 GB Macs and up, UD-Q8_K_XL 22.9 GB for 48 GB and
+  UD-Q4_K_XL 17.6 GB for 36 GB Macs and up, UD-Q8_K_XL 22.9 GB for 48 GB and
   up; the picker lists every quant from 7.8 GB. Unsloth keeps the files that
   standard llama.cpp reads in a subfolder under a `.gguf_file` name; LocalCode
   lists that folder and saves them as `.gguf`. Its thinking is switched off
   through the template's own effort setting, since the usual switch leaves it
   thinking. Opt-in, never recommended automatically.
+- Shell commands run in the macOS sandbox (`sandbox-exec`), on by default.
+  They can write the project, temporary folders and tool caches, and cannot
+  touch the rest of your home folder, `~/.ssh`, `~/.aws`, the keychain,
+  `.git/hooks`, LocalCode's own settings or your shell startup files. Tokens
+  and keys are removed from their environment. A command the sandbox stops
+  asks before it runs outside it, and auto-approve never answers that
+  prompt. Two switches in /permissions: the sandbox and its network access.
+- /bench measures the loaded model on this Mac: load time, time to first
+  token, prompt reading and generation speed at 1K and 8K tokens, and peak
+  memory, with progress, cancel, saved history and a comparison with
+  earlier runs. Chat waits while it runs.
+- Import MCP servers and skills from Claude Code, Codex and Cursor inside
+  the interface (or `localcode mcp import`). Imported servers start
+  switched off. Servers can be removed from /mcps, and each skill can be
+  switched on or off in /skills.
+- A guide for using LocalCode from VS Code and other editors.
 
 ### Changed
+- The picker stars the quant that leaves memory free for your other apps
+  and marks the largest one that still fits, with a Free column.
+- An image pasted into a model that cannot see images is no longer sent as
+  if it were text: a dialog explains and points to /vision.
+- Inkling 2 Mini's memory use is measured (about 5 GB beyond its files)
+  instead of estimated (8.5 GB). Its 4-bit file fits Macs with 36 GB and up,
+  and 32 GB Macs are offered quants up to UD-Q3_K_XL (13.6 GB). The earlier
+  "32 GB and up" for the 4-bit file was wrong.
 
 - The bundled llama.cpp is rebased onto upstream v1.0.0 (b1b770d), 148
   commits newer, with the patch series replayed. Upstream changes it brings:

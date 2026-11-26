@@ -360,6 +360,7 @@ def test_agent_submodules_declare_all():
 # allowlist with a reason than silently let printfs leak into the
 # agent loop.
 PRINT_ALLOWLIST = {
+    "bench.py",  # `localcode bench` CLI prints its results table.
     "diagnostics.py",  # Offline `localcode doctor` CLI emits its JSON report.
     "launch.py",  # UI launcher: prints to the terminal BEFORE the UI runtime starts (no event bus yet)
     "ports.py",  # UI launcher: prints to the terminal BEFORE the UI runtime starts (no event bus yet)

@@ -8,12 +8,12 @@ localcode [DIR] [--model TAG] [--resume SESSION_ID]
 localcode --version
 localcode api [--json] [--show-key] [--port PORT|auto]
 localcode doctor
-localcode mcp add|list|auth|debug
+localcode mcp add|list|auth|debug|import|remove
 localcode [DIR] --mode chat|decisions
 localcode decide --question TEXT [--type yes-no|choice|score] [--option LABEL ...]
 ```
 
-Run `localcode` by itself to open the interface. Setup, the model picker, and sessions all live inside it. There is no `localcode setup` subcommand and no benchmark subcommand.
+Run `localcode` by itself to open the interface. Setup, the model picker, and sessions all live inside it. There is no `localcode setup` subcommand.
 
 ## Options
 

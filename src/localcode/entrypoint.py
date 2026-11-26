@@ -11,7 +11,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="localcode",
         description="LocalCode — AI coding assistant running entirely on your machine",
-        epilog="Other commands: localcode doctor diagnoses installation; localcode api shows connection details; localcode decide asks a typed question.",
+        epilog="Other commands: localcode doctor diagnoses installation; localcode api shows connection details; localcode decide asks a typed question; localcode bench measures model speed.",
     )
     parser.add_argument("--version", action="store_true", help="Print the version and exit")
     parser.add_argument("--mode", choices=["chat", "decisions"], default="chat", help="Start in normal chat or typed decision mode")
@@ -50,6 +50,9 @@ def main(argv: list[str] | None = None) -> None:
     if argv and argv[0] == "api":
         from .ui.api import main as api_main
         sys.exit(api_main(argv[1:]))
+    if argv and argv[0] == "bench":
+        from .bench import main as bench_main
+        sys.exit(bench_main(argv[1:]))
     if argv and argv[0] == "mcp":
         from .ui.launch import mcp_main
         sys.exit(mcp_main(argv[1:]))

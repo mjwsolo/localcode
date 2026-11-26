@@ -79,7 +79,11 @@ test("/models picker and quant list", () =>
     await s.waitFor("Available to download")
     screen = await s.settle()
     assert.match(screen, /Q4_K_M ★\s+6\.9 GB/)
-    assert.match(screen, /Q8_0\s+12\.7 GB/)
+    assert.match(screen, /Q8_0 max\s+12\.7 GB/)
+    assert.match(screen, /Q3_K_M\s+5\.1 GB\s+✓ fits\s+~21\.4 GB/)
+    assert.match(screen, /Q4_K_M ★\s+6\.9 GB\s+✓ fits\s+~19\.6 GB/)
+    // The largest that fits is selectable and marked; it is under the comfort floor, so it says tight.
+    assert.match(screen, /Q8_0 max\s+12\.7 GB\s+✓ fits\s+~6\.8 GB tight/)
     await snap(s, "models-quants")
   }))
 
@@ -127,6 +131,35 @@ test("/status dialog", () =>
     assert.match(screen, /Model e2e-model/)
     assert.match(screen, /No MCP servers/)
     await snap(s, "status")
+  }))
+
+test("/mcps is a plain list with a hint for adding and importing", () =>
+  journey("mcps", {}, async (s) => {
+    await s.waitFor("localcode · e2e-model")
+    await s.type("/mcps")
+    await s.waitFor("/mcps")
+    await s.key("Enter")
+    await s.waitFor("MCP servers")
+    const screen = (await s.settle()).replace(/\s+/g, " ")
+    assert.match(screen, /Add from other agents: \/import/)
+    assert.match(screen, /Add your own: localcode mcp add <name> -- <command>/)
+    assert.doesNotMatch(screen, /ctrl\+a|ctrl\+d/i)
+  }))
+
+test("/skills shows each skill's cost and source, and space turns one off", () =>
+  journey("skills-toggle", {}, async (s) => {
+    await s.waitFor("localcode · e2e-model")
+    await s.type("/skills")
+    await s.waitFor("/skills")
+    await s.key("Enter")
+    await s.waitFor("Skills")
+    let screen = await s.settle()
+    assert.match(screen, /\[x\] /)
+    assert.match(screen, / tok/)
+    await s.key(" ")
+    await s.waitFor(/\[ \] /)
+    screen = await s.settle()
+    assert.match(screen, / · off/)
   }))
 
 test("sidebar shows the session context", () =>
@@ -244,7 +277,7 @@ test("commands LocalCode dropped are not offered in the / menu", () =>
 // The menu is an allowlist (UI fork: packages/tui/src/util/localcode-menu.ts). Scroll the
 // whole real menu, on the home screen and in a session, and fail on anything else, so an
 // upstream UI update cannot add commands without someone choosing them.
-const MENU = new Set(["cd", "clear", "compact", "decide", "diff", "exit", "export", "help",
+const MENU = new Set(["bench", "cd", "clear", "compact", "decide", "diff", "exit", "export", "help", "import",
   "mcps", "models", "new", "permissions", "project-context", "rename", "resume",
   "speak", "server", "settings", "show-sidebar", "skills", "status", "themes", "thinking", "undo", "vision"])
 
@@ -275,4 +308,179 @@ test("the / menu offers only LocalCode's allowlist", () =>
     const extra = [...home, ...session].filter((name) => !MENU.has(name))
     assert.deepEqual(extra, [], `not on the allowlist: ${extra.join(", ")}`)
     for (const name of ["models", "resume", "undo", "exit"]) assert.ok(session.has(name), `/${name} is offered`)
+  }))
+
+// #259: an image bound for a model that cannot see it is never sent silently.
+const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFklEQVR4nGM4YWBAEmIY1TCqYfhqAAD1mygQumZKZwAAAABJRU5ErkJggg==", "base64")
+const imageFiles = { "README.md": "# demo\n", "shot.png": PNG }
+async function attachImage(s) {
+  await s.waitFor("localcode · e2e-model")
+  // A terminal paste of an image path becomes an attachment.
+  await s.term.write(`\x1b[200~${s.ws}/shot.png\x1b[201~`)
+  await s.waitFor(/\[Image/)
+  await s.type("what is this")
+  await s.key("Enter")
+}
+const chatPosts = async (s) => (await s.posts()).filter((p) => p.endsWith("/chat/completions"))
+
+test("an image without vision support is not sent; the model can download it", () =>
+  journey("novision-dl", { files: imageFiles, mockArgs: ["--vision=off-available"] }, async (s) => {
+    await attachImage(s)
+    await s.waitFor("can't see images yet")
+    const screen = await s.settle()
+    assert.match(screen, /Download vision support \(0\.9 GB\)/)
+    assert.match(screen, /reads images with a separate 0\.9 GB/)
+    assert.match(screen, /Same as running \/vision/)
+    assert.match(screen, /Switch model/)
+    assert.doesNotMatch(screen, /Send without image/)
+    assert.deepEqual(await chatPosts(s), [], "no chat request while blocked")
+    await s.key("Enter")
+    await s.waitFor("Enable images for this model?")
+    await s.key("Enter")
+    await s.waitFor("Images enabled")
+    assert.ok((await s.posts()).includes("/vision/install"), "vision install requested")
+    assert.deepEqual(await chatPosts(s), [], "still nothing sent")
+  }))
+
+test("an image without vision support and no projector offers switch or an explicit send", () =>
+  journey("novision-none", { files: imageFiles, mockArgs: ["--vision=off-unavailable"] }, async (s) => {
+    await attachImage(s)
+    await s.waitFor("can't see images yet")
+    const screen = await s.settle()
+    assert.match(screen, /can't read images/)
+    assert.match(screen, /Switch model/)
+    assert.match(screen, /Send without image/)
+    assert.doesNotMatch(screen, /Download vision support/)
+    assert.deepEqual(await chatPosts(s), [], "no chat request while blocked")
+    await s.key("Down")
+    await s.key("Enter")
+    await s.waitFor("This reply is fixed so screenshots stay stable.")
+    assert.equal((await chatPosts(s)).length >= 1, true)
+  }))
+
+
+// ---- /import, the first-launch hint and /bench
+
+async function openCommand(s, name) {
+  await s.waitFor("localcode · e2e-model")
+  await s.type(`/${name}`)
+  await s.waitFor(`/${name}`)
+  await s.key("Enter")
+}
+
+test("/import lists other agents' settings, checks nothing, and applies only what is picked", () =>
+  journey("import", {}, async (s) => {
+    await openCommand(s, "import")
+    await s.waitFor("Import from other agents")
+    let screen = (await s.settle()).replace(/\s+/g, " ")
+    assert.match(screen, /Claude Code/)
+    assert.match(screen, /Codex/)
+    assert.match(screen, /\[ \] files/)
+    assert.doesNotMatch(screen, /\[x\]/, "nothing is checked by default")
+    assert.match(screen, /npx -y @example\/files-server --root \. --api-key \*\*\*/)
+    assert.match(screen, /starts off/)
+    await s.key("Down")
+    screen = (await s.settle()).replace(/\s+/g, " ")
+    assert.match(screen, /2 KB/)
+    assert.match(screen, /has scripts/)
+    await s.key("Space")
+    await s.key("Enter")
+    await s.waitFor("These will be added, switched off")
+    screen = (await s.settle()).replace(/\s+/g, " ")
+    assert.match(screen, /1 skill: tidy/)
+    assert.match(screen, /Turn MCP servers on in \/mcps/)
+    await s.key("Enter")
+    await s.waitFor("Imported")
+    assert.ok((await s.posts()).includes("/import/apply"))
+  }))
+
+test("Esc cancels /import at the confirm step without applying", () =>
+  journey("import-esc", {}, async (s) => {
+    await openCommand(s, "import")
+    await s.waitFor("Import from other agents")
+    await s.key("Space")
+    await s.key("Enter")
+    await s.waitFor("These will be added, switched off")
+    await s.key("Escape")
+    await new Promise((r) => setTimeout(r, 500))
+    assert.doesNotMatch(await s.screen(), /These will be added/)
+    assert.ok(!(await s.posts()).includes("/import/apply"))
+  }))
+
+test("the first-launch hint points to /import once", () =>
+  journey("import-hint", { mockArgs: ["--import-hint"] }, async (s) => {
+    const screen = (await s.waitFor("Found settings from Claude Code (and Codex)")).replace(/\s+/g, " ")
+    assert.match(screen, /Type \/ ?import to bring over/)
+  }))
+
+test("/bench shows step and elapsed time, esc cancels, and chat is held meanwhile", () =>
+  journey("bench-cancel", {}, async (s) => {
+    await openCommand(s, "bench")
+    await s.waitFor("Benchmark this model?")
+    await s.key("Enter")
+    await s.waitFor("Benchmarking e2e-model")
+    await s.waitFor(/step \d of 4/)
+    const screen = await s.settle()
+    assert.match(screen, /Elapsed \d\d:\d\d/)
+    assert.match(screen, /esc: cancel/)
+    await s.key("Escape")
+    await s.waitFor("Benchmark cancelled")
+    assert.ok((await s.posts()).includes("/bench/cancel"), "cancel reached the supervisor")
+  }))
+
+test("chat is refused while a benchmark runs, and /bench reopens the run instead of starting another", () =>
+  journey("bench-block", {}, async (s) => {
+    await s.waitFor("localcode · e2e-model")
+    // Started elsewhere (the CLI): the UI only learns of it from the supervisor.
+    await s.mockPost("/bench")
+    await s.waitFor("Benchmark running (esc in /bench to cancel)")
+    await s.type("hello there")
+    await s.key("Enter")
+    await new Promise((r) => setTimeout(r, 800))
+    assert.deepEqual(await chatPosts(s), [], "nothing was sent")
+    assert.match(await s.screen(), /Benchmark running/)
+    await s.key("Ctrl+U")
+    const before = (await s.posts()).filter((p) => p === "/bench").length
+    await s.type("/bench")
+    await s.waitFor("/bench")
+    await s.key("Enter")
+    await s.waitFor(/step \d of 4/)
+    assert.equal((await s.posts()).filter((p) => p === "/bench").length, before, "no second run was started")
+    await s.key("Escape")
+    await s.waitFor("Benchmark cancelled")
+    await s.waitFor(/Ask anything/)
+  }))
+
+test("a finished benchmark shows the comparison with honest condition marks", () =>
+  journey("bench-compare", { mockArgs: ["--bench-history"] }, async (s) => {
+    await openCommand(s, "bench")
+    await s.waitFor("Run benchmark on e2e-model")
+    assert.match(await s.settle(), /View past results/)
+    await s.key("Enter")
+    await s.waitFor("Benchmark this model?")
+    await s.key("Enter")
+    await s.waitFor("Benchmarking e2e-model")
+    await s.waitFor("Compare (+ means this run is faster)", 40_000)
+    const screen = (await s.settle()).replace(/\s+/g, " ")
+    assert.match(screen, /alpha-Q4_K_M: gen 33\.0 \(\+10%\)/)
+    assert.match(screen, /differs: LocalCode <version>, on/)
+    await s.key("Enter")
+  }))
+
+test("past benchmark results can be viewed and deleted", () =>
+  journey("bench-history", { mockArgs: ["--bench-history"] }, async (s) => {
+    await openCommand(s, "bench")
+    await s.waitFor("View past results")
+    await s.key("Down")
+    await s.key("Enter")
+    await s.waitFor("Past benchmarks")
+    const screen = (await s.settle()).replace(/\s+/g, " ")
+    assert.match(screen, /alpha-Q4_K_M/)
+    assert.match(screen, /beta-Q8_0/)
+    assert.match(screen, /\[battery\]/)
+    await s.key("Ctrl+D")
+    await s.waitFor("Delete this result?")
+    await s.key("Enter")
+    await s.waitFor(/Delete|Past benchmarks/)
+    assert.ok((await s.posts()).includes("/bench/history/delete"))
   }))

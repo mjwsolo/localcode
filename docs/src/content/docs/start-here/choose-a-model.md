@@ -25,7 +25,7 @@ Other models in the picker are choices you make yourself:
 - **Flint 40B-A2.5B** - a coding-agent MoE with about 2.5B active parameters: 25 GB at Q4 (48 GB Macs and up) and 42 GB at Q8 (96 GB and up), with smaller quants from 11 GB. It reasons on every step and has no off switch, so its thinking stays hidden and agent tasks run slower than on Qwen 3.6.
 - **DeepSeek V4 Flash 284B-A13B** - DeepSeek's large MoE with about 13B active parameters and image input (the Vision-Exp release). Every quant is a multi-part download of 82 GB or more, so it runs on 128 GB Macs only: UD-Q2_K_XL (96.8 GB) is the curated pick; the IQ1, IQ2 and UD-IQ3_XXS (103 GB) quants also fit. It leaves little memory for other apps, so it is never the default pick.
 - **North-Mini-Code, Muse Glimmer, Gemma 4 Diffusion (DiffusionGemma), Kolibri** - more models in the picker, each verified to load, chat and call tools on every release.
-- **Inkling 2 Mini 26B-A5B** - Thinking Machines' looped MoE: 26B weights, about 5B active per token, and image input. UD-Q4_K_XL (17.6 GB, 32 GB Macs and up) and UD-Q8_K_XL (22.9 GB, 48 GB and up) are the curated picks; the picker lists every Unsloth quant from 7.8 GB up. Its thinking is off by default like every model here. It is new on this stack, so it is never the default pick yet.
+- **Inkling 2 Mini 26B-A5B** - Thinking Machines' looped MoE: 26B weights, about 5B active per token, and image input. UD-Q4_K_XL (17.6 GB, 36 GB Macs and up) and UD-Q8_K_XL (22.9 GB, 48 GB and up) are the curated picks; the picker lists every Unsloth quant from 7.8 GB up, and on a 32 GB Mac it offers quants up to UD-Q3_K_XL (13.6 GB). Beyond its files it needs about 5 GB while running (its 16-bit cache and loop state), which is why the 4-bit file does not fit the GPU memory a 32 GB Mac allows. Its thinking is off by default like every model here. It is new on this stack, so it is never the default pick yet.
 - **OpenJev** - a decision model, not a coding model. See [Chat and Decisions](/localcode/guides/decisions).
 
 ## The model picker
@@ -68,7 +68,7 @@ Four things matter, roughly in this order:
 
 The model server's GPU kernels ship precompiled, so the first start after an install or update takes seconds rather than 20 to 30. If the shipped kernels do not match your hardware, the server compiles them as before.
 
-localcode does not run a benchmark on your machine and does not publish throughput figures. Real speed depends on your chip, context length, thermal state, and other running tasks.
+localcode does not publish throughput figures, because real speed depends on your chip, context length, thermal state and other running tasks. To measure your own Mac, run `/bench`: it shows the loaded model's load time, time to first token, prompt and generation speed, and peak memory, and compares it with your earlier runs.
 
 ## Hidden reasoning
 

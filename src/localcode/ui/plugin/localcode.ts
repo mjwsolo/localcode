@@ -42,6 +42,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realp
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { leanMessages } from "./context";
+import { isImagePart, needsVision } from "./vision";
 
 /** What the engine needs from its host: nudges, aborts and notifications. */
 export type EngineClient = {
@@ -678,6 +679,21 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
     return loadedName.name;
   }
 
+  // Defence in depth: the terminal UI blocks the send before it gets here. If an
+  // image still arrives while the loaded model cannot see, drop it and say so,
+  // instead of letting the model answer as if the image were not there.
+  async function stripUnseeableImages(parts: any[]) {
+    const control = process.env.LOCALCODE_CONTROL_URL;
+    if (!control || !parts.some(isImagePart)) return;
+    try {
+      const r = await fetch(`${control}/status`, { headers: controlHeaders(), signal: AbortSignal.timeout(1_000) });
+      const status = (await r.json()) as { vision?: boolean };
+      if (!needsVision(parts, status)) return;
+      for (let i = parts.length - 1; i >= 0; i--) if (isImagePart(parts[i])) parts.splice(i, 1);
+      await client?.tui?.showToast?.({ body: { title: "Image not sent", message: "This model can't see images yet. Use /vision to add image support, or switch model.", variant: "warning", duration: 10000 } });
+    } catch {}
+  }
+
   async function nudge(sessionID: string, text: string) {
     if (interrupted.has(sessionID)) return;
     // Open todos travel with every turn the model reads, nudges included.
@@ -801,6 +817,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
 
     "chat.message": async (input: { sessionID: string; agent?: string; messageID?: string }, output: { parts: any[] }) => {
       if (input.agent) currentAgent = input.agent;
+      await stripUnseeableImages(output.parts);
       const text = output.parts.map((p: any) => (p.type === "text" ? p.text : "")).join(" ");
       if (!text.startsWith(NUDGE_PREFIX)) {
         // A real turn is about to hit the model: if the supervisor is still
