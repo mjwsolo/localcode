@@ -752,9 +752,11 @@ class Supervisor:
             spd = estimate_decode_tok_s(q.size_gb, g.display_name, self.bandwidth)
             total_gb = q.size_gb + draft_gb
             footprint = footprint_gb(q.size_gb, g)
+            badge = fit_badge(footprint, self.ram_gb, q.filename, self._moe_info(installed.get(q.filename)))
             out.append({
                 "filename": q.filename, "alias": _alias(q.filename), "label": q.label,
-                "size_gb": round(total_gb, 1), "fit": fit_badge(footprint, self.ram_gb, q.filename),
+                "size_gb": round(total_gb, 1), "fit": badge,
+                "fit_label": "streams experts, slower" if badge == "streamed" else None,
                 "tok_s": spd, "recommended": i == rec_idx,
                 "downloaded": q.filename in installed and self._model_ready(q.filename, q, installed.get(q.filename)),
                 "current": _alias(q.filename) == self.current,
@@ -767,6 +769,15 @@ class Supervisor:
                 "listing": g.hf_repo in getattr(self, "_quant_pending", set()),
                 "drafter_size_gb": round(draft_gb, 2),
                 "vision_size_gb": round(float(getattr(g, "mmproj_size_gb", 0.0) or 0.0), 2) if getattr(g, "mmproj_filename", None) else 0.0}
+
+    @staticmethod
+    def _moe_info(path):
+        """Expert sizes of a downloaded MoE quant (None when absent, dense or unreadable).
+        The header is only known once the file is on disk."""
+        if path is None:
+            return None
+        from localcode.gguf_experts import read_moe_info
+        return read_moe_info(path)
 
     def _recommended_quant_idx(self, rows, name: str, group=None) -> int | None:
         if not rows:

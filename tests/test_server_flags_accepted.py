@@ -61,3 +61,26 @@ def test_every_emitted_flag_is_accepted_by_the_bundled_binary(mode, monkeypatch,
         cmd = server_cmd.server_command(str(tmp_path / choice.filename), 8081, choice.key)
         unknown = sorted({f for f in _emitted(cmd) if f not in known})
         assert not unknown, f"{choice.key}: llama-server no longer accepts: {unknown}"
+
+
+def test_streamed_expert_flags_are_accepted_by_the_bundled_binary(monkeypatch, tmp_path):
+    """--moe-cache-mib and -ot exps=CPU, as added for a streamed MoE launch."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from gguf_builder import moe_tensors, write_gguf
+    from localcode.config import AppConfig, RuntimeConfig, UIConfig
+    from localcode.runtime import LocalCodeRuntimeGateway
+    from localcode.ui import server_cmd
+
+    kv = {"qwen3moe.expert_count": 256, "qwen3moe.expert_used_count": 8}
+    gguf = write_gguf(tmp_path / "Qwen3.6-35B-A3B-UD-Q8_K_XL.gguf", moe_tensors(40, 200_000_000, dense_bytes=int(0.05e9)), kv)
+    monkeypatch.setattr(server_cmd, "load_config", lambda: AppConfig(runtime=RuntimeConfig(provider="llama_cpp"), ui=UIConfig()))
+    monkeypatch.setattr(server_cmd, "mmproj_for", lambda g: None)
+    monkeypatch.setattr(LocalCodeRuntimeGateway, "_system_ram_gb", lambda _: 36)
+    monkeypatch.setenv("LOCALCODE_RAM_GB", "36")
+    monkeypatch.setenv("LOCALCODE_PROMPT_WARMUP", "0")
+    monkeypatch.setenv("LOCALCODE_AGENT_RUN_DIR", str(tmp_path / "run"))
+    cmd = server_cmd.server_command(str(gguf), 8081)
+    assert "--moe-cache-mib" in cmd
+    unknown = sorted({f for f in _emitted(cmd) if f not in _help_flags()})
+    assert not unknown, f"bundled llama-server does not accept: {unknown}"

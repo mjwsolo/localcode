@@ -100,3 +100,22 @@ def test_recommended_quant_fit_matches_badge_with_drafter_and_vision(tmp_path, m
             rec = [q for q in out if q['recommended']]
             if any(q['fit'] == 'fits' for q in out):
                 assert rec and rec[0]['fit'] == 'fits', (g.key, ram)
+
+
+def test_moe_quant_that_streams_is_labelled_not_too_big(tmp_path, monkeypatch):
+    from gguf_builder import moe_tensors, write_gguf
+    monkeypatch.setenv('LOCALCODE_RAM_GB', '36')
+    g = next(g for g in supervisor.MODEL_GROUPS if g.key == 'qwen-3.6-35b-a3b')
+    name = 'Qwen3.6-35B-A3B-UD-Q8_K_XL.gguf'
+    kv = {'qwen3moe.expert_count': 256, 'qwen3moe.expert_used_count': 8}
+    path = write_gguf(tmp_path / name, moe_tensors(40, 200_000_000, dense_bytes=int(0.05e9)), kv)
+    extra = hf_quants.Quant(name, path.stat().st_size / 1e9, 'UD-Q8_K_XL', False)
+    sup = _cold_sup(tmp_path, monkeypatch, lambda _: [extra])
+    sup.ram_gb = 36
+    sup._installed_models = lambda: {name: path}
+    sup._model_ready = lambda *a: True
+    row = next(q for q in sup.quants(g.key)['quants'] if q['filename'] == name)
+    assert row['fit'] == 'streamed' and row['fit_label'] == 'streams experts, slower'
+    sup._installed_models = lambda: {}
+    row = next(q for q in sup.quants(g.key)['quants'] if q['filename'] == name)
+    assert row['fit'] == 'too_big' and row['fit_label'] is None

@@ -1535,6 +1535,8 @@ class LocalCodeRuntimeGateway:
             pass
         self._client = None
         cmd = self.llama_server_command(str(model))
+        from .ui.server_cmd import add_expert_streaming
+        add_expert_streaming(cmd, str(model), self._system_ram_gb())
         # restart() now also VERIFIES (via /props) that the live server really
         # loaded `model`; it returns False on a mismatch. See
         # ServerManager._verify_loaded_model — 2026-08-22 the app happily talked

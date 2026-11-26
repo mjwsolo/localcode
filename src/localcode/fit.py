@@ -94,13 +94,43 @@ def runtime_overhead_gb(filename: str | None, files_gb: float) -> float:
     return flat + frac * files_gb
 
 
-def fit(files_gb: float, ram_gb: float, filename: str | None = None) -> str:
-    """"fits" | "tight" | "too_big" for files totalling ``files_gb`` (weights plus
-    any projector and drafter) on a Mac with ``ram_gb``."""
+STREAM_RESERVE_MIN_GB = 3.0
+STREAM_RESERVE_FRACTION = 0.15
+
+
+def _stream_ram_limit_gb(ram_gb: float) -> float:
+    """RAM the files plus run-time memory may use when experts stream from the
+    page cache: all of it except what the OS keeps (same reserve as the launch check)."""
+    return ram_gb - max(STREAM_RESERVE_MIN_GB, STREAM_RESERVE_FRACTION * ram_gb)
+
+
+def moe_cache_mib(files_gb: float, ram_gb: float, filename: str | None, moe) -> int | None:
+    """Size of the GPU expert cache (MiB) for a MoE model whose experts stay in
+    the page cache: GPU budget, minus the margin, the non-expert files (which
+    stay on the GPU) and the run-time overhead. None when that is below the
+    smallest usable bank (``moe.min_bank_bytes``), and capped at all experts."""
+    gib = 1024 ** 3
+    non_expert_gb = files_gb - moe.expert_bytes / 1e9
+    room_gb = gpu_budget_gb(ram_gb) - FIT_MARGIN_GB - non_expert_gb - runtime_overhead_gb(filename, files_gb)
+    cache = min(int(room_gb * gib), moe.expert_bytes)
+    if cache < moe.min_bank_bytes:
+        return None
+    return cache // (1024 ** 2)
+
+
+def fit(files_gb: float, ram_gb: float, filename: str | None = None, moe=None) -> str:
+    """"fits" | "tight" | "streamed" | "too_big" for files totalling ``files_gb``
+    (weights plus any projector and drafter) on a Mac with ``ram_gb``.
+
+    "streamed" needs ``moe`` (gguf_experts.MoeInfo): the model would not fit the
+    GPU working set, but the files plus run-time memory fit RAM and a usable
+    expert cache fits the GPU, so experts page in from the page cache."""
     need = files_gb + runtime_overhead_gb(filename, files_gb)
     budget = gpu_budget_gb(ram_gb)
     if need <= budget - FIT_MARGIN_GB:
         return "fits"
     if need <= budget:
         return "tight"
+    if moe is not None and need <= _stream_ram_limit_gb(ram_gb) and moe_cache_mib(files_gb, ram_gb, filename, moe) is not None:
+        return "streamed"
     return "too_big"

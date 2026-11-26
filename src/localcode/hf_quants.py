@@ -267,15 +267,17 @@ def fetch_quants(hf_repo: str) -> list[Quant]:
     return quants
 
 
-def fit_badge(size_gb: float, ram_gb: int, filename: str | None = None) -> str:
+def fit_badge(size_gb: float, ram_gb: int, filename: str | None = None, moe=None) -> str:
     """Fit badge for a quant whose files total ``size_gb`` on a Mac with ``ram_gb``.
 
     Same rule as models_catalog.recommend() and the launch check (localcode.fit):
     files plus the model's measured run-time memory must sit inside the GPU's
-    working set. Returns "fits" | "tight" | "too_big".
+    working set. Returns "fits" | "tight" | "streamed" | "too_big"; "streamed"
+    only for a MoE model (``moe``: gguf_experts.MoeInfo) whose experts can page in
+    from RAM.
     """
     from .fit import fit
-    return fit(size_gb, ram_gb, filename)
+    return fit(size_gb, ram_gb, filename, moe)
 
 
 if __name__ == "__main__":  # pragma: no cover - tiny self-test

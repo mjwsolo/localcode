@@ -142,6 +142,7 @@ def server_command(gguf: str, port: int, alias: str | None = None) -> list[str]:
             raise ValueError("Insufficient RAM for model weights and minimum context; choose a smaller quantization in /models.")
         ctx_index = cmd.index("--ctx-size") + 1
         cmd[ctx_index] = str(min(int(cmd[ctx_index]), fit))
+    add_expert_streaming(cmd, gguf, ram_gb)
     # Prompt warm-up (ui/warmup.py) reads the first turn's token ids back out
     # of a slot save; the flag only enables the endpoint, nothing is written
     # until the supervisor asks.
@@ -154,6 +155,28 @@ def server_command(gguf: str, port: int, alias: str | None = None) -> list[str]:
     except Exception:  # noqa: BLE001, S110
         pass
     return cmd
+
+
+def add_expert_streaming(cmd: list[str], gguf: str, ram_gb: float) -> None:
+    """A MoE model too big for the GPU working set but inside RAM: keep experts in
+    the page cache and give the GPU a bank of expert slots (fit.py decides)."""
+    from localcode.fit import fit, moe_cache_mib
+    from localcode.gguf_experts import read_moe_info
+    moe = read_moe_info(gguf)
+    if moe is None:
+        return
+    from localcode.split_gguf import shard_paths
+    files_gb = sum(q.stat().st_size for p in {Path(gguf), *(Path(cmd[i + 1]) for i, a in enumerate(cmd) if a in ("--mmproj", "--model-draft"))}
+                   for q in shard_paths(p) if q.is_file()) / 1e9
+    name = Path(gguf).name
+    if fit(files_gb, ram_gb, name, moe) != "streamed":
+        return
+    mib = moe_cache_mib(files_gb, ram_gb, name, moe)
+    if "--load-mode" not in cmd:
+        cmd += ["--load-mode", "mmap"]
+    if "-ot" not in cmd and "--override-tensor" not in cmd:
+        cmd += ["-ot", "exps=CPU"]
+    cmd += ["--moe-cache-mib", str(mib)]
 
 
 def catalog_choice(gguf: str):

@@ -45,3 +45,47 @@ def test_deepseek_v4_flash_fits_a_128_gb_mac(monkeypatch):
     name = "DeepSeek-V4-Flash-Vision-Exp-UD-Q2_K_XL-00001-of-00003.gguf"
     assert F.fit(96.83 + 0.93, 128, name) == "fits"
     assert F.fit(114.39 + 0.93, 128, name) == "too_big"   # UD-IQ3_S
+
+
+# ---- streamed experts -------------------------------------------------------
+from localcode.gguf_experts import MoeInfo  # noqa: E402
+
+# 26 GB of files, 24 GB of them experts: 256 experts, 8 used, 40 layers.
+MOE = MoeInfo(expert_bytes=int(24e9), n_expert=256, n_expert_used=8, n_moe_layers=40)
+QWEN = "Qwen3.6-35B-A3B-UD-Q8_K_XL.gguf"
+
+
+def test_moe_that_misses_the_gpu_but_fits_ram_streams(monkeypatch):
+    monkeypatch.setenv("LOCALCODE_RAM_GB", "36")
+    assert F.fit(26.0, 36, QWEN) == "too_big"
+    assert F.fit(26.0, 36, QWEN, MOE) == "streamed"
+
+
+def test_moe_that_fits_the_gpu_is_unchanged(monkeypatch):
+    monkeypatch.setenv("LOCALCODE_RAM_GB", "64")
+    assert F.fit(39.7, 64, QWEN, MOE) == "fits"
+
+
+def test_dense_or_unknown_model_never_streams(monkeypatch):
+    monkeypatch.setenv("LOCALCODE_RAM_GB", "36")
+    assert F.fit(26.0, 36, QWEN, None) == "too_big"
+
+
+def test_files_beyond_ram_do_not_stream(monkeypatch):
+    monkeypatch.setenv("LOCALCODE_RAM_GB", "36")
+    # 36 - max(3, 5.4) = 30.6 GB of RAM for files + run-time memory; 29 + 2.35 > 30.6
+    assert F.fit(29.0, 36, QWEN, MOE) == "too_big"
+
+
+def test_cache_size_is_what_the_gpu_has_left(monkeypatch):
+    monkeypatch.setenv("LOCALCODE_RAM_GB", "36")
+    got = F.moe_cache_mib(26.0, 36, QWEN, MOE)
+    assert got == int((24.0 - 0.5 - 2.0 - 2.35) * 1024)
+
+
+def test_cache_below_the_smallest_bank_is_too_big(monkeypatch):
+    monkeypatch.setenv("LOCALCODE_RAM_GB", "36")
+    huge_bank = MoeInfo(int(24e9), n_expert=8, n_expert_used=8, n_moe_layers=2)  # one token touches every expert
+    assert huge_bank.min_bank_bytes == 24e9
+    assert F.moe_cache_mib(26.0, 36, QWEN, huge_bank) is None
+    assert F.fit(26.0, 36, QWEN, huge_bank) == "too_big"
