@@ -40,7 +40,7 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { leanMessages } from "./context";
 import { isImagePart, needsVision } from "./vision";
 
@@ -77,7 +77,7 @@ const autoCheck = () => process.env.LOCALCODE_AUTO_CHECK === "1";
 const PLANNING_RULE = `WORKSPACE TASK COMPLETION:
 - Answer greetings, general questions and advice directly. Do not inspect project files, load skills, create todos or run checks unless the user requests project work.
 - For requested project work, use the supplied working directory. Inspect only the relevant files and follow LOCALCODE.md when supplied. Do not seek out legacy agent instructions or unrelated configuration.
-- Complete every requested deliverable and verify it. For three or more steps, make a concise todo list and update it as steps finish. Do not stop at a scaffold or a plan.
+- Complete every requested deliverable and verify it. Verification means execution output: a test, build, typecheck, or a command that exercises the change. Reading code or noting that it exists is not verification; if nothing could be run, say "not verified". For three or more steps, make a concise todo list and update it as steps finish. Do not stop at a scaffold or a plan.
 - Match existing project conventions and dependencies. Combine edits to the same file. Run the relevant project check after changes; do not repeat passing checks without new changes. Report failures accurately.
 - Preserve the user's changes. Do not run destructive git commands or commit without permission. Never expose secrets. Background persistent servers and verify their endpoint.
 - Old tool results may be abbreviated in history. Reread a specific file only when needed; never scan the whole project to answer an unrelated question.
@@ -230,12 +230,13 @@ type ProgressMemory = {
   failureSigs: Set<string>;
   lastFailureCount: number | null;
   lastCheckPassed: boolean | null; // null = no check run yet this session
+  lastExecution: "pass" | "fail" | null; // latest check or run of a changed file; null after a fresh edit
   completedTodos: number;
 };
 type PlateauDecision = "none" | "nudge" | "repair-nudge" | "same-call-nudge" | "pass-nudge" | "stop";
 
 function newProgressMemory(): ProgressMemory {
-  return { changedPaths: new Set(), revisions: new Set(), failureSigs: new Set(), lastFailureCount: null, lastCheckPassed: null, completedTodos: 0 };
+  return { changedPaths: new Set(), revisions: new Set(), failureSigs: new Set(), lastFailureCount: null, lastCheckPassed: null, lastExecution: null, completedTodos: 0 };
 }
 
 // Same program-position idea as SERVER_CMD: a check is a PROGRAM being run.
@@ -247,6 +248,17 @@ const CHECK_CMD = new RegExp(
   "i",
 );
 function isCheckCommand(cmd: string): boolean { return CHECK_CMD.test(cmd); }
+const RUNNER = String.raw`(?:python3?|node|bun(?:\s+run)?|deno\s+run|tsx|ts-node|ruby|php|perl|bash|sh|go\s+run|cargo\s+run|java)`;
+/** True when the command runs one of the files changed this session (an interpreter or ./ on its path). */
+function runsChangedFile(cmd: string, changed: Set<string>): boolean {
+  for (const p of changed) {
+    const name = basename(p).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (!name) continue;
+    if (new RegExp(PROG + RUNNER + String.raw`\s+(?:-\S+\s+)*(?:[^;&|\n]*?[\s/])?` + name + String.raw`(?=[\s;&|"']|$)`).test(cmd)) return true;
+    if (new RegExp(PROG + String.raw`\.\/(?:[^;&|\s]*\/)?` + name + String.raw`(?=[\s;&|"']|$)`).test(cmd)) return true;
+  }
+  return false;
+}
 function filteredCheck(cmd: string): boolean {
   return isCheckCommand(cmd) && /(?:^|[^|])\|\s*(?:head|tail|tee|cat|grep|sed|awk|wc)\b/.test(cmd);
 }
@@ -368,7 +380,7 @@ function progressOf(ev: ToolEvent, mem: ProgressMemory, directory?: string): str
     const fresh = !mem.revisions.has(revision);
     for (const p of paths) mem.changedPaths.add(p);
     mem.revisions.add(revision);
-    if (fresh) mem.lastCheckPassed = null;
+    if (fresh) { mem.lastCheckPassed = null; mem.lastExecution = null; }
     return fresh ? `changed file(s): ${paths.join(", ")}` : null;
   }
   if (ev.tool === "todowrite") {
@@ -378,6 +390,7 @@ function progressOf(ev: ToolEvent, mem: ProgressMemory, directory?: string): str
     return null;
   }
   if (ev.tool === "bash" && isCheckCommand(String(ev.args?.command ?? ""))) {
+    mem.lastExecution = checkPassed(ev) ? "pass" : "fail";
     if (checkPassed(ev)) {
       const first = mem.lastCheckPassed !== true;
       mem.lastCheckPassed = true;
@@ -393,6 +406,9 @@ function progressOf(ev: ToolEvent, mem: ProgressMemory, directory?: string): str
     if (unseen.length) return `new failure signature(s): ${unseen.length}`;
     if (shrank) return `failure set shrank to ${sigs.length}`;
     return null;
+  }
+  if (ev.tool === "bash" && runsChangedFile(String(ev.args?.command ?? ""), mem.changedPaths)) {
+    mem.lastExecution = checkPassed(ev) ? "pass" : "fail";
   }
   return null;
 }
@@ -639,6 +655,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
   let lastRemaining = Number.MAX_SAFE_INTEGER;
   let buildVerifyNudges = 0;
   let stubNudgeDone = false;
+  let executionNudged = false;
   let verificationRequested = false;
   let outputLimited = false;
   let lengthContinuations = 0;
@@ -832,7 +849,7 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
         activeSession = input.sessionID;
         interrupted.delete(input.sessionID);
         continueCount = 0; stuckCount = 0; lastRemaining = Number.MAX_SAFE_INTEGER;
-        buildVerifyNudges = 0; stubNudgeDone = false; verificationRequested = false;
+        buildVerifyNudges = 0; stubNudgeDone = false; executionNudged = false; verificationRequested = false;
         outputLimited = false; lengthContinuations = 0;
         turnStartedAt = Date.now() - 1000;
         plateau = new PlateauTracker(directory); plateauStopped = false; stopDenials = 0; stopReason = ""; seenSteps.clear();
@@ -1028,6 +1045,14 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
         }
       }
 
+      // The last thing actually run failed: fix and rerun it, or report it as failing. Once per turn.
+      if (!executionNudged && plateau.mem.lastExecution === "fail") {
+        executionNudged = true;
+        plateau.freshInstruction();
+        await nudge(sessionID, `${NUDGE_PREFIX} The last check or run of your changes failed. Fix the cause and rerun it, or tell the user plainly that it is failing and why. Do not describe the work as done or verified while the latest run fails.`);
+        return;
+      }
+
       // Ask through the normal agent/bash path: repository commands must pass
       // runtime permissions. Never execute a new check outside those permissions.
       if (!autoCheck() && !verificationRequested && process.env.LOCALCODE_TARGETED_VERIFY !== "0" && plateau.mem.lastCheckPassed === null) {
@@ -1057,5 +1082,5 @@ const LocalcodePlugin: Plugin = async ({ client, directory }) => {
 
 
 // Tests read the helpers from `default`.
-Object.assign(LocalcodePlugin, { NUDGE_PREFIX, renderTodos, PLATEAU_MIN_ROUND, PLATEAU_NUDGE_AFTER, PLATEAU_STOP_AFTER, PLATEAU_RECENT_PASS, PLATEAU_PASS_GRACE, PLATEAU_STOP_DENIALS, SAME_CALL_NUDGE_AFTER, SAME_CALL_STOP_AFTER, callSignature, newProgressMemory, projectCheck, checkDirectory, CHECK_CMD, isCheckCommand, filteredCheck, isTempPath, editedPaths, failureSignatures, checkPassed, progressOf, referenceOnlyTypecheck, RepeatedCheckTracker, PlateauTracker, plateauNudgeText, PLATEAU_PASS_TEXT, bashDescription, trimToolDefinition, repairProjectPath });
+Object.assign(LocalcodePlugin, { NUDGE_PREFIX, renderTodos, PLATEAU_MIN_ROUND, PLATEAU_NUDGE_AFTER, PLATEAU_STOP_AFTER, PLATEAU_RECENT_PASS, PLATEAU_PASS_GRACE, PLATEAU_STOP_DENIALS, SAME_CALL_NUDGE_AFTER, SAME_CALL_STOP_AFTER, callSignature, newProgressMemory, projectCheck, checkDirectory, CHECK_CMD, isCheckCommand, filteredCheck, isTempPath, editedPaths, failureSignatures, checkPassed, progressOf, runsChangedFile, referenceOnlyTypecheck, RepeatedCheckTracker, PlateauTracker, plateauNudgeText, PLATEAU_PASS_TEXT, bashDescription, trimToolDefinition, repairProjectPath });
 export default LocalcodePlugin;

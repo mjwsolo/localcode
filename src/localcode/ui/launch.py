@@ -191,7 +191,9 @@ def write_config(path: Path, *, port: int, ctx: int, alias: str | None) -> None:
         # The supervisor's /status budget already includes the headroom one step
         # can add (ui/context_budget.step_reserve), and the provider sets it as
         # the model's input limit; a second reserve here would double-count.
-        "compaction": {"buffer": 0},
+        # A compaction snapshots up to three files from its summary's Relevant
+        # Files into the checkpoint, so the files being worked on survive it.
+        "compaction": {"buffer": 0, "pinned_files": 3},
         # The runtime saves the complete result to disk and exposes its path.
         # Keep the preview affordable, including on small context windows.
         "tool_output": {"max_bytes": max(4096, min(16384, ctx)), "max_lines": 400},

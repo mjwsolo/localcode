@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import LocalcodePluginDefault from "../../src/localcode/ui/plugin/localcode";
 type ToolEvent = { tool: string; args: any; output?: string; metadata?: any };
-const { PLATEAU_MIN_ROUND, PLATEAU_NUDGE_AFTER, PLATEAU_STOP_AFTER, PLATEAU_PASS_GRACE, PLATEAU_STOP_DENIALS, PlateauTracker, checkPassed, editedPaths, failureSignatures, isCheckCommand, isTempPath, newProgressMemory, plateauNudgeText, progressOf } = LocalcodePluginDefault as any;
+const { runsChangedFile, PLATEAU_MIN_ROUND, PLATEAU_NUDGE_AFTER, PLATEAU_STOP_AFTER, PLATEAU_PASS_GRACE, PLATEAU_STOP_DENIALS, PlateauTracker, checkPassed, editedPaths, failureSignatures, isCheckCommand, isTempPath, newProgressMemory, plateauNudgeText, progressOf } = LocalcodePluginDefault as any;
 
 const edit = (filePath: string): ToolEvent => ({ tool: "edit", args: { filePath, oldString: "a", newString: "b" } });
 const write = (filePath: string): ToolEvent => ({ tool: "write", args: { filePath, content: "x" } });
@@ -626,4 +626,43 @@ test("targeted verification prompts once through tools and never executes a repo
   await h.idle();
   await h.idle();
   expect(h.prompts.filter((p: string) => p.includes("smallest relevant existing check"))).toHaveLength(1);
+});
+
+describe("lastExecution", () => {
+  const run = (command: string, exit: number, output = ""): ToolEvent => ({ tool: "bash", args: { command }, output, metadata: { exit } });
+  test("a failing check sets fail, a passing one pass, a fresh edit resets", () => {
+    const mem = newProgressMemory();
+    expect(mem.lastExecution).toBeNull();
+    progressOf(edit("/p/a.ts"), mem, "/p");
+    progressOf(check(FAIL_A, 1), mem, "/p");
+    expect(mem.lastExecution).toBe("fail");
+    progressOf(check("ok", 0), mem, "/p");
+    expect(mem.lastExecution).toBe("pass");
+    progressOf(edit("/p/b.ts"), mem, "/p");
+    expect(mem.lastExecution).toBeNull();
+  });
+  test("running a changed file counts, running an unchanged one does not", () => {
+    const mem = newProgressMemory();
+    progressOf(write("/p/app.py"), mem, "/p");
+    progressOf(run("python3 other.py", 1, "Traceback"), mem, "/p");
+    expect(mem.lastExecution).toBeNull();
+    progressOf(run("python3 app.py", 1, "Traceback (most recent call last)"), mem, "/p");
+    expect(mem.lastExecution).toBe("fail");
+    progressOf(run("cd /p && python3 -u src/app.py --x", 0, "hello"), mem, "/p");
+    expect(mem.lastExecution).toBe("pass");
+  });
+  test("reading or mentioning a changed file is not an execution", () => {
+    const changed = new Set(["/p/app.py"]);
+    expect(runsChangedFile("cat app.py", changed)).toBe(false);
+    expect(runsChangedFile("grep python app.py", changed)).toBe(false);
+    expect(runsChangedFile("echo python app.py", changed)).toBe(false);
+    expect(runsChangedFile("python3 app.py", changed)).toBe(true);
+    expect(runsChangedFile("./app.py", new Set(["/p/app.py"]))).toBe(true);
+    expect(runsChangedFile("node build/app.js", new Set(["/p/build/app.js"]))).toBe(true);
+  });
+  test("the planning rule defines verification as execution output", async () => {
+    const src = (await import("node:fs")).readFileSync(new URL("../../src/localcode/ui/plugin/localcode.ts", import.meta.url), "utf8");
+    expect(src).toContain('Verification means execution output');
+    expect(src).toContain('say "not verified"');
+  });
 });

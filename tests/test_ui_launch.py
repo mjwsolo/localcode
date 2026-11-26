@@ -98,7 +98,7 @@ def test_write_config_points_at_local_server_and_plugin(tmp_path):
         ("external_directory", "ask"), ("external_directory", "allow"),
     }
     assert cfg["agents"] == {"plan": {"disabled": True}}
-    assert cfg["compaction"] == {"buffer": 0}
+    assert cfg["compaction"] == {"buffer": 0, "pinned_files": 3}
     assert "model" not in cfg
     assert list(prov["models"]) == ["__pending__"]
     assert prov["models"]["__pending__"]["limit"] == {"context": 32768, "output": 8192, "input": 32768 - 8192}
