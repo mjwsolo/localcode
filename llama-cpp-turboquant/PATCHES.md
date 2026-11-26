@@ -641,6 +641,32 @@ as it did before #30980. `/v1/models` still reports upstream's output
 modalities. **Delete this patch** if upstream narrows the check to head-less
 checkpoints, or if OpenJev chat is dropped from the product.
 
+### `0017-metal-moe-cache-direct-copies.patch` - MoE cache misses without a command buffer each
+
+Upstream's experimental MoE expert cache (`--moe-cache-mib N` with
+`-ot exps=CPU`, `src/llama-moe-cache.cpp`) synchronizes the backend once per
+MoE layer, reads the selected experts back and uploads the misses. On Metal each
+of those async copies wrapped the data in a new `MTLBuffer` (a staging copy for
+uploads) and a new command buffer, and the 32-byte read-back of the expert ids
+waited a full command-buffer round trip on every layer of every token.
+`ggml_metal_set_tensor_async` and `ggml_metal_get_tensor_async` now copy in
+place when the tensor is in a shared buffer and nothing has been queued since
+the last synchronize (`cmd_buf_last == nil`, so the in-order queue would have
+run the copy immediately anyway); copies of 1 MiB or more are split over the
+performance cores. Otherwise the old blit path runs unchanged. The cache also
+logs `llama_moe_cache: last 1024 tokens: hit rate = X%, uploaded = Y MiB, total
+hit rate = Z%` every 1024 tokens (info level; the per-ubatch lines at exit are
+unchanged). Measured on Qwen3.6-35B-A3B UD-Q4_K_XL, `-ot exps=CPU --repack 0
+--moe-cache-mib 14070`: decode 41.2 -> 57.4 tok/s, 4096-token prefill
+478 -> 1203 tok/s, with the same hit rate. **Delete it** once upstream's Metal
+backend copies in place (or the MoE cache stops round-tripping per layer).
+
+### `0018-llama-bench-moe-cache-mib.patch` - `--moe-cache-mib` in llama-bench
+
+Exposes `llama_context_params.moe_cache_size` in llama-bench (a list like the
+other context parameters, column `mcache`), so cache sizes can be compared in
+one run. **Delete it** when upstream's llama-bench has the option.
+
 ## Retired at the 2026-10-27 bump
 
 **Do not resurrect these.**

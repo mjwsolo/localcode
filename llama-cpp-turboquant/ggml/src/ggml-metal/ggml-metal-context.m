@@ -12,6 +12,8 @@
 
 #import <Metal/Metal.h>
 
+#include <sys/sysctl.h>
+
 #undef MIN
 #undef MAX
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -323,7 +325,45 @@ static struct ggml_metal_buffer_id ggml_metal_get_buffer_id(const struct ggml_te
     return ggml_metal_buffer_get_id(buffer->context, t);
 }
 
+// copies of at least this size are split over the performance cores, in chunks of at least a quarter of it
+#define GGML_METAL_SET_PARALLEL_MIN (1u*1024*1024)
+
+static void ggml_metal_memcpy(void * dst, const void * src, size_t size) {
+    static int n_perf = 0;
+    if (n_perf == 0) {
+        int    n   = 0;
+        size_t len = sizeof(n);
+        if (sysctlbyname("hw.perflevel0.physicalcpu", &n, &len, NULL, 0) != 0 || n <= 0) {
+            n = 4;
+        }
+        n_perf = MIN(n, 8);
+    }
+
+    const size_t n_chunks = size < GGML_METAL_SET_PARALLEL_MIN ? 1 : MIN((size_t) n_perf, size/(GGML_METAL_SET_PARALLEL_MIN/4));
+    if (n_chunks <= 1) {
+        memcpy(dst, src, size);
+        return;
+    }
+
+    // 16 KiB (page) aligned chunks, the last one takes the rest
+    const size_t chunk = ((size + n_chunks - 1)/n_chunks + 16383) & ~(size_t) 16383;
+    dispatch_apply(n_chunks, dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), ^(size_t i) {
+        const size_t offs = i*chunk;
+        if (offs < size) {
+            memcpy((char *) dst + offs, (const char *) src + offs, MIN(chunk, size - offs));
+        }
+    });
+}
+
 void ggml_metal_set_tensor_async(ggml_metal_t ctx, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
+    // nothing is queued since the last synchronize: a shared buffer can be written in place
+    // this avoids a staging copy and a command buffer for each upload, e.g. the MoE cache misses
+    ggml_backend_buffer_t buffer = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
+    if (ctx->cmd_buf_last == nil && buffer != NULL && ggml_metal_buffer_is_shared(buffer->context)) {
+        ggml_metal_memcpy((char *) tensor->data + offset, data, size);
+        return;
+    }
+
     @autoreleasepool {
         // wrap the source data into a Metal buffer
         id<MTLDevice> device = ggml_metal_device_get_obj(ctx->dev);
@@ -370,6 +410,14 @@ void ggml_metal_set_tensor_async(ggml_metal_t ctx, struct ggml_tensor * tensor, 
 }
 
 void ggml_metal_get_tensor_async(ggml_metal_t ctx, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
+    // nothing is queued since the last synchronize: a shared buffer can be read in place
+    // this avoids a command buffer round trip, e.g. for the experts selected before each MoE cache lookup
+    ggml_backend_buffer_t buffer = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
+    if (ctx->cmd_buf_last == nil && buffer != NULL && ggml_metal_buffer_is_shared(buffer->context)) {
+        ggml_metal_memcpy(data, (const char *) tensor->data + offset, size);
+        return;
+    }
+
     @autoreleasepool {
         id<MTLDevice> device = ggml_metal_device_get_obj(ctx->dev);
         id<MTLBuffer> buf_dst = [device newBufferWithBytesNoCopy:data

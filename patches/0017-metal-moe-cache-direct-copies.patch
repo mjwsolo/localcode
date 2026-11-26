@@ -1,0 +1,134 @@
+diff --git a/ggml/src/ggml-metal/ggml-metal-context.m b/ggml/src/ggml-metal/ggml-metal-context.m
+index e12c55a3..33482ac3 100644
+--- a/ggml/src/ggml-metal/ggml-metal-context.m
++++ b/ggml/src/ggml-metal/ggml-metal-context.m
+@@ -12,6 +12,8 @@
+ 
+ #import <Metal/Metal.h>
+ 
++#include <sys/sysctl.h>
++
+ #undef MIN
+ #undef MAX
+ #define MIN(a, b) ((a) < (b) ? (a) : (b))
+@@ -323,7 +325,45 @@ static struct ggml_metal_buffer_id ggml_metal_get_buffer_id(const struct ggml_te
+     return ggml_metal_buffer_get_id(buffer->context, t);
+ }
+ 
++// copies of at least this size are split over the performance cores, in chunks of at least a quarter of it
++#define GGML_METAL_SET_PARALLEL_MIN (1u*1024*1024)
++
++static void ggml_metal_memcpy(void * dst, const void * src, size_t size) {
++    static int n_perf = 0;
++    if (n_perf == 0) {
++        int    n   = 0;
++        size_t len = sizeof(n);
++        if (sysctlbyname("hw.perflevel0.physicalcpu", &n, &len, NULL, 0) != 0 || n <= 0) {
++            n = 4;
++        }
++        n_perf = MIN(n, 8);
++    }
++
++    const size_t n_chunks = size < GGML_METAL_SET_PARALLEL_MIN ? 1 : MIN((size_t) n_perf, size/(GGML_METAL_SET_PARALLEL_MIN/4));
++    if (n_chunks <= 1) {
++        memcpy(dst, src, size);
++        return;
++    }
++
++    // 16 KiB (page) aligned chunks, the last one takes the rest
++    const size_t chunk = ((size + n_chunks - 1)/n_chunks + 16383) & ~(size_t) 16383;
++    dispatch_apply(n_chunks, dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), ^(size_t i) {
++        const size_t offs = i*chunk;
++        if (offs < size) {
++            memcpy((char *) dst + offs, (const char *) src + offs, MIN(chunk, size - offs));
++        }
++    });
++}
++
+ void ggml_metal_set_tensor_async(ggml_metal_t ctx, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
++    // nothing is queued since the last synchronize: a shared buffer can be written in place
++    // this avoids a staging copy and a command buffer for each upload, e.g. the MoE cache misses
++    ggml_backend_buffer_t buffer = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
++    if (ctx->cmd_buf_last == nil && buffer != NULL && ggml_metal_buffer_is_shared(buffer->context)) {
++        ggml_metal_memcpy((char *) tensor->data + offset, data, size);
++        return;
++    }
++
+     @autoreleasepool {
+         // wrap the source data into a Metal buffer
+         id<MTLDevice> device = ggml_metal_device_get_obj(ctx->dev);
+@@ -370,6 +410,14 @@ void ggml_metal_set_tensor_async(ggml_metal_t ctx, struct ggml_tensor * tensor,
+ }
+ 
+ void ggml_metal_get_tensor_async(ggml_metal_t ctx, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
++    // nothing is queued since the last synchronize: a shared buffer can be read in place
++    // this avoids a command buffer round trip, e.g. for the experts selected before each MoE cache lookup
++    ggml_backend_buffer_t buffer = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
++    if (ctx->cmd_buf_last == nil && buffer != NULL && ggml_metal_buffer_is_shared(buffer->context)) {
++        ggml_metal_memcpy(data, (const char *) tensor->data + offset, size);
++        return;
++    }
++
+     @autoreleasepool {
+         id<MTLDevice> device = ggml_metal_device_get_obj(ctx->dev);
+         id<MTLBuffer> buf_dst = [device newBufferWithBytesNoCopy:data
+diff --git a/src/llama-moe-cache.cpp b/src/llama-moe-cache.cpp
+index ba35af02..2ae584e8 100644
+--- a/src/llama-moe-cache.cpp
++++ b/src/llama-moe-cache.cpp
+@@ -374,6 +374,12 @@ struct llama_moe_cache::impl {
+     stats stats_large;
+     stats stats_copy;  // experts copied from the cache for large batches
+ 
++    // the stats are logged every log_interval tokens of slot lookups, for the tokens since the last log and in total
++    static constexpr size_t log_interval = 1024;
++    size_t n_cached_layers = 0;
++    size_t n_lookups       = 0; // slot lookups of all layers, in tokens
++    stats  stats_logged;        // stats_small + stats_large at the last log
++
+     std::vector<device> devices;
+     std::vector<group> groups;
+     std::vector<layer> layers;
+@@ -582,6 +588,7 @@ struct llama_moe_cache::impl {
+                 }
+             }
+             devices[g.id].buf_size += alloc_size(g, g.n_slots);
++            n_cached_layers        += g.layers.size();
+         }
+ 
+         // with no_alloc, dummy buffers are attached so the memory use can still be measured, see llama_context::memory_breakdown
+@@ -855,12 +862,34 @@ struct llama_moe_cache::impl {
+         st.cpu    += cpu.size();
+         st.bytes  += bytes;
+ 
++        n_lookups += sel->src[0]->ne[1];
++        if (n_lookups >= log_interval*n_cached_layers) {
++            n_lookups = 0;
++            log_interval_stats();
++        }
++
+         // the next copy synchronizes the backend before it changes the slot map again
+         ggml_backend_tensor_set_async(backend, dst, l.slot_map->data, 0, ggml_nbytes(l.slot_map));
+ 
+         return true;
+     }
+ 
++    void log_interval_stats() {
++        stats total;
++        for (const stats * st : { &stats_small, &stats_large }) {
++            total.hits   += st->hits;
++            total.misses += st->misses;
++            total.cpu    += st->cpu;
++            total.bytes  += st->bytes;
++        }
++        const size_t hits   = total.hits   - stats_logged.hits;
++        const size_t misses = total.misses - stats_logged.misses;
++        LLAMA_LOG_INFO("llama_moe_cache: last %zu tokens: hit rate = %.2f%%, uploaded = %.2f MiB, total hit rate = %.2f%%\n",
++            log_interval, 100.0*hits/std::max<size_t>(1, hits + misses), (total.bytes - stats_logged.bytes)/1024.0/1024.0,
++            100.0*total.hits/std::max<size_t>(1, total.hits + total.misses));
++        stats_logged = total;
++    }
++
+     void log_stats() const {
+         auto log = [](const char * name, const stats & st) {
+             const size_t n = st.hits + st.misses;

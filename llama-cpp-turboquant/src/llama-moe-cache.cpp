@@ -374,6 +374,12 @@ struct llama_moe_cache::impl {
     stats stats_large;
     stats stats_copy;  // experts copied from the cache for large batches
 
+    // the stats are logged every log_interval tokens of slot lookups, for the tokens since the last log and in total
+    static constexpr size_t log_interval = 1024;
+    size_t n_cached_layers = 0;
+    size_t n_lookups       = 0; // slot lookups of all layers, in tokens
+    stats  stats_logged;        // stats_small + stats_large at the last log
+
     std::vector<device> devices;
     std::vector<group> groups;
     std::vector<layer> layers;
@@ -582,6 +588,7 @@ struct llama_moe_cache::impl {
                 }
             }
             devices[g.id].buf_size += alloc_size(g, g.n_slots);
+            n_cached_layers        += g.layers.size();
         }
 
         // with no_alloc, dummy buffers are attached so the memory use can still be measured, see llama_context::memory_breakdown
@@ -855,10 +862,32 @@ struct llama_moe_cache::impl {
         st.cpu    += cpu.size();
         st.bytes  += bytes;
 
+        n_lookups += sel->src[0]->ne[1];
+        if (n_lookups >= log_interval*n_cached_layers) {
+            n_lookups = 0;
+            log_interval_stats();
+        }
+
         // the next copy synchronizes the backend before it changes the slot map again
         ggml_backend_tensor_set_async(backend, dst, l.slot_map->data, 0, ggml_nbytes(l.slot_map));
 
         return true;
+    }
+
+    void log_interval_stats() {
+        stats total;
+        for (const stats * st : { &stats_small, &stats_large }) {
+            total.hits   += st->hits;
+            total.misses += st->misses;
+            total.cpu    += st->cpu;
+            total.bytes  += st->bytes;
+        }
+        const size_t hits   = total.hits   - stats_logged.hits;
+        const size_t misses = total.misses - stats_logged.misses;
+        LLAMA_LOG_INFO("llama_moe_cache: last %zu tokens: hit rate = %.2f%%, uploaded = %.2f MiB, total hit rate = %.2f%%\n",
+            log_interval, 100.0*hits/std::max<size_t>(1, hits + misses), (total.bytes - stats_logged.bytes)/1024.0/1024.0,
+            100.0*total.hits/std::max<size_t>(1, total.hits + total.misses));
+        stats_logged = total;
     }
 
     void log_stats() const {

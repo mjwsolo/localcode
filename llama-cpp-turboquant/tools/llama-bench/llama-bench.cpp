@@ -357,6 +357,7 @@ struct cmd_params {
     std::vector<llama_lazy_mode>     lazy_mode;
     std::vector<int>                 main_gpu;
     std::vector<bool>                no_kv_offload;
+    std::vector<int>                 moe_cache_mib;
     std::vector<llama_flash_attn_type> flash_attn;
     std::vector<std::vector<ggml_backend_dev_t>> devices;
     std::vector<std::vector<float>>  tensor_split;
@@ -403,6 +404,7 @@ static const cmd_params cmd_params_defaults = {
     /* lazy_mode            */ { LLAMA_LAZY_MODE_AUTO },
     /* main_gpu             */ { 0 },
     /* no_kv_offload        */ { false },
+    /* moe_cache_mib        */ { 0 },
     /* flash_attn           */ { LLAMA_FLASH_ATTN_TYPE_AUTO },
     /* devices              */ { {} },
     /* tensor_split         */ { std::vector<float>(llama_max_devices(), 0.0f) },
@@ -475,6 +477,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -sm, --split-mode <none|layer|row|tensor>         (default: %s)\n", join(transform_to_str(cmd_params_defaults.split_mode, split_mode_str), ",").c_str());
     printf("  -mg, --main-gpu <i>                               (default: %s)\n", join(cmd_params_defaults.main_gpu, ",").c_str());
     printf("  -nkvo, --no-kv-offload <0|1>                      (default: %s)\n", join(cmd_params_defaults.no_kv_offload, ",").c_str());
+    printf("  --moe-cache-mib <n>                               (default: %s)\n", join(cmd_params_defaults.moe_cache_mib, ",").c_str());
     printf("  -fa, --flash-attn <on|off|auto>                   (default: %s)\n", join(transform_to_str(cmd_params_defaults.flash_attn, llama_flash_attn_type_name), ",").c_str());
     printf("  -dev, --device <dev0/dev1/...>                    (default: auto)\n");
     printf("  -lm, --load-mode <auto|none|mmap|mlock|mmap+mlock|dio> (default: %s)\n", join(transform_to_str(cmd_params_defaults.load_mode, llama_load_mode_name), ",").c_str());
@@ -858,6 +861,13 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 auto p = string_split<bool>(argv[i], split_delim);
                 params.no_kv_offload.insert(params.no_kv_offload.end(), p.begin(), p.end());
+            } else if (arg == "--moe-cache-mib") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = parse_int_range(argv[i]);
+                params.moe_cache_mib.insert(params.moe_cache_mib.end(), p.begin(), p.end());
             } else if (arg == "--numa") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1174,6 +1184,9 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.no_kv_offload.empty()) {
         params.no_kv_offload = cmd_params_defaults.no_kv_offload;
     }
+    if (params.moe_cache_mib.empty()) {
+        params.moe_cache_mib = cmd_params_defaults.moe_cache_mib;
+    }
     if (params.flash_attn.empty()) {
         params.flash_attn = cmd_params_defaults.flash_attn;
     }
@@ -1240,6 +1253,7 @@ struct cmd_params_instance {
     llama_lazy_mode    lazy_mode;
     int                main_gpu;
     bool               no_kv_offload;
+    int                moe_cache_mib;
     llama_flash_attn_type flash_attn;
     std::vector<ggml_backend_dev_t> devices;
     std::vector<float> tensor_split;
@@ -1323,6 +1337,7 @@ struct cmd_params_instance {
         cparams.type_k          = type_k;
         cparams.type_v          = type_v;
         cparams.offload_kqv     = !no_kv_offload;
+        cparams.moe_cache_size  = (size_t) moe_cache_mib*1024*1024;
         cparams.flash_attn_type = flash_attn;
         cparams.embeddings      = embeddings;
         cparams.op_offload      = !no_op_offload;
@@ -1358,6 +1373,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & tk : params.type_k)
     for (const auto & tv : params.type_v)
     for (const auto & nkvo : params.no_kv_offload)
+    for (const auto & mcm : params.moe_cache_mib)
     for (const auto & fa : params.flash_attn)
     for (const auto & nt : params.n_threads)
     for (const auto & cm : params.cpu_mask)
@@ -1388,6 +1404,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .lazy_mode             = */ lzm,
                 /* .main_gpu              = */ mg,
                 /* .no_kv_offload         = */ nkvo,
+                /* .moe_cache_mib         = */ mcm,
                 /* .flash_attn            = */ fa,
                 /* .devices               = */ devs,
                 /* .tensor_split          = */ ts,
@@ -1426,6 +1443,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .lazy_mode             = */ lzm,
                 /* .main_gpu              = */ mg,
                 /* .no_kv_offload         = */ nkvo,
+                /* .moe_cache_mib         = */ mcm,
                 /* .flash_attn            = */ fa,
                 /* .devices               = */ devs,
                 /* .tensor_split          = */ ts,
@@ -1464,6 +1482,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .lazy_mode             = */ lzm,
                 /* .main_gpu              = */ mg,
                 /* .no_kv_offload         = */ nkvo,
+                /* .moe_cache_mib         = */ mcm,
                 /* .flash_attn            = */ fa,
                 /* .devices               = */ devs,
                 /* .tensor_split          = */ ts,
@@ -1507,6 +1526,7 @@ struct test {
     llama_lazy_mode          lazy_mode;
     int                      main_gpu;
     bool                     no_kv_offload;
+    int                      moe_cache_mib;
     llama_flash_attn_type    flash_attn;
     std::vector<ggml_backend_dev_t> devices;
     std::vector<float>       tensor_split;
@@ -1548,6 +1568,7 @@ struct test {
         lazy_mode      = inst.lazy_mode;
         main_gpu       = inst.main_gpu;
         no_kv_offload  = inst.no_kv_offload;
+        moe_cache_mib  = inst.moe_cache_mib;
         flash_attn     = inst.flash_attn;
         devices        = inst.devices;
         tensor_split   = inst.tensor_split;
@@ -1613,7 +1634,7 @@ struct test {
             "model_filename", "model_type",     "model_size",    "model_n_params", "n_batch",
             "n_ubatch",       "n_threads",      "cpu_mask",      "cpu_strict",     "poll",
             "type_k",         "type_v",         "n_gpu_layers",  "n_cpu_moe",      "split_mode",
-            "main_gpu",       "no_kv_offload",  "flash_attn",    "devices",        "tensor_split",
+            "main_gpu",       "no_kv_offload",  "moe_cache_mib", "flash_attn",    "devices",        "tensor_split",
             "tensor_buft_overrides",            "load_mode",     "lazy_mode",
             "embeddings",
             "no_op_offload",  "no_host",        "repack",        "fit_target",    "fit_min_ctx",
@@ -1630,7 +1651,7 @@ struct test {
             field == "poll" || field == "model_size" || field == "model_n_params" || field == "n_gpu_layers" ||
             field == "main_gpu" || field == "n_prompt" || field == "n_gen" || field == "n_depth" || field == "avg_ns" ||
             field == "stddev_ns" || field == "no_op_offload" || field == "n_cpu_moe" ||
-            field == "fit_target" || field == "fit_min_ctx" || field == "flash_attn") {
+            field == "fit_target" || field == "fit_min_ctx" || field == "flash_attn" || field == "moe_cache_mib") {
             return INT;
         }
         if (field == "f16_kv" || field == "no_kv_offload" || field == "cpu_strict" ||
@@ -1705,6 +1726,7 @@ struct test {
                                             split_mode_str(split_mode),
                                             std::to_string(main_gpu),
                                             std::to_string(no_kv_offload),
+                                            std::to_string(moe_cache_mib),
                                             std::to_string((int) flash_attn),
                                             devices_to_string(devices),
                                             tensor_split_str,
@@ -1933,6 +1955,9 @@ struct markdown_printer : public printer {
         if (field == "no_kv_offload") {
             return "nkvo";
         }
+        if (field == "moe_cache_mib") {
+            return "mcache";
+        }
         if (field == "flash_attn") {
             return "fa";
         }
@@ -2016,6 +2041,9 @@ struct markdown_printer : public printer {
         }
         if (params.no_kv_offload.size() > 1 || params.no_kv_offload != cmd_params_defaults.no_kv_offload) {
             fields.emplace_back("no_kv_offload");
+        }
+        if (params.moe_cache_mib.size() > 1 || params.moe_cache_mib != cmd_params_defaults.moe_cache_mib) {
+            fields.emplace_back("moe_cache_mib");
         }
         if (params.flash_attn.size() > 1 || params.flash_attn != cmd_params_defaults.flash_attn) {
             fields.emplace_back("flash_attn");
