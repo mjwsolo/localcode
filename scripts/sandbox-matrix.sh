@@ -5,13 +5,16 @@
 #
 # PROFILE.sb is the profile the runtime generates (ShellSandbox.profile(true) in the UI fork's
 # packages/core/src/shell/sandbox.ts; profile(false) with `nonet`). Every case runs under
-# `sandbox-exec` inside a scratch project with a fake HOME holding fake secrets; nothing real is touched.
-set -u
+# `sandbox-exec` inside a scratch project. Build tools use normal caches. Home and credential probes use fixtures.
+set -eu
 PROFILE="${1:?profile file}"
 MODE="${2:-net}"
 [ "$(uname)" = Darwin ] || { echo "macOS only"; exit 0; }
 
-ROOT="$(cd "$(mktemp -d "$HOME/.sbmatrix.XXXXXX")" && pwd -P)"
+ROOT="$(mktemp -d "${HOME:?}/.sbmatrix.XXXXXX")" || exit 1
+ROOT="$(cd -- "$ROOT" && pwd -P)" || exit 1
+readonly ROOT
+trap 'rm -rf -- "$ROOT"' EXIT
 PROJECT="$ROOT/my project (1)"
 FAKEHOME="$ROOT/home"
 mkdir -p "$PROJECT" "$FAKEHOME/.ssh" "$FAKEHOME/.aws"
@@ -24,20 +27,24 @@ TMPD="$(cd "${TMPDIR:-/tmp}" && pwd -P)"
 pass=0; fail=0
 sb() { # run a snippet in the sandbox, cwd = project
   /usr/bin/sandbox-exec -f "$PROFILE" -D "PROJECT=$PROJECT" -D "HOME=$REALHOME" -D "TMPDIR=$TMPD" \
-    /bin/zsh -lc "cd \"$PROJECT\" && $1" 2>&1
+    /bin/zsh -fc 'cd -- "$1" && eval "$2"' sb "$PROJECT" "$1" 2>&1
 }
 sbfake() { # same, but HOME names the fake home so the secret rules point at the fake secrets
-  /usr/bin/sandbox-exec -f "$PROFILE" -D "PROJECT=$PROJECT" -D "HOME=$FAKEHOME" -D "TMPDIR=$TMPD" \
-    /bin/zsh -lc "cd \"$PROJECT\" && $1" 2>&1
+  HOME="$FAKEHOME" /usr/bin/sandbox-exec -f "$PROFILE" -D "PROJECT=$PROJECT" -D "HOME=$FAKEHOME" -D "TMPDIR=$TMPD" \
+    /bin/zsh -fc 'cd -- "$1" && eval "$2"' sb "$PROJECT" "$1" 2>&1
 }
 ok() { # name, command: must exit 0
-  local out; out="$(sb "$2")"; local rc=$?
+  local out rc=0; out="$(sb "$2")" || rc=$?
   if [ $rc -eq 0 ]; then echo "PASS  $1"; pass=$((pass+1)); else echo "FAIL  $1 (exit $rc)"; echo "$out" | tail -4 | sed 's/^/        /'; fail=$((fail+1)); fi
 }
 blocked() { # name, runner, command: must exit nonzero
-  local out; out="$($2 "$3")"; local rc=$?
+  local out rc=0; out="$("$2" "$3")" || rc=$?
   if [ $rc -ne 0 ]; then echo "PASS  $1 (blocked)"; pass=$((pass+1)); else echo "FAIL  $1 (was NOT blocked)"; echo "$out" | tail -3 | sed 's/^/        /'; fail=$((fail+1)); fi
 }
+
+# A launcher failure must never count as a successful policy denial.
+sb 'true' || exit 1
+sbfake 'true' || exit 1
 
 if [ "$MODE" = nonet ]; then
   ok "localhost server + curl (network off)" 'python3 -m http.server 18765 --bind 127.0.0.1 >/dev/null 2>&1 & p=$!; sleep 1.5; curl -sf http://127.0.0.1:18765/ >/dev/null; r=$?; kill $p; exit $r'
@@ -75,15 +82,14 @@ blocked "write project .mcp.json" sb 'echo {} > .mcp.json'
 blocked "write project .localcode-agent/x" sb 'mkdir -p .localcode-agent && echo x > .localcode-agent/x'
 blocked "write ~/.zshrc (fake home)" sbfake 'echo x >> "$HOME/.zshrc"'
 blocked "write ~/.config/localcode-agent (fake home)" sbfake 'mkdir -p "$HOME/.config/localcode-agent" && echo x > "$HOME/.config/localcode-agent/cli.json"'
-blocked "write to ~/sandbox-test-x" sb 'echo x > "$HOME/sandbox-test-x"'
-blocked "write outside project via cd .." sb 'cd .. && echo x > ../sbm-escape.txt'
-blocked "script that cd's out and writes" sb 'printf "cd /\ncd \"$HOME\"\necho x > sbm-script-out\n" > s.sh && sh s.sh'
-blocked "python reads ~/.ssh (fake home)" sbfake "python3 -c \"print(open('$FAKEHOME/.ssh/id_rsa').read())\""
-blocked "cat ~/.aws/credentials (fake home)" sbfake "cat '$FAKEHOME/.aws/credentials'"
-blocked "ls ~/.ssh (fake home)" sbfake "ls '$FAKEHOME/.ssh'"
-[ -e "$HOME/sandbox-test-x" ] && { echo "FAIL  ~/sandbox-test-x exists"; rm -f "$HOME/sandbox-test-x"; fail=$((fail+1)); }
+blocked "write to ~/sandbox-test-x" sbfake 'echo x > "$HOME/sandbox-test-x"'
+blocked "write outside project via cd .." sb 'cd .. && echo x > sbm-escape.txt'
+blocked "script that cd's out and writes" sbfake 'printf "cd /\ncd \"$HOME\"\necho x > sbm-script-out\n" > s.sh && sh s.sh'
+blocked "python reads ~/.ssh (fake home)" sbfake 'python3 -c "import os; open(os.path.expanduser(\"~/.ssh/id_rsa\")).read()"'
+blocked "cat ~/.aws/credentials (fake home)" sbfake 'cat "$HOME/.aws/credentials"'
+blocked "ls ~/.ssh (fake home)" sbfake 'ls "$HOME/.ssh"'
+[ -e "$FAKEHOME/sandbox-test-x" ] && { echo "FAIL  ~/sandbox-test-x exists"; fail=$((fail+1)); }
 [ -e "$ROOT/sbm-escape.txt" ] && { echo "FAIL  escape file written"; fail=$((fail+1)); }
 
-rm -rf "$ROOT"
 echo "passed $pass, failed $fail"
 [ $fail -eq 0 ]

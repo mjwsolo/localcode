@@ -9,6 +9,7 @@ recommend(ram), and every size/active-param string is the catalog's own.
 Run with the interpreter that has localcode installed:
   ~/.local/share/uv/tools/localcode/bin/python docs/scripts/gen-models.py
 """
+from dataclasses import replace
 import json, os, pathlib, re
 # Size every tier by the documented GPU working-set fractions, not by the Mac
 # that happens to run this script.
@@ -116,6 +117,13 @@ for ram in TIERS:
     budget = round(F.gpu_budget_gb(ram), 1)
     rec = m.recommend(ram)
     fits = sorted((c for c in m.CHOICES if F.fit(c.size_gb, ram, c.filename) == "fits"), key=lambda c: c.size_gb)
+    # The in-app quant picker also lists smaller files from the same repository.
+    # Show its 13.6 GB option when neither curated Inkling choice fits.
+    inkling = m.by_key("inkling-2-mini")
+    small_file = "Inkling-2-Mini-UD-Q3_K_XL.gguf"
+    if not any(c.hf_repo == inkling.hf_repo for c in fits) and F.fit(13.6, ram, small_file) == "fits":
+        fits.append(replace(inkling, name="Inkling 2 Mini 26B-A5B (UD-Q3_K_XL)",
+                            filename=small_file, size_gb=13.6))
     models = [{
         "name": c.name,
         **facets(c),
