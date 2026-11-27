@@ -1,5 +1,4 @@
-import { expect, test } from "bun:test";
-import { createServer } from "node:http";
+import { expect, spyOn, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,12 +17,14 @@ test("needsVision only for an image part with vision off", () => {
 });
 
 test("plugin strips the image and toasts when the model has no vision", async () => {
-  const srv = createServer((_q, res) => { res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ vision: false })); });
-  await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
-  const port = (srv.address() as any).port;
-  const prev = process.env.LOCALCODE_CONTROL_URL;
-  process.env.LOCALCODE_CONTROL_URL = `http://127.0.0.1:${port}`;
   const dir = mkdtempSync(join(tmpdir(), "vision-"));
+  const prev = process.env.LOCALCODE_CONTROL_URL;
+  const control = "http://control.invalid";
+  process.env.LOCALCODE_CONTROL_URL = control;
+  const request = spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+    if (String(url) !== control + "/status") throw new Error("unexpected control endpoint");
+    return Response.json({ vision: false });
+  });
   const toasts: any[] = [];
   try {
     const hooks = await (Plugin as any)({ directory: dir, client: { tui: { showToast: (i: any) => toasts.push(i) } } });
@@ -34,6 +35,7 @@ test("plugin strips the image and toasts when the model has no vision", async ()
     expect(toasts.length).toBe(1);
   } finally {
     if (prev === undefined) delete process.env.LOCALCODE_CONTROL_URL; else process.env.LOCALCODE_CONTROL_URL = prev;
-    srv.close(); rmSync(dir, { recursive: true, force: true });
+    request.mockRestore();
+    rmSync(dir, { recursive: true, force: true });
   }
 });
