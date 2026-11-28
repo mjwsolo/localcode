@@ -805,13 +805,15 @@ class Supervisor:
 
     def catalog(self) -> dict:
         from localcode.models_catalog import group_for_filename
-        installed = {}
+        installed: dict[str, int] = {}
+        dirs: dict[str, set[Path]] = {}
         for file in self._installed_models().values():
             if not file.is_file() or file.name.lower().startswith("mmproj"):
                 continue
             group = group_for_filename(file.name)
             if group:
                 installed[group.key] = installed.get(group.key, 0) + 1
+                dirs.setdefault(group.key, set()).add(file.parent)
         rec, cur = self._rec_repo(), self._current_repo()
         process = getattr(self, "proc", None)
         loaded = process is not None and process.poll() is None and self.state["state"] == "ready"
@@ -823,11 +825,22 @@ class Supervisor:
                 "recommended": g.hf_repo == rec, "current": g.hf_repo == cur,
                 "loaded": loaded and g.hf_repo == cur,
                 "installed_count": installed.get(g.key, 0),
+                **self._group_vision(g, dirs.get(g.key, set())),
                 "downloading": self.downloading() and self.download.get("group") == g.key,
                 "pct": self.download.get("pct") if self.downloading() and self.download.get("group") == g.key else None,
             })
         return {"ram_gb": self.ram_gb, "current": self.current, "groups": groups,
                 "models_dir": str(self.models_dir)}
+
+    def _group_vision(self, g, weight_dirs: set[Path]) -> dict:
+        """Picker column: can this model read images, and is its vision file
+        (the mmproj projector, separate from the weights) already on disk? The
+        server finds it in the models folder or next to the weights (mmproj_for)."""
+        if not g.mmproj_filename:
+            return {"vision": "none", "vision_size_gb": 0.0}
+        from localcode.bootstrap import _is_mmproj_complete
+        ready = any(_is_mmproj_complete(d / g.mmproj_filename, g) for d in {Path(self.models_dir), *weight_dirs})
+        return {"vision": "ready" if ready else "download", "vision_size_gb": round(float(g.mmproj_size_gb or 0.0), 2)}
 
     def _quant_rows(self, g, refresh: bool = False):
         from localcode.hf_quants import Quant, _parse_label, _read_cache

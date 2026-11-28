@@ -95,15 +95,15 @@ def download():
 REPLY = "Hello from the mock model.\nThis reply is fixed so screenshots stay stable."
 
 
-def _group(key, name, maker, lic, repo, rec, installed):
+def _group(key, name, maker, lic, repo, rec, installed, vision="none", vision_gb=0.0):
     return {"key": key, "display_name": name, "maker": maker, "license": lic, "hf_repo": repo,
             "recommended": rec, "current": False, "loaded": False, "installed_count": installed,
-            "downloading": False, "pct": None}
+            "downloading": False, "pct": None, "vision": vision, "vision_size_gb": vision_gb}
 
 
 GROUPS = [
-    _group("alpha", "Alpha 4 12B", "Acme", "apache-2.0", "acme/alpha-gguf", True, 1),
-    _group("beta", "Beta 3 8B", "Thinking Machines", "mit", "globex/beta-gguf", False, 0),
+    _group("alpha", "Alpha 4 12B", "Acme", "apache-2.0", "acme/alpha-gguf", True, 1, "ready", 0.9),
+    _group("beta", "Beta 3 8B", "Thinking Machines", "mit", "globex/beta-gguf", False, 0, "download", 1.2),
     _group("gamma", "Gamma 2 30B", "Initech", "apache-2.0", "initech/gamma-gguf", False, 0),
 ]
 

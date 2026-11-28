@@ -3,6 +3,17 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.5.44rc2 - 2026-11-28
+
+- Auto-approve no longer answers requests to touch files outside the project. With it on, the write tool replaced a user's ~/.zshrc right after the sandbox had blocked the same write and the user had said no. Leaving the sandbox and reaching outside the project now always ask.
+- When the user declines running a blocked command outside the sandbox, the agent is told not to make the change another way and to say it was not done.
+- The agent no longer refuses a task because no dedicated tool exists. It uses the shell and the tools every Mac has (textutil writes .docx, cupsfilter writes PDF from plain text), and says something cannot be done only after a real attempt fails.
+- The model picker shows which models read images and whether the vision file still needs downloading (Images, Images +1.2 GB, Text only).
+- /mcps has an "Import from Claude Code, Codex or Cursor" row. The old hint pointed at /import, which cannot be typed inside that screen.
+- /bench reports memory including the mapped model file. It read only the process's own allocations, so a 23 GB model showed 9.7 GB.
+- /bench results are shorter: one line per saved run, context in K, a four-line intro.
+- A test wrote fake /bench results into the real history folder, where they showed up as a model called "m". Tests now write to a temporary folder.
+
 ## 0.5.44rc1 - 2026-11-27
 
 - Importing MCP servers preserves nested server definitions and the timeout setting. Skill imports use a private staging directory.
