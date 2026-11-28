@@ -114,6 +114,14 @@ jobs:
         run: python3 scripts/release_promote.py "$VERSION"
       - name: Build (pure-Python wheel + sdist)
         run: python -m build
+      - name: Pre-releases ship the wheel only
+        # The source archive repeats the bundled binaries (~65 MiB). PyPI caps a
+        # project's total size, and release candidates are tested from the wheel,
+        # so only final releases carry an sdist.
+        env:
+          VERSION: ${{ needs.test.outputs.version }}
+        run: |
+          if [[ "$VERSION" =~ [a-zA-Z] ]]; then rm -f dist/*.tar.gz; fi
       - name: Show artifacts
         env:
           VERSION: ${{ needs.test.outputs.version }}
