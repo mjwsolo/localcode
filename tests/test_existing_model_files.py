@@ -54,6 +54,13 @@ def test_picker_lists_local_only_quant_and_selects_it_offline(tmp_path, monkeypa
     sup.state = {'state': 'idle', 'pct': None}
     sup._rec_repo = lambda: None
     assert next(g for g in sup.catalog()['groups'] if g['key'] == group.key)['installed_count'] == 1
+    row = next(g for g in sup.catalog()['groups'] if g['key'] == group.key)
+    assert row['vision'] == 'download' and row['vision_size_gb'] == round(group.mmproj_size_gb, 2)
+    with open(cache / group.mmproj_filename, 'wb') as f:   # sparse: the size is what counts
+        f.truncate(int(group.mmproj_size_gb * 1024 ** 3 * 0.95))
+    assert next(g for g in sup.catalog()['groups'] if g['key'] == group.key)['vision'] == 'ready'
+    text_only = next(g for g in MODEL_GROUPS if not g.mmproj_filename)
+    assert next(g for g in sup.catalog()['groups'] if g['key'] == text_only.key)['vision'] == 'none'
     row = next(q for q in sup.quants(group.key)['quants'] if q['filename'] == filename)
     assert row['downloaded'] is True
     selected = []

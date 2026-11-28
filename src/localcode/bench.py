@@ -113,7 +113,7 @@ def _run_text(cmd: list[str], timeout: float = 3) -> str:
 def power_warning() -> str | None:
     text = _run_text(["pmset", "-g", "batt"])
     if "Battery Power" in text:
-        return "on battery power; results are usually lower than when plugged in"
+        return "on battery, so speeds may be lower than when plugged in"
     if re.search(r"low power mode\s*=\s*1|lowpowermode\s+1", _run_text(["pmset", "-g"]), re.I):
         return "Low Power Mode is on; results will be lower"
     return None
@@ -145,6 +145,23 @@ def thermal_snapshot() -> int:
     return read_cpu_speed_limit()
 
 
+_SIZE = r"([\d.]+)\s*(B|KB|MB|GB)"
+_UNIT_MB = {"B": 1 / 1048576, "KB": 1 / 1024, "MB": 1, "GB": 1024}
+
+
+def footprint_resident_mb(out: str) -> float | None:
+    """Resident memory from `footprint -p`: dirty plus clean pages of the TOTAL row.
+
+    The headline "Footprint" counts dirty memory only. llama-server maps the model
+    file, so its weights are clean file-backed pages and the headline leaves them
+    out (a 23 GB model showed as 9.7 GB). Dirty + clean is what the process holds."""
+    m = re.search(rf"^\s*{_SIZE}\s+{_SIZE}\s+{_SIZE}\s+\d+\s+TOTAL\s*$", out, re.M)
+    if m:
+        return float(m.group(1)) * _UNIT_MB[m.group(2)] + float(m.group(3)) * _UNIT_MB[m.group(4)]
+    m = re.search(r"Footprint:\s*([\d.]+)\s*(KB|MB|GB)", out)
+    return float(m.group(1)) * _UNIT_MB[m.group(2)] if m else None
+
+
 class MemorySampler(threading.Thread):
     """Samples a process every 0.5 s: `footprint` when available, else RSS."""
 
@@ -158,9 +175,9 @@ class MemorySampler(threading.Thread):
     def sample(self) -> float | None:
         if self.source == "footprint":
             out = _run_text(["/usr/bin/footprint", "-p", str(self.pid)], timeout=5)
-            m = re.search(r"Footprint:\s*([\d.]+)\s*(KB|MB|GB)", out)
-            if m:
-                return float(m.group(1)) * {"KB": 1 / 1024, "MB": 1, "GB": 1024}[m.group(2)]
+            v = footprint_resident_mb(out)
+            if v is not None:
+                return v
             self.source = "rss"
         out = _run_text(["ps", "-o", "rss=", "-p", str(self.pid)]).strip()
         return int(out) / 1024 if out.isdigit() else None
@@ -599,7 +616,7 @@ def render_table(reports: list[ModelReport], compare: bool) -> str:
     notes = ["", "Values are medians with (min-max). TTFT is the time to the first generated token.",
              "Load is from starting the model server until it answers; 1st reply is the first short answer",
              "after that (it includes any one-off GPU setup).",
-             "Peak memory is approximate (process footprint, sampled every 0.5 s)."]
+             "Peak memory is approximate (resident memory including the mapped model file, sampled every 0.5 s)."]
     if compare:
         notes.append("Compare columns are speedups relative to the first model; above 1.00x is faster.")
     for r in reports:

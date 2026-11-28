@@ -10,6 +10,25 @@ import pytest
 from localcode import bench
 
 
+@pytest.fixture(autouse=True)
+def _results_in_tmp(monkeypatch, tmp_path):
+    """No test may write into the real ~/.localcode/bench: the history and the
+    /bench comparison read it, so fake runs showed up as a model called "m"."""
+    monkeypatch.setattr(bench, "results_dir", lambda: tmp_path)
+
+
+def test_footprint_counts_mapped_model_pages():
+    out = """llama-server [1]: 64-bit    Footprint: 9779 MB (16384 bytes per page)
+  Dirty      Clean  Reclaimable    Regions    Category
+    ---        ---          ---        ---    ---
+    0 B      21 GB          0 B         11    mapped file
+9779 MB      21 GB        47 MB       5284    TOTAL
+"""
+    assert bench.footprint_resident_mb(out) == 9779 + 21 * 1024
+    assert bench.footprint_resident_mb("x [1]: 64-bit    Footprint: 2 GB") == 2048
+    assert bench.footprint_resident_mb("nothing") is None
+
+
 class _Fake(BaseHTTPRequestHandler):
     prompts: list[str] = []
 

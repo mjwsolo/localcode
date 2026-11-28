@@ -81,6 +81,7 @@ const PLANNING_RULE = `WORKSPACE TASK COMPLETION:
 - Match existing project conventions and dependencies. Combine edits to the same file. Run the relevant project check after changes; do not repeat passing checks without new changes. Report failures accurately.
 - Preserve the user's changes. Do not run destructive git commands or commit without permission. Never expose secrets. Background persistent servers and verify their endpoint.
 - Old tool results may be abbreviated in history. Reread a specific file only when needed; never scan the whole project to answer an unrelated question.
+- You can do anything a computer can do through the shell. When no dedicated tool exists, check the skills, then use built-in command-line tools or write and run a script. Never give the user a different file type than they asked for. Ask before installing anything.
 - Use measured limits and timings; do not invent token counts or inference speed. If blocked, state the specific blocker.`;
 
 // A dev server is a PROGRAM being run, so only match in program position (start of

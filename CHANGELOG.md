@@ -3,6 +3,26 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.5.44rc2 - 2026-11-28
+
+- Auto-approve no longer answers requests to touch files outside the project. With it on, the write tool replaced a user's ~/.zshrc right after the sandbox had blocked the same write and the user had said no. Leaving the sandbox and reaching outside the project now always ask.
+- When the user declines running a blocked command outside the sandbox, the agent is told not to make the change another way and to say it was not done.
+- Bundled skills for documents: Word (.docx, .rtf, .odt), PDF, Excel spreadsheets, images and audio/video. Each uses tools built into macOS or a small standard-library script, so nothing is installed. Only a one-line description of each is in every request; the rest loads when a task needs it. Measured on Qwen 3.6 35B-A3B and Gemma 4 12B: 8 of 8 file tasks made the right file (before: 4 of 8, with pip installs).
+- Skills now reach the model. The interface hid the skills list from local models unless LocalCode started with full context, so bundled and imported skills were never used.
+- One general rule replaces per-format hints: the agent can do anything through the shell, checks its skills, never hands back a different file type than asked for, and asks before installing.
+- Package installs (pip, brew, npm -g, cargo, gem and similar) always ask first, enforced by permission rules rather than the prompt.
+- The shell sandbox lets commands read the whole disk except credentials and personal data (SSH and cloud keys, keychains, Mail, Messages, browser profiles), as Codex and Claude Code do. Toolchains outside the listed folders (conda, uv-managed Pythons, a virtualenv in another folder) crashed with "No module named 'encodings'". Writes stay limited to the project, temporary folders and tool caches.
+- The write, edit and patch tools ask a person, every time, before writing shell startup files, LocalCode's settings, credentials, or project files that run code (.git, .mcp.json, localcode.json, .vscode, .envrc and similar). Auto-approve never answers these, and "always" is never saved for them or for the home folder as a whole.
+- LocalCode's settings folder is no longer pre-approved for file tools, which could have switched the sandbox off.
+- Formatters no longer run outside the sandbox after edits.
+- The sandbox blocks container daemons (Docker, OrbStack, colima) and renaming .git or .localcode-agent to plant a hook.
+- /bench shows bar charts of generation and prompt speed against saved runs of other models.
+- The model picker shows which models read images and whether the vision file still needs downloading (Images, Images +1.2 GB, Text only).
+- /mcps has an "Import from Claude Code, Codex or Cursor" row. The old hint pointed at /import, which cannot be typed inside that screen.
+- /bench reports memory including the mapped model file. It read only the process's own allocations, so a 23 GB model showed 9.7 GB.
+- /bench results are shorter: one line per saved run, context in K, a four-line intro.
+- A test wrote fake /bench results into the real history folder, where they showed up as a model called "m". Tests now write to a temporary folder.
+
 ## 0.5.44rc1 - 2026-11-27
 
 - Importing MCP servers preserves nested server definitions and the timeout setting. Skill imports use a private staging directory.

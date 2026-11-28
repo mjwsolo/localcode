@@ -72,7 +72,10 @@ test("/models picker and quant list", () =>
     let screen = await s.settle()
     assert.match(screen, /Alpha 4 12B ★/)
     // The maker column fits the longest maker: "Thinking Machines" must not run into the state.
-    assert.match(screen, /Beta 3 8B\s+Thinking Machines {2,}Download/)
+    assert.match(screen, /Beta 3 8B\s+Thinking Machines {2,}Download\s+Images \+1\.2 GB/)
+    // Which models read images, and whether their vision file is already on disk.
+    assert.match(screen, /Alpha 4 12B ★\s+Acme\s+1 on disk\s+Images\s/)
+    assert.match(screen, /Gamma 2 30B\s+Initech\s+Download\s+Text only/)
     await snap(s, "models-picker")
 
     await s.key("Enter")
@@ -133,7 +136,7 @@ test("/status dialog", () =>
     await snap(s, "status")
   }))
 
-test("/mcps is a plain list with a hint for adding and importing", () =>
+test("/mcps has an import row that opens the import from other agents", () =>
   journey("mcps", {}, async (s) => {
     await s.waitFor("localcode · e2e-model")
     await s.type("/mcps")
@@ -141,9 +144,14 @@ test("/mcps is a plain list with a hint for adding and importing", () =>
     await s.key("Enter")
     await s.waitFor("MCP servers")
     const screen = (await s.settle()).replace(/\s+/g, " ")
-    assert.match(screen, /Add from other agents: \/import/)
+    assert.match(screen, /\+ Import from Claude Code, Codex or Cursor/)
     assert.match(screen, /Add your own: localcode mcp add <name> -- <command>/)
     assert.doesNotMatch(screen, /ctrl\+a|ctrl\+d/i)
+    // Typing "import" in the search keeps the row, and Enter opens the import.
+    await s.type("import")
+    await s.waitFor("+ Import from Claude Code")
+    await s.key("Enter")
+    await s.waitFor("Import from other agents")
   }))
 
 test("/skills shows each skill's cost and source, and space turns one off", () =>
@@ -460,10 +468,10 @@ test("a finished benchmark shows the comparison with honest condition marks", ()
     await s.waitFor("Benchmark this model?")
     await s.key("Enter")
     await s.waitFor("Benchmarking e2e-model")
-    await s.waitFor("Compare (+ means this run is faster)", 40_000)
+    await s.waitFor("Saved runs (+ means this run is faster)", 40_000)
     const screen = (await s.settle()).replace(/\s+/g, " ")
-    assert.match(screen, /alpha-Q4_K_M: gen 33\.0 \(\+10%\)/)
-    assert.match(screen, /differs: LocalCode <version>, on/)
+    assert.match(screen, /vs alpha-Q4_K_M: gen \+10%/)
+    assert.match(screen, /\(LocalCode <version>, on/)
     await s.key("Enter")
   }))
 

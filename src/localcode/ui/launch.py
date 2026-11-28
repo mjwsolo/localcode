@@ -136,6 +136,13 @@ def _context_size(models_dir: Path, ctrl: int) -> int:
             return 2048
 
 
+def bundled_skills_dir() -> Path:
+    """Skills shipped with LocalCode (documents, PDFs, spreadsheets, images, audio
+    and video): only their one-line descriptions are in every request; the body and
+    any helper script load when a task needs them."""
+    return Path(__file__).resolve().parent.parent / "agent_skills"
+
+
 def _external_directory_rules() -> list[dict]:
     """Ask before touching anything outside the project, as opencode v1 did.
 
@@ -147,14 +154,32 @@ def _external_directory_rules() -> list[dict]:
 
     home = Path.home()
     data = Path(os.environ.get("XDG_DATA_HOME") or home / ".local" / "share") / "localcode-agent"
-    config = Path(os.environ.get("XDG_CONFIG_HOME") or home / ".config") / "localcode-agent"
     tmp = Path(tempfile.gettempdir()) / "localcode-agent"
-    allowed = [data / "shell" / "*" / "*", data / "tool-output" / "*", tmp / "*", config / "*"]
+    # Not LocalCode's own settings folder: a file tool allowed there could switch the shell
+    # sandbox off in cli.json, and the next command would run without it.
+    allowed = [data / "shell" / "*" / "*", data / "tool-output" / "*", tmp / "*",
+               # The bundled skills: the agent reads them and runs their helper scripts.
+               bundled_skills_dir() / "*"]
     # The runtime compares canonical paths (/var -> /private/var on macOS).
     allowed += [Path(os.path.realpath(p.parent)) / p.name for p in allowed]
     return [{"action": "external_directory", "resource": "*", "effect": "ask"}] + [
         {"action": "external_directory", "resource": str(p), "effect": "allow"} for p in dict.fromkeys(allowed)
     ]
+
+
+# Package installs download and run code from the internet: they always ask first,
+# whatever the prompt says (a model ran `python3 -m pip install` despite an
+# "ask before installing" rule). Project dependency commands (npm install, uv sync)
+# are ordinary coding and stay as they are.
+INSTALL_COMMANDS = (
+    "pip install *", "pip3 install *", "* -m pip install *", "uv pip install *", "uv tool install *",
+    "pipx install *", "brew install *", "brew reinstall *", "npm install -g *", "npm i -g *",
+    "npm install --global *", "cargo install *", "gem install *", "go install *",
+)
+
+
+def _install_rules() -> list[dict]:
+    return [{"action": "shell", "resource": cmd, "effect": "ask"} for cmd in INSTALL_COMMANDS]
 
 
 def write_config(path: Path, *, port: int, ctx: int, alias: str | None) -> None:
@@ -205,8 +230,14 @@ def write_config(path: Path, *, port: int, ctx: int, alias: str | None) -> None:
             # A command the shell sandbox blocked runs outside it only with a person's yes.
             {"action": "shell.unsandboxed", "resource": "*", "effect": "ask"},
             *_external_directory_rules(),
+            *_install_rules(),
         ],
         "agents": {"plan": {"disabled": True}},
+        "skills": {"paths": [str(bundled_skills_dir())]},
+        # The runtime would run the project's own formatter (prettier, biome, ruff) after
+        # every edit, outside the shell sandbox; a sandboxed command could plant one.
+        # The model formats through the shell, inside the sandbox.
+        "formatter": False,
         # Language servers stay off: with them on, coding evals scored lower
         # and edits failed more often, while startup and memory cost rose.
         "lsp": False,
