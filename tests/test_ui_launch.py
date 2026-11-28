@@ -96,6 +96,7 @@ def test_write_config_points_at_local_server_and_plugin(tmp_path):
         ("subagent", "deny"), ("execute", "deny"), ("doom_loop", "ask"),
         ("shell.unsandboxed", "ask"),
         ("external_directory", "ask"), ("external_directory", "allow"),
+        ("shell", "ask"),  # package installs (see test_agent_skills)
     }
     assert cfg["agents"] == {"plan": {"disabled": True}}
     assert cfg["compaction"] == {"buffer": 0}

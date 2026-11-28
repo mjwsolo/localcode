@@ -360,6 +360,9 @@ def test_agent_submodules_declare_all():
 # allowlist with a reason than silently let printfs leak into the
 # agent loop.
 PRINT_ALLOWLIST = {
+    # Bundled skill helper scripts: the agent runs them in the shell and reads their output.
+    "make_xlsx.py",
+    "make_pdf.py",
     "bench.py",  # `localcode bench` CLI prints its results table.
     "diagnostics.py",  # Offline `localcode doctor` CLI emits its JSON report.
     "launch.py",  # UI launcher: prints to the terminal BEFORE the UI runtime starts (no event bus yet)
