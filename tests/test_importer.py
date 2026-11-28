@@ -293,3 +293,25 @@ def test_import_hint_checks_existence_only_and_shows_once(sup, home, monkeypatch
     assert msg == "Found settings from Claude Code (and Codex). Type /import to bring over your MCP servers and skills."
     assert not [o for o in opened if "claude.json" in str(o) or "config.toml" in str(o)]
     assert sup.import_hint() is None                    # shown once
+
+
+def test_reserved_server_names_preserve_mcp_settings(home):
+    write_claude(home, {name: {"command": "new"} for name in ("servers", "timeout", "ordinary")})
+    path = cfg_path(home)
+    path.parent.mkdir(parents=True)
+    nested = {"existing": {"type": "local", "command": ["original"]}}
+    path.write_text(json.dumps({"mcp": {"servers": nested, "timeout": 42}}))
+    assert run(home, ["--yes"])[0] == 0
+    config = json.loads(path.read_text())["mcp"]
+    assert config["servers"] == nested and config["timeout"] == 42
+    assert config["ordinary"]["enabled"] is False
+
+
+def test_skill_import_preserves_existing_sibling(home):
+    make_skill(home, "demo")
+    sibling = importer.skills_dir(home) / ".demo.importing"
+    sibling.mkdir(parents=True)
+    (sibling / "keep").write_text("original")
+    assert run(home, ["--yes"])[0] == 0
+    assert (sibling / "keep").read_text() == "original"
+    assert (importer.skills_dir(home) / "demo" / "SKILL.md").is_file()

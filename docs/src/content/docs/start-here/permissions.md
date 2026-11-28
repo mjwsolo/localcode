@@ -49,15 +49,15 @@ On macOS, every shell command the agent runs goes through the operating system's
 
 Inside the sandbox a command can:
 
-- read and write the project directory, temporary directories and the usual tool caches (npm, pip and uv, cargo, go, bun);
+- read and write the project directory, temporary directories and shared tool directories, including caches and installations for npm, uv, Cargo, Go and Bun;
 - read system files, installed tools, your git configuration and your shell startup files;
-- use the network (unless you turn that switch off, which leaves localhost only).
+- use the network (unless you turn that switch off, which still permits loopback connections and Unix sockets).
 
 It cannot write anywhere else in your home directory, and it cannot read or write `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.docker`, the GitHub CLI login or the keychain folders.
 
-Inside the project it still cannot change `.git/hooks` (a hook would later run outside the sandbox), LocalCode's own project settings (`.localcode-agent/`, `localcode.json`, `.mcp.json`), your LocalCode settings in `~/.config/localcode-agent`, or your shell startup files (`~/.zshrc`, `~/.bashrc`, `~/.profile` and the like). Everyday git (add, commit, branch, checkout, fetch, `git init`) works; `.git/config` stays writable because those commands write it.
+Inside the project it still cannot change `.git/hooks` (a hook would later run outside the sandbox), LocalCode's own project settings (`.localcode-agent/`, `localcode.json`, `.mcp.json`), your LocalCode settings in `~/.config/localcode-agent`, or your shell startup files (`~/.zshrc`, `~/.bashrc`, `~/.profile` and the like). The profile permits writes to `.git/config` for Git workflows. Local Git configuration can affect commands you run later, outside LocalCode.
 
-Sandboxed commands also run without your credentials in their environment: variables ending in `_TOKEN`, `_SECRET`, `_KEY` or `_PASSWORD`, anything starting with `AWS_`, and `GITHUB_TOKEN`, `GH_TOKEN`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` and `HF_TOKEN` are removed (case does not matter). A command you allow to run outside the sandbox, or any command with the sandbox switched off, gets your full environment.
+LocalCode filters the environment of sandboxed commands by variable name. It removes names ending in `_TOKEN`, `_SECRET`, `_KEY` or `_PASSWORD`, anything starting with `AWS_`, and `GITHUB_TOKEN`, `GH_TOKEN`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` and `HF_TOKEN` (case does not matter). Names beginning with `LOCALCODE_` or `OPENCODE_` are retained. Other variables can also contain credentials. A command you allow to run outside the sandbox, or any command with the sandbox switched off, gets your full environment.
 
 When the sandbox blocks a command, LocalCode lists what was blocked and asks whether to run that command outside the sandbox: **allow once**, **always** for that command, or **deny**. Auto-approve never answers this prompt, so leaving the sandbox always takes a deliberate yes from you. Turning **Sandbox shell commands** off in `/permissions` removes the boundary for every command. That is a separate, deliberate switch.
 

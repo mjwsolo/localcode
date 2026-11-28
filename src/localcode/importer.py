@@ -262,7 +262,7 @@ def _same_server(a: dict, b: dict) -> bool:
 def plan(items: list[Item], home: Path | None = None) -> list[Step]:
     cfg, _ = load_user_config(home)
     existing = _existing_servers(cfg)
-    taken = set(existing)
+    taken = set(existing) | {"servers", "timeout"}
     sdir = skills_dir(home)
     steps: list[Step] = []
     for it in items:
@@ -346,10 +346,10 @@ def apply(steps: list[Step], home: Path | None = None) -> dict:
         if dest.exists():
             continue
         dest.parent.mkdir(parents=True, exist_ok=True)
-        tmp = dest.with_name(f".{dest.name}.importing")
-        shutil.rmtree(tmp, ignore_errors=True)
-        shutil.copytree(s.item.path.resolve(), tmp, ignore=_ignore_links)
-        os.replace(tmp, dest)
+        with tempfile.TemporaryDirectory(dir=dest.parent) as staging:
+            tmp = Path(staging) / "skill"
+            shutil.copytree(s.item.path.resolve(), tmp, ignore=_ignore_links)
+            os.rename(tmp, dest)
         result["skills"].append(s.final_name)
     return result
 

@@ -3,6 +3,13 @@
 All notable changes to LocalCode will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.5.44rc1 - 2026-11-27
+
+- Importing MCP servers preserves nested server definitions and the timeout setting. Skill imports use a private staging directory.
+- The sandbox test uses a disposable home for write probes and stops if scratch setup or sandbox startup fails.
+- The homepage lists the 13.6 GB Inkling Q3 option on the 32 GB tab.
+- CI checks the bundled UI against the checkout's package version, allows the documented macOS first-launch timeout, and checks long pull-request file lists reliably.
+
 ## 0.5.43 - 2026-11-21
 
 ### Added

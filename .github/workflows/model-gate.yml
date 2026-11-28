@@ -31,7 +31,7 @@ jobs:
           [[ "$PR" =~ ^[0-9]+$ ]] || exit 1
           head=$(gh pr view "$PR" --json headRefOid --jq .headRefOid)
           changed=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --jq '.[].filename')
-          if ! printf '%s\n' "$changed" | grep -qE '^(src/localcode/bin/|src/localcode/ui/(FORK_COMMIT|UPSTREAM_COMMIT|plugin/|server_cmd.py)|src/localcode/(models_catalog|runtime|reasoning_capabilities)\.py|patches/|llama-cpp-turboquant/|scripts/verify_models\.py)'; then
+          if ! grep -qE '^(src/localcode/bin/|src/localcode/ui/(FORK_COMMIT|UPSTREAM_COMMIT|plugin/|server_cmd.py)|src/localcode/(models_catalog|runtime|reasoning_capabilities)\.py|patches/|llama-cpp-turboquant/|scripts/verify_models\.py)' <<< "$changed"; then
             echo 'No model/runtime changes; hosted tests suffice.'
             exit 0
           fi

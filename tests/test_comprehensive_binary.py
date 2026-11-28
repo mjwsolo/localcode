@@ -19,6 +19,11 @@ from pathlib import Path
 
 import pytest
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10
+    import tomli as tomllib
+
 import localcode
 
 pytestmark = pytest.mark.skipif(
@@ -123,6 +128,7 @@ def _version(path: Path, timeout: int = FIRST_LAUNCH_TIMEOUT_S) -> subprocess.Co
     return subprocess.run([str(path), "--version"], capture_output=True, text=True, timeout=timeout, check=False)
 
 
+@pytest.mark.timeout(FIRST_LAUNCH_TIMEOUT_S + 30)
 def test_bundled_binary_loads_and_runs(binary: Path):
     """`--version` exits 0 — i.e. dyld resolves every linked symbol."""
     proc = _version(binary)
@@ -131,6 +137,7 @@ def test_bundled_binary_loads_and_runs(binary: Path):
     )
 
 
+@pytest.mark.timeout(FIRST_LAUNCH_TIMEOUT_S + 30)
 def test_ui_binary_version_matches_package():
     """The runtime footer shows the binary's version; it must be the same
     release as the wheel (X.Y.Z). Pre-release suffixes may differ so an alpha
@@ -138,14 +145,17 @@ def test_ui_binary_version_matches_package():
     path = BIN_DIR / "localcode-ui"
     if not path.is_file():
         pytest.skip("no bundled UI binary")
-    from localcode import __version__
+    # conftest loads src/ from this checkout even in an environment containing
+    # an older installed distribution. Compare the bundled file to its own manifest.
+    manifest = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    version = tomllib.loads(manifest.read_text())["project"]["version"]
     # Same major.minor: a Python-only patch release must not force a rebuild of
     # the 98 MB binary; a fork change bumps FORK_COMMIT and rebuilds anyway.
-    want = re.match(r"\d+\.\d+", __version__).group(0)
+    want = re.match(r"\d+\.\d+", version).group(0)
     out = _version(path).stdout.strip()
     # The runtime prints "localcode vX.Y.Z".
     reported = re.fullmatch(r"(?:localcode v)?(\d+\.\d+\.\S+)", out)
-    assert reported and reported.group(1).startswith(want + "."), f"UI binary reports {out!r}, package is {__version__!r}; rebuild with scripts/build_ui_binary.sh"
+    assert reported and reported.group(1).startswith(want + "."), f"UI binary reports {out!r}, package is {version!r}; rebuild with scripts/build_ui_binary.sh"
 
 
 @pytest.mark.skipif(os.environ.get("GITHUB_ACTIONS") == "true", reason="hosted macOS VMs launch the binary in minutes; speed is measured on real hardware")
